@@ -26,15 +26,15 @@ think.md          总体思想与核心闭环
 | 文档 | 标题 | 内容简介 |
 | --- | --- | --- |
 | [think.md](./think.md) | 知识大脑总体思想 | 定义知识大脑的目标与边界；说明为何不是普通知识库、Agent 平台或知识图谱；描述从材料进入到 Wiki 沉淀的核心闭环，以及简单/复杂问题分流原则。 |
-| [design.md](./design.md) | 知识大脑系统设计 | 把 `think.md` 的总体思想转化为系统设计；定义核心对象、完整链路和 Agent 协作边界；是阅读其他专题文档前的总览入口。 |
+| [design.md](./design.md) | 知识大脑系统设计 | 把 `think.md` 的总体思想转化为系统设计；定义核心对象（含 KPN）、完整链路和 Agent 协作边界；是阅读其他专题文档前的总览入口。 |
 | [source.md](./source.md) | 外部知识输入 | 描述外部材料如何进入系统、转换为规范化 Markdown 并保留来源；区分文档、对话、网页等不同材料类型及其处理方式。 |
-| [unit.md](./unit.md) | 知识单元 | 定义知识单元与知识点的区别；说明如何从材料形成最小完整知识包，以及如何保留来源位置以支持追溯。 |
+| [unit.md](./unit.md) | 知识单元 | 定义知识单元与知识点的区别；说明如何从材料形成最小完整知识包，以及如何保留来源位置以支持追溯；定义 KnowledgePoint Network（KPN）作为知识点间的轻量上下文补充层。 |
 | [precompile.md](./precompile.md) | 初始激活结构 | 区分导入阶段形成的材料侧知识，与使用阶段形成的认知侧结构；说明领域、概念、ActivationLink 为何来自使用而非导入。 |
 | [cognitive-routing.md](./cognitive-routing.md) | 思维模式选择 | 描述系统如何根据问题类型、熟悉度、不确定性和风险选择处理模式；定义直接记忆、快速检索、工作模型、查证、冲突检测等思维模式。 |
-| [retrieval.md](./retrieval.md) | 知识激活与证据检索 | 描述 ActivationLink、目录结构树、全文检索和外部证据的分层检索路径；说明认知结构检索与补充查找如何协作。 |
-| [working-model.md](./working-model.md) | 临时认知模型 | 描述复杂问题如何组织本次思考的工作结构；说明它与检索、思考记录和学习之间的关系。 |
-| [trace.md](./trace.md) | 思考追踪 | 定义思考记录应保存什么、为何不是检索日志；说明记录深度如何与思维模式匹配。 |
-| [study.md](./study.md) | 反馈学习 | 描述学习来自思考记录的哪些信号；区分材料层、认知层和表达层学习，以及强化、修正、降权、补充、重组和 Wiki 编译。 |
+| [retrieval.md](./retrieval.md) | 知识激活与证据检索 | 描述 ActivationLink、目录结构树、全文检索和外部证据的分层检索路径；说明 KPN 如何在核心知识点召回后做局部上下文扩散；说明认知结构检索与补充查找如何协作。 |
+| [working-model.md](./working-model.md) | 临时认知模型 | 描述复杂问题如何组织本次思考的工作结构；说明 KPN 如何补充上下文变量；说明它与检索、思考记录和学习之间的关系。 |
+| [trace.md](./trace.md) | 思考追踪 | 定义思考记录应保存什么、为何不是检索日志；记录 KPN 局部扩散结果；说明记录深度如何与思维模式匹配。 |
+| [study.md](./study.md) | 反馈学习 | 描述学习来自思考记录的哪些信号；区分 KPN 与 ActivationLink 的学习边界；区分材料层、认知层和表达层学习。 |
 | [lifecycle.md](./lifecycle.md) | 记忆生命周期 | 说明知识为何需要状态管理；描述生命周期如何影响激活、ActivationLink 和 Wiki 页面，以及如何区分当前可用与历史解释知识。 |
 | [wiki-compilation.md](./wiki-compilation.md) | Wiki 编译与长期知识沉淀 | 定义 Wiki 页面的定位与类型；说明 Wiki 如何由长期使用、反复激活和反馈强化后编译形成，而非导入时一次性生成。 |
 
@@ -71,6 +71,7 @@ flowchart TB
 
   source --> unit
   unit --> precompile
+  unit --> retrieval
 
   precompile --> retrieval
   precompile --> study
@@ -105,13 +106,13 @@ flowchart TB
 
 **材料进入与编码**
 
-- `source.md` → `unit.md`：外部材料规范化后，形成可追溯的知识单元和知识点。
+- `source.md` → `unit.md`：外部材料规范化后，形成可追溯的知识单元和知识点，以及知识点间的轻量 KPN 连接。
 - `unit.md` → `precompile.md`：知识单元是长期记忆的基础；导入阶段只形成材料侧结构和初始线索。
 
 **问题处理**
 
 - `cognitive-routing.md` 决定问题走轻量路径还是深度路径，并调度后续环节。
-- `retrieval.md` 在 ActivationLink、目录结构树、全文检索和外部证据之间分层召回。
+- `retrieval.md` 在 ActivationLink、目录结构树、全文检索和外部证据之间分层召回；核心 KnowledgePoint 确定后，KPN 做局部上下文扩散。
 - `working-model.md` 承接复杂问题，把激活结果和证据组织为本次思考结构。
 
 **追踪、学习与沉淀**
@@ -131,7 +132,8 @@ flowchart TB
 ```text
 外部材料（source）
   -> 知识单元和知识点（unit）
-  -> 使用中形成 ActivationLink（precompile）
+  -> KnowledgePoint Network 补充上下文（unit / retrieval）
+  -> 使用中形成 ActivationLink（precompile / study）
   -> 思维模式选择（cognitive-routing）
   -> 分层检索与证据查找（retrieval）
   -> 复杂问题进入临时认知模型（working-model）
@@ -140,4 +142,12 @@ flowchart TB
   -> Wiki 编译（wiki-compilation）
         ↑
   生命周期管理（lifecycle）持续影响激活、学习与 Wiki 有效性
+```
+
+其中：
+
+```text
+KPN 是上下文补充层，不是主检索层；
+ActivationLink 仍然是正式认知激活路径；
+Study 才负责从真实使用中形成新的 ActivationLink。
 ```

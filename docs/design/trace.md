@@ -46,6 +46,21 @@
 后续学习建议。
 ```
 
+思考记录还应记录 KPN 的局部扩散结果：
+
+```text
+核心 KnowledgePoint 是什么；
+KPN 扩散出了哪些上下文 KnowledgePoint；
+哪些上下文被采用；
+哪些只是背景；
+哪些暴露了知识缺口；
+哪些连接在本次问题中被证明有效或无效。
+```
+
+KPN 扩散结果不能自动强化为 ActivationLink。
+
+只有当某些上下文 KnowledgePoint 在多次问题处理中被独立召回、实际采用并得到反馈验证后，Study 才可以考虑形成新的 candidate ActivationLink。
+
 ## 3. 召回和使用要分开
 
 思考记录必须区分：
