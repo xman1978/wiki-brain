@@ -12,6 +12,39 @@ Trace 的目标不是解释系统为什么这样回答。
 
 Trace 的目标是为 Study 提供可以学习的事实样本。
 
+### Rerank 质量是 MVP 阶段的核心隐式信号
+
+MVP 阶段尚未形成 ActivationLink，无法产生 `activation_success / activation_failure / activation_gap` 等激活类事件。**Rerank 输出的证据质量分级是这一阶段最主要的学习信号**，不依赖用户任何显式操作。
+
+每次问答中，Rerank 已对候选证据做了语义分类（direct / supporting / irrelevant），Answer 的 citation 进一步确认了哪些直接证据被实际采用。两者组合形成**隐式质量分级**：
+
+```text
+confident：直接证据非空且被 Answer 引用
+            → 检索准确，问题-KP 路径值得积累
+partial  ：无直接证据但支持性证据非空，或直接证据未被引用
+            → 检索偏弱，知识点相关但缺乏直接回答能力
+gap      ：直接和支持性证据均为空
+            → 知识库盲区，立即生成 knowledge_gap 事件
+```
+
+这一分级在每次问答中自动产生，不需要用户表态。积累足够多的 `confident` 质量问答后，统计出的「问题关键词 × KP 共现」是形成 ActivationLink 和 Wiki 编译的直接材料，见 Study 文档的共现消费机制。
+
+### 学习信号以检索事件为主
+
+知识大脑的有效学习**不依赖**用户持续主动纠正。当前文档中 `user_correction`、`repeated_success` / `repeated_failure` 等类型并列出现，容易让读者误以为系统必须靠用户反馈才能学习；实际上，**主学习燃料来自每次问题处理中自然产生的检索事件**。
+
+三类核心检索事件是 ActivationLink 演化的主要驱动：
+
+```text
+activation_success：ActivationLink 命中且其知识被实际采用，支撑了有效回答；
+activation_failure：ActivationLink 命中但未能支撑有效回答，或命中知识未被采用；
+activation_gap：当前没有合适 ActivationLink，但补充查找找到了被采用的有效知识。
+```
+
+这些事件在问答过程中自动产生，记录的是「哪条路径被召回、是否进入最终回答、是否暴露缺口」等事实，不需要用户额外表态。`repeated_success` 和 `repeated_failure` 是对上述检索事件在相似场景下跨次累积的归纳，同样 primarily 来自使用过程，而非用户纠正。
+
+`user_correction` 是高价值但**非必要**的补充信号：它能加速边界修正和知识重新验证，在检索信号模糊时提供决定性证据，但**不是** ActivationLink 能够演化的前提。即使完全没有用户反馈，系统仍应仅凭检索事件的累积，完成候选链接形成、verified 晋升、降权和淘汰。
+
 ### Trace 只记录什么
 
 Trace 只记录与长期记忆学习相关的事实，不记录过程叙事：
@@ -71,19 +104,19 @@ ActivationLink 命中但失败；
 
 ## 3. Learning Event 类型
 
-Learning Event 按学习信号分类，每种类型对应一类可被 Study 消费的事实。
+Learning Event 按学习信号分类，每种类型对应一类可被 Study 消费的事实。**ActivationLink 相关学习以检索事件为主**（`activation_success`、`activation_failure`、`activation_gap` 及其累积形态）；用户反馈类事件（如 `user_correction`）是补充加速，不是主驱动。
 
-**activation_success**：ActivationLink 命中且其指向的知识被实际采用，支撑了成功回答。
+**activation_success**：ActivationLink 命中且其指向的知识被实际采用，支撑了成功回答。单次事件只说明路径值得观察；多次在相似 scene / goal 下重复出现，可累积为 `repeated_success` 并推动强化或晋升。
 
-**activation_failure**：ActivationLink 命中但未能支撑有效回答，或命中知识未被采用、导致回答失败或降级。
+**activation_failure**：ActivationLink 命中但未能支撑有效回答，或命中知识未被采用、导致回答失败或降级。单次失败可能来自问题理解偏差或证据不足，不应立即废弃整条链接；多次在相似条件下重复出现，可累积为 `repeated_failure` 并推动降权或淘汰。
 
-**activation_gap**：当前没有合适 ActivationLink，但通过目录结构召回、全文检索、外部证据或用户补充找到了有效知识，暴露激活路径缺口。
+**activation_gap**：当前没有合适 ActivationLink，但通过目录结构召回、全文检索、外部证据或用户补充找到了有效知识，暴露激活路径缺口。若补充结果被实际采用，Study 可据此形成候选 ActivationLink，无需等待用户纠正。
 
 **knowledge_conflict**：检索或回答中出现多来源、多结论或路径间的稳定冲突，需要标记或进入冲突处理。
 
-**user_correction**：用户明确纠正系统回答，表明当前知识、路径或边界存在问题。
+**user_correction**：用户明确纠正系统回答，表明当前知识、路径或边界存在问题。这是高价值补充信号，可加速重新验证或边界修正，但不应被理解为 ActivationLink 演化的必要条件。
 
-**repeated_success**：同类问题在相似场景下多次通过同一路径成功，适合强化 ActivationLink 或实践路径。
+**repeated_success**：同类问题在相似场景下多次通过同一路径成功，适合强化 ActivationLink 或实践路径。若多次事件还表现出相似的核心变量组合与 Working Model 组织方式，可作为 Study 提炼候选实践路径的结构信号。详见 `study.md` 第 7 节。
 
 **repeated_failure**：同类问题在相似场景下多次通过同一路径失败，适合降权、淘汰或重组路径。
 
@@ -166,7 +199,7 @@ Study 是长期记忆调整机制。
 
 Study 根据 Learning Event 中的事实样本执行强化、降权、淘汰、标记冲突、触发 Wiki 重编译等动作。Learning Reason 解释 Study 为何采取该动作，便于后续追踪、回滚和重评估。
 
-没有 Learning Event 支撑的学习动作，不应直接改变长期记忆的稳定结构。单次事件通常不足以晋升 verified ActivationLink 或触发 Wiki 重编译；Study 应结合多次事件、证据来源和反馈信号综合判断。
+没有 Learning Event 支撑的学习动作，不应直接改变长期记忆的稳定结构。单次事件通常不足以晋升 verified ActivationLink 或触发 Wiki 重编译；Study 应结合多次检索事件累积、证据来源，以及可选的用户反馈信号综合判断。ActivationLink 演化**不依赖**用户纠正，检索事件本身即可提供足够驱动。
 
 ## 7. Trace 与 Agent Runtime 的边界
 

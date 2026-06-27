@@ -1,0 +1,486 @@
+{
+  "perspective_id": "default",
+  "version": "1.0.0",
+  "domains": [
+    {
+      "id": "finance_stocks",
+      "name": "金融股票",
+      "description": "用于理解金融市场、股票投资、公司基本面、交易规则和风险控制。",
+      "status": "active",
+      "concepts": [
+        {
+          "id": "stock_market",
+          "name": "股票市场",
+          "aliases": ["证券市场", "二级市场"],
+          "description": "关注股票发行、交易、市场参与者和市场运行机制。",
+          "boundary": "关注股票市场整体机制，不直接等同于单只股票分析。",
+          "status": "active"
+        },
+        {
+          "id": "fundamental_analysis",
+          "name": "基本面分析",
+          "aliases": ["公司基本面", "财务分析"],
+          "description": "关注公司经营、财务、行业地位和长期价值判断。",
+          "boundary": "关注企业内在价值，不直接处理短线价格形态。",
+          "status": "active"
+        },
+        {
+          "id": "technical_analysis",
+          "name": "技术分析",
+          "aliases": ["K线分析", "走势分析"],
+          "description": "关注价格、成交量、趋势、形态和技术指标。",
+          "boundary": "关注市场交易行为，不直接判断企业内在价值。",
+          "status": "active"
+        },
+        {
+          "id": "valuation",
+          "name": "估值",
+          "aliases": ["股票估值", "价值评估"],
+          "description": "关注市盈率、市净率、现金流折现和相对估值等方法。",
+          "boundary": "关注价格与价值关系，不直接等同于买卖建议。",
+          "status": "active"
+        },
+        {
+          "id": "portfolio_risk",
+          "name": "组合风险",
+          "aliases": ["投资组合风险", "风险控制"],
+          "description": "关注仓位、分散、回撤、波动和风险暴露。",
+          "boundary": "关注组合层面的风险管理，不直接判断单个交易信号。",
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "policies_standards",
+      "name": "制度规范",
+      "description": "用于理解规章制度、流程规范、管理办法、合规要求和执行边界。",
+      "status": "active",
+      "concepts": [
+        {
+          "id": "policy_scope",
+          "name": "适用范围",
+          "aliases": ["适用对象", "适用边界"],
+          "description": "关注制度适用于哪些组织、人员、场景和事项。",
+          "boundary": "关注制度覆盖边界，不直接描述具体执行步骤。",
+          "status": "active"
+        },
+        {
+          "id": "responsibility",
+          "name": "职责分工",
+          "aliases": ["责任主体", "职责边界"],
+          "description": "关注不同角色、部门或岗位承担的责任。",
+          "boundary": "关注谁负责什么，不直接判断执行结果。",
+          "status": "active"
+        },
+        {
+          "id": "approval_process",
+          "name": "审批流程",
+          "aliases": ["流程审批", "审核流程"],
+          "description": "关注事项从发起、审核、批准到归档的流程。",
+          "boundary": "关注审批链路，不直接覆盖制度目的或处罚规则。",
+          "status": "active"
+        },
+        {
+          "id": "compliance_requirement",
+          "name": "合规要求",
+          "aliases": ["合规规范", "监管要求"],
+          "description": "关注必须遵守的规则、限制、证明和检查要求。",
+          "boundary": "关注规范性要求，不直接等同于业务最佳实践。",
+          "status": "active"
+        },
+        {
+          "id": "assessment_penalty",
+          "name": "考核处罚",
+          "aliases": ["考核办法", "违规处理"],
+          "description": "关注考核指标、评分规则、奖惩和违规后果。",
+          "boundary": "关注结果评价和后果，不直接描述日常流程。",
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "database_operations",
+      "name": "数据库运维",
+      "description": "用于理解数据库部署、备份恢复、性能优化、高可用和故障处理。",
+      "status": "active",
+      "concepts": [
+        {
+          "id": "backup_restore",
+          "name": "备份恢复",
+          "aliases": ["数据备份", "数据恢复"],
+          "description": "关注数据库备份策略、恢复流程和恢复目标。",
+          "boundary": "关注数据保护和恢复，不直接处理查询性能优化。",
+          "status": "active"
+        },
+        {
+          "id": "performance_tuning",
+          "name": "性能优化",
+          "aliases": ["SQL优化", "数据库调优"],
+          "description": "关注 SQL、索引、执行计划、连接和资源使用优化。",
+          "boundary": "关注性能问题，不直接覆盖备份和权限管理。",
+          "status": "active"
+        },
+        {
+          "id": "high_availability",
+          "name": "高可用",
+          "aliases": ["主从复制", "集群高可用"],
+          "description": "关注数据库复制、故障切换、集群和可用性设计。",
+          "boundary": "关注服务连续性，不直接等同于数据备份。",
+          "status": "active"
+        },
+        {
+          "id": "database_security",
+          "name": "数据库安全",
+          "aliases": ["数据库权限", "数据访问控制"],
+          "description": "关注账号、权限、审计、加密和访问控制。",
+          "boundary": "关注数据库访问安全，不直接覆盖系统级安全策略。",
+          "status": "active"
+        },
+        {
+          "id": "fault_diagnosis",
+          "name": "故障诊断",
+          "aliases": ["故障排查", "数据库故障"],
+          "description": "关注数据库异常、告警、日志和恢复处置。",
+          "boundary": "关注故障定位和处置，不直接描述日常巡检。",
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "os_operations",
+      "name": "操作系统运维",
+      "description": "用于理解 Linux/Windows 系统安装、配置、监控、性能、安全和故障处理。",
+      "status": "active",
+      "concepts": [
+        {
+          "id": "process_management",
+          "name": "进程管理",
+          "aliases": ["服务进程", "进程状态"],
+          "description": "关注进程启动、停止、状态、资源占用和异常处理。",
+          "boundary": "关注操作系统进程，不直接覆盖应用业务逻辑。",
+          "status": "active"
+        },
+        {
+          "id": "file_system",
+          "name": "文件系统",
+          "aliases": ["磁盘文件", "挂载点"],
+          "description": "关注目录、权限、磁盘、挂载和文件系统容量。",
+          "boundary": "关注文件和存储结构，不直接覆盖数据库数据模型。",
+          "status": "active"
+        },
+        {
+          "id": "network_config",
+          "name": "网络配置",
+          "aliases": ["网络连通", "端口配置"],
+          "description": "关注 IP、路由、DNS、端口、防火墙和网络连通性。",
+          "boundary": "关注主机网络层面，不直接覆盖应用协议设计。",
+          "status": "active"
+        },
+        {
+          "id": "system_performance",
+          "name": "系统性能",
+          "aliases": ["CPU内存", "系统负载"],
+          "description": "关注 CPU、内存、磁盘 IO、网络 IO 和系统负载。",
+          "boundary": "关注操作系统资源，不直接等同于应用性能。",
+          "status": "active"
+        },
+        {
+          "id": "system_security",
+          "name": "系统安全",
+          "aliases": ["主机安全", "系统加固"],
+          "description": "关注账号、权限、补丁、防火墙、审计和安全加固。",
+          "boundary": "关注操作系统安全，不直接覆盖业务合规制度。",
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "middleware_operations",
+      "name": "中间件运维",
+      "description": "用于理解 Web 服务、消息队列、缓存、网关、服务注册和中间件故障处理。",
+      "status": "active",
+      "concepts": [
+        {
+          "id": "web_server",
+          "name": "Web 服务",
+          "aliases": ["Nginx", "Apache"],
+          "description": "关注 Web 服务器配置、反向代理、负载均衡和静态资源服务。",
+          "boundary": "关注 Web 中间件，不直接覆盖业务应用代码。",
+          "status": "active"
+        },
+        {
+          "id": "message_queue",
+          "name": "消息队列",
+          "aliases": ["MQ", "消息中间件"],
+          "description": "关注消息生产、消费、堆积、确认、重试和顺序性。",
+          "boundary": "关注异步消息机制，不直接覆盖数据库事务。",
+          "status": "active"
+        },
+        {
+          "id": "cache_service",
+          "name": "缓存服务",
+          "aliases": ["Redis", "缓存中间件"],
+          "description": "关注缓存读写、失效、穿透、击穿、雪崩和容量。",
+          "boundary": "关注缓存层，不直接覆盖持久化数据建模。",
+          "status": "active"
+        },
+        {
+          "id": "api_gateway",
+          "name": "API 网关",
+          "aliases": ["网关", "服务网关"],
+          "description": "关注路由、鉴权、限流、熔断和服务入口管理。",
+          "boundary": "关注统一入口和治理，不直接描述内部业务实现。",
+          "status": "active"
+        },
+        {
+          "id": "middleware_monitoring",
+          "name": "中间件监控",
+          "aliases": ["运行监控", "中间件告警"],
+          "description": "关注中间件指标、日志、告警和运行状态。",
+          "boundary": "关注运行观测，不直接覆盖容量规划全部内容。",
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "software_development",
+      "name": "程序开发",
+      "description": "用于理解编码、调试、测试、构建、接口实现和工程实践。",
+      "status": "active",
+      "concepts": [
+        {
+          "id": "code_structure",
+          "name": "代码结构",
+          "aliases": ["代码组织", "目录结构"],
+          "description": "关注代码模块、目录、文件和职责组织。",
+          "boundary": "关注代码层面的组织，不直接等同于系统架构设计。",
+          "status": "active"
+        },
+        {
+          "id": "api_implementation",
+          "name": "接口实现",
+          "aliases": ["API开发", "接口开发"],
+          "description": "关注接口定义、参数、响应、错误处理和兼容性。",
+          "boundary": "关注程序接口实现，不直接覆盖产品需求定义。",
+          "status": "active"
+        },
+        {
+          "id": "debugging",
+          "name": "调试排错",
+          "aliases": ["Bug排查", "问题定位"],
+          "description": "关注复现、日志、断点、定位和修复程序问题。",
+          "boundary": "关注开发期和运行期代码问题，不直接覆盖运维平台告警。",
+          "status": "active"
+        },
+        {
+          "id": "testing",
+          "name": "测试",
+          "aliases": ["单元测试", "集成测试"],
+          "description": "关注测试用例、断言、覆盖率、回归和自动化测试。",
+          "boundary": "关注程序质量验证，不直接覆盖业务验收标准全部内容。",
+          "status": "active"
+        },
+        {
+          "id": "build_release",
+          "name": "构建发布",
+          "aliases": ["打包", "发布流程"],
+          "description": "关注编译、打包、版本、制品和发布流程。",
+          "boundary": "关注软件交付制品，不直接覆盖项目管理里程碑。",
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "software_design",
+      "name": "软件设计",
+      "description": "用于理解软件架构、模块划分、设计模式、数据模型和质量属性。",
+      "status": "active",
+      "concepts": [
+        {
+          "id": "module_decomposition",
+          "name": "模块划分",
+          "aliases": ["模块设计", "功能模块"],
+          "description": "关注系统如何拆分为模块、组件或服务。",
+          "boundary": "关注职责和边界，不直接描述具体代码实现细节。",
+          "status": "active"
+        },
+        {
+          "id": "system_boundary",
+          "name": "系统边界",
+          "aliases": ["边界设计", "上下文边界"],
+          "description": "关注系统与外部系统、用户、数据和职责的边界。",
+          "boundary": "关注系统范围，不直接覆盖内部算法细节。",
+          "status": "active"
+        },
+        {
+          "id": "data_model",
+          "name": "数据模型",
+          "aliases": ["领域模型", "数据结构"],
+          "description": "关注实体、字段、关系、约束和数据表达方式。",
+          "boundary": "关注数据表达，不直接等同于数据库运维。",
+          "status": "active"
+        },
+        {
+          "id": "design_pattern",
+          "name": "设计模式",
+          "aliases": ["模式设计", "软件模式"],
+          "description": "关注可复用的软件设计结构和适用场景。",
+          "boundary": "关注设计思想，不直接覆盖具体框架配置。",
+          "status": "active"
+        },
+        {
+          "id": "quality_attribute",
+          "name": "质量属性",
+          "aliases": ["非功能属性", "架构质量"],
+          "description": "关注性能、可用性、扩展性、安全性和可维护性。",
+          "boundary": "关注设计质量目标，不直接描述单个功能需求。",
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "ai_fundamentals",
+      "name": "AI 基础知识",
+      "description": "用于理解机器学习、深度学习、模型训练、评估和大模型基础概念。",
+      "status": "active",
+      "concepts": [
+        {
+          "id": "machine_learning",
+          "name": "机器学习",
+          "aliases": ["ML", "传统机器学习"],
+          "description": "关注监督学习、无监督学习、特征、训练和泛化。",
+          "boundary": "关注机器学习基本方法，不直接等同于大模型应用开发。",
+          "status": "active"
+        },
+        {
+          "id": "deep_learning",
+          "name": "深度学习",
+          "aliases": ["神经网络", "DL"],
+          "description": "关注神经网络、反向传播、表示学习和深度模型。",
+          "boundary": "关注深度模型原理，不直接覆盖业务应用方案。",
+          "status": "active"
+        },
+        {
+          "id": "large_language_model",
+          "name": "大语言模型",
+          "aliases": ["LLM", "大模型"],
+          "description": "关注语言模型、上下文、推理、生成和模型能力边界。",
+          "boundary": "关注模型基础能力，不直接覆盖具体工具使用。",
+          "status": "active"
+        },
+        {
+          "id": "model_evaluation",
+          "name": "模型评估",
+          "aliases": ["评测", "评价指标"],
+          "description": "关注准确率、召回率、损失、基准测试和人工评估。",
+          "boundary": "关注模型效果判断，不直接覆盖上线运维。",
+          "status": "active"
+        },
+        {
+          "id": "training_inference",
+          "name": "训练与推理",
+          "aliases": ["模型训练", "模型推理"],
+          "description": "关注训练数据、参数更新、推理调用和性能成本。",
+          "boundary": "关注模型生命周期中的训练和推理，不直接等同于提示词设计。",
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "ai_application_development",
+      "name": "AI 应用开发",
+      "description": "用于理解基于大模型和 AI 能力构建应用的架构、检索、工具调用和评估。",
+      "status": "active",
+      "concepts": [
+        {
+          "id": "prompt_engineering",
+          "name": "提示词工程",
+          "aliases": ["Prompt", "提示词设计"],
+          "description": "关注如何设计输入指令、上下文和输出约束。",
+          "boundary": "关注模型交互设计，不直接等同于产品功能设计。",
+          "status": "active"
+        },
+        {
+          "id": "rag",
+          "name": "检索增强生成",
+          "aliases": ["RAG", "知识库问答"],
+          "description": "关注检索、召回、重排、证据注入和生成回答。",
+          "boundary": "关注检索增强，不直接等同于完整知识大脑设计。",
+          "status": "active"
+        },
+        {
+          "id": "tool_calling",
+          "name": "工具调用",
+          "aliases": ["Function Calling", "工具使用"],
+          "description": "关注模型选择和调用外部工具、函数或 API。",
+          "boundary": "关注模型和工具交互，不直接覆盖工具本身实现。",
+          "status": "active"
+        },
+        {
+          "id": "agent_workflow",
+          "name": "Agent 工作流",
+          "aliases": ["智能体流程", "Agent 编排"],
+          "description": "关注任务规划、步骤执行、工具编排和反馈循环。",
+          "boundary": "关注应用层智能体，不直接等同于底层模型训练。",
+          "status": "active"
+        },
+        {
+          "id": "ai_evaluation",
+          "name": "AI 应用评估",
+          "aliases": ["应用评测", "效果评估"],
+          "description": "关注 AI 应用的正确性、稳定性、可解释性和用户反馈。",
+          "boundary": "关注应用效果，不直接覆盖模型基础评测全部内容。",
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "ai_tool_usage",
+      "name": "AI 工具使用",
+      "description": "用于理解各类 AI 工具的使用方法、工作流、限制和实践经验。",
+      "status": "active",
+      "concepts": [
+        {
+          "id": "chat_assistant",
+          "name": "对话助手",
+          "aliases": ["ChatGPT", "AI 助手"],
+          "description": "关注对话式 AI 的提问、上下文管理、输出使用和限制。",
+          "boundary": "关注使用方式，不直接覆盖模型底层原理。",
+          "status": "active"
+        },
+        {
+          "id": "coding_assistant",
+          "name": "代码助手",
+          "aliases": ["AI 编程", "编码助手"],
+          "description": "关注使用 AI 辅助阅读、修改、生成和测试代码。",
+          "boundary": "关注开发辅助工具使用，不直接替代软件设计原则。",
+          "status": "active"
+        },
+        {
+          "id": "document_assistant",
+          "name": "文档助手",
+          "aliases": ["文档生成", "文档总结"],
+          "description": "关注 AI 辅助写作、总结、改写、审阅和资料整理。",
+          "boundary": "关注文档处理，不直接等同于知识结构构建。",
+          "status": "active"
+        },
+        {
+          "id": "image_generation",
+          "name": "图像生成",
+          "aliases": ["AI 绘图", "图片生成"],
+          "description": "关注使用 AI 生成、编辑和优化图像资产。",
+          "boundary": "关注图像工具使用，不直接覆盖视觉设计全部方法。",
+          "status": "active"
+        },
+        {
+          "id": "workflow_automation",
+          "name": "工作流自动化",
+          "aliases": ["自动化流程", "AI 工作流"],
+          "description": "关注使用 AI 串联任务、工具、文档和操作流程。",
+          "boundary": "关注使用层面的自动化，不直接覆盖底层 Agent 框架实现。",
+          "status": "active"
+        }
+      ]
+    }
+  ]
+}

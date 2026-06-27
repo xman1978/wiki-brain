@@ -1,0 +1,46 @@
+package retrieval
+
+import "encoding/json"
+
+type EvidenceSet struct {
+	Question        string             `json:"question"`
+	Path            string             `json:"path"`
+	DirectEvidence  []Evidence         `json:"direct_evidence"`
+	Supporting      []Evidence         `json:"supporting"`
+	Conflicts       []ConflictEvidence `json:"conflicts,omitempty"`
+}
+
+type Evidence struct {
+	FactID      string          `json:"fact_id"`
+	CandidateID string          `json:"-"`
+	UnitID      string          `json:"unit_id"`
+	PointID     string          `json:"point_id"`
+	Content     string          `json:"content"`
+	SourceRef   json.RawMessage `json:"source_ref"`
+	Role        string          `json:"role"`
+}
+
+type ConflictEvidence struct {
+	UnitID    string          `json:"unit_id"`
+	PointID   string          `json:"point_id"`
+	Content   string          `json:"content"`
+	SourceRef json.RawMessage `json:"source_ref"`
+	SourceTitle string        `json:"source_title"`
+}
+
+type SourceRef struct {
+	SourceID  string `json:"source_id"`
+	LineStart int    `json:"line_start"`
+	LineEnd   int    `json:"line_end"`
+}
+
+type candidate struct {
+	candidateID string
+	unitID      string
+	pointID     string
+	sourceID    string
+	lineStart   int
+	lineEnd     int
+	score       float64
+	sourcePaths []string // "outline", "fts"
+}

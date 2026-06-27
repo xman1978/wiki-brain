@@ -1,0 +1,73 @@
+# Wiki-Brain 配置文件
+# 环境变量优先级高于此文件，格式：WB_<大写字段路径>，如 WB_LLM_BASE_URL
+
+# LLM 配置
+llm:
+  api_key:           "sk-7b7e0e6749d14e8b83381e0b8ac809e5"
+  base_url:          "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  timeout_seconds:   120
+  max_retries:       3
+  models:
+    default:
+      model:            "qwen3-30b-a3b-instruct-2507"
+      temperature:      0.2
+      max_input_tokens: 4096
+      max_output_tokens: 4096
+    reasoning:
+      model:            "qwen3-30b-a3b-instruct-2507"
+      temperature:      0.1
+      max_input_tokens: 4096
+      max_output_tokens: 8192
+      thinking:         true
+    extraction:
+      model:            "qwen3-30b-a3b-instruct-2507"
+      temperature:      0
+      max_input_tokens: 4096
+      max_output_tokens: 4096
+
+# HTTP 服务器
+server:
+  port:          8080
+  read_timeout:  "30s"
+  write_timeout: "60s"
+
+# 数据库
+database:
+  path: "data/wiki-brain.db"            # SQLite 文件路径，相对于工作目录
+
+# Bleve 全文索引
+index:
+  path: "data/searchindex"              # 索引根目录，内含 units / points / outlines 子目录
+
+# 异步任务队列
+queue:
+  buffer_size: 100                      # buffered channel 容量
+
+# FileView 服务（格式转换）
+fileview:
+  base_url:          "http://127.0.0.1:8000"
+  poll_interval_ms:  1500
+  max_poll_seconds:  600
+
+# Source 模块
+source:
+  upload_dir:            "data/sources"
+  segment_max_chars:     2000           # 大纲叶节点最大字符数（rune），超过此值在 Source 层触发语义目录细化
+  min_segment_chars:     400            # Unit 切块：相邻叶节点合计低于此值时合并
+
+# Retrieval 模块
+retrieval:
+  outline_fts_min_score: 0.5
+  rerank_top_n:          20
+
+# Study 模块
+study:
+  schedule_interval:       "1h"
+  candidate_confident_min: 5
+  candidate_ratio_min:     0.6
+  wiki_kp_min:             4
+  wiki_confident_min:      8
+  gap_hit_threshold:       3
+  scan_batch_size:         200
+  report_period_days:      30
+  report_max_keep:         10

@@ -1,0 +1,83 @@
+Session Parser Diagnostic
+Model: qwen3-30b-a3b-instruct-2507
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+CASE: s01-失败：长问句含文档名
+  recent_objects = []
+  current_object = （空）
+  user_input     = 帮我看看差旅费报销制度，住宿费标准是怎样的？
+  LLM raw output: {"intent":"查询住宿费标准","resolved_objects":["差旅费报销制度"]}
+  Parsed: ok=true intent="查询住宿费标准" objects=[差旅费报销制度]
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+CASE: s02-成功：短问句含文档名
+  recent_objects = []
+  current_object = （空）
+  user_input     = 帮我看看绩效管理制度
+  LLM raw output: {"intent":"查看绩效管理制度","resolved_objects":["绩效管理制度"]}
+  Parsed: ok=true intent="查看绩效管理制度" objects=[绩效管理制度]
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+CASE: s04-成功：含文档名短语
+  recent_objects = []
+  current_object = （空）
+  user_input     = 查看应收账款管理制度的回款周期
+  LLM raw output: {"intent":"查询回款周期","resolved_objects":["应收账款管理制度"]}
+  Parsed: ok=true intent="查询回款周期" objects=[应收账款管理制度]
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+CASE: s03-失败：含文档名长短语
+  recent_objects = []
+  current_object = （空）
+  user_input     = 培训积分管理办法中，积分由哪几部分组成？
+  LLM raw output: {"intent":"查询积分组成","resolved_objects":["培训积分管理办法"]}
+  Parsed: ok=true intent="查询积分组成" objects=[培训积分管理办法]
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+CASE: s08-失败：含文档名+具体问题
+  recent_objects = []
+  current_object = （空）
+  user_input     = 差旅费报销制度中，哪些情况可以坐飞机？
+  LLM raw output: {"intent":"查询可坐飞机情况","resolved_objects":["差旅费报销制度"]}
+  Parsed: ok=true intent="查询可坐飞机情况" objects=[差旅费报销制度]
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+CASE: s06-失败：含文档名+具体问题
+  recent_objects = []
+  current_object = （空）
+  user_input     = 无合同立项申请与审批规范中，成本红线是什么？
+  LLM raw output: {"intent":"查询成本红线","resolved_objects":["无合同立项申请与审批规范"]}
+  Parsed: ok=true intent="查询成本红线" objects=[无合同立项申请与审批规范]
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+CASE: s09-失败：长文档名+具体问题
+  recent_objects = []
+  current_object = （空）
+  user_input     = 大模型开发测试基础平台使用暂行管理办法中，资源申请流程是什么？
+  LLM raw output: {"intent":"查询资源申请流程","resolved_objects":["大模型开发测试基础平台使用暂行管理办法"]}
+  Parsed: ok=true intent="查询资源申请流程" objects=[大模型开发测试基础平台使用暂行管理办法]
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+CASE: 代词-有候选
+  recent_objects = ["绩效管理制度"]
+  current_object = 绩效管理制度
+  user_input     = 它里面的考核周期是怎么规定的？
+  LLM raw output: {"intent":"查询考核周期规定","resolved_objects":["绩效管理制度"]}
+  Parsed: ok=true intent="查询考核周期规定" objects=[绩效管理制度]
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+CASE: 代词-无候选
+  recent_objects = []
+  current_object = （空）
+  user_input     = 分析它的设计思路
+  LLM raw output: {"intent":"分析设计思路","resolved_objects":[]}
+  Parsed: ok=true intent="分析设计思路" objects=[]
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+CASE: s04t3-打断后重新问：含文档名
+  recent_objects = []
+  current_object = （空）
+  user_input     = 日常费用报销期限管理规定中，招待费报销期限是多久？
+  LLM raw output: {"intent":"查询报销期限","resolved_objects":["日常费用报销期限管理规定"]}
+  Parsed: ok=true intent="查询报销期限" objects=[日常费用报销期限管理规定]
+

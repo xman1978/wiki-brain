@@ -1,0 +1,79 @@
+[
+  {
+    "id": "s01",
+    "title": "直接指定文档的单轮问答",
+    "turns": [
+      { "input": "帮我看看差旅费报销制度，住宿费标准是怎样的？", "expect_action": "retrieve", "expect_has_answer": true }
+    ]
+  },
+  {
+    "id": "s02",
+    "title": "代词指代解析（它）",
+    "turns": [
+      { "input": "帮我看看绩效管理制度", "expect_action": "retrieve", "expect_has_answer": true },
+      { "input": "它里面的考核周期是怎么规定的？", "expect_action": "retrieve", "expect_has_answer": true }
+    ]
+  },
+  {
+    "id": "s03",
+    "title": "连续性输入（继续）",
+    "turns": [
+      { "input": "培训积分管理办法中，积分由哪几部分组成？", "expect_action": "retrieve", "expect_has_answer": true },
+      { "input": "继续", "expect_action": "retrieve", "note": "continuable_action set by previous turn" }
+    ]
+  },
+  {
+    "id": "s04",
+    "title": "打断后重新提问",
+    "turns": [
+      { "input": "查看应收账款管理制度的回款周期", "expect_action": "retrieve", "expect_has_answer": true },
+      { "input": "停下", "expect_action": "interrupted" },
+      { "input": "日常费用报销期限管理规定中，招待费报销期限是多久？", "expect_action": "retrieve", "expect_has_answer": true }
+    ]
+  },
+  {
+    "id": "s05",
+    "title": "无对象时的澄清流程",
+    "turns": [
+      { "input": "分析它的设计思路", "expect_action": "clarify" }
+    ]
+  },
+  {
+    "id": "s06",
+    "title": "多轮上下文切换",
+    "turns": [
+      { "input": "无合同立项申请与审批规范中，成本红线是什么？", "expect_action": "retrieve", "expect_has_answer": true },
+      { "input": "项目考核与激励制度中，成本超支怎么扣分？", "expect_action": "retrieve", "expect_has_answer": true }
+    ]
+  },
+  {
+    "id": "s07",
+    "title": "模糊意图触发澄清",
+    "turns": [
+      { "input": "看看", "expect_action": "clarify" }
+    ]
+  },
+  {
+    "id": "s08",
+    "title": "指定文档后代词连续追问",
+    "turns": [
+      { "input": "差旅费报销制度中，哪些情况可以坐飞机？", "expect_action": "retrieve", "expect_has_answer": true },
+      { "input": "那住宿费呢？", "expect_action": "retrieve", "expect_has_answer": true },
+      { "input": "伙食补贴标准呢？", "expect_action": "retrieve", "expect_has_answer": true }
+    ]
+  },
+  {
+    "id": "s09",
+    "title": "大模型平台管理办法查询",
+    "turns": [
+      { "input": "大模型开发测试基础平台使用暂行管理办法中，资源申请流程是什么？", "expect_action": "retrieve", "expect_has_answer": true }
+    ]
+  },
+  {
+    "id": "s10",
+    "title": "知识库中不存在的问题",
+    "turns": [
+      { "input": "公司年假制度是怎样的？", "expect_action": "retrieve", "expect_has_answer": false, "note": "知识库无此内容，但问题本身可检索，应放行" }
+    ]
+  }
+]

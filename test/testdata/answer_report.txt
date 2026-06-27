@@ -1,0 +1,354 @@
+Answer Quality Report
+Generated: 2026-06-26 13:53:58
+========================================================================================================================
+
+[q01] 什么是绩效管理？什么是绩效考核？两者有什么区别？
+  Category: definition | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T13:53:59.047+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T13:54:00.072+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[4a7f9d51]
+time=2026-06-26T13:54:05.295+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=25
+time=2026-06-26T13:54:05.297+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=28
+time=2026-06-26T13:54:05.297+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=20
+time=2026-06-26T13:54:09.491+08:00 level=INFO msg="retrieval: step7 rerank done" kept=20
+time=2026-06-26T13:54:09.492+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=1 supporting=20 conflicts=0
+  Actual path: short | has_answer: true | citations: 6 | time: 15.5s
+
+  --- Generated Answer ---
+  绩效管理是指企业为实现战略目标，通过设定绩效目标、持续沟通与辅导、绩效考核、结果应用及改进等环节，对员工工作表现进行系统化管理的过程。其核心在于将组织目标分解到个人，推动员工行为与组织战略保持一致，并通过反馈和激励促进绩效提升。
+  
+  绩效考核是绩效管理中的关键环节，指依据预先设定的绩效指标和标准，对员工在一定周期内的工作成果、能力表现和态度进行客观评估，并给予等级评定（如S、A、B、C、D）的过程。北京万户软件技术有限公司采用评分与排序相结合的方式，由直接上级进行评分，二级考评者负责监督一致性，最终根据强制比例确定绩效等级。
+  
+  两者区别在于：绩效管理是一个涵盖目标设定、过程监控、反馈沟通、考核评价和结果应用的完整循环体系；而绩效考核仅是其中的评估环节，侧重于对绩效结果的量化评判。绩效管理强调过程与持续改进，绩效考核则聚焦于结果评定。
+
+  --- Expected Answer Points ---
+  ✗ [1] 绩效管理是上级为提高和改善下属员工工作能力与工作业绩所做的一系列管理活动
+  ✗ [2] 绩效考核是上级对下属员工工作结果进行定期或不定期的评估
+  ✗ [3] 绩效考核是绩效管理的一个重要环节
+
+  Coverage: 0/3 (0%)
+
+[q02] 培训积分由哪几部分组成？各部分的含义是什么？
+  Category: definition | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T13:54:14.355+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T13:54:15.021+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[20426b2f]
+time=2026-06-26T13:54:16.148+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=4
+time=2026-06-26T13:54:16.151+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=12
+time=2026-06-26T13:54:16.151+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=12
+time=2026-06-26T13:54:18.196+08:00 level=INFO msg="retrieval: step7 rerank done" kept=12
+time=2026-06-26T13:54:18.197+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=2 supporting=10 conflicts=0
+  Actual path: short | has_answer: true | citations: 2 | time: 6.9s
+
+  --- Generated Answer ---
+  培训积分由出勤分、结果分和奖惩分三部分组成。出勤分是指员工参与由人力部门组织的培训项目，完整参与每个课程积1分，缺勤、迟到/早退、请假或未参加考核等行为将被扣分；结果分包括培训后的考试成绩、心得分享、课件输出、能力测试及实操结果等，根据完成情况给予加分或扣分；奖惩分则涵盖培训效果反馈、讲师激励以及因未按规定要求而产生的扣减分。
+
+  --- Expected Answer Points ---
+  ✗ [1] 出勤分：参与人力部门组织的培训项目，完整参与积1分
+  ✗ [2] 结果分：考试成绩、心得分享、课件输出、能力测试、实操结果等
+  ✗ [3] 奖惩分：培训效果反馈、讲师激励、自主学习等奖励积分及扣减分
+
+  Coverage: 0/3 (0%)
+
+[q03] 无合同立项制度中，成本红线是什么意思？
+  Category: definition | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T13:54:21.376+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T13:54:21.882+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[8fc74a44]
+time=2026-06-26T13:54:23.019+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=0
+time=2026-06-26T13:54:23.021+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=5
+time=2026-06-26T13:54:23.021+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=5
+time=2026-06-26T13:54:24.134+08:00 level=INFO msg="retrieval: step7 rerank done" kept=4
+time=2026-06-26T13:54:24.135+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=2 supporting=2 conflicts=0
+  Actual path: short | has_answer: true | citations: 2 | time: 5.3s
+
+  --- Generated Answer ---
+  在无合同立项制度中，成本红线是指在合同签订前，允许发生的实施成本和采购成本的总和。该红线由营销中心总经理、总经理及分管交付副总经理在审批过程中确认，并作为项目投入的上限。所有交付活动不得超出此成本红线，且投入需遵循风险可控、最小投入的原则，在审批后方可执行。若实际投入超过成本红线，将触发风险预警机制，需及时上报并组织会议讨论是否继续执行项目。
+
+  --- Expected Answer Points ---
+  ✓ [1] 合同签订前，允许发生的实施成本和采购成本的总和
+
+  Coverage: 1/1 (100%)
+
+[q04] 一个员工从北京出差去武汉，住宿费最高能报销多少？如果两位同部门同性员工一起出差武汉，住宿应如何安排？
+  Category: reasoning | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T13:54:26.591+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T13:54:27.103+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[426a1b8d]
+time=2026-06-26T13:54:28.232+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=0
+time=2026-06-26T13:54:28.236+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=19
+time=2026-06-26T13:54:28.236+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=19
+time=2026-06-26T13:54:29.049+08:00 level=INFO msg="retrieval: step7 rerank done" kept=2
+time=2026-06-26T13:54:29.050+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=2 supporting=5 conflicts=0
+time=2026-06-26T13:54:29.051+08:00 level=INFO msg="answer: question complexity upgraded to deep" question=一个员工从北京出差去武汉，住宿费最高能报销多少？如果两位同部门同性员工一起出差武汉，住宿应如何安排？
+  Actual path: deep | has_answer: true | citations: 2 | time: 8.4s
+
+  --- Generated Answer ---
+  1. 员工从北京出差去武汉，住宿费最高能报销多少？
+  
+  - 武汉属于B类城市（根据 fact_id: [b123aeb9-45a7-47ff-845b-bffdde093302] 中的第2点）。
+  - B类城市全体员工的住宿限额标准为280元/天（根据 fact_id: [b123aeb9-45a7-47ff-845b-bffdde093302] 中的表格）。
+  - 住宿费用采用限额实报实销制，超标准部分由个人承担（fact_id: [b123aeb9-45a7-47ff-845b-bffdde093302] 第三条）。
+  - 因此，该员工从北京出差至武汉，住宿费最高可报销280元/天。
+  
+  2. 如果两位同部门同性员工一起出差武汉，住宿应如何安排？
+  
+  - 根据 fact_id: [b123aeb9-45a7-47ff-845b-bffdde093302] 第(五)条：同部门同行同性人员必须选择标准间住宿，按照两两优先入住原则，不得各自单独开设额外房间。
+  - 若违反此规定，将取消所有补贴，并视情节轻重给予罚款。
+  - 因此，两位同部门同性员工应合住一个标准间，不可分别开房。
+  
+  综上，该员工住宿费最高可报销280元/天；若两人同行且同性，必须合住标准间，不得单独开房。
+
+  --- Expected Answer Points ---
+  ✗ [1] 武汉属于B类城市（新一线城市）
+  ✗ [2] B类城市住宿限额280元
+  ✗ [3] 同部门同行同性人员必须选择标准间住宿，按两两优先入住原则
+  ✗ [4] 不得各自单独开设额外房间，否则取消所有补贴并视情节罚款
+
+  Coverage: 0/4 (0%)
+
+[q05] 某员工2021年签约的合同至今未回款，根据制度，现在这笔回款由谁负责？经历了哪些阶段？
+  Category: reasoning | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T13:54:35.092+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T13:54:35.499+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[44c2483c]
+time=2026-06-26T13:54:40.012+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=17
+time=2026-06-26T13:54:40.015+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=62
+time=2026-06-26T13:54:40.015+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=20
+time=2026-06-26T13:54:42.671+08:00 level=INFO msg="retrieval: step7 rerank done" kept=20
+time=2026-06-26T13:54:42.671+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=7 supporting=15 conflicts=0
+time=2026-06-26T13:54:42.674+08:00 level=INFO msg="answer: question complexity upgraded to deep" question=某员工2021年签约的合同至今未回款，根据制度，现在这笔回款由谁负责？经历了哪些阶段？
+  Actual path: deep | has_answer: true | citations: 8 | time: 31.1s
+
+  --- Generated Answer ---
+  ### 问题拆解与推理过程
+  
+  #### 子问题1：该合同的签约年份属于哪个回款周期规定？
+  - 根据证据 [52663d4a-c454-4944-8f13-ee1f3def3d16] 和 [f1e4af61-a333-4596-9fae-dfd43ab1ad3a]，2021年至2022年（含）签约的合同回款周期为6个月。
+  - 该员工于2021年签约合同，因此适用6个月回款周期。
+  - 引用 fact_id: [52663d4a-c454-4944-8f13-ee1f3def3d16], [f1e4af61-a333-4596-9fae-dfd43ab1ad3a]
+  
+  #### 子问题2：该合同是否已超过回款周期？
+  - 合同签订时间为2021年，至今（假设当前时间在2024年）已超过3年，远超6个月的回款周期。
+  - 因此，该合同已严重逾期，超出规定回款期限。
+  - 引用 fact_id: [52663d4a-c454-4944-8f13-ee1f3def3d16], [f1e4af61-a333-4596-9fae-dfd43ab1ad3a]
+  
+  #### 子问题3：根据制度，该笔回款是否触发任务再分配？
+  - 依据 [52663d4a-c454-4944-8f13-ee1f3def3d16] 和 [f1e4af61-a333-4596-9fae-dfd43ab1ad3a]，若销售人员未在6个月内完成回款，则回款义务自动转移至客户成功部催款专员，进入法务催收阶段。
+  - 由于该合同自2021年起至今未回款，已明显超过6个月，因此回款任务已自动转移。
+  - 引用 fact_id: [52663d4a-c454-4944-8f13-ee1f3def3d16], [f1e4af61-a333-4596-9fae-dfd43ab1ad3a]
+  
+  #### 子问题4：是否存在其他触发强制转移或涉诉情况？
+  - 证据 [9b3ac989-bcd5-45d6-8fcb-316b82f759b5] 提到：项目回款延期累计达9个月以上，或申请两次延期期满未回款，将强制转给催款专员。
+  - 本案例中，合同已逾期超过3年，远超9个月，满足“延期累计达9个月以上”的条件，因此也符合强制转移标准。
+  - 此外，[6a3bee55-999d-407c-8feb-397847eddd5e] 和 [0629c3fd-6fd8-475b-ba26-b2b63df9db2d] 均指出，涉诉项目回款第一责任人是催款专员，第二责任人为总经理。
+  - 虽然目前无明确证据表明已进入诉讼阶段，但因长期逾期且已超6个月，系统性地已进入法务催收流程，可视为处于涉诉前准备阶段。
+  - 引用 fact_id: [9b3ac989-bcd5-45d6-8fcb-316b82f759b5], [6a3bee55-999d-407c-8feb-397847eddd5e], [0629c3fd-6fd8-475b-ba26-b2b63df9db2d]
+  
+  #### 子问题5：该笔回款经历了哪些阶段？
+  - **阶段一：初始回款责任阶段**（2021年签约后）
+    - 销售人员为第一责任人，上级主管为第二责任人（依据 [1f92cbd1-e3e8-455b-937f-d006cc93c201]）。
+  - **阶段二：回款周期到期未完成**（2021年+6个月=2022年6月后）
+    - 6个月期限届满未回款，根据 [52663d4a-c454-4944-8f13-ee1f3def3d16]，回款义务自动转移至客户成功部催款专员。
+  - **阶段三：进入法务催收阶段**（2022年6月起持续至今）
+    - 由于逾期超过9个月，触发 [9b3ac989-bcd5-45d6-8fcb-316b82f759b5] 的强制转移条件，任务由催款专员负责。
+    - 同时，根据 [acbe9d39-65c2-4511-a35e-fca19c728782] 等证据，公司会组织专项回款会议，由催款专员牵头，联合销售、财务、项目中心等部门分析问题并形成《回款任务清单》。
+    - 期间需留存催收证据（如邮件、微信记录、EMS签收等），避免诉讼时效失效（依据 [26414ccb-781c-45df-8b94-2ec16e1001f6]）。
+  - **阶段四：可能进入诉讼阶段**（未来可能性）
+    - 若继续无法回款，将进入诉讼催收阶段，此时第一责任人变为催款专员，第二责任人为总经理（依据 [6a3bee55-999d-407c-8feb-397847eddd5e] 和 [0629c3fd-6fd8-475b-ba26-b2b63df9db2d]）。
+  
+  #### 综合结论：
+  - 该笔2021年签约合同至今未回款，已严重超期，根据制度规定，其回款责任已从原销售人员转移至客户成功部催款专员。
+  - 当前阶段为法务催收阶段，由催款专员主导，经办销售人员不再承担回款义务。
+  - 该笔回款经历了：
+    1. 初始销售责任阶段（2021年）
+    2. 6个月回款周期到期后自动转移阶段（2022年6月）
+    3. 法务催收与专项会议协调阶段（2022年6月至今）
+    4. 可能进入诉讼阶段（未来）
+  
+  最终答案：
+  - **现在这笔回款由客户成功部催款专员负责**；
+  - **经历阶段包括：初始销售责任 → 6个月回款周期到期自动转移 → 法务催收与专项会议协调 → 可能进入诉讼阶段**。
+
+  --- Expected Answer Points ---
+  ✗ [1] 2021年至2022年签约的合同回款周期为6个月
+  ✗ [2] 超过6个月未回款，回款任务自动转移给客户成功部催款专员
+  ✓ [3] 进入法务催收阶段
+  ✗ [4] 销售人员回款义务转移
+
+  Coverage: 1/4 (25%)
+
+[q06] 如果一个项目的决算成本比预算成本超支了20%，该项目的考核评定结果是什么？能拿到项目奖金吗？
+  Category: reasoning | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T13:55:06.220+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T13:55:06.834+08:00 level=INFO msg="retrieval: step3 source filter done" sources="[dc4b79df 44e1a5cc 19803e65]"
+time=2026-06-26T13:55:08.687+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=3
+time=2026-06-26T13:55:08.690+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=18
+time=2026-06-26T13:55:08.690+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=18
+time=2026-06-26T13:55:12.467+08:00 level=INFO msg="retrieval: step7 rerank done" kept=11
+time=2026-06-26T13:55:12.468+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=4 supporting=7 conflicts=0
+time=2026-06-26T13:55:12.469+08:00 level=INFO msg="answer: question complexity upgraded to deep" question=如果一个项目的决算成本比预算成本超支了20%，该项目的考核评定结果是什么？能拿到项目奖金吗？
+  Actual path: deep | has_answer: true | citations: 5 | time: 21.0s
+
+  --- Generated Answer ---
+  ### 问题拆解与推理过程
+  
+  #### 子问题1：计算项目考核得分（T）
+  - 已知条件：项目决算成本比预算成本超支20%，即成本超支率 = 20% = 0.2
+  - 根据直接证据 [d236687b-1a5b-4284-a3f9-b4dfb285d6b2] 和 [d9245e0d-831a-41cb-8915-3f0c6d85c40c]，项目考核得分公式为：
+    
+    $$
+    T = (1 - \text{成本超支率}) \times 100\%
+    $$
+    
+    代入数值：
+    
+    $$
+    T = (1 - 0.2) \times 100 = 0.8 \times 100 = 80
+    $$
+  
+  - 因此，项目考核得分为 **80**。
+  
+  #### 子问题2：根据考核得分确定评定结果
+  - 查表：
+    - 优秀：T >= 100 → 不满足
+    - 满意：95 <= T < 100 → 不满足
+    - 合格：85 <= T < 95 → 80 不在该区间 → 不满足
+    - 待改进：70 <= T < 85 → 80 在此区间 → 满足
+    - 不合格：<70 → 不满足
+  
+  - 结论：该项目的评定结果为 **待改进**。
+  
+  #### 子问题3：能否拿到项目奖金？
+  - 根据直接证据 [fafaf0c9-5445-43e6-aae1-5793f02cdcff]：
+    > 项目评定结果为不合格，则无项目奖金。
+  
+  - 注意：该规则仅说明“不合格”则无奖金，但未明确“待改进”是否可获得奖金。需进一步判断。
+  
+  - 查阅其他相关规则：
+    - 证据 [1735e44f-b400-4252-a1c2-434d6e562619] 规定：
+      > 当项目决算成本大于等于预算成本，即项目成本超支时，
+      > 项目奖金 = 项目奖金包 × 项目绩效系数
+  
+    - 项目绩效系数由评定结果决定，见表格：
+      - 待改进对应项目绩效系数为 **0.5**
+  
+  - 因此，即使项目超支，只要评定结果不是“不合格”，仍可获得奖金，且奖金金额为项目奖金包 × 0.5。
+  
+  - 另外，证据 [fafaf0c9-5445-43e6-aae1-5793f02cdcff] 仅限制“不合格”情况无奖金，未禁止“待改进”获得奖金，因此不构成排除条件。
+  
+  - 补充证据 [1519efcd-b961-4a3c-aba0-f4bb57b4ed0f] 等也未提及“待改进”不可获奖，仅强调考核流程和审批机制。
+  
+  #### 综合结论：
+  - 项目考核得分为80，评定结果为“待改进”；
+  - 由于评定结果非“不合格”，且存在项目绩效系数0.5，因此可以领取项目奖金，金额为项目奖金包 × 0.5；
+  - 项目奖金发放流程依据 [84dbd699-e44a-4471-b10f-16e85b7d1ee3] 进行分两次发放，但不影响是否能拿奖金的判断。
+  
+  
+
+  --- Expected Answer Points ---
+  ✗ [1] 成本超支率为20%
+  ✗ [2] 考核得分 = (1 - 0.2) × 100 = 80
+  ✗ [3] 评定结果为待改进（70 <= T < 85）
+  ✗ [4] 项目绩效系数为0.5
+  ✗ [5] 可以拿到项目奖金但按0.5系数折算
+
+  Coverage: 0/5 (0%)
+
+[q07] 公司差旅费制度中，允许乘坐飞机出差的情况有哪些？
+  Category: enumeration | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T13:55:27.211+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T13:55:27.725+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[426a1b8d]
+time=2026-06-26T13:55:28.461+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=0
+time=2026-06-26T13:55:28.463+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=18
+time=2026-06-26T13:55:28.463+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=18
+time=2026-06-26T13:55:33.254+08:00 level=INFO msg="retrieval: step7 rerank done" kept=1
+time=2026-06-26T13:55:33.255+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=1 supporting=2 conflicts=0
+  Actual path: short | has_answer: true | citations: 2 | time: 9.3s
+
+  --- Generated Answer ---
+  根据公司差旅费制度，允许乘坐飞机出差的情况包括：第一，因紧急情况急需赶赴客户现场处理事务，需在易快报中发起“出差乘坐飞机申请流程”，选择“紧急情况”并说明理由，经审批后可乘坐飞机；第二，当机票总费用（含经济舱票价、保险及往返机场交通费）低于高铁二等座票价，或低于其他交通工具的标准报价（如无直达火车需转车的情况），可在流程中列明相关费用，财务按就低原则报销，且需以行程单作为报销凭证。
+
+  --- Expected Answer Points ---
+  ✗ [1] 紧急情况急需赶赴客户现场处理事务，在流程中选择紧急情况并说明理由
+  ✗ [2] 机票总费用（含经济舱费用+保险+往返机场交通费）低于高铁二等票价格或低于其他交通工具标准报价
+
+  Coverage: 0/2 (0%)
+
+[q08] 日常费用报销有哪些时间限制？分别是多长？
+  Category: enumeration | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T13:55:36.530+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T13:55:36.977+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[991b684a]
+time=2026-06-26T13:55:37.952+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=5
+time=2026-06-26T13:55:37.954+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=5
+time=2026-06-26T13:55:37.954+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=5
+time=2026-06-26T13:55:39.091+08:00 level=INFO msg="retrieval: step7 rerank done" kept=4
+time=2026-06-26T13:55:39.092+08:00 level=INFO msg="retrieval: kpn found contradicts" count=1
+time=2026-06-26T13:55:39.092+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=2 supporting=2 conflicts=1
+  Actual path: short | has_answer: true | citations: 3 | time: 5.0s
+
+  --- Generated Answer ---
+  日常费用报销的时间限制根据费用类型不同而有所区别：办公费用、市内交通费用、通讯费用及差旅费用等，应自发票开具之日起三个月内完成报销；招待费用则须在费用实际发生之日起45天内完成报销。逾期未提交的，财务部门将不予受理，相关费用由个人自行承担。
+
+  --- Expected Answer Points ---
+  ✗ [1] 招待费用须在费用发生之日起45天内报销
+  ✗ [2] 其他日常费用（办公、市内交通、通讯、差旅）在发票开具之日起三个月内报销
+  ✗ [3] 原则上禁止发票跨年报销
+
+  Coverage: 0/3 (0%)
+
+[q09] 公司年假制度是怎样的？员工入职满一年后有几天年假？
+  Category: irrelevant | Expected path: deep
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T13:55:41.546+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T13:55:41.971+08:00 level=INFO msg="retrieval: step3 source filter done" sources="[dc4b79df d16dd42e 991b684a 8fc74a44 5ac8ec7a 4a7f9d51 44e1a5cc 44c2483c 426a1b8d 20426b2f 19803e65]"
+time=2026-06-26T13:55:43.902+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=0
+time=2026-06-26T13:55:43.907+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=119
+time=2026-06-26T13:55:43.907+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=20
+time=2026-06-26T13:55:48.182+08:00 level=INFO msg="retrieval: step7 rerank done" kept=0
+time=2026-06-26T13:55:48.182+08:00 level=INFO msg="retrieval: step9 sufficiency" path=deep direct=0 supporting=0 conflicts=0
+  Actual path: none | has_answer: false | citations: 0 | time: 7.1s
+
+  --- Generated Answer ---
+  知识库中暂无相关材料，无法回答该问题。
+
+  ✓ Correctly identified as no-evidence / irrelevant
+
+[q10] 公司使用的项目管理工具是Jira还是禅道？
+  Category: irrelevant | Expected path: deep
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T13:55:48.689+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T13:55:49.013+08:00 level=INFO msg="retrieval: step3 source filter done" sources="[dc4b79df d16dd42e 991b684a 8fc74a44 5ac8ec7a 4a7f9d51 44e1a5cc 44c2483c 426a1b8d 20426b2f 19803e65]"
+time=2026-06-26T13:55:49.762+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=0
+time=2026-06-26T13:55:49.769+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=126
+time=2026-06-26T13:55:49.769+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=20
+time=2026-06-26T13:55:54.350+08:00 level=INFO msg="retrieval: step7 rerank done" kept=0
+time=2026-06-26T13:55:54.351+08:00 level=INFO msg="retrieval: step9 sufficiency" path=deep direct=0 supporting=0 conflicts=0
+  Actual path: none | has_answer: false | citations: 0 | time: 6.2s
+
+  --- Generated Answer ---
+  知识库中暂无相关材料，无法回答该问题。
+
+  ✓ Correctly identified as no-evidence / irrelevant
+
+========================================================================================================================
+SUMMARY
+========================================================================================================================
+Questions: 10 | Path match: 7/10
+Answer point coverage: 2/25 (8%)
+Total time: 115.8s | Avg: 11.6s
+
+ID    Category   ExPath Path   Cover    Time       Question
+q01   definition short  short  0/3      15.472s    什么是绩效管理？什么是绩效考核？两者有什么区别？
+q02   definition short  short  0/3      6.859s     培训积分由哪几部分组成？各部分的含义是什么？
+q03   definition short  short  1/1      5.319s     无合同立项制度中，成本红线是什么意思？
+q04   reasoning  short  deep   0/4      8.444s     一个员工从北京出差去武汉，住宿费最高能报销多少？如果两位同部门同性员工一起出差武...
+q05   reasoning  short  deep   1/4      31.09s     某员工2021年签约的合同至今未回款，根据制度，现在这笔回款由谁负责？经历了哪些...
+q06   reasoning  short  deep   0/5      20.988s    如果一个项目的决算成本比预算成本超支了20%，该项目的考核评定结果是什么？能拿到...
+q07   enumeration short  short  0/2      9.317s     公司差旅费制度中，允许乘坐飞机出差的情况有哪些？
+q08   enumeration short  short  0/3      5.017s     日常费用报销有哪些时间限制？分别是多长？
+q09   irrelevant deep   none   -        7.147s     公司年假制度是怎样的？员工入职满一年后有几天年假？
+q10   irrelevant deep   none   -        6.168s     公司使用的项目管理工具是Jira还是禅道？

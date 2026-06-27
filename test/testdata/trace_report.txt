@@ -1,0 +1,402 @@
+Trace Quality Report
+Generated: 2026-06-26 15:36:25
+========================================================================================================================
+
+[q01] 什么是绩效管理？什么是绩效考核？两者有什么区别？
+  Category: definition | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T15:36:25.500+08:00 level=DEBUG msg="answer: start" question=什么是绩效管理？什么是绩效考核？两者有什么区别？ force_deep=false
+time=2026-06-26T15:36:26.150+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T15:36:26.757+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[4a7f9d51]
+time=2026-06-26T15:36:29.947+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=25
+time=2026-06-26T15:36:29.950+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=28
+time=2026-06-26T15:36:29.950+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=20
+time=2026-06-26T15:36:34.856+08:00 level=INFO msg="retrieval: step7 rerank done" kept=20
+time=2026-06-26T15:36:34.857+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=1 supporting=20 conflicts=0
+time=2026-06-26T15:36:34.859+08:00 level=DEBUG msg="answer: retrieval done" duration_ms=9359 direct_count=1 supporting_count=20 path=short
+time=2026-06-26T15:36:34.859+08:00 level=DEBUG msg="answer: generation start" path=short prompt_file=answer_short.md model=default question=什么是绩效管理？什么是绩效考核？两者有什么区别？
+time=2026-06-26T15:36:40.798+08:00 level=DEBUG msg="answer: LLM response received" path=short duration_ms=5938 response_len=1641
+time=2026-06-26T15:36:40.798+08:00 level=DEBUG msg="answer: generation done" path=short citation_count=8 content_len=1287 duration_ms=5938
+time=2026-06-26T15:36:40.798+08:00 level=DEBUG msg="answer: saving to db" answer_id=a784c463-2a0b-4bf5-99af-2fcdcb769a5d path=short has_answer=true
+time=2026-06-26T15:36:40.799+08:00 level=DEBUG msg="answer: enqueuing trace task" answer_id=a784c463-2a0b-4bf5-99af-2fcdcb769a5d
+time=2026-06-26T15:36:40.799+08:00 level=DEBUG msg="answer: complete" answer_id=a784c463-2a0b-4bf5-99af-2fcdcb769a5d path=short has_answer=true citation_count=8 total_ms=15298
+time=2026-06-26T15:36:40.799+08:00 level=DEBUG msg="trace: process start" answer_id=a784c463-2a0b-4bf5-99af-2fcdcb769a5d question=什么是绩效管理？什么是绩效考核？两者有什么区别？
+time=2026-06-26T15:36:40.799+08:00 level=DEBUG msg="trace: quality graded" answer_id=a784c463-2a0b-4bf5-99af-2fcdcb769a5d quality=confident direct_point_ids=[e43aeca9-4804-4fde-86e5-65783c69a164]
+time=2026-06-26T15:36:40.799+08:00 level=DEBUG msg="trace: question normalized" answer_id=a784c463-2a0b-4bf5-99af-2fcdcb769a5d normalized=什么是绩效管理什么是绩效考核两者有什么区别 hash=1265afecf7dc7b97cc769ce888ccc25a terms="两者 区别 管理 绩效 绩效考核"
+time=2026-06-26T15:36:40.799+08:00 level=DEBUG msg="trace: saved" trace_id=bd1f49e5-605a-4eef-90b0-061195f0f831 answer_id=a784c463-2a0b-4bf5-99af-2fcdcb769a5d
+time=2026-06-26T15:36:40.799+08:00 level=DEBUG msg="trace: cooccurrence update" trace_id=bd1f49e5-605a-4eef-90b0-061195f0f831 quality=confident point_ids=[e43aeca9-4804-4fde-86e5-65783c69a164] question_hash=1265afecf7dc7b97cc769ce888ccc25a
+time=2026-06-26T15:36:40.799+08:00 level=DEBUG msg="trace: no learning event needed" trace_id=bd1f49e5-605a-4eef-90b0-061195f0f831 quality=confident
+time=2026-06-26T15:36:40.799+08:00 level=DEBUG msg="trace: process complete" trace_id=bd1f49e5-605a-4eef-90b0-061195f0f831 quality=confident duration_ms=0
+  Answer:   id=a784c463-2a0b-4bf5-99af-2fcdcb769a5d path=short has_answer=true citations=8
+  Trace:    id=bd1f49e5-605a-4eef-90b0-061195f0f831 quality=confident path=short
+  Question: hash=1265afecf7dc7b97cc769ce888ccc25a terms="两者 区别 管理 绩效 绩效考核"
+  DirectPointIDs: [e43aeca9-4804-4fde-86e5-65783c69a164]
+  LearningEvents: 0
+  Cooccurrence entries: 1
+    - terms="两者 区别 管理 绩效 绩效考核" point_id=e43aeca9-4804-4fde-86e5-65783c69a164 hit=1 confident=1
+  Time: 15.3s
+
+[q02] 培训积分由哪几部分组成？各部分的含义是什么？
+  Category: definition | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T15:36:40.800+08:00 level=DEBUG msg="answer: start" question=培训积分由哪几部分组成？各部分的含义是什么？ force_deep=false
+time=2026-06-26T15:36:41.300+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T15:36:41.711+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[20426b2f]
+time=2026-06-26T15:36:42.756+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=4
+time=2026-06-26T15:36:42.759+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=12
+time=2026-06-26T15:36:42.759+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=12
+time=2026-06-26T15:36:46.838+08:00 level=INFO msg="retrieval: step7 rerank done" kept=12
+time=2026-06-26T15:36:46.839+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=2 supporting=10 conflicts=0
+time=2026-06-26T15:36:46.840+08:00 level=DEBUG msg="answer: retrieval done" duration_ms=6040 direct_count=2 supporting_count=10 path=short
+time=2026-06-26T15:36:46.841+08:00 level=DEBUG msg="answer: generation start" path=short prompt_file=answer_short.md model=default question=培训积分由哪几部分组成？各部分的含义是什么？
+time=2026-06-26T15:36:49.074+08:00 level=DEBUG msg="answer: LLM response received" path=short duration_ms=2233 response_len=628
+time=2026-06-26T15:36:49.074+08:00 level=DEBUG msg="answer: generation done" path=short citation_count=2 content_len=518 duration_ms=2233
+time=2026-06-26T15:36:49.074+08:00 level=DEBUG msg="answer: saving to db" answer_id=3adf5fac-595e-4f77-90b1-a790e517a471 path=short has_answer=true
+time=2026-06-26T15:36:49.075+08:00 level=DEBUG msg="answer: enqueuing trace task" answer_id=3adf5fac-595e-4f77-90b1-a790e517a471
+time=2026-06-26T15:36:49.075+08:00 level=DEBUG msg="answer: complete" answer_id=3adf5fac-595e-4f77-90b1-a790e517a471 path=short has_answer=true citation_count=2 total_ms=8274
+time=2026-06-26T15:36:49.075+08:00 level=DEBUG msg="trace: process start" answer_id=3adf5fac-595e-4f77-90b1-a790e517a471 question=培训积分由哪几部分组成？各部分的含义是什么？
+time=2026-06-26T15:36:49.075+08:00 level=DEBUG msg="trace: quality graded" answer_id=3adf5fac-595e-4f77-90b1-a790e517a471 quality=confident direct_point_ids="[9ae72a21-1e4a-4a4f-a1e7-d666792895b0 f2738741-73f1-4bf4-8557-464b634ef881]"
+time=2026-06-26T15:36:49.075+08:00 level=DEBUG msg="trace: question normalized" answer_id=3adf5fac-595e-4f77-90b1-a790e517a471 normalized=培训积分由哪几部分组成各部分的含义是什么 hash=fc0c27cee64cfb83aabc81853c09eb8d terms="各 含义 哪几 培训 由 积分 组成 部分 部分"
+time=2026-06-26T15:36:49.075+08:00 level=DEBUG msg="trace: saved" trace_id=b389bfef-892f-438d-aa01-6a895266b87d answer_id=3adf5fac-595e-4f77-90b1-a790e517a471
+time=2026-06-26T15:36:49.075+08:00 level=DEBUG msg="trace: cooccurrence update" trace_id=b389bfef-892f-438d-aa01-6a895266b87d quality=confident point_ids="[9ae72a21-1e4a-4a4f-a1e7-d666792895b0 f2738741-73f1-4bf4-8557-464b634ef881]" question_hash=fc0c27cee64cfb83aabc81853c09eb8d
+time=2026-06-26T15:36:49.076+08:00 level=DEBUG msg="trace: no learning event needed" trace_id=b389bfef-892f-438d-aa01-6a895266b87d quality=confident
+time=2026-06-26T15:36:49.076+08:00 level=DEBUG msg="trace: process complete" trace_id=b389bfef-892f-438d-aa01-6a895266b87d quality=confident duration_ms=0
+  Answer:   id=3adf5fac-595e-4f77-90b1-a790e517a471 path=short has_answer=true citations=2
+  Trace:    id=b389bfef-892f-438d-aa01-6a895266b87d quality=confident path=short
+  Question: hash=fc0c27cee64cfb83aabc81853c09eb8d terms="各 含义 哪几 培训 由 积分 组成 部分 部分"
+  DirectPointIDs: [9ae72a21-1e4a-4a4f-a1e7-d666792895b0 f2738741-73f1-4bf4-8557-464b634ef881]
+  LearningEvents: 0
+  Cooccurrence entries: 2
+    - terms="各 含义 哪几 培训 由 积分 组成 部分 部分" point_id=9ae72a21-1e4a-4a4f-a1e7-d666792895b0 hit=1 confident=1
+    - terms="各 含义 哪几 培训 由 积分 组成 部分 部分" point_id=f2738741-73f1-4bf4-8557-464b634ef881 hit=1 confident=1
+  Time: 8.3s
+
+[q03] 无合同立项制度中，成本红线是什么意思？
+  Category: definition | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T15:36:49.076+08:00 level=DEBUG msg="answer: start" question=无合同立项制度中，成本红线是什么意思？ force_deep=false
+time=2026-06-26T15:36:49.498+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T15:36:50.079+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[8fc74a44]
+time=2026-06-26T15:36:51.393+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=0
+time=2026-06-26T15:36:51.396+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=5
+time=2026-06-26T15:36:51.396+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=5
+time=2026-06-26T15:36:52.593+08:00 level=INFO msg="retrieval: step7 rerank done" kept=4
+time=2026-06-26T15:36:52.594+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=2 supporting=2 conflicts=0
+time=2026-06-26T15:36:52.594+08:00 level=DEBUG msg="answer: retrieval done" duration_ms=3517 direct_count=2 supporting_count=2 path=short
+time=2026-06-26T15:36:52.594+08:00 level=DEBUG msg="answer: generation start" path=short prompt_file=answer_short.md model=default question=无合同立项制度中，成本红线是什么意思？
+time=2026-06-26T15:36:54.824+08:00 level=DEBUG msg="answer: LLM response received" path=short duration_ms=2229 response_len=428
+time=2026-06-26T15:36:54.824+08:00 level=DEBUG msg="answer: generation done" path=short citation_count=2 content_len=318 duration_ms=2229
+time=2026-06-26T15:36:54.824+08:00 level=DEBUG msg="answer: saving to db" answer_id=74dac5cc-3fb0-4669-93f1-43cd46b7e0f4 path=short has_answer=true
+time=2026-06-26T15:36:54.825+08:00 level=DEBUG msg="answer: enqueuing trace task" answer_id=74dac5cc-3fb0-4669-93f1-43cd46b7e0f4
+time=2026-06-26T15:36:54.825+08:00 level=DEBUG msg="answer: complete" answer_id=74dac5cc-3fb0-4669-93f1-43cd46b7e0f4 path=short has_answer=true citation_count=2 total_ms=5748
+time=2026-06-26T15:36:54.825+08:00 level=DEBUG msg="trace: process start" answer_id=74dac5cc-3fb0-4669-93f1-43cd46b7e0f4 question=无合同立项制度中，成本红线是什么意思？
+time=2026-06-26T15:36:54.825+08:00 level=DEBUG msg="trace: quality graded" answer_id=74dac5cc-3fb0-4669-93f1-43cd46b7e0f4 quality=confident direct_point_ids=[4df01cdd-2854-4739-a182-2f7b02d4562b]
+time=2026-06-26T15:36:54.825+08:00 level=DEBUG msg="trace: question normalized" answer_id=74dac5cc-3fb0-4669-93f1-43cd46b7e0f4 normalized=无合同立项制度中成本红线是什么意思 hash=a6115ab3446d1b481aeecb4c5d639af6 terms="中 制度 合同 意思 成本 无 立项 红线"
+time=2026-06-26T15:36:54.825+08:00 level=DEBUG msg="trace: saved" trace_id=40d3e63a-7119-46ad-85d4-3d47fc4b1f8b answer_id=74dac5cc-3fb0-4669-93f1-43cd46b7e0f4
+time=2026-06-26T15:36:54.825+08:00 level=DEBUG msg="trace: cooccurrence update" trace_id=40d3e63a-7119-46ad-85d4-3d47fc4b1f8b quality=confident point_ids=[4df01cdd-2854-4739-a182-2f7b02d4562b] question_hash=a6115ab3446d1b481aeecb4c5d639af6
+time=2026-06-26T15:36:54.826+08:00 level=DEBUG msg="trace: no learning event needed" trace_id=40d3e63a-7119-46ad-85d4-3d47fc4b1f8b quality=confident
+time=2026-06-26T15:36:54.826+08:00 level=DEBUG msg="trace: process complete" trace_id=40d3e63a-7119-46ad-85d4-3d47fc4b1f8b quality=confident duration_ms=0
+  Answer:   id=74dac5cc-3fb0-4669-93f1-43cd46b7e0f4 path=short has_answer=true citations=2
+  Trace:    id=40d3e63a-7119-46ad-85d4-3d47fc4b1f8b quality=confident path=short
+  Question: hash=a6115ab3446d1b481aeecb4c5d639af6 terms="中 制度 合同 意思 成本 无 立项 红线"
+  DirectPointIDs: [4df01cdd-2854-4739-a182-2f7b02d4562b]
+  LearningEvents: 0
+  Cooccurrence entries: 1
+    - terms="中 制度 合同 意思 成本 无 立项 红线" point_id=4df01cdd-2854-4739-a182-2f7b02d4562b hit=1 confident=1
+  Time: 5.7s
+
+[q04] 一个员工从北京出差去武汉，住宿费最高能报销多少？如果两位同部门同性员工一起出差武汉，住宿应如何安排？
+  Category: reasoning | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T15:36:54.826+08:00 level=DEBUG msg="answer: start" question=一个员工从北京出差去武汉，住宿费最高能报销多少？如果两位同部门同性员工一起出差武汉，住宿应如何安排？ force_deep=false
+time=2026-06-26T15:36:55.545+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T15:36:55.907+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[426a1b8d]
+time=2026-06-26T15:36:57.044+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=0
+time=2026-06-26T15:36:57.046+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=19
+time=2026-06-26T15:36:57.046+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=19
+time=2026-06-26T15:36:57.741+08:00 level=INFO msg="retrieval: step7 rerank done" kept=2
+time=2026-06-26T15:36:57.742+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=2 supporting=5 conflicts=0
+time=2026-06-26T15:36:57.743+08:00 level=DEBUG msg="answer: retrieval done" duration_ms=2916 direct_count=2 supporting_count=5 path=short
+time=2026-06-26T15:36:57.743+08:00 level=INFO msg="answer: question complexity upgraded to deep" question=一个员工从北京出差去武汉，住宿费最高能报销多少？如果两位同部门同性员工一起出差武汉，住宿应如何安排？
+time=2026-06-26T15:36:57.743+08:00 level=DEBUG msg="answer: generation start" path=deep prompt_file=answer_deep.md model=reasoning question=一个员工从北京出差去武汉，住宿费最高能报销多少？如果两位同部门同性员工一起出差武汉，住宿应如何安排？
+time=2026-06-26T15:37:03.386+08:00 level=DEBUG msg="answer: LLM response received" path=deep duration_ms=5643 response_len=1243
+time=2026-06-26T15:37:03.386+08:00 level=DEBUG msg="answer: generation done" path=deep citation_count=2 content_len=1119 duration_ms=5643
+time=2026-06-26T15:37:03.387+08:00 level=DEBUG msg="answer: saving to db" answer_id=a2c4853b-f5a3-4061-8f3f-f6a806346bd2 path=deep has_answer=true
+time=2026-06-26T15:37:03.387+08:00 level=DEBUG msg="answer: enqueuing trace task" answer_id=a2c4853b-f5a3-4061-8f3f-f6a806346bd2
+time=2026-06-26T15:37:03.387+08:00 level=DEBUG msg="answer: complete" answer_id=a2c4853b-f5a3-4061-8f3f-f6a806346bd2 path=deep has_answer=true citation_count=2 total_ms=8560
+time=2026-06-26T15:37:03.387+08:00 level=DEBUG msg="trace: process start" answer_id=a2c4853b-f5a3-4061-8f3f-f6a806346bd2 question=一个员工从北京出差去武汉，住宿费最高能报销多少？如果两位同部门同性员工一起出差武汉，住宿应如何安排？
+time=2026-06-26T15:37:03.387+08:00 level=DEBUG msg="trace: quality graded" answer_id=a2c4853b-f5a3-4061-8f3f-f6a806346bd2 quality=confident direct_point_ids="[c144a7de-bc9a-40f1-bc5c-c975c6312d92 bf54f003-7b14-4b0a-9977-50d1eefc5588]"
+time=2026-06-26T15:37:03.387+08:00 level=DEBUG msg="trace: question normalized" answer_id=a2c4853b-f5a3-4061-8f3f-f6a806346bd2 normalized=一个员工从北京出差去武汉住宿费最高能报销多少如果两位同部门同性员工一起出差武汉住宿应如何安排 hash=79e081821e5a2c7965ce9d988951068a terms="一个 一起 两位 住宿 住宿费 出差 出差 北京 去 同 同性 员工 员工 多少 如果 安排 应 报销 最高 武汉 武汉 能 部门"
+time=2026-06-26T15:37:03.388+08:00 level=DEBUG msg="trace: saved" trace_id=25e1b108-8c0a-4d61-b050-919ae0a5548a answer_id=a2c4853b-f5a3-4061-8f3f-f6a806346bd2
+time=2026-06-26T15:37:03.388+08:00 level=DEBUG msg="trace: cooccurrence update" trace_id=25e1b108-8c0a-4d61-b050-919ae0a5548a quality=confident point_ids="[c144a7de-bc9a-40f1-bc5c-c975c6312d92 bf54f003-7b14-4b0a-9977-50d1eefc5588]" question_hash=79e081821e5a2c7965ce9d988951068a
+time=2026-06-26T15:37:03.388+08:00 level=DEBUG msg="trace: no learning event needed" trace_id=25e1b108-8c0a-4d61-b050-919ae0a5548a quality=confident
+time=2026-06-26T15:37:03.388+08:00 level=DEBUG msg="trace: process complete" trace_id=25e1b108-8c0a-4d61-b050-919ae0a5548a quality=confident duration_ms=1
+  Answer:   id=a2c4853b-f5a3-4061-8f3f-f6a806346bd2 path=deep has_answer=true citations=2
+  Trace:    id=25e1b108-8c0a-4d61-b050-919ae0a5548a quality=confident path=deep
+  Question: hash=79e081821e5a2c7965ce9d988951068a terms="一个 一起 两位 住宿 住宿费 出差 出差 北京 去 同 同性 员工 员工 多少 如果 安排 应 报销 最高 武汉 武汉 能 部门"
+  DirectPointIDs: [c144a7de-bc9a-40f1-bc5c-c975c6312d92 bf54f003-7b14-4b0a-9977-50d1eefc5588]
+  LearningEvents: 0
+  Cooccurrence entries: 2
+    - terms="一个 一起 两位 住宿 住宿费 出差 出差 北京 去 同 同性 员工 员工 多少 如果 安排 应 报销 最高 武汉 武汉 能 部门" point_id=c144a7de-bc9a-40f1-bc5c-c975c6312d92 hit=1 confident=1
+    - terms="一个 一起 两位 住宿 住宿费 出差 出差 北京 去 同 同性 员工 员工 多少 如果 安排 应 报销 最高 武汉 武汉 能 部门" point_id=bf54f003-7b14-4b0a-9977-50d1eefc5588 hit=1 confident=1
+  Time: 8.6s
+
+[q05] 某员工2021年签约的合同至今未回款，根据制度，现在这笔回款由谁负责？经历了哪些阶段？
+  Category: reasoning | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T15:37:03.389+08:00 level=DEBUG msg="answer: start" question=某员工2021年签约的合同至今未回款，根据制度，现在这笔回款由谁负责？经历了哪些阶段？ force_deep=false
+time=2026-06-26T15:37:03.934+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T15:37:04.552+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[44c2483c]
+time=2026-06-26T15:37:07.614+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=15
+time=2026-06-26T15:37:07.618+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=62
+time=2026-06-26T15:37:07.618+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=20
+time=2026-06-26T15:37:11.508+08:00 level=INFO msg="retrieval: step7 rerank done" kept=20
+time=2026-06-26T15:37:11.509+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=7 supporting=13 conflicts=0
+time=2026-06-26T15:37:11.511+08:00 level=DEBUG msg="answer: retrieval done" duration_ms=8121 direct_count=7 supporting_count=13 path=short
+time=2026-06-26T15:37:11.511+08:00 level=INFO msg="answer: question complexity upgraded to deep" question=某员工2021年签约的合同至今未回款，根据制度，现在这笔回款由谁负责？经历了哪些阶段？
+time=2026-06-26T15:37:11.511+08:00 level=DEBUG msg="answer: generation start" path=deep prompt_file=answer_deep.md model=reasoning question=某员工2021年签约的合同至今未回款，根据制度，现在这笔回款由谁负责？经历了哪些阶段？
+time=2026-06-26T15:37:28.611+08:00 level=DEBUG msg="llm: repaired JSON syntax" promptFile=answer_deep.md
+time=2026-06-26T15:37:28.612+08:00 level=DEBUG msg="answer: LLM response received" path=deep duration_ms=17100 response_len=3868
+time=2026-06-26T15:37:28.612+08:00 level=DEBUG msg="answer: generation done" path=deep citation_count=8 content_len=3477 duration_ms=17101
+time=2026-06-26T15:37:28.612+08:00 level=DEBUG msg="answer: saving to db" answer_id=98f63cba-00f5-4d64-8043-07487c410ab5 path=deep has_answer=true
+time=2026-06-26T15:37:28.613+08:00 level=DEBUG msg="answer: enqueuing trace task" answer_id=98f63cba-00f5-4d64-8043-07487c410ab5
+time=2026-06-26T15:37:28.613+08:00 level=DEBUG msg="answer: complete" answer_id=98f63cba-00f5-4d64-8043-07487c410ab5 path=deep has_answer=true citation_count=8 total_ms=25223
+time=2026-06-26T15:37:28.613+08:00 level=DEBUG msg="trace: process start" answer_id=98f63cba-00f5-4d64-8043-07487c410ab5 question=某员工2021年签约的合同至今未回款，根据制度，现在这笔回款由谁负责？经历了哪些阶段？
+time=2026-06-26T15:37:28.613+08:00 level=DEBUG msg="trace: quality graded" answer_id=98f63cba-00f5-4d64-8043-07487c410ab5 quality=confident direct_point_ids="[2707f974-c4c0-443a-b510-22921fca6f1a f3160597-8a14-474c-b906-409b77647897 f0142f1c-dd6f-49c0-ab6f-6d783d895874 e6bb0890-bf84-4835-8a9b-47843baa0911 7b6bad0a-217f-4b1f-87f6-3178a79e35ea]"
+time=2026-06-26T15:37:28.613+08:00 level=DEBUG msg="trace: question normalized" answer_id=98f63cba-00f5-4d64-8043-07487c410ab5 normalized=某员工2021年签约的合同至今未回款根据制度现在这笔回款由谁负责经历了哪些阶段 hash=3f5cf470cf35ef4539813aa54f52f78c terms="2021 制度 合同 员工 回款 回款 年 未 某 根据 现在 由 签约 经历 至今 谁 负责 这笔 阶段"
+time=2026-06-26T15:37:28.613+08:00 level=DEBUG msg="trace: saved" trace_id=697ea45e-f3d0-463e-b764-8e242f7f0d36 answer_id=98f63cba-00f5-4d64-8043-07487c410ab5
+time=2026-06-26T15:37:28.613+08:00 level=DEBUG msg="trace: cooccurrence update" trace_id=697ea45e-f3d0-463e-b764-8e242f7f0d36 quality=confident point_ids="[2707f974-c4c0-443a-b510-22921fca6f1a f3160597-8a14-474c-b906-409b77647897 f0142f1c-dd6f-49c0-ab6f-6d783d895874 e6bb0890-bf84-4835-8a9b-47843baa0911 7b6bad0a-217f-4b1f-87f6-3178a79e35ea]" question_hash=3f5cf470cf35ef4539813aa54f52f78c
+time=2026-06-26T15:37:28.614+08:00 level=DEBUG msg="trace: no learning event needed" trace_id=697ea45e-f3d0-463e-b764-8e242f7f0d36 quality=confident
+time=2026-06-26T15:37:28.614+08:00 level=DEBUG msg="trace: process complete" trace_id=697ea45e-f3d0-463e-b764-8e242f7f0d36 quality=confident duration_ms=0
+  Answer:   id=98f63cba-00f5-4d64-8043-07487c410ab5 path=deep has_answer=true citations=8
+  Trace:    id=697ea45e-f3d0-463e-b764-8e242f7f0d36 quality=confident path=deep
+  Question: hash=3f5cf470cf35ef4539813aa54f52f78c terms="2021 制度 合同 员工 回款 回款 年 未 某 根据 现在 由 签约 经历 至今 谁 负责 这笔 阶段"
+  DirectPointIDs: [2707f974-c4c0-443a-b510-22921fca6f1a f3160597-8a14-474c-b906-409b77647897 f0142f1c-dd6f-49c0-ab6f-6d783d895874 e6bb0890-bf84-4835-8a9b-47843baa0911 7b6bad0a-217f-4b1f-87f6-3178a79e35ea]
+  LearningEvents: 0
+  Cooccurrence entries: 5
+    - terms="2021 制度 合同 员工 回款 回款 年 未 某 根据 现在 由 签约 经历 至今 谁 负责 这笔 阶段" point_id=2707f974-c4c0-443a-b510-22921fca6f1a hit=1 confident=1
+    - terms="2021 制度 合同 员工 回款 回款 年 未 某 根据 现在 由 签约 经历 至今 谁 负责 这笔 阶段" point_id=f3160597-8a14-474c-b906-409b77647897 hit=1 confident=1
+    - terms="2021 制度 合同 员工 回款 回款 年 未 某 根据 现在 由 签约 经历 至今 谁 负责 这笔 阶段" point_id=f0142f1c-dd6f-49c0-ab6f-6d783d895874 hit=1 confident=1
+    - terms="2021 制度 合同 员工 回款 回款 年 未 某 根据 现在 由 签约 经历 至今 谁 负责 这笔 阶段" point_id=e6bb0890-bf84-4835-8a9b-47843baa0911 hit=1 confident=1
+    - terms="2021 制度 合同 员工 回款 回款 年 未 某 根据 现在 由 签约 经历 至今 谁 负责 这笔 阶段" point_id=7b6bad0a-217f-4b1f-87f6-3178a79e35ea hit=1 confident=1
+  Time: 25.2s
+
+[q06] 如果一个项目的决算成本比预算成本超支了20%，该项目的考核评定结果是什么？能拿到项目奖金吗？
+  Category: reasoning | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T15:37:28.615+08:00 level=DEBUG msg="answer: start" question=如果一个项目的决算成本比预算成本超支了20%，该项目的考核评定结果是什么？能拿到项目奖金吗？ force_deep=false
+time=2026-06-26T15:37:29.140+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T15:37:29.757+08:00 level=INFO msg="retrieval: step3 source filter done" sources="[dc4b79df 44e1a5cc 19803e65]"
+time=2026-06-26T15:37:31.215+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=0
+time=2026-06-26T15:37:31.219+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=18
+time=2026-06-26T15:37:31.219+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=18
+time=2026-06-26T15:37:34.559+08:00 level=INFO msg="retrieval: step7 rerank done" kept=11
+time=2026-06-26T15:37:34.560+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=4 supporting=7 conflicts=0
+time=2026-06-26T15:37:34.561+08:00 level=DEBUG msg="answer: retrieval done" duration_ms=5945 direct_count=4 supporting_count=7 path=short
+time=2026-06-26T15:37:34.561+08:00 level=INFO msg="answer: question complexity upgraded to deep" question=如果一个项目的决算成本比预算成本超支了20%，该项目的考核评定结果是什么？能拿到项目奖金吗？
+time=2026-06-26T15:37:34.561+08:00 level=DEBUG msg="answer: generation start" path=deep prompt_file=answer_deep.md model=reasoning question=如果一个项目的决算成本比预算成本超支了20%，该项目的考核评定结果是什么？能拿到项目奖金吗？
+time=2026-06-26T15:37:45.406+08:00 level=DEBUG msg="answer: LLM response received" path=deep duration_ms=10845 response_len=2076
+time=2026-06-26T15:37:45.406+08:00 level=DEBUG msg="answer: generation done" path=deep citation_count=5 content_len=1803 duration_ms=10845
+time=2026-06-26T15:37:45.406+08:00 level=DEBUG msg="answer: saving to db" answer_id=ce60f82d-f82f-4657-a604-66d4d7493ebe path=deep has_answer=true
+time=2026-06-26T15:37:45.407+08:00 level=DEBUG msg="answer: enqueuing trace task" answer_id=ce60f82d-f82f-4657-a604-66d4d7493ebe
+time=2026-06-26T15:37:45.407+08:00 level=DEBUG msg="answer: complete" answer_id=ce60f82d-f82f-4657-a604-66d4d7493ebe path=deep has_answer=true citation_count=5 total_ms=16792
+time=2026-06-26T15:37:45.407+08:00 level=DEBUG msg="trace: process start" answer_id=ce60f82d-f82f-4657-a604-66d4d7493ebe question=如果一个项目的决算成本比预算成本超支了20%，该项目的考核评定结果是什么？能拿到项目奖金吗？
+time=2026-06-26T15:37:45.407+08:00 level=DEBUG msg="trace: quality graded" answer_id=ce60f82d-f82f-4657-a604-66d4d7493ebe quality=confident direct_point_ids="[1c94204a-4eb9-4e26-9da0-0063265ffce9 bed5622f-41e9-4b47-9e8e-73a67bb47246 f21adf8f-8a62-4867-a60b-872a41c84b9c 11d824f3-71b8-4ba2-8838-17ecf851bd25]"
+time=2026-06-26T15:37:45.407+08:00 level=DEBUG msg="trace: question normalized" answer_id=ce60f82d-f82f-4657-a604-66d4d7493ebe normalized=如果一个项目的决算成本比预算成本超支了20该项目的考核评定结果是什么能拿到项目奖金吗 hash=bee676f48249beba977cfa02bc8326a9 terms="20 一个 决算 奖金 如果 成本 成本 拿到 比 目的 结果 考核 能 评定 该项 超支 项目 项目 预算"
+time=2026-06-26T15:37:45.407+08:00 level=DEBUG msg="trace: saved" trace_id=a390e41c-570c-48da-b1de-845c1b306b5e answer_id=ce60f82d-f82f-4657-a604-66d4d7493ebe
+time=2026-06-26T15:37:45.407+08:00 level=DEBUG msg="trace: cooccurrence update" trace_id=a390e41c-570c-48da-b1de-845c1b306b5e quality=confident point_ids="[1c94204a-4eb9-4e26-9da0-0063265ffce9 bed5622f-41e9-4b47-9e8e-73a67bb47246 f21adf8f-8a62-4867-a60b-872a41c84b9c 11d824f3-71b8-4ba2-8838-17ecf851bd25]" question_hash=bee676f48249beba977cfa02bc8326a9
+time=2026-06-26T15:37:45.408+08:00 level=DEBUG msg="trace: no learning event needed" trace_id=a390e41c-570c-48da-b1de-845c1b306b5e quality=confident
+time=2026-06-26T15:37:45.408+08:00 level=DEBUG msg="trace: process complete" trace_id=a390e41c-570c-48da-b1de-845c1b306b5e quality=confident duration_ms=1
+  Answer:   id=ce60f82d-f82f-4657-a604-66d4d7493ebe path=deep has_answer=true citations=5
+  Trace:    id=a390e41c-570c-48da-b1de-845c1b306b5e quality=confident path=deep
+  Question: hash=bee676f48249beba977cfa02bc8326a9 terms="20 一个 决算 奖金 如果 成本 成本 拿到 比 目的 结果 考核 能 评定 该项 超支 项目 项目 预算"
+  DirectPointIDs: [1c94204a-4eb9-4e26-9da0-0063265ffce9 bed5622f-41e9-4b47-9e8e-73a67bb47246 f21adf8f-8a62-4867-a60b-872a41c84b9c 11d824f3-71b8-4ba2-8838-17ecf851bd25]
+  LearningEvents: 0
+  Cooccurrence entries: 4
+    - terms="20 一个 决算 奖金 如果 成本 成本 拿到 比 目的 结果 考核 能 评定 该项 超支 项目 项目 预算" point_id=1c94204a-4eb9-4e26-9da0-0063265ffce9 hit=1 confident=1
+    - terms="20 一个 决算 奖金 如果 成本 成本 拿到 比 目的 结果 考核 能 评定 该项 超支 项目 项目 预算" point_id=bed5622f-41e9-4b47-9e8e-73a67bb47246 hit=1 confident=1
+    - terms="20 一个 决算 奖金 如果 成本 成本 拿到 比 目的 结果 考核 能 评定 该项 超支 项目 项目 预算" point_id=f21adf8f-8a62-4867-a60b-872a41c84b9c hit=1 confident=1
+    - terms="20 一个 决算 奖金 如果 成本 成本 拿到 比 目的 结果 考核 能 评定 该项 超支 项目 项目 预算" point_id=11d824f3-71b8-4ba2-8838-17ecf851bd25 hit=1 confident=1
+  Time: 16.8s
+
+[q07] 公司差旅费制度中，允许乘坐飞机出差的情况有哪些？
+  Category: enumeration | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T15:37:45.409+08:00 level=DEBUG msg="answer: start" question=公司差旅费制度中，允许乘坐飞机出差的情况有哪些？ force_deep=false
+time=2026-06-26T15:37:45.773+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T15:37:46.431+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[426a1b8d]
+time=2026-06-26T15:37:47.035+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=0
+time=2026-06-26T15:37:47.038+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=18
+time=2026-06-26T15:37:47.038+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=18
+time=2026-06-26T15:37:50.010+08:00 level=INFO msg="retrieval: step7 rerank done" kept=1
+time=2026-06-26T15:37:50.011+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=1 supporting=2 conflicts=0
+time=2026-06-26T15:37:50.011+08:00 level=DEBUG msg="answer: retrieval done" duration_ms=4601 direct_count=1 supporting_count=2 path=short
+time=2026-06-26T15:37:50.011+08:00 level=DEBUG msg="answer: generation start" path=short prompt_file=answer_short.md model=default question=公司差旅费制度中，允许乘坐飞机出差的情况有哪些？
+time=2026-06-26T15:37:52.233+08:00 level=DEBUG msg="answer: LLM response received" path=short duration_ms=2221 response_len=677
+time=2026-06-26T15:37:52.233+08:00 level=DEBUG msg="answer: generation done" path=short citation_count=2 content_len=567 duration_ms=2221
+time=2026-06-26T15:37:52.233+08:00 level=DEBUG msg="answer: saving to db" answer_id=66d6080a-6e1e-46c0-8272-ce9df5bedcb1 path=short has_answer=true
+time=2026-06-26T15:37:52.233+08:00 level=DEBUG msg="answer: enqueuing trace task" answer_id=66d6080a-6e1e-46c0-8272-ce9df5bedcb1
+time=2026-06-26T15:37:52.234+08:00 level=DEBUG msg="answer: complete" answer_id=66d6080a-6e1e-46c0-8272-ce9df5bedcb1 path=short has_answer=true citation_count=2 total_ms=6824
+time=2026-06-26T15:37:52.234+08:00 level=DEBUG msg="trace: process start" answer_id=66d6080a-6e1e-46c0-8272-ce9df5bedcb1 question=公司差旅费制度中，允许乘坐飞机出差的情况有哪些？
+time=2026-06-26T15:37:52.234+08:00 level=DEBUG msg="trace: quality graded" answer_id=66d6080a-6e1e-46c0-8272-ce9df5bedcb1 quality=confident direct_point_ids=[952facad-9548-48cc-8c35-244a4a6b57c3]
+time=2026-06-26T15:37:52.234+08:00 level=DEBUG msg="trace: question normalized" answer_id=66d6080a-6e1e-46c0-8272-ce9df5bedcb1 normalized=公司差旅费制度中允许乘坐飞机出差的情况有哪些 hash=be3c0bd34d5940cb3c349436571c1614 terms="中 乘坐 允许 公司 出差 制度 差旅费 情况 飞机"
+time=2026-06-26T15:37:52.234+08:00 level=DEBUG msg="trace: saved" trace_id=58cfb2ca-c99c-42ce-b7e1-e5e4e53c6863 answer_id=66d6080a-6e1e-46c0-8272-ce9df5bedcb1
+time=2026-06-26T15:37:52.234+08:00 level=DEBUG msg="trace: cooccurrence update" trace_id=58cfb2ca-c99c-42ce-b7e1-e5e4e53c6863 quality=confident point_ids=[952facad-9548-48cc-8c35-244a4a6b57c3] question_hash=be3c0bd34d5940cb3c349436571c1614
+time=2026-06-26T15:37:52.235+08:00 level=DEBUG msg="trace: no learning event needed" trace_id=58cfb2ca-c99c-42ce-b7e1-e5e4e53c6863 quality=confident
+time=2026-06-26T15:37:52.235+08:00 level=DEBUG msg="trace: process complete" trace_id=58cfb2ca-c99c-42ce-b7e1-e5e4e53c6863 quality=confident duration_ms=0
+  Answer:   id=66d6080a-6e1e-46c0-8272-ce9df5bedcb1 path=short has_answer=true citations=2
+  Trace:    id=58cfb2ca-c99c-42ce-b7e1-e5e4e53c6863 quality=confident path=short
+  Question: hash=be3c0bd34d5940cb3c349436571c1614 terms="中 乘坐 允许 公司 出差 制度 差旅费 情况 飞机"
+  DirectPointIDs: [952facad-9548-48cc-8c35-244a4a6b57c3]
+  LearningEvents: 0
+  Cooccurrence entries: 1
+    - terms="中 乘坐 允许 公司 出差 制度 差旅费 情况 飞机" point_id=952facad-9548-48cc-8c35-244a4a6b57c3 hit=1 confident=1
+  Time: 6.8s
+
+[q08] 日常费用报销有哪些时间限制？分别是多长？
+  Category: enumeration | Expected path: short
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T15:37:52.235+08:00 level=DEBUG msg="answer: start" question=日常费用报销有哪些时间限制？分别是多长？ force_deep=false
+time=2026-06-26T15:37:52.793+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T15:37:53.204+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[991b684a]
+time=2026-06-26T15:37:54.221+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=5
+time=2026-06-26T15:37:54.224+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=5
+time=2026-06-26T15:37:54.224+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=5
+time=2026-06-26T15:37:55.148+08:00 level=INFO msg="retrieval: step7 rerank done" kept=4
+time=2026-06-26T15:37:55.149+08:00 level=INFO msg="retrieval: kpn found contradicts" count=1
+time=2026-06-26T15:37:55.149+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=2 supporting=2 conflicts=1
+time=2026-06-26T15:37:55.150+08:00 level=DEBUG msg="answer: retrieval done" duration_ms=2914 direct_count=2 supporting_count=2 path=short
+time=2026-06-26T15:37:55.150+08:00 level=DEBUG msg="answer: generation start" path=short prompt_file=answer_short.md model=default question=日常费用报销有哪些时间限制？分别是多长？
+time=2026-06-26T15:37:57.583+08:00 level=DEBUG msg="answer: LLM response received" path=short duration_ms=2432 response_len=603
+time=2026-06-26T15:37:57.583+08:00 level=DEBUG msg="answer: generation done" path=short citation_count=4 content_len=413 duration_ms=2433
+time=2026-06-26T15:37:57.583+08:00 level=DEBUG msg="answer: saving to db" answer_id=f6d64d52-6fb4-4797-bd2a-213765d0eee5 path=short has_answer=true
+time=2026-06-26T15:37:57.583+08:00 level=DEBUG msg="answer: enqueuing trace task" answer_id=f6d64d52-6fb4-4797-bd2a-213765d0eee5
+time=2026-06-26T15:37:57.583+08:00 level=DEBUG msg="answer: complete" answer_id=f6d64d52-6fb4-4797-bd2a-213765d0eee5 path=short has_answer=true citation_count=4 total_ms=5348
+time=2026-06-26T15:37:57.583+08:00 level=DEBUG msg="trace: process start" answer_id=f6d64d52-6fb4-4797-bd2a-213765d0eee5 question=日常费用报销有哪些时间限制？分别是多长？
+time=2026-06-26T15:37:57.583+08:00 level=DEBUG msg="trace: quality graded" answer_id=f6d64d52-6fb4-4797-bd2a-213765d0eee5 quality=confident direct_point_ids="[8dc2c191-95b8-4fe2-b302-04b747273fb8 b0feabba-480d-46c1-b7b3-3580ea62c3a3]"
+time=2026-06-26T15:37:57.584+08:00 level=DEBUG msg="trace: question normalized" answer_id=f6d64d52-6fb4-4797-bd2a-213765d0eee5 normalized=日常费用报销有哪些时间限制分别是多长 hash=7392e25599af15a5acf842c35d8458e1 terms="分别 多长 报销 日常 时间 费用 限制"
+time=2026-06-26T15:37:57.584+08:00 level=DEBUG msg="trace: saved" trace_id=5c5614b9-0e04-4b54-b4c7-a45ed267ae33 answer_id=f6d64d52-6fb4-4797-bd2a-213765d0eee5
+time=2026-06-26T15:37:57.584+08:00 level=DEBUG msg="trace: cooccurrence update" trace_id=5c5614b9-0e04-4b54-b4c7-a45ed267ae33 quality=confident point_ids="[8dc2c191-95b8-4fe2-b302-04b747273fb8 b0feabba-480d-46c1-b7b3-3580ea62c3a3]" question_hash=7392e25599af15a5acf842c35d8458e1
+time=2026-06-26T15:37:57.584+08:00 level=DEBUG msg="trace: no learning event needed" trace_id=5c5614b9-0e04-4b54-b4c7-a45ed267ae33 quality=confident
+time=2026-06-26T15:37:57.584+08:00 level=DEBUG msg="trace: process complete" trace_id=5c5614b9-0e04-4b54-b4c7-a45ed267ae33 quality=confident duration_ms=1
+  Answer:   id=f6d64d52-6fb4-4797-bd2a-213765d0eee5 path=short has_answer=true citations=4
+  Trace:    id=5c5614b9-0e04-4b54-b4c7-a45ed267ae33 quality=confident path=short
+  Question: hash=7392e25599af15a5acf842c35d8458e1 terms="分别 多长 报销 日常 时间 费用 限制"
+  DirectPointIDs: [8dc2c191-95b8-4fe2-b302-04b747273fb8 b0feabba-480d-46c1-b7b3-3580ea62c3a3]
+  LearningEvents: 0
+  Cooccurrence entries: 2
+    - terms="分别 多长 报销 日常 时间 费用 限制" point_id=8dc2c191-95b8-4fe2-b302-04b747273fb8 hit=1 confident=1
+    - terms="分别 多长 报销 日常 时间 费用 限制" point_id=b0feabba-480d-46c1-b7b3-3580ea62c3a3 hit=1 confident=1
+  Time: 5.3s
+
+[q09] 公司年假制度是怎样的？员工入职满一年后有几天年假？
+  Category: irrelevant | Expected path: deep
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T15:37:57.585+08:00 level=DEBUG msg="answer: start" question=公司年假制度是怎样的？员工入职满一年后有几天年假？ force_deep=false
+time=2026-06-26T15:37:58.198+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T15:37:58.604+08:00 level=INFO msg="retrieval: step3 source filter done" sources="[dc4b79df d16dd42e 991b684a 8fc74a44 5ac8ec7a 4a7f9d51 44e1a5cc 44c2483c 426a1b8d 20426b2f 19803e65]"
+time=2026-06-26T15:37:59.390+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=0
+time=2026-06-26T15:37:59.396+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=119
+time=2026-06-26T15:37:59.397+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=20
+time=2026-06-26T15:38:03.642+08:00 level=INFO msg="retrieval: step7 rerank done" kept=0
+time=2026-06-26T15:38:03.642+08:00 level=INFO msg="retrieval: step9 sufficiency" path=deep direct=0 supporting=0 conflicts=0
+time=2026-06-26T15:38:03.642+08:00 level=DEBUG msg="answer: retrieval done" duration_ms=6056 direct_count=0 supporting_count=0 path=deep
+time=2026-06-26T15:38:03.642+08:00 level=DEBUG msg="answer: saving to db" answer_id=a6b8c696-4c36-404f-b739-ebdf5d8b490b path=none has_answer=false
+time=2026-06-26T15:38:03.642+08:00 level=DEBUG msg="answer: enqueuing trace task" answer_id=a6b8c696-4c36-404f-b739-ebdf5d8b490b
+time=2026-06-26T15:38:03.642+08:00 level=DEBUG msg="answer: complete" answer_id=a6b8c696-4c36-404f-b739-ebdf5d8b490b path=none has_answer=false citation_count=0 total_ms=6057
+time=2026-06-26T15:38:03.642+08:00 level=DEBUG msg="trace: process start" answer_id=a6b8c696-4c36-404f-b739-ebdf5d8b490b question=公司年假制度是怎样的？员工入职满一年后有几天年假？
+time=2026-06-26T15:38:03.642+08:00 level=DEBUG msg="trace: quality graded" answer_id=a6b8c696-4c36-404f-b739-ebdf5d8b490b quality=gap direct_point_ids=[]
+time=2026-06-26T15:38:03.643+08:00 level=DEBUG msg="trace: question normalized" answer_id=a6b8c696-4c36-404f-b739-ebdf5d8b490b normalized=公司年假制度是怎样的员工入职满一年后有几天年假 hash=913b08c5d145734c3400af2aa46035b8 terms="一年 假 假 入 公司 几天 制度 后 员工 年 年 怎样 满 职"
+time=2026-06-26T15:38:03.643+08:00 level=DEBUG msg="trace: saved" trace_id=eb8c5c2a-ca63-482e-8373-dbc4cb49f804 answer_id=a6b8c696-4c36-404f-b739-ebdf5d8b490b
+time=2026-06-26T15:38:03.643+08:00 level=DEBUG msg="trace: cooccurrence skipped (gap)" trace_id=eb8c5c2a-ca63-482e-8373-dbc4cb49f804
+time=2026-06-26T15:38:03.643+08:00 level=DEBUG msg="trace: generating knowledge_gap event" trace_id=eb8c5c2a-ca63-482e-8373-dbc4cb49f804 question=公司年假制度是怎样的？员工入职满一年后有几天年假？
+time=2026-06-26T15:38:03.643+08:00 level=DEBUG msg="trace: process complete" trace_id=eb8c5c2a-ca63-482e-8373-dbc4cb49f804 quality=gap duration_ms=0
+  Answer:   id=a6b8c696-4c36-404f-b739-ebdf5d8b490b path=none has_answer=false citations=0
+  Trace:    id=eb8c5c2a-ca63-482e-8373-dbc4cb49f804 quality=gap path=none
+  Question: hash=913b08c5d145734c3400af2aa46035b8 terms="一年 假 假 入 公司 几天 制度 后 员工 年 年 怎样 满 职"
+  DirectPointIDs: []
+  LearningEvents: 1
+    - type=knowledge_gap payload={"question":"公司年假制度是怎样的？员工入职满一年后有几天年假？"}
+  Cooccurrence entries: 0
+  Time: 6.1s
+
+[q10] 公司使用的项目管理工具是Jira还是禅道？
+  Category: irrelevant | Expected path: deep
+----------------------------------------------------------------------------------------------------
+time=2026-06-26T15:38:03.644+08:00 level=DEBUG msg="answer: start" question=公司使用的项目管理工具是Jira还是禅道？ force_deep=false
+time=2026-06-26T15:38:04.145+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T15:38:04.656+08:00 level=INFO msg="retrieval: step3 source filter done" sources="[dc4b79df d16dd42e 991b684a 8fc74a44 5ac8ec7a 4a7f9d51 44e1a5cc 44c2483c 426a1b8d 20426b2f 19803e65]"
+time=2026-06-26T15:38:05.885+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=0
+time=2026-06-26T15:38:05.890+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=126
+time=2026-06-26T15:38:05.890+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=20
+time=2026-06-26T15:38:10.405+08:00 level=INFO msg="retrieval: step7 rerank done" kept=0
+time=2026-06-26T15:38:10.405+08:00 level=INFO msg="retrieval: step9 sufficiency" path=deep direct=0 supporting=0 conflicts=0
+time=2026-06-26T15:38:10.405+08:00 level=DEBUG msg="answer: retrieval done" duration_ms=6761 direct_count=0 supporting_count=0 path=deep
+time=2026-06-26T15:38:10.405+08:00 level=DEBUG msg="answer: saving to db" answer_id=4cc1acfb-c19e-4c54-ab8d-6fcaf7b7b32d path=none has_answer=false
+time=2026-06-26T15:38:10.405+08:00 level=DEBUG msg="answer: enqueuing trace task" answer_id=4cc1acfb-c19e-4c54-ab8d-6fcaf7b7b32d
+time=2026-06-26T15:38:10.406+08:00 level=DEBUG msg="answer: complete" answer_id=4cc1acfb-c19e-4c54-ab8d-6fcaf7b7b32d path=none has_answer=false citation_count=0 total_ms=6761
+time=2026-06-26T15:38:10.406+08:00 level=DEBUG msg="trace: process start" answer_id=4cc1acfb-c19e-4c54-ab8d-6fcaf7b7b32d question=公司使用的项目管理工具是Jira还是禅道？
+time=2026-06-26T15:38:10.406+08:00 level=DEBUG msg="trace: quality graded" answer_id=4cc1acfb-c19e-4c54-ab8d-6fcaf7b7b32d quality=gap direct_point_ids=[]
+time=2026-06-26T15:38:10.406+08:00 level=DEBUG msg="trace: question normalized" answer_id=4cc1acfb-c19e-4c54-ab8d-6fcaf7b7b32d normalized=公司使用的项目管理工具是jira还是禅道 hash=6f47650b7286a5107812b2f54fdfc4f8 terms="jira 使用 公司 工具 禅 还是 道 项目管理"
+time=2026-06-26T15:38:10.406+08:00 level=DEBUG msg="trace: saved" trace_id=165bd4da-d8d8-429f-b594-6d14636381af answer_id=4cc1acfb-c19e-4c54-ab8d-6fcaf7b7b32d
+time=2026-06-26T15:38:10.406+08:00 level=DEBUG msg="trace: cooccurrence skipped (gap)" trace_id=165bd4da-d8d8-429f-b594-6d14636381af
+time=2026-06-26T15:38:10.406+08:00 level=DEBUG msg="trace: generating knowledge_gap event" trace_id=165bd4da-d8d8-429f-b594-6d14636381af question=公司使用的项目管理工具是Jira还是禅道？
+time=2026-06-26T15:38:10.406+08:00 level=DEBUG msg="trace: process complete" trace_id=165bd4da-d8d8-429f-b594-6d14636381af quality=gap duration_ms=0
+  Answer:   id=4cc1acfb-c19e-4c54-ab8d-6fcaf7b7b32d path=none has_answer=false citations=0
+  Trace:    id=165bd4da-d8d8-429f-b594-6d14636381af quality=gap path=none
+  Question: hash=6f47650b7286a5107812b2f54fdfc4f8 terms="jira 使用 公司 工具 禅 还是 道 项目管理"
+  DirectPointIDs: []
+  LearningEvents: 1
+    - type=knowledge_gap payload={"question":"公司使用的项目管理工具是Jira还是禅道？"}
+  Cooccurrence entries: 0
+  Time: 6.8s
+
+========================================================================================================================
+DEDUP TEST: Repeat q01
+========================================================================================================================
+time=2026-06-26T15:38:10.407+08:00 level=DEBUG msg="answer: start" question=什么是绩效管理？什么是绩效考核？两者有什么区别？ force_deep=false
+time=2026-06-26T15:38:11.000+08:00 level=INFO msg="retrieval: step2 domain pre-filter done" candidates=11
+time=2026-06-26T15:38:11.590+08:00 level=INFO msg="retrieval: step3 source filter done" sources=[4a7f9d51]
+time=2026-06-26T15:38:13.689+08:00 level=INFO msg="retrieval: step4 outline recall done" candidates=25
+time=2026-06-26T15:38:13.692+08:00 level=INFO msg="retrieval: step5 fts recall done" candidates=28
+time=2026-06-26T15:38:13.692+08:00 level=INFO msg="retrieval: step6 rrf merge done" merged=20
+time=2026-06-26T15:38:18.224+08:00 level=INFO msg="retrieval: step7 rerank done" kept=20
+time=2026-06-26T15:38:18.225+08:00 level=INFO msg="retrieval: step9 sufficiency" path=short direct=1 supporting=20 conflicts=0
+time=2026-06-26T15:38:18.228+08:00 level=DEBUG msg="answer: retrieval done" duration_ms=7820 direct_count=1 supporting_count=20 path=short
+time=2026-06-26T15:38:18.228+08:00 level=DEBUG msg="answer: generation start" path=short prompt_file=answer_short.md model=default question=什么是绩效管理？什么是绩效考核？两者有什么区别？
+time=2026-06-26T15:38:24.137+08:00 level=DEBUG msg="answer: LLM response received" path=short duration_ms=5909 response_len=1663
+time=2026-06-26T15:38:24.138+08:00 level=DEBUG msg="answer: generation done" path=short citation_count=9 content_len=1269 duration_ms=5909
+time=2026-06-26T15:38:24.138+08:00 level=DEBUG msg="answer: saving to db" answer_id=af4a4e57-32e5-4b4d-a9cf-bcb37e72ad35 path=short has_answer=true
+time=2026-06-26T15:38:24.138+08:00 level=DEBUG msg="answer: enqueuing trace task" answer_id=af4a4e57-32e5-4b4d-a9cf-bcb37e72ad35
+time=2026-06-26T15:38:24.138+08:00 level=DEBUG msg="answer: complete" answer_id=af4a4e57-32e5-4b4d-a9cf-bcb37e72ad35 path=short has_answer=true citation_count=9 total_ms=13731
+time=2026-06-26T15:38:24.138+08:00 level=DEBUG msg="trace: process start" answer_id=af4a4e57-32e5-4b4d-a9cf-bcb37e72ad35 question=什么是绩效管理？什么是绩效考核？两者有什么区别？
+time=2026-06-26T15:38:24.138+08:00 level=DEBUG msg="trace: quality graded" answer_id=af4a4e57-32e5-4b4d-a9cf-bcb37e72ad35 quality=confident direct_point_ids=[e43aeca9-4804-4fde-86e5-65783c69a164]
+time=2026-06-26T15:38:24.139+08:00 level=DEBUG msg="trace: question normalized" answer_id=af4a4e57-32e5-4b4d-a9cf-bcb37e72ad35 normalized=什么是绩效管理什么是绩效考核两者有什么区别 hash=1265afecf7dc7b97cc769ce888ccc25a terms="两者 区别 管理 绩效 绩效考核"
+time=2026-06-26T15:38:24.139+08:00 level=DEBUG msg="trace: saved" trace_id=a05d8669-d010-463a-94aa-929ed8a6317b answer_id=af4a4e57-32e5-4b4d-a9cf-bcb37e72ad35
+time=2026-06-26T15:38:24.139+08:00 level=DEBUG msg="trace: cooccurrence update" trace_id=a05d8669-d010-463a-94aa-929ed8a6317b quality=confident point_ids=[e43aeca9-4804-4fde-86e5-65783c69a164] question_hash=1265afecf7dc7b97cc769ce888ccc25a
+time=2026-06-26T15:38:24.139+08:00 level=DEBUG msg="trace: duplicate question, skipping cooccurrence update" question_hash=1265afecf7dc7b97cc769ce888ccc25a point_id=e43aeca9-4804-4fde-86e5-65783c69a164
+time=2026-06-26T15:38:24.139+08:00 level=DEBUG msg="trace: no learning event needed" trace_id=a05d8669-d010-463a-94aa-929ed8a6317b quality=confident
+time=2026-06-26T15:38:24.139+08:00 level=DEBUG msg="trace: process complete" trace_id=a05d8669-d010-463a-94aa-929ed8a6317b quality=confident duration_ms=0
+  Repeat trace: id=a05d8669-d010-463a-94aa-929ed8a6317b quality=confident hash=1265afecf7dc7b97cc769ce888ccc25a
+  Original hash: 1265afecf7dc7b97cc769ce888ccc25a | Repeat hash: 1265afecf7dc7b97cc769ce888ccc25a | Same: true
+  Cooc after repeat: terms="两者 区别 管理 绩效 绩效考核" point=e43aeca9-4804-4fde-86e5-65783c69a164 hit=1 confident=1
+
+========================================================================================================================
+SUMMARY
+========================================================================================================================
+Questions: 10 | Traces created: 10/10
+Quality distribution: confident=8 partial=0 gap=2
+Quality match (relevant→confident/partial, irrelevant→gap): 10/10
+Total learning events: 2 | Total cooccurrence entries: 18
+
+ID    Category   Quality    Path   DirPIDs  Events Coocs  Time
+q01   definition confident  short  1        0      1      15.299s
+q02   definition confident  short  2        0      2      8.276s
+q03   definition confident  short  1        0      1      5.749s
+q04   reasoning  confident  deep   2        0      2      8.562s
+q05   reasoning  confident  deep   5        0      5      25.224s
+q06   reasoning  confident  deep   4        0      4      16.794s
+q07   enumeration confident  short  1        0      1      6.825s
+q08   enumeration confident  short  2        0      2      5.349s
+q09   irrelevant gap        none   0        1      0      6.058s
+q10   irrelevant gap        none   0        1      0      6.763s

@@ -35,8 +35,8 @@ think.md          总体思想与核心闭环
 | [cognitive-routing.md](./cognitive-routing.md) | 思维模式选择 | 描述系统如何根据问题类型、熟悉度、不确定性和风险选择处理模式；定义直接记忆、快速检索、工作模型、查证、冲突检测等思维模式。 |
 | [retrieval.md](./retrieval.md) | 知识激活与证据检索 | 描述 ActivationLink、目录结构树、全文检索和外部证据的分层检索路径；说明 KPN 如何在核心知识点召回后做局部上下文补充；说明认知结构检索与补充查找如何协作。 |
 | [working-model.md](./working-model.md) | 临时认知模型 | 描述复杂问题如何组织本次思考的工作结构；说明 KPN 如何补充上下文变量；说明它与检索、Learning Event 和 Study 之间的关系。 |
-| [trace.md](./trace.md) | Learning Event 与 Trace | 定义 Learning Event 与 Trace，说明系统只记录对长期记忆学习有价值的事件和结果，不记录完整思考过程。 |
-| [study.md](./study.md) | 长期记忆学习 | 描述 Study 如何根据 Learning Event 调整长期记忆；区分 KPN 与 ActivationLink 的学习边界；区分材料层、认知层和表达层学习。 |
+| [trace.md](./trace.md) | Learning Event 与 Trace | 定义 Learning Event 与 Trace；说明检索事件是主学习驱动、用户反馈是补充加速；系统只记录对长期记忆学习有价值的事件和结果，不记录完整思考过程。 |
+| [study.md](./study.md) | 长期记忆学习 | 描述 Study 如何根据 Learning Event 调整长期记忆；说明 ActivationLink 演化主要由检索事件累积驱动、无需依赖用户纠正；区分 KPN 与 ActivationLink 的学习边界；说明 Working Model 结构如何经多次事件提炼为实践路径；区分材料层、认知层和表达层学习。 |
 | [lifecycle.md](./lifecycle.md) | 记忆生命周期 | 说明知识为何需要状态管理；描述生命周期如何影响激活、ActivationLink 和 Wiki 页面，以及如何区分当前可用与历史解释知识。 |
 | [wiki-compilation.md](./wiki-compilation.md) | Wiki 编译与长期知识沉淀 | 定义 Wiki 页面的定位与类型；说明 Wiki 如何由 Study 根据 Learning Event 判断重编译，而非依赖完整 Trace。 |
 
@@ -124,8 +124,8 @@ flowchart TB
 
 **学习与沉淀**
 
-- `trace.md` 仅在产生学习价值时记录 Learning Event，是 Study 的事实样本来源。
-- `study.md` 根据 Learning Event 调整长期记忆，不是复盘每次回答或完整推理过程。
+- `trace.md` 仅在产生学习价值时记录 Learning Event，是 Study 的事实样本来源；**检索事件（activation_success / failure / gap）是主驱动，不依赖用户纠正**。
+- `study.md` 根据 Learning Event 调整长期记忆，不是复盘每次回答或完整推理过程；**ActivationLink 演化主要由检索事件累积驱动**。
 - `wiki-compilation.md` 是表达层学习的产物；Wiki 更新由 Study 根据 Learning Event 驱动，而非完整 Trace。
 
 **横切：生命周期**

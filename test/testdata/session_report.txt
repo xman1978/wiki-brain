@@ -1,0 +1,154 @@
+Session Integration Report
+Generated: 2026-06-27 16:15:01
+Model: qwen3-30b-a3b-instruct-2507
+========================================================================================================================
+
+── [s01] 直接指定文档的单轮问答 ──
+
+  Turn 1: 帮我看看差旅费报销制度，住宿费标准是怎样的？
+    intent="查询标准" subject="差旅费报销制度" gaps=[] plan=retrieve
+    → retrieve (expanded=帮我看看差旅费报销制度，住宿费标准是怎样的？)
+    → answer: path=short has_answer=true
+    action: expect=retrieve actual=retrieve ✓ | answer: ✓
+  Turns persisted: 1/1 ✓
+
+── [s02] 代词指代解析（它） ──
+
+  Turn 1: 帮我看看绩效管理制度
+    intent="查询绩效管理制度" subject="绩效管理制度" gaps=[] plan=retrieve
+    → retrieve (expanded=帮我看看绩效管理制度)
+    → answer: path=short has_answer=true
+    action: expect=retrieve actual=retrieve ✓ | answer: ✓
+
+  Turn 2: 它里面的考核周期是怎么规定的？
+    intent="查询考核周期规定" subject="绩效管理制度" gaps=[] plan=retrieve
+    → retrieve (expanded=它里面的考核周期是怎么规定的？)
+    → answer: path=short has_answer=true
+    action: expect=retrieve actual=retrieve ✓ | answer: ✓
+  Turns persisted: 2/2 ✓
+
+── [s03] 连续性输入（继续） ──
+
+  Turn 1: 培训积分管理办法中，积分由哪几部分组成？
+    intent="查询积分组成" subject="培训积分管理办法" gaps=[] plan=retrieve
+    → retrieve (expanded=培训积分管理办法中，积分由哪几部分组成？)
+    → answer: path=short has_answer=true
+    action: expect=retrieve actual=retrieve ✓ | answer: ✓
+
+  Turn 2: 继续
+    → continuation retrieve (expanded=培训积分管理办法中，积分由哪几部分组成？) ✓
+  Turns persisted: 2/2 ✓
+
+── [s04] 打断后重新提问 ──
+
+  Turn 1: 查看应收账款管理制度的回款周期
+    intent="查询回款周期" subject="应收账款管理制度" gaps=[] plan=retrieve
+    → retrieve (expanded=查看应收账款管理制度的回款周期)
+    → answer: path=short has_answer=true
+    action: expect=retrieve actual=retrieve ✓ | answer: ✓
+
+  Turn 2: 停下
+    → interrupted ✓
+
+  Turn 3: 日常费用报销期限管理规定中，招待费报销期限是多久？
+    intent="查询报销期限" subject="日常费用报销期限管理规定" gaps=[] plan=retrieve
+    → retrieve (expanded=日常费用报销期限管理规定中，招待费报销期限是多久？)
+    → answer: path=short has_answer=true
+    action: expect=retrieve actual=retrieve ✓ | answer: ✓
+  Turns persisted: 3/3 ✓
+
+── [s05] 无对象时的澄清流程 ──
+
+  Turn 1: 分析它的设计思路
+    intent="分析设计思路" subject="" gaps=[vague] plan=clarify
+    → clarify: 请描述您想了解的内容
+    action: expect=clarify actual=clarify ✓ | answer: -
+  Turns persisted: 1/1 ✓
+
+── [s06] 多轮上下文切换 ──
+
+  Turn 1: 无合同立项申请与审批规范中，成本红线是什么？
+    intent="查询成本红线" subject="无合同立项申请与审批规范" gaps=[] plan=retrieve
+    → retrieve (expanded=无合同立项申请与审批规范中，成本红线是什么？)
+    → answer: path=short has_answer=true
+    action: expect=retrieve actual=retrieve ✓ | answer: ✓
+
+  Turn 2: 项目考核与激励制度中，成本超支怎么扣分？
+    intent="查询扣分规则" subject="项目考核与激励制度" gaps=[] plan=retrieve
+    → retrieve (expanded=项目考核与激励制度中，成本超支怎么扣分？)
+    → answer: path=short has_answer=true
+    action: expect=retrieve actual=retrieve ✓ | answer: ✓
+  Turns persisted: 2/2 ✓
+
+── [s07] 模糊意图触发澄清 ──
+
+  Turn 1: 看看
+    intent="查看" subject="" gaps=[vague] plan=clarify
+    → clarify: 请描述您想了解的内容
+    action: expect=clarify actual=clarify ✓ | answer: -
+  Turns persisted: 1/1 ✓
+
+── [s08] 指定文档后代词连续追问 ──
+
+  Turn 1: 差旅费报销制度中，哪些情况可以坐飞机？
+    intent="查询可坐飞机情况" subject="差旅费报销制度" gaps=[] plan=retrieve
+    → retrieve (expanded=差旅费报销制度中，哪些情况可以坐飞机？)
+    → answer: path=short has_answer=true
+    action: expect=retrieve actual=retrieve ✓ | answer: ✓
+
+  Turn 2: 那住宿费呢？
+    intent="查询住宿费" subject="差旅费报销制度" gaps=[] plan=retrieve
+    → retrieve (expanded=那住宿费呢？)
+    → answer: path=short has_answer=true
+    action: expect=retrieve actual=retrieve ✓ | answer: ✓
+
+  Turn 3: 伙食补贴标准呢？
+    intent="查询补贴标准" subject="差旅费报销制度" gaps=[] plan=retrieve
+    → retrieve (expanded=伙食补贴标准呢？)
+    → answer: path=short has_answer=true
+    action: expect=retrieve actual=retrieve ✓ | answer: ✓
+  Turns persisted: 3/3 ✓
+
+── [s09] 大模型平台管理办法查询 ──
+
+  Turn 1: 大模型开发测试基础平台使用暂行管理办法中，资源申请流程是什么？
+    intent="查询资源申请流程" subject="大模型开发测试基础平台使用暂行管理办法" gaps=[] plan=retrieve
+    → retrieve (expanded=大模型开发测试基础平台使用暂行管理办法中，资源申请流程是什么？)
+    → answer: path=short has_answer=true
+    action: expect=retrieve actual=retrieve ✓ | answer: ✓
+  Turns persisted: 1/1 ✓
+
+── [s10] 知识库中不存在的问题 ──
+
+  Turn 1: 公司年假制度是怎样的？
+    intent="查询制度内容" subject="公司年假" gaps=[] plan=retrieve
+    → retrieve (expanded=公司年假制度是怎样的？)
+    → answer: path=none has_answer=false
+    action: expect=retrieve actual=retrieve ✓ | answer: ✓
+  Turns persisted: 1/1 ✓
+
+========================================================================================================================
+SUMMARY
+========================================================================================================================
+
+  Case  Turn Input                        ExpAction  Action     ActOK  AnsOK  Path     Time     Subject
+  s01   1    帮我看看差旅费报销制度，住宿费标准是怎样的？       retrieve   retrieve   ✓      ✓      short    11.442s  差旅费报销制度
+  s02   1    帮我看看绩效管理制度                   retrieve   retrieve   ✓      ✓      short    30.36s   绩效管理制度
+  s02   2    它里面的考核周期是怎么规定的？              retrieve   retrieve   ✓      ✓      short    10.034s  绩效管理制度
+  s03   1    培训积分管理办法中，积分由哪几部分组成？         retrieve   retrieve   ✓      ✓      short    6.45s    培训积分管理办法
+  s03   2    继续                           retrieve   retrieve   ✓      -      short    6.657s   
+  s04   1    查看应收账款管理制度的回款周期              retrieve   retrieve   ✓      ✓      short    8.604s   应收账款管理制度
+  s04   2    停下                           interrupted interrupted ✓      -               0s       
+  s04   3    日常费用报销期限管理规定中，招待费报销期限是多久？    retrieve   retrieve   ✓      ✓      short    4.4s     日常费用报销期限管理规定
+  s05   1    分析它的设计思路                     clarify    clarify    ✓      -               511ms    
+  s06   1    无合同立项申请与审批规范中，成本红线是什么？       retrieve   retrieve   ✓      ✓      short    4.956s   无合同立项申请与审批规范
+  s06   2    项目考核与激励制度中，成本超支怎么扣分？         retrieve   retrieve   ✓      ✓      short    8.867s   项目考核与激励制度
+  s07   1    看看                           clarify    clarify    ✓      -               381ms    
+  s08   1    差旅费报销制度中，哪些情况可以坐飞机？          retrieve   retrieve   ✓      ✓      short    9.04s    差旅费报销制度
+  s08   2    那住宿费呢？                       retrieve   retrieve   ✓      ✓      short    15.155s  差旅费报销制度
+  s08   3    伙食补贴标准呢？                     retrieve   retrieve   ✓      ✓      short    7.544s   差旅费报销制度
+  s09   1    大模型开发测试基础平台使用暂行管理办法中，资源申请流…  retrieve   retrieve   ✓      ✓      short    6.586s   大模型开发测试基础平台使用暂行管…
+  s10   1    公司年假制度是怎样的？                  retrieve   retrieve   ✓      ✓      none     5.574s   公司年假
+
+  Action match: 17/17 (100%)
+  Answer match: 17/17 (100%)

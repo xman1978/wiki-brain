@@ -1,0 +1,115 @@
+[
+  {
+    "id": "q01",
+    "question": "什么是绩效管理？什么是绩效考核？两者有什么区别？",
+    "category": "definition",
+    "expected_path": "short",
+    "expected_sources": ["4a7f9d51"],
+    "expected_answer_points": [
+      "绩效管理是上级为提高和改善下属员工工作能力与工作业绩所做的一系列管理活动",
+      "绩效考核是上级对下属员工工作结果进行定期或不定期的评估",
+      "绩效考核是绩效管理的一个重要环节"
+    ]
+  },
+  {
+    "id": "q02",
+    "question": "培训积分由哪几部分组成？各部分的含义是什么？",
+    "category": "definition",
+    "expected_path": "short",
+    "expected_sources": ["20426b2f"],
+    "expected_answer_points": [
+      "出勤分：参与人力部门组织的培训项目，完整参与积1分",
+      "结果分：考试成绩、心得分享、课件输出、能力测试、实操结果等",
+      "奖惩分：培训效果反馈、讲师激励、自主学习等奖励积分及扣减分"
+    ]
+  },
+  {
+    "id": "q03",
+    "question": "无合同立项制度中，成本红线是什么意思？",
+    "category": "definition",
+    "expected_path": "short",
+    "expected_sources": ["8fc74a44"],
+    "expected_answer_points": [
+      "合同签订前，允许发生的实施成本和采购成本的总和"
+    ]
+  },
+  {
+    "id": "q04",
+    "question": "一个员工从北京出差去武汉，住宿费最高能报销多少？如果两位同部门同性员工一起出差武汉，住宿应如何安排？",
+    "category": "reasoning",
+    "expected_path": "short",
+    "expected_sources": ["426a1b8d"],
+    "expected_answer_points": [
+      "武汉属于B类城市（新一线城市）",
+      "B类城市住宿限额280元",
+      "同部门同行同性人员必须选择标准间住宿，按两两优先入住原则",
+      "不得各自单独开设额外房间，否则取消所有补贴并视情节罚款"
+    ]
+  },
+  {
+    "id": "q05",
+    "question": "某员工2021年签约的合同至今未回款，根据制度，现在这笔回款由谁负责？经历了哪些阶段？",
+    "category": "reasoning",
+    "expected_path": "short",
+    "expected_sources": ["44c2483c"],
+    "expected_answer_points": [
+      "2021年至2022年签约的合同回款周期为6个月",
+      "超过6个月未回款，回款任务自动转移给客户成功部催款专员",
+      "进入法务催收阶段",
+      "销售人员回款义务转移"
+    ]
+  },
+  {
+    "id": "q06",
+    "question": "如果一个项目的决算成本比预算成本超支了20%，该项目的考核评定结果是什么？能拿到项目奖金吗？",
+    "category": "reasoning",
+    "expected_path": "short",
+    "expected_sources": ["dc4b79df"],
+    "expected_answer_points": [
+      "成本超支率为20%",
+      "考核得分 = (1 - 0.2) × 100 = 80",
+      "评定结果为待改进（70 <= T < 85）",
+      "项目绩效系数为0.5",
+      "可以拿到项目奖金但按0.5系数折算"
+    ]
+  },
+  {
+    "id": "q07",
+    "question": "公司差旅费制度中，允许乘坐飞机出差的情况有哪些？",
+    "category": "enumeration",
+    "expected_path": "short",
+    "expected_sources": ["426a1b8d"],
+    "expected_answer_points": [
+      "紧急情况急需赶赴客户现场处理事务，在流程中选择紧急情况并说明理由",
+      "机票总费用（含经济舱费用+保险+往返机场交通费）低于高铁二等票价格或低于其他交通工具标准报价"
+    ]
+  },
+  {
+    "id": "q08",
+    "question": "日常费用报销有哪些时间限制？分别是多长？",
+    "category": "enumeration",
+    "expected_path": "short",
+    "expected_sources": ["991b684a"],
+    "expected_answer_points": [
+      "招待费用须在费用发生之日起45天内报销",
+      "其他日常费用（办公、市内交通、通讯、差旅）在发票开具之日起三个月内报销",
+      "原则上禁止发票跨年报销"
+    ]
+  },
+  {
+    "id": "q09",
+    "question": "公司年假制度是怎样的？员工入职满一年后有几天年假？",
+    "category": "irrelevant",
+    "expected_path": "deep",
+    "expected_sources": [],
+    "expected_answer_points": []
+  },
+  {
+    "id": "q10",
+    "question": "公司使用的项目管理工具是Jira还是禅道？",
+    "category": "irrelevant",
+    "expected_path": "deep",
+    "expected_sources": [],
+    "expected_answer_points": []
+  }
+]

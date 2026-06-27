@@ -1,0 +1,99 @@
+{"time":"2026-06-27T14:02:25.987557+08:00","level":"INFO","msg":"applying migration","version":"001_init"}
+{"time":"2026-06-27T14:02:25.987785+08:00","level":"INFO","msg":"applying migration","version":"002_sources"}
+{"time":"2026-06-27T14:02:25.987936+08:00","level":"INFO","msg":"applying migration","version":"003_units"}
+{"time":"2026-06-27T14:02:25.988202+08:00","level":"INFO","msg":"applying migration","version":"004_answers"}
+{"time":"2026-06-27T14:02:25.988267+08:00","level":"INFO","msg":"applying migration","version":"005_traces"}
+{"time":"2026-06-27T14:02:25.988616+08:00","level":"INFO","msg":"applying migration","version":"006_study"}
+{"time":"2026-06-27T14:02:25.988801+08:00","level":"INFO","msg":"applying migration","version":"007_source_timestamps"}
+{"time":"2026-06-27T14:02:25.98906+08:00","level":"INFO","msg":"applying migration","version":"008_sessions"}
+{"time":"2026-06-27T14:02:25.990706+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-06-27T14:02:26.200611+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-06-27T14:02:26.571495+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-06-27T14:02:26.620731+08:00","level":"INFO","msg":"知识大脑启动","port":8080,"addr":"http://localhost:8080"}
+{"time":"2026-06-27T14:02:26.954547+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"6af1dc70-34a7-408b-ac50-a34e276b6b33"}
+{"time":"2026-06-27T14:02:27.017976+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"edeac462-ad61-4289-baf0-92ac9e264b36"}
+{"time":"2026-06-27T14:02:27.018203+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"3702e7bf-cc80-4b40-b060-c30689f9087b"}
+{"time":"2026-06-27T14:02:28.857276+08:00","level":"INFO","msg":"http request","method":"HEAD","path":"/","status":200,"duration_ms":0,"request_id":"3c313a14-ce05-42a4-9be9-51f808dfc23b"}
+{"time":"2026-06-27T14:02:28.866547+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"5a05fde7-256c-4987-823f-be409d51ea71"}
+{"time":"2026-06-27T14:02:28.877424+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"21b59f14-a117-4232-b413-d798285f20be"}
+{"time":"2026-06-27T14:02:28.877535+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"6d15a66b-e1c6-4d9d-b6cf-c5cfdd332392"}
+{"time":"2026-06-27T14:02:58.879138+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c3c63953-1f34-4d60-b555-3e85a2302f47"}
+{"time":"2026-06-27T14:03:26.621007+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"c2a71557-b43c-4e2f-ba23-2d659d5681ca","elapsed_ms":2}
+{"time":"2026-06-27T14:03:28.876401+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"080c457c-2df1-47d1-bd1f-6025a2103942"}
+{"time":"2026-06-27T14:03:58.877576+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f60cdc91-b229-443b-a090-f07cc5c39b5f"}
+{"time":"2026-06-27T14:04:16.421516+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports/latest","status":200,"duration_ms":0,"request_id":"36998742-d5af-42b1-8c6f-92ddbe927bec"}
+{"time":"2026-06-27T14:04:19.657235+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"eb8649c7-c9ba-4864-ba86-a3e847f66d71"}
+{"time":"2026-06-27T14:04:28.888116+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"7437d48b-7345-4b64-9588-fac22f1b3a92"}
+{"time":"2026-06-27T14:04:58.889327+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"6686f9e9-327a-4873-ab5e-0b7d50696dc0"}
+{"time":"2026-06-27T14:05:28.887056+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e83cc834-dca3-4711-b0a5-b013527046c3"}
+{"time":"2026-06-27T14:05:58.887077+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e24fea8a-cd05-4b6f-980e-01115d3815a8"}
+{"time":"2026-06-27T14:06:26.759084+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-06-27T14:06:26.759356+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-06-27T14:06:31.695487+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-06-27T14:06:31.90445+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-06-27T14:06:32.276322+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-06-27T14:06:32.277349+08:00","level":"INFO","msg":"知识大脑启动","port":8080,"addr":"http://localhost:8080"}
+{"time":"2026-06-27T14:06:33.583967+08:00","level":"INFO","msg":"http request","method":"HEAD","path":"/","status":200,"duration_ms":0,"request_id":"630f8dff-2842-459e-ba97-e071e4faa4c0"}
+{"time":"2026-06-27T14:06:33.593677+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"3fc2f296-a40f-4b28-b621-6a1c2204937a"}
+{"time":"2026-06-27T14:06:33.648963+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"483b9d6b-343e-434a-b25f-29faf1d68f8f"}
+{"time":"2026-06-27T14:06:33.649016+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"0e8c12e4-0370-411f-bd58-36c5ad8b7457"}
+{"time":"2026-06-27T14:06:33.664025+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"fd148872-0e11-4ba1-bad9-3ac8b9b7539f"}
+{"time":"2026-06-27T14:06:33.67779+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"21f82008-7d18-4155-923a-ff5ca7043cfc"}
+{"time":"2026-06-27T14:06:33.678229+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"3781d671-6f8d-464c-9342-7cc83e864d9a"}
+{"time":"2026-06-27T14:07:03.680832+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"0bcda9cf-395d-43ca-8022-9aa69cc37803"}
+{"time":"2026-06-27T14:07:32.278159+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"2ed604e7-2c24-4bb7-947c-324a443441f3","elapsed_ms":2}
+{"time":"2026-06-27T14:07:34.66505+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e716560b-368e-4c65-8c60-9451da155e44"}
+{"time":"2026-06-27T14:08:04.661203+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e95d0ddc-bea1-4c6d-bdcb-851cd39f38e0"}
+{"time":"2026-06-27T14:08:34.661018+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"fb913e0f-ab12-461f-93e7-945a4cca35c6"}
+{"time":"2026-06-27T14:09:04.659984+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"edfcf060-05fd-49b0-8c39-c74b083c4fc8"}
+{"time":"2026-06-27T14:09:34.65768+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"6360959a-4f7d-4136-bc90-13451d897e9f"}
+{"time":"2026-06-27T14:10:04.657136+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"732064fa-ba97-4a09-a7de-c8831a6bc386"}
+{"time":"2026-06-27T14:10:34.655199+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"36dbbdfc-afd2-4c0b-af3f-9936d94a09c0"}
+{"time":"2026-06-27T14:11:08.929452+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-06-27T14:11:08.929775+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-06-27T14:11:15.126562+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-06-27T14:11:15.331373+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-06-27T14:11:15.67146+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-06-27T14:11:15.672531+08:00","level":"INFO","msg":"知识大脑启动","port":8080,"addr":"http://localhost:8080"}
+{"time":"2026-06-27T14:11:17.647576+08:00","level":"INFO","msg":"http request","method":"HEAD","path":"/","status":200,"duration_ms":0,"request_id":"66794114-f921-4dd3-9451-4dec240d3f97"}
+{"time":"2026-06-27T14:11:17.654019+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"8125ee55-ff43-4375-80ea-815502250e12"}
+{"time":"2026-06-27T14:11:17.706505+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"838f265f-7c3f-4691-812e-9b11b1331d31"}
+{"time":"2026-06-27T14:11:17.706633+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"0044e46f-135a-4776-935c-7db68cdcb933"}
+{"time":"2026-06-27T14:11:21.892199+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"5c0f54c0-aa33-46cc-988c-563217db415c"}
+{"time":"2026-06-27T14:11:21.900726+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"3020b523-23be-48b0-8265-09b90d246350"}
+{"time":"2026-06-27T14:11:21.90165+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"82d8d59c-959a-4538-a81a-333253c3d4ee"}
+{"time":"2026-06-27T14:11:27.02508+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8897a9db-6836-47bb-bea7-ac5e16e4410e"}
+{"time":"2026-06-27T14:11:28.85646+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports/latest","status":200,"duration_ms":0,"request_id":"29749341-8841-4102-a50c-5b37e5b47105"}
+{"time":"2026-06-27T14:11:33.704564+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"6e6e36b6-5e74-4d31-8ff1-d556136919e4"}
+{"time":"2026-06-27T14:11:35.770718+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"50089b38-441b-4117-b9a1-94e7ef9cff39"}
+{"time":"2026-06-27T14:11:40.475617+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"75aa9e76-dd84-4e34-8ea5-83d2e66189c2"}
+{"time":"2026-06-27T14:11:42.426324+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"7989cb84-943b-492c-9cba-e6b4b761af25"}
+{"time":"2026-06-27T14:11:51.902277+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c9bb1b20-1b95-4884-86ce-d11614d5df97"}
+{"time":"2026-06-27T14:12:15.673561+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"2944fb87-7963-4776-a3e7-b8f3bce604a5","elapsed_ms":2}
+{"time":"2026-06-27T14:12:21.901537+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"72eab614-a35c-4f2e-a791-7f0007d5661f"}
+{"time":"2026-06-27T14:12:51.900015+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8022f5bf-4124-4fb0-8120-8543acf2977d"}
+{"time":"2026-06-27T14:13:21.898664+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9c05fefe-9409-41fe-9f40-aa422b7c76c2"}
+{"time":"2026-06-27T14:13:45.782256+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"539baed7-6663-4d66-99d6-404920a45b3e"}
+{"time":"2026-06-27T14:13:47.33109+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports/latest","status":200,"duration_ms":0,"request_id":"aa82e4da-4b64-4a41-8750-356a2bb42bd4"}
+{"time":"2026-06-27T14:13:51.897987+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"6a76af4b-d643-4b20-ae78-71d04f44d7e2"}
+{"time":"2026-06-27T14:13:52.064451+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports","status":200,"duration_ms":0,"request_id":"9fe343c6-0ed0-4c15-a4fc-9713156d8b4b"}
+{"time":"2026-06-27T14:14:02.54851+08:00","level":"INFO","msg":"http request","method":"POST","path":"/study/run","status":200,"duration_ms":0,"request_id":"1e5fdd3d-8116-407b-b06a-9e6e20211021"}
+{"time":"2026-06-27T14:14:04.458997+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports/latest","status":200,"duration_ms":0,"request_id":"6953760d-382a-404d-809d-8bd466aee3f8"}
+{"time":"2026-06-27T14:14:05.595349+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports","status":200,"duration_ms":0,"request_id":"a4520a0d-c7b7-4811-a22e-5e7a248d67af"}
+{"time":"2026-06-27T14:14:21.896482+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ba14d7e2-3f46-4440-a3da-f83e3ee65d0f"}
+{"time":"2026-06-27T14:14:24.740611+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"c1d2936d-6f4f-436b-8d80-549c54f61508"}
+{"time":"2026-06-27T14:14:24.749675+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"7b1b5dd8-ec25-4531-9cb2-fca646860522"}
+{"time":"2026-06-27T14:14:25.41177+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":583,"request_id":"3aeec27b-5fb8-4443-9d30-5b1b0c4dec4b"}
+{"time":"2026-06-27T14:14:25.417467+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"3b53792c-9047-491d-b8b6-6b11b7ffc12c"}
+{"time":"2026-06-27T14:14:47.432149+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":572,"request_id":"688472f6-a305-4141-a58e-eb021ce4997d"}
+{"time":"2026-06-27T14:14:47.436792+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"7e9ddfbc-274a-472a-ae20-2d7ab96f01a0"}
+{"time":"2026-06-27T14:14:51.893876+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"250e3052-ff5a-4223-816e-a9ad32f3a5af"}
+{"time":"2026-06-27T14:14:53.912614+08:00","level":"INFO","msg":"http request","method":"DELETE","path":"/sessions/3de2e6e2-514a-41a1-bc42-311d66a6129d","status":204,"duration_ms":0,"request_id":"68b45691-487e-443a-ad71-5fb7a739faf5"}
+{"time":"2026-06-27T14:14:53.918305+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"a6c54f9a-dc36-4b2e-8497-80aa83bf3c16"}
+{"time":"2026-06-27T14:15:21.89377+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"04c2911c-7516-4a32-9db3-338a8a84c650"}
+{"time":"2026-06-27T14:15:51.892323+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"97d7b811-84e2-4b26-b872-2be8dbba98f1"}
+{"time":"2026-06-27T14:16:21.890538+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"2b8f70c9-3496-4daf-8ea8-d7c01a406388"}
+{"time":"2026-06-27T14:16:51.889236+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c6be309d-6793-4739-965b-7349571b2e39"}
+{"time":"2026-06-27T14:17:21.888254+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"2337f7d2-0017-439b-bbdf-efa45cb54510"}
+{"time":"2026-06-27T14:17:30.413678+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-06-27T14:17:30.413945+08:00","level":"INFO","msg":"知识大脑已停止"}
