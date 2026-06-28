@@ -10,23 +10,38 @@ func Expand(state *SessionState, plan PlanResult, input string) ExpandedQuery {
 
 	if state.Working.ContinuableAction != "" && plan.Action == PlanRetrieve && plan.Subject == "" {
 		eq.ExpandedQuestion = state.Working.ContinuableAction
+		eq.DefaultAssumptions = []string{"综合角度"}
 		return eq
 	}
 
-	// Use original input as the primary query — it contains the full natural language
-	// with all keywords the retrieval system needs
-	eq.ExpandedQuestion = input
+	inputRunes := []rune(input)
+	built := buildIntentSubjectQuery(state.Dialogue.Intent, plan.Subject)
+
+	if built != "" && len(inputRunes) < len([]rune(built)) {
+		eq.ExpandedQuestion = built
+	} else {
+		eq.ExpandedQuestion = input
+	}
 
 	if eq.ExpandedQuestion == "" {
-		if plan.Subject != "" && state.Dialogue.Intent != "" {
-			eq.ExpandedQuestion = state.Dialogue.Intent + " " + plan.Subject
-		} else if state.Dialogue.Intent != "" {
-			eq.ExpandedQuestion = state.Dialogue.Intent
-		}
+		eq.ExpandedQuestion = input
 	}
 
 	eq.DefaultAssumptions = []string{"综合角度"}
 	return eq
+}
+
+func buildIntentSubjectQuery(intent, subject string) string {
+	if intent != "" && subject != "" {
+		return subject + " " + intent
+	}
+	if intent != "" {
+		return intent
+	}
+	if subject != "" {
+		return subject
+	}
+	return ""
 }
 
 func UpdateTopic(state *SessionState) {

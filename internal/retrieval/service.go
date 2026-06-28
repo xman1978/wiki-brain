@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/search/query"
@@ -38,16 +39,30 @@ func NewService(store *Store, llmClient llm.LLMClient, unitsIdx, pointsIdx, outl
 }
 
 func (s *Service) Retrieve(ctx context.Context, question string) (*EvidenceSet, error) {
-	// Step 2: Domain pre-filter
+	return s.RetrieveWithProgress(ctx, question, nil)
+}
+
+func (s *Service) RetrieveWithProgress(ctx context.Context, question string, progress ProgressFunc) (*EvidenceSet, error) {
+	emit := func(phase, status, detail string, dur int64) {
+		if progress != nil {
+			progress(ProgressEvent{Phase: phase, Status: status, Detail: detail, Duration: dur})
+		}
+	}
+
+	// Step 2-3: 知识点激活（Domain pre-filter + Source semantic filter）
+	emit("activation", "start", "", 0)
+	activationStart := time.Now()
+
 	candidateSources, err := s.domainPreFilter(ctx, question)
 	if err != nil {
+		emit("activation", "error", err.Error(), time.Since(activationStart).Milliseconds())
 		return nil, fmt.Errorf("retrieval: domain pre-filter: %w", err)
 	}
 	slog.Info("retrieval: step2 domain pre-filter done", "candidates", len(candidateSources))
 
-	// Step 3: Source semantic filter
 	filteredSources, err := s.sourceSemanticFilter(ctx, question, candidateSources)
 	if err != nil {
+		emit("activation", "error", err.Error(), time.Since(activationStart).Milliseconds())
 		return nil, fmt.Errorf("retrieval: source filter: %w", err)
 	}
 
@@ -56,26 +71,36 @@ func (s *Service) Retrieve(ctx context.Context, question string) (*EvidenceSet, 
 		sourceIDs[i] = src.SourceID
 	}
 	slog.Info("retrieval: step3 source filter done", "sources", sourceIDs)
+	emit("activation", "done", fmt.Sprintf("%d 个来源", len(sourceIDs)), time.Since(activationStart).Milliseconds())
 
-	// Step 4: Outline recall
+	// Step 4: 目录结构检索（Outline recall）
+	emit("outline", "start", "", 0)
+	outlineStart := time.Now()
 	outlineCandidates, err := s.outlineRecall(ctx, question, sourceIDs)
 	if err != nil {
+		emit("outline", "error", err.Error(), time.Since(outlineStart).Milliseconds())
 		return nil, fmt.Errorf("retrieval: outline recall: %w", err)
 	}
 	slog.Info("retrieval: step4 outline recall done", "candidates", len(outlineCandidates))
+	emit("outline", "done", fmt.Sprintf("%d 条", len(outlineCandidates)), time.Since(outlineStart).Milliseconds())
 
-	// Step 5: FTS recall
+	// Step 5: 全文检索（FTS recall）
+	emit("fts", "start", "", 0)
+	ftsStart := time.Now()
 	ftsCandidates, err := s.ftsRecall(question, sourceIDs)
 	if err != nil {
+		emit("fts", "error", err.Error(), time.Since(ftsStart).Milliseconds())
 		return nil, fmt.Errorf("retrieval: fts recall: %w", err)
 	}
 	slog.Info("retrieval: step5 fts recall done", "candidates", len(ftsCandidates))
+	emit("fts", "done", fmt.Sprintf("%d 条", len(ftsCandidates)), time.Since(ftsStart).Milliseconds())
 
 	// Step 6: RRF merge
 	merged := s.rrfMerge(outlineCandidates, ftsCandidates)
 	slog.Info("retrieval: step6 rrf merge done", "merged", len(merged))
 
 	if len(merged) == 0 {
+		emit("rerank", "done", "无候选", 0)
 		return &EvidenceSet{
 			Question:       question,
 			Path:           "deep",
@@ -85,9 +110,12 @@ func (s *Service) Retrieve(ctx context.Context, question string) (*EvidenceSet, 
 		}, nil
 	}
 
-	// Step 7: LLM Rerank
+	// Step 7: 证据分类（LLM Rerank）
+	emit("rerank", "start", fmt.Sprintf("%d 条候选", len(merged)), 0)
+	rerankStart := time.Now()
 	reranked, err := s.rerank(ctx, question, merged)
 	if err != nil {
+		emit("rerank", "error", err.Error(), time.Since(rerankStart).Milliseconds())
 		return nil, fmt.Errorf("retrieval: rerank: %w", err)
 	}
 	slog.Info("retrieval: step7 rerank done", "kept", len(reranked))
@@ -113,6 +141,7 @@ func (s *Service) Retrieve(ctx context.Context, question string) (*EvidenceSet, 
 		path = "short"
 	}
 	slog.Info("retrieval: step9 sufficiency", "path", path, "direct", len(direct), "supporting", len(supporting), "conflicts", len(conflictCandidates))
+	emit("rerank", "done", fmt.Sprintf("%d 直接 · %d 补充", len(direct), len(supporting)), time.Since(rerankStart).Milliseconds())
 
 	// Step 10: Build EvidenceSet
 	es, err := s.buildEvidenceSet(question, path, direct, supporting, conflictCandidates)
@@ -616,12 +645,11 @@ func (s *Service) rerank(ctx context.Context, question string, candidates []cand
 
 	jsonSchema := `{"results": [{"candidate_id": "c1", "role": "direct|supporting|irrelevant"}]}`
 
-	model := s.cfg.LLM.ModelForPurpose("default").Model
 	resp, err := s.llmClient.CompleteJSON(ctx, "rerank.md", map[string]string{
 		"question":    question,
 		"candidates":  candidatesText.String(),
 		"json_schema": jsonSchema,
-	}, model)
+	}, "classification")
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: rerank llm: %w", err)
 	}
@@ -656,6 +684,18 @@ func (s *Service) rerank(ctx context.Context, question string, candidates []cand
 		roleMap[r.CandidateID] = r.Role
 	}
 
+	// Build content cache for direct validation
+	contentCache := make(map[string]string, len(candidates))
+	for _, c := range candidates {
+		content, err := s.readUnitContent(c.sourceID, c.lineStart, c.lineEnd)
+		if err == nil {
+			contentCache[c.candidateID] = content
+		}
+	}
+
+	// Extract key nouns from question for direct validation
+	questionNouns := extractQuestionNouns(question)
+
 	var kept []candidate
 	for _, c := range candidates {
 		role, ok := roleMap[c.candidateID]
@@ -665,7 +705,14 @@ func (s *Service) rerank(ctx context.Context, question string, candidates []cand
 		if role == "irrelevant" {
 			continue
 		}
-		// Reuse sourcePaths[0] to carry the role for step 9
+		if role == "direct" && len(questionNouns) > 0 {
+			content := contentCache[c.candidateID]
+			if !containsAnyNoun(content, questionNouns) {
+				slog.Info("retrieval: rerank direct→supporting (question noun not in evidence)",
+					"candidate_id", c.candidateID, "nouns", questionNouns)
+				role = "supporting"
+			}
+		}
 		c.sourcePaths = []string{role}
 		kept = append(kept, c)
 	}
@@ -879,6 +926,57 @@ func intFromField(v interface{}) int {
 	default:
 		return 0
 	}
+}
+
+// extractQuestionNouns extracts key entity phrases from the question.
+// It splits on punctuation and particles, returning short phrases (2-8 chars)
+// that are likely entity names (place, document, product, etc).
+func extractQuestionNouns(question string) []string {
+	splitters := []string{"，", "。", "？", "?", "！", "、", "：", "的", "中", "呢", "吗", "了", "是"}
+	parts := []string{question}
+	for _, sep := range splitters {
+		var next []string
+		for _, p := range parts {
+			next = append(next, strings.Split(p, sep)...)
+		}
+		parts = next
+	}
+
+	// Also split each part by spaces
+	var segments []string
+	for _, p := range parts {
+		for _, s := range strings.Fields(p) {
+			s = strings.TrimSpace(s)
+			r := []rune(s)
+			if len(r) >= 2 && len(r) <= 8 {
+				segments = append(segments, s)
+			}
+		}
+	}
+
+	// Filter out common verb/question words that are not entities
+	commonWords := map[string]bool{
+		"什么": true, "哪些": true, "怎么": true, "如何": true, "多少": true,
+		"怎样": true, "为什么": true, "是否": true, "能否": true,
+		"查询": true, "查看": true, "帮我": true, "看看": true, "分析": true,
+		"标准": true, "怎么样": true, "是多少": true, "有哪些": true,
+	}
+	var nouns []string
+	for _, s := range segments {
+		if !commonWords[s] {
+			nouns = append(nouns, s)
+		}
+	}
+	return nouns
+}
+
+func containsAnyNoun(content string, nouns []string) bool {
+	for _, n := range nouns {
+		if strings.Contains(content, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // buildSourceIDQuery creates a Bleve boolean query to filter by source IDs.

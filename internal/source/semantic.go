@@ -148,6 +148,8 @@ func splitLeafBySemantic(ctx context.Context, client llm.LLMClient, sourceID str
 
 	var allSections []llmSection
 
+	numberedNode := numberedLineRange(lines, leaf.LineStart, leaf.LineEnd)
+
 	if RuneCount(nodeContent) <= maxRunes {
 		// 单次调用
 		data, err := client.CompleteJSON(ctx, "outline_semantic_chunk.md", map[string]string{
@@ -156,7 +158,7 @@ func splitLeafBySemantic(ctx context.Context, client llm.LLMClient, sourceID str
 			"chunk_line_end":   fmt.Sprintf("%d", leaf.LineEnd),
 			"target_level":     fmt.Sprintf("%d", leaf.Level),
 			"parent_title":     leaf.Title,
-			"chunk_content":    nodeContent,
+			"chunk_content":    numberedNode,
 		}, "extraction")
 		if err != nil {
 			return nil, err
@@ -173,9 +175,9 @@ func splitLeafBySemantic(ctx context.Context, client llm.LLMClient, sourceID str
 		windows := splitWindowsByMarkdown(nodeLines, maxRunes, 0.05)
 
 		for _, w := range windows {
-			chunkContent := extractLineRange(nodeLines, w.StartLine, w.EndLine)
 			absStart := leaf.LineStart + w.StartLine - 1
 			absEnd := leaf.LineStart + w.EndLine - 1
+			numberedChunk := numberedLineRange(lines, absStart, absEnd)
 
 			data, err := client.CompleteJSON(ctx, "outline_semantic_chunk.md", map[string]string{
 				"json_schema":      jsonSchemaExample,
@@ -183,7 +185,7 @@ func splitLeafBySemantic(ctx context.Context, client llm.LLMClient, sourceID str
 				"chunk_line_end":   fmt.Sprintf("%d", absEnd),
 				"target_level":     fmt.Sprintf("%d", leaf.Level),
 				"parent_title":     leaf.Title,
-				"chunk_content":    chunkContent,
+				"chunk_content":    numberedChunk,
 			}, "extraction")
 			if err != nil {
 				slog.Warn("L3 chunk split failed", "error", err)
@@ -310,7 +312,7 @@ func extractLocalSketches(ctx context.Context, client llm.LLMClient, lines []str
 
 	var sketches []localSketchOutput
 	for i, w := range windows {
-		content := extractLineRange(lines, w.StartLine, w.EndLine)
+		content := numberedLineRange(lines, w.StartLine, w.EndLine)
 
 		data, err := client.CompleteJSON(ctx, "outline_local_sketch.md", map[string]string{
 			"window_line_start": fmt.Sprintf("%d", w.StartLine),
@@ -435,10 +437,12 @@ func singlePassOutline(ctx context.Context, client llm.LLMClient, sourceID, cont
 	lines := strings.Split(content, "\n")
 	totalLines := fmt.Sprintf("%d", len(lines))
 
+	numbered := numberedLineRange(lines, 1, len(lines))
+
 	data, err := client.CompleteJSON(ctx, "outline_semantic_full.md", map[string]string{
 		"json_schema":      jsonSchemaExample,
 		"total_lines":      totalLines,
-		"document_content": content,
+		"document_content": numbered,
 	}, "extraction")
 	if err != nil {
 		return nil, fmt.Errorf("semantic outline single pass: %w", err)
@@ -507,13 +511,21 @@ func refineNode(ctx context.Context, client llm.LLMClient, sourceID string, line
 }
 
 func refineChunk(ctx context.Context, client llm.LLMClient, sourceID, content string, parent *Outline, targetLevel, absStart, absEnd, totalLines int) ([]Outline, error) {
+	// Add line numbers to help LLM report accurate positions
+	contentLines := strings.Split(content, "\n")
+	var sb strings.Builder
+	for i, l := range contentLines {
+		fmt.Fprintf(&sb, "%d: %s\n", absStart+i, l)
+	}
+	numberedContent := sb.String()
+
 	data, err := client.CompleteJSON(ctx, "outline_semantic_chunk.md", map[string]string{
 		"json_schema":      jsonSchemaExample,
 		"chunk_line_start": fmt.Sprintf("%d", absStart),
 		"chunk_line_end":   fmt.Sprintf("%d", absEnd),
 		"target_level":     fmt.Sprintf("%d", targetLevel),
 		"parent_title":     parent.Title,
-		"chunk_content":    content,
+		"chunk_content":    numberedContent,
 	}, "extraction")
 	if err != nil {
 		return nil, err

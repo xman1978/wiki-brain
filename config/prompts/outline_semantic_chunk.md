@@ -9,7 +9,7 @@ version: v2
 严格要求：
 1. 输出格式为 `{"sections": [...]}`，sections 是扁平数组
 2. 每个子章节必须包含 title（非空标题）、summary（3~6 个关键词，逗号分隔）、line_start、line_end、level
-3. line_start 和 line_end 是整篇文档中的绝对行号（1-based, inclusive），不是片段内行号
+3. 内容每行以 "行号: " 开头，line_start 和 line_end 直接取该行号（绝对行号，1-based, inclusive）
 4. 每个子章节至少 5 行
 5. 若内容是连贯整体无法细分，返回 `{"sections": []}`
 6. 只输出 JSON，不输出任何其他文字

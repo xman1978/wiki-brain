@@ -114,7 +114,13 @@ func (s *Service) AnswerStream(ctx context.Context, question string, forceDeep b
 		retrievalStart := time.Now()
 		slog.Debug("answer: stream retrieval start")
 
-		es, err := s.retSvc.Retrieve(ctx, question)
+		progress := func(evt retrieval.ProgressEvent) {
+			data := fmt.Sprintf(`{"phase":"%s","status":"%s","detail":"%s","duration_ms":%d}`,
+				evt.Phase, evt.Status, evt.Detail, evt.Duration)
+			outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: data}
+		}
+
+		es, err := s.retSvc.RetrieveWithProgress(ctx, question, progress)
 		if err != nil {
 			slog.Error("answer: retrieval failed", "error", err)
 			slog.Debug("answer: stream retrieval error", "duration_ms", time.Since(retrievalStart).Milliseconds(), "error", err)

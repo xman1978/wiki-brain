@@ -50,31 +50,40 @@ func (q *Queue) RegisterHandler(taskType string, handler HandlerFunc) {
 }
 
 func (q *Queue) Start() {
-	q.wg.Add(1)
-	go func() {
-		defer q.wg.Done()
-		for {
-			select {
-			case task, ok := <-q.ch:
-				if !ok {
-					return
-				}
-				q.consume(task)
-			case <-q.done:
-				for {
-					select {
-					case task, ok := <-q.ch:
-						if !ok {
+	q.StartN(1)
+}
+
+func (q *Queue) StartN(workers int) {
+	if workers < 1 {
+		workers = 1
+	}
+	for i := 0; i < workers; i++ {
+		q.wg.Add(1)
+		go func() {
+			defer q.wg.Done()
+			for {
+				select {
+				case task, ok := <-q.ch:
+					if !ok {
+						return
+					}
+					q.consume(task)
+				case <-q.done:
+					for {
+						select {
+						case task, ok := <-q.ch:
+							if !ok {
+								return
+							}
+							q.consume(task)
+						default:
 							return
 						}
-						q.consume(task)
-					default:
-						return
 					}
 				}
 			}
-		}
-	}()
+		}()
+	}
 }
 
 func (q *Queue) Enqueue(task Task) bool {

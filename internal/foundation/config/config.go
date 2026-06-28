@@ -38,9 +38,12 @@ type ModelConfig struct {
 }
 
 type ServerConfig struct {
-	Port         int    `yaml:"port"`
-	ReadTimeout  string `yaml:"read_timeout"`
-	WriteTimeout string `yaml:"write_timeout"`
+	Host           string `yaml:"host"`
+	Port           int    `yaml:"port"`
+	PathPrefix     string `yaml:"path_prefix"`
+	ReadTimeout    string `yaml:"read_timeout"`
+	WriteTimeout   string `yaml:"write_timeout"`
+	MaxConcurrency int    `yaml:"max_concurrency"`
 }
 
 type DatabaseConfig struct {
@@ -53,6 +56,7 @@ type IndexConfig struct {
 
 type QueueConfig struct {
 	BufferSize int `yaml:"buffer_size"`
+	Workers    int `yaml:"workers"`
 }
 
 type FileViewConfig struct {
@@ -162,13 +166,15 @@ func findConfigFile(explicit string) (string, error) {
 
 func applyEnvOverrides(cfg *Config) {
 	overrides := map[string]*string{
-		"WB_LLM_BASE_URL":        &cfg.LLM.BaseURL,
-		"WB_LLM_API_KEY":         &cfg.LLM.APIKey,
-		"WB_DATABASE_PATH":       &cfg.Database.Path,
-		"WB_INDEX_PATH":          &cfg.Index.Path,
-		"WB_SOURCE_UPLOAD_DIR":   &cfg.Source.UploadDir,
-		"WB_SERVER_READ_TIMEOUT": &cfg.Server.ReadTimeout,
-		"WB_SERVER_WRITE_TIMEOUT": &cfg.Server.WriteTimeout,
+		"WB_LLM_BASE_URL":          &cfg.LLM.BaseURL,
+		"WB_LLM_API_KEY":           &cfg.LLM.APIKey,
+		"WB_DATABASE_PATH":         &cfg.Database.Path,
+		"WB_INDEX_PATH":            &cfg.Index.Path,
+		"WB_SOURCE_UPLOAD_DIR":     &cfg.Source.UploadDir,
+		"WB_SERVER_HOST":           &cfg.Server.Host,
+		"WB_SERVER_PATH_PREFIX":    &cfg.Server.PathPrefix,
+		"WB_SERVER_READ_TIMEOUT":   &cfg.Server.ReadTimeout,
+		"WB_SERVER_WRITE_TIMEOUT":  &cfg.Server.WriteTimeout,
 	}
 
 	for env, ptr := range overrides {
@@ -178,10 +184,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 
 	intOverrides := map[string]*int{
-		"WB_SERVER_PORT":           &cfg.Server.Port,
-		"WB_LLM_TIMEOUT_SECONDS":  &cfg.LLM.TimeoutSeconds,
-		"WB_LLM_MAX_RETRIES":      &cfg.LLM.MaxRetries,
-		"WB_QUEUE_BUFFER_SIZE":     &cfg.Queue.BufferSize,
+		"WB_SERVER_PORT":            &cfg.Server.Port,
+		"WB_SERVER_MAX_CONCURRENCY": &cfg.Server.MaxConcurrency,
+		"WB_LLM_TIMEOUT_SECONDS":   &cfg.LLM.TimeoutSeconds,
+		"WB_LLM_MAX_RETRIES":       &cfg.LLM.MaxRetries,
+		"WB_QUEUE_BUFFER_SIZE":      &cfg.Queue.BufferSize,
+		"WB_QUEUE_WORKERS":          &cfg.Queue.Workers,
 	}
 
 	for env, ptr := range intOverrides {

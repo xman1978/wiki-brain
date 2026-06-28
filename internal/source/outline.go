@@ -2,6 +2,7 @@ package source
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -203,6 +204,21 @@ func findLeafNodes(outlines []Outline) []Outline {
 		}
 	}
 	return leaves
+}
+
+// numberedLineRange returns content with line number prefixes like "76: content".
+func numberedLineRange(lines []string, lineStart, lineEnd int) string {
+	if lineStart < 1 {
+		lineStart = 1
+	}
+	if lineEnd > len(lines) {
+		lineEnd = len(lines)
+	}
+	var sb strings.Builder
+	for i := lineStart - 1; i < lineEnd; i++ {
+		fmt.Fprintf(&sb, "%d: %s\n", i+1, lines[i])
+	}
+	return sb.String()
 }
 
 func extractLineRange(lines []string, lineStart, lineEnd int) string {

@@ -5,7 +5,7 @@
       "name": "wiki-brain",
       "runtimeExecutable": "go",
       "runtimeArgs": ["run", "./cmd/server/", "--config", "config/config.yml"],
-      "port": 8080
+      "port": 8800
     }
   ]
 }

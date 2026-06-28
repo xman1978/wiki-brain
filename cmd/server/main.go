@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"os/signal"
 	"syscall"
 	"time"
@@ -138,7 +139,11 @@ func main() {
 		traceSvc.ProcessTrace(task.Result.(*answer.AnswerResult))
 	})
 
-	q.Start()
+	queueWorkers := cfg.Queue.Workers
+	if queueWorkers <= 0 {
+		queueWorkers = 1
+	}
+	q.StartN(queueWorkers)
 
 	// ── Study scheduler ─────────────────────────────────
 	studyInterval, err := time.ParseDuration(cfg.Study.ScheduleInterval)
@@ -150,9 +155,10 @@ func main() {
 
 	// ── HTTP routes ─────────────────────────────────────
 	mux := foundation.NewRouter()
+	prefix := strings.TrimRight(cfg.Server.PathPrefix, "/")
 
 	// Web UI
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+prefix+"/", func(w http.ResponseWriter, r *http.Request) {
 		data, err := web.FS.ReadFile("index.html")
 		if err != nil {
 			http.Error(w, "page not found", http.StatusNotFound)
@@ -162,26 +168,45 @@ func main() {
 		w.Write(data)
 	})
 
-	// API routes
-	source.NewHandler(sourceSvc).RegisterRoutes(mux)
-	unit.NewHandler(unitSvc).RegisterRoutes(mux)
-	retrieval.NewHandler(retrievalSvc).RegisterRoutes(mux)
+	// API routes — if prefix is set, wrap mux with StripPrefix
+	apiMux := mux
+	if prefix != "" {
+		apiMux = foundation.NewRouter()
+	}
+	source.NewHandler(sourceSvc).RegisterRoutes(apiMux)
+	unit.NewHandler(unitSvc).RegisterRoutes(apiMux)
+	retrieval.NewHandler(retrievalSvc).RegisterRoutes(apiMux)
 	answerHandler := answer.NewHandler(answerSvc)
 	answerHandler.SetDB(database)
-	answerHandler.RegisterRoutes(mux)
-	trace.NewHandler(traceSvc).RegisterRoutes(mux)
-	study.NewHandler(studySvc).RegisterRoutes(mux)
-	session.NewHandler(sessionStore, session.NewParser(llmClient)).RegisterRoutes(mux)
+	answerHandler.RegisterRoutes(apiMux)
+	trace.NewHandler(traceSvc).RegisterRoutes(apiMux)
+	study.NewHandler(studySvc).RegisterRoutes(apiMux)
+	session.NewHandler(sessionStore, session.NewParser(llmClient)).RegisterRoutes(apiMux)
 
-	// CORS middleware
+	var rootHandler http.Handler = mux
+	if prefix != "" {
+		mux.Handle(prefix+"/", http.StripPrefix(prefix, apiMux))
+		rootHandler = mux
+	}
+
+	// Middleware chain
 	handler := corsMiddleware(
-		foundation.Chain(mux,
+		foundation.Chain(rootHandler,
 			foundation.RequestIDMiddleware,
 			foundation.LoggingMiddleware,
 		),
 	)
 
+	// Concurrency limiter
+	if cfg.Server.MaxConcurrency > 0 {
+		handler = concurrencyMiddleware(handler, cfg.Server.MaxConcurrency)
+	}
+
 	// ── Server ──────────────────────────────────────────
+	host := cfg.Server.Host
+	if host == "" {
+		host = "0.0.0.0"
+	}
 	port := cfg.Server.Port
 	if port <= 0 {
 		port = 8080
@@ -190,8 +215,9 @@ func main() {
 	readTimeout := parseDuration(cfg.Server.ReadTimeout, 30*time.Second)
 	writeTimeout := parseDuration(cfg.Server.WriteTimeout, 60*time.Second)
 
+	addr := fmt.Sprintf("%s:%d", host, port)
 	srv := &http.Server{
-		Addr:         fmt.Sprintf(":%d", port),
+		Addr:         addr,
 		Handler:      handler,
 		ReadTimeout:  readTimeout,
 		WriteTimeout: writeTimeout,
@@ -215,7 +241,7 @@ func main() {
 		}
 	}()
 
-	slog.Info("知识大脑启动", "port", port, "addr", fmt.Sprintf("http://localhost:%d", port))
+	slog.Info("知识大脑启动", "addr", addr, "prefix", prefix, "url", fmt.Sprintf("http://localhost:%d%s/", port, prefix))
 
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		slog.Error("HTTP 服务异常退出", "error", err)
@@ -235,6 +261,19 @@ func corsMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+func concurrencyMiddleware(next http.Handler, max int) http.Handler {
+	sem := make(chan struct{}, max)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case sem <- struct{}{}:
+			defer func() { <-sem }()
+			next.ServeHTTP(w, r)
+		default:
+			http.Error(w, "server too busy", http.StatusServiceUnavailable)
+		}
 	})
 }
 

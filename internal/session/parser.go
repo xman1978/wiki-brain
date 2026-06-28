@@ -22,6 +22,7 @@ func (p *Parser) Parse(ctx context.Context, input string, state *SessionState) P
 	vars := map[string]string{
 		"recent_subjects": formatRecentSubjects(state.Dialogue.RecentSubjects),
 		"current_subject": truncate(state.Working.CurrentSubject, 60, "（空）"),
+		"last_intent":     truncate(state.Dialogue.Intent, 60, "（空）"),
 		"user_input":      truncate(input, 200, ""),
 	}
 

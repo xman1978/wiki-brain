@@ -20,6 +20,15 @@ type Evidence struct {
 	Role        string          `json:"role"`
 }
 
+type ProgressEvent struct {
+	Phase    string `json:"phase"`
+	Status   string `json:"status"`
+	Detail   string `json:"detail,omitempty"`
+	Duration int64  `json:"duration_ms,omitempty"`
+}
+
+type ProgressFunc func(evt ProgressEvent)
+
 type ConflictEvidence struct {
 	UnitID    string          `json:"unit_id"`
 	PointID   string          `json:"point_id"`
