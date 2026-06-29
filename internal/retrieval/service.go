@@ -39,10 +39,11 @@ func NewService(store *Store, llmClient llm.LLMClient, unitsIdx, pointsIdx, outl
 }
 
 func (s *Service) Retrieve(ctx context.Context, question string) (*EvidenceSet, error) {
-	return s.RetrieveWithProgress(ctx, question, nil)
+	return s.RetrieveWithProgress(ctx, QueryContext{Question: question}, nil)
 }
 
-func (s *Service) RetrieveWithProgress(ctx context.Context, question string, progress ProgressFunc) (*EvidenceSet, error) {
+func (s *Service) RetrieveWithProgress(ctx context.Context, qc QueryContext, progress ProgressFunc) (*EvidenceSet, error) {
+	question := qc.Question
 	emit := func(phase, status, detail string, dur int64) {
 		if progress != nil {
 			progress(ProgressEvent{Phase: phase, Status: status, Detail: detail, Duration: dur})
@@ -60,7 +61,7 @@ func (s *Service) RetrieveWithProgress(ctx context.Context, question string, pro
 	}
 	slog.Info("retrieval: step2 domain pre-filter done", "candidates", len(candidateSources))
 
-	filteredSources, err := s.sourceSemanticFilter(ctx, question, candidateSources)
+	filteredSources, err := s.sourceSemanticFilter(ctx, qc, candidateSources)
 	if err != nil {
 		emit("activation", "error", err.Error(), time.Since(activationStart).Milliseconds())
 		return nil, fmt.Errorf("retrieval: source filter: %w", err)
@@ -103,6 +104,7 @@ func (s *Service) RetrieveWithProgress(ctx context.Context, question string, pro
 		emit("rerank", "done", "无候选", 0)
 		return &EvidenceSet{
 			Question:       question,
+			Constraint:     qc.Constraint,
 			Path:           "deep",
 			DirectEvidence: []Evidence{},
 			Supporting:     []Evidence{},
@@ -113,7 +115,7 @@ func (s *Service) RetrieveWithProgress(ctx context.Context, question string, pro
 	// Step 7: 证据分类（LLM Rerank）
 	emit("rerank", "start", fmt.Sprintf("%d 条候选", len(merged)), 0)
 	rerankStart := time.Now()
-	reranked, err := s.rerank(ctx, question, merged)
+	reranked, err := s.rerank(ctx, qc, merged)
 	if err != nil {
 		emit("rerank", "error", err.Error(), time.Since(rerankStart).Milliseconds())
 		return nil, fmt.Errorf("retrieval: rerank: %w", err)
@@ -144,7 +146,7 @@ func (s *Service) RetrieveWithProgress(ctx context.Context, question string, pro
 	emit("rerank", "done", fmt.Sprintf("%d 直接 · %d 补充", len(direct), len(supporting)), time.Since(rerankStart).Milliseconds())
 
 	// Step 10: Build EvidenceSet
-	es, err := s.buildEvidenceSet(question, path, direct, supporting, conflictCandidates)
+	es, err := s.buildEvidenceSet(question, qc.Constraint, path, direct, supporting, conflictCandidates)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: build evidence set: %w", err)
 	}
@@ -192,7 +194,7 @@ func (s *Service) domainPreFilter(ctx context.Context, question string) ([]Sourc
 }
 
 // Step 3: Source semantic filter
-func (s *Service) sourceSemanticFilter(ctx context.Context, question string, candidates []SourceInfo) ([]SourceInfo, error) {
+func (s *Service) sourceSemanticFilter(ctx context.Context, qc QueryContext, candidates []SourceInfo) ([]SourceInfo, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -210,9 +212,20 @@ func (s *Service) sourceSemanticFilter(ctx context.Context, question string, can
 		}
 	}
 
+	subject := qc.Subject
+	if subject == "" {
+		subject = "（未提取）"
+	}
+	intent := qc.Intent
+	if intent == "" {
+		intent = "（未提取）"
+	}
+
 	model := s.cfg.LLM.ModelForPurpose("default").Model
 	resp, err := s.llmClient.CompleteJSON(ctx, "source_filter.md", map[string]string{
-		"question":    question,
+		"question":    qc.Question,
+		"subject":     subject,
+		"intent":      intent,
 		"source_list": sourceList.String(),
 	}, model)
 	if err != nil {
@@ -626,7 +639,7 @@ func (s *Service) rrfMerge(outlineCandidates, ftsCandidates []candidate) []candi
 }
 
 // Step 7: LLM Rerank
-func (s *Service) rerank(ctx context.Context, question string, candidates []candidate) ([]candidate, error) {
+func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []candidate) ([]candidate, error) {
 	// Assign candidate_ids
 	for i := range candidates {
 		candidates[i].candidateID = fmt.Sprintf("c%d", i+1)
@@ -645,8 +658,24 @@ func (s *Service) rerank(ctx context.Context, question string, candidates []cand
 
 	jsonSchema := `{"results": [{"candidate_id": "c1", "role": "direct|supporting|irrelevant"}]}`
 
+	subject := qc.Subject
+	if subject == "" {
+		subject = "（未提取）"
+	}
+	intent := qc.Intent
+	if intent == "" {
+		intent = "（未提取）"
+	}
+	constraint := qc.Constraint
+	if constraint == "" {
+		constraint = "（无）"
+	}
+
 	resp, err := s.llmClient.CompleteJSON(ctx, "rerank.md", map[string]string{
-		"question":    question,
+		"question":    qc.Question,
+		"subject":     subject,
+		"intent":      intent,
+		"constraint":  constraint,
 		"candidates":  candidatesText.String(),
 		"json_schema": jsonSchema,
 	}, "classification")
@@ -694,7 +723,7 @@ func (s *Service) rerank(ctx context.Context, question string, candidates []cand
 	}
 
 	// Extract key nouns from question for direct validation
-	questionNouns := extractQuestionNouns(question)
+	questionNouns := extractQuestionNouns(qc.Question)
 
 	var kept []candidate
 	for _, c := range candidates {
@@ -814,9 +843,10 @@ func (s *Service) kpnExpand(candidates []candidate) ([]candidate, []candidate, e
 }
 
 // Step 10: Build EvidenceSet
-func (s *Service) buildEvidenceSet(question, path string, direct, supporting, conflicts []candidate) (*EvidenceSet, error) {
+func (s *Service) buildEvidenceSet(question, constraint, path string, direct, supporting, conflicts []candidate) (*EvidenceSet, error) {
 	es := &EvidenceSet{
 		Question:       question,
+		Constraint:     constraint,
 		Path:           path,
 		DirectEvidence: make([]Evidence, 0, len(direct)),
 		Supporting:     make([]Evidence, 0, len(supporting)),

@@ -66,7 +66,8 @@ func (h *Handler) createSource(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
-	limit := 20
+	domainID := r.URL.Query().Get("domain_id")
+	limit := 10
 	offset := 0
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -79,11 +80,25 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	sources, err := h.svc.store.List(status, limit, offset)
+	total, err := h.svc.store.Count(status, domainID)
+	if err != nil {
+		slog.Error("count sources failed", "error", err)
+		foundation.WriteError(w, http.StatusInternalServerError, "count failed")
+		return
+	}
+
+	sources, err := h.svc.store.List(status, domainID, limit, offset)
 	if err != nil {
 		slog.Error("list sources failed", "error", err)
 		foundation.WriteError(w, http.StatusInternalServerError, "list failed")
 		return
+	}
+
+	domainMap := make(map[string]string)
+	if domains, err := h.svc.store.ListDomains(); err == nil {
+		for _, d := range domains {
+			domainMap[d.DomainID] = d.Name
+		}
 	}
 
 	type item struct {
@@ -92,6 +107,8 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 		Format              string  `json:"format"`
 		Status              string  `json:"status"`
 		OutlineType         *string `json:"outline_type"`
+		DomainID            *string `json:"domain_id,omitempty"`
+		DomainName          *string `json:"domain_name,omitempty"`
 		CreatedAt           string  `json:"created_at"`
 		ProcessingStartedAt *string `json:"processing_started_at,omitempty"`
 		CompletedAt         *string `json:"completed_at,omitempty"`
@@ -109,6 +126,12 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 		if s.OutlineType.Valid {
 			it.OutlineType = &s.OutlineType.String
 		}
+		if s.DomainID.Valid {
+			it.DomainID = &s.DomainID.String
+			if name, ok := domainMap[s.DomainID.String]; ok {
+				it.DomainName = &name
+			}
+		}
 		if s.ProcessingStartedAt.Valid {
 			t := s.ProcessingStartedAt.Time.Format("2006-01-02T15:04:05Z")
 			it.ProcessingStartedAt = &t
@@ -123,7 +146,23 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 		items = []item{}
 	}
 
-	foundation.WriteJSON(w, http.StatusOK, items)
+	type domainItem struct {
+		DomainID string `json:"domain_id"`
+		Name     string `json:"name"`
+	}
+	var domainItems []domainItem
+	for id, name := range domainMap {
+		domainItems = append(domainItems, domainItem{DomainID: id, Name: name})
+	}
+	if domainItems == nil {
+		domainItems = []domainItem{}
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, map[string]any{
+		"total":   total,
+		"items":   items,
+		"domains": domainItems,
+	})
 }
 
 func (h *Handler) getSource(w http.ResponseWriter, r *http.Request) {

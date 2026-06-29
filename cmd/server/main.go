@@ -167,6 +167,15 @@ func main() {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(data)
 	})
+	mux.HandleFunc("GET "+prefix+"/marked.min.js", func(w http.ResponseWriter, r *http.Request) {
+		data, err := web.FS.ReadFile("marked.min.js")
+		if err != nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Write(data)
+	})
 
 	// API routes — if prefix is set, wrap mux with StripPrefix
 	apiMux := mux

@@ -3,6 +3,7 @@ package source
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -91,16 +92,27 @@ func (s *Store) GetByID(sourceID string) (*Source, error) {
 	return src, nil
 }
 
-func (s *Store) List(status string, limit, offset int) ([]Source, error) {
+func (s *Store) List(status, domainID string, limit, offset int) ([]Source, error) {
 	var rows *sql.Rows
 	var err error
+	base := `SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, created_at, updated_at, processing_started_at, completed_at FROM sources`
+	var where []string
+	var args []any
 	if status != "" {
-		rows, err = s.db.Query(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, created_at, updated_at, processing_started_at, completed_at
-			FROM sources WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`, status, limit, offset)
-	} else {
-		rows, err = s.db.Query(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, created_at, updated_at, processing_started_at, completed_at
-			FROM sources ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
+		where = append(where, "status = ?")
+		args = append(args, status)
 	}
+	if domainID != "" {
+		where = append(where, "domain_id = ?")
+		args = append(args, domainID)
+	}
+	q := base
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	q += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+	rows, err = s.db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("source store: list: %w", err)
 	}
@@ -179,6 +191,29 @@ func (s *Store) UpdateDomainID(sourceID string, domainID *string) error {
 		return fmt.Errorf("source store: update domain id: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) Count(status, domainID string) (int, error) {
+	var count int
+	q := `SELECT COUNT(*) FROM sources`
+	var where []string
+	var args []any
+	if status != "" {
+		where = append(where, "status = ?")
+		args = append(args, status)
+	}
+	if domainID != "" {
+		where = append(where, "domain_id = ?")
+		args = append(args, domainID)
+	}
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	err := s.db.QueryRow(q, args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("source store: count: %w", err)
+	}
+	return count, nil
 }
 
 func (s *Store) UpdateWordCount(sourceID string, wordCount int) error {

@@ -1,10 +1,13 @@
 package session
 
+import "strings"
+
 func Expand(state *SessionState, plan PlanResult, input string) ExpandedQuery {
 	eq := ExpandedQuery{
 		OriginalInput:  input,
 		Subject:        plan.Subject,
 		Intent:         state.Dialogue.Intent,
+		Constraint:     state.Dialogue.Constraint,
 		AllowRetrieval: true,
 	}
 
@@ -33,6 +36,9 @@ func Expand(state *SessionState, plan PlanResult, input string) ExpandedQuery {
 
 func buildIntentSubjectQuery(intent, subject string) string {
 	if intent != "" && subject != "" {
+		if strings.Contains(intent, subject) {
+			return intent
+		}
 		return subject + " " + intent
 	}
 	if intent != "" {

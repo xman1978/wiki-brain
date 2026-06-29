@@ -70,9 +70,12 @@ func (h *Handler) postAnswer(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) postAnswerStream(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Question  string `json:"question"`
-		Deep      bool   `json:"deep"`
-		SessionID string `json:"session_id"`
+		Question   string `json:"question"`
+		Deep       bool   `json:"deep"`
+		SessionID  string `json:"session_id"`
+		Subject    string `json:"subject"`
+		Intent     string `json:"intent"`
+		Constraint string `json:"constraint"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -83,7 +86,7 @@ func (h *Handler) postAnswerStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ch, getResult, err := h.svc.AnswerStream(r.Context(), req.Question, req.Deep)
+	ch, getResult, err := h.svc.AnswerStream(r.Context(), req.Question, req.Deep, req.Subject, req.Intent, req.Constraint)
 	if err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return

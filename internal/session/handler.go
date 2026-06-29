@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
@@ -116,12 +117,16 @@ func (h *Handler) postTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. SessionParser (LLM)
+	// 3. SessionParser (LLM) — extracts intent/subject from input only
 	parsed := h.parser.Parse(r.Context(), input.UserInput, state)
+
+	slog.Info("session parse result", "input", input.UserInput, "intent", parsed.Intent,
+		"subject", parsed.Subject, "current_subject", state.Working.CurrentSubject)
 
 	// 4. Update state
 	state.Dialogue.Intent = parsed.Intent
 	state.Dialogue.Subject = parsed.Subject
+	state.Dialogue.Constraint = parsed.Constraint
 	if parsed.Subject != "" {
 		state.Working.CurrentSubject = parsed.Subject
 		state.Dialogue.RecentSubjects = append(state.Dialogue.RecentSubjects, parsed.Subject)
@@ -140,6 +145,7 @@ func (h *Handler) postTurn(w http.ResponseWriter, r *http.Request) {
 	switch plan.Action {
 	case PlanRetrieve:
 		eq := Expand(state, plan, input.UserInput)
+		slog.Info("session expand result", "expanded_question", eq.ExpandedQuestion, "subject", eq.Subject, "plan_subject", plan.Subject)
 		result.Action = "retrieve"
 		result.ExpandedQuery = &eq
 		h.store.Set(input.SessionID, state)
@@ -239,3 +245,4 @@ func (h *Handler) postWorking(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+

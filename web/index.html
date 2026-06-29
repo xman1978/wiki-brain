@@ -193,7 +193,20 @@
     }
 
     .msg-assistant { max-width:100%; }
-    .ans-body { line-height:1.75; white-space:pre-wrap; font-size:15px; color:var(--text); }
+    .ans-body { line-height:1.75; font-size:15px; color:var(--text); }
+    .ans-body p { margin:0.5em 0; }
+    .ans-body h1,.ans-body h2,.ans-body h3,.ans-body h4 { margin:0.8em 0 0.4em; font-size:1em; font-weight:600; }
+    .ans-body h1 { font-size:1.2em; } .ans-body h2 { font-size:1.1em; }
+    .ans-body ul,.ans-body ol { margin:0.4em 0; padding-left:1.5em; }
+    .ans-body li { margin:0.2em 0; }
+    .ans-body code { background:var(--bg-3); padding:1px 4px; border-radius:3px; font-size:0.9em; }
+    .ans-body pre { background:var(--bg-3); padding:10px; border-radius:6px; overflow-x:auto; margin:0.5em 0; }
+    .ans-body pre code { background:none; padding:0; }
+    .ans-body blockquote { border-left:3px solid var(--border); padding-left:10px; margin:0.5em 0; color:var(--text-2); }
+    .ans-body table { border-collapse:collapse; margin:0.5em 0; font-size:0.9em; }
+    .ans-body th,.ans-body td { border:1px solid var(--border); padding:4px 8px; }
+    .ans-body th { background:var(--bg-2); }
+    .stream-body { white-space:pre-wrap; }
     .ans-meta { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; align-items:center; padding-top:12px; border-top:1px solid var(--border-lt); }
 
     .badge { font-size:11px; padding:3px 9px; border-radius:20px; border:1px solid var(--border); background:var(--surface-alt); color:var(--text-2); font-weight:500; }
@@ -377,7 +390,10 @@
     ::-webkit-scrollbar { width:6px; }
     ::-webkit-scrollbar-thumb { background:#d9d9d4; border-radius:3px; }
     ::-webkit-scrollbar-thumb:hover { background:#b0b0a8; }
+    .send-btn.stop-btn { background:var(--red); }
+    .send-btn.stop-btn:hover { background:#c0392b; }
   </style>
+  <script src="marked.min.js"></script>
 </head>
 <body>
 
@@ -492,20 +508,28 @@
     </div>
     <div class="drawer-sources">
       <div class="drawer-sources-header" style="display:flex;align-items:center;justify-content:space-between;">
-        <span>来源列表</span>
+        <span>来源列表 <span id="sourcesCount" style="font-size:11px;color:var(--text-3)"></span></span>
         <button class="btn btn-sm" onclick="loadSources()">刷新</button>
       </div>
-      <div style="padding:8px 12px;border-bottom:1px solid var(--border-lt);">
-        <select id="sourceStatusFilter" onchange="loadSources()" style="font-size:12px;padding:4px 8px;">
+      <div style="padding:8px 12px;border-bottom:1px solid var(--border-lt);display:flex;gap:8px;flex-wrap:wrap;">
+        <select id="sourceStatusFilter" onchange="sourcePage=0;loadSources()" style="font-size:12px;padding:4px 8px;">
           <option value="">全部状态</option>
           <option value="completed">已完成</option>
           <option value="processing">处理中</option>
           <option value="pending">等待中</option>
           <option value="failed">失败</option>
         </select>
+        <select id="sourceDomainFilter" onchange="sourcePage=0;loadSources()" style="font-size:12px;padding:4px 8px;">
+          <option value="">全部领域</option>
+        </select>
       </div>
       <div class="drawer-sources-list" id="sourcesList">
         <div style="text-align:center;padding:40px 16px;color:var(--text-3);font-size:13px">打开后自动加载</div>
+      </div>
+      <div id="sourcesPager" style="display:none;padding:8px 12px;border-top:1px solid var(--border-lt);display:flex;align-items:center;justify-content:center;gap:8px;font-size:12px;">
+        <button class="btn btn-sm" id="srcPrevBtn" onclick="sourcePage--;loadSources()">上一页</button>
+        <span id="srcPageInfo" style="color:var(--text-3)"></span>
+        <button class="btn btn-sm" id="srcNextBtn" onclick="sourcePage++;loadSources()">下一页</button>
       </div>
     </div>
   </div>
@@ -519,7 +543,7 @@
   <div class="drawer-header">
     <span>学习报告</span>
     <div style="display:flex;gap:6px;align-items:center">
-      <button class="btn btn-sm" onclick="runStudy()" id="runStudyBtn">▶ 立即扫描</button>
+      <button class="btn btn-sm" onclick="runStudy()" id="runStudyBtn">生成报告</button>
       <button class="btn btn-sm" onclick="loadStudyReport()">刷新</button>
       <button class="btn-ghost" onclick="closeStudyView()">✕</button>
     </div>
@@ -622,6 +646,29 @@ async function checkHealth() {
 // ═══════════════════════════════════════════════════════
 // QUESTION SUBMISSION
 // ═══════════════════════════════════════════════════════
+var _abortCtrl = null;
+
+function showStopBtn() {
+  var btn = document.getElementById('sendBtn');
+  btn.textContent = '■';
+  btn.classList.add('stop-btn');
+  btn.disabled = false;
+  btn.onclick = stopAnswer;
+}
+
+function showSendBtn() {
+  var btn = document.getElementById('sendBtn');
+  btn.textContent = '↑';
+  btn.classList.remove('stop-btn');
+  btn.disabled = false;
+  btn.onclick = submitQuestion;
+}
+
+function stopAnswer() {
+  if (_abortCtrl) { _abortCtrl.abort(); _abortCtrl = null; }
+  showSendBtn();
+}
+
 async function submitQuestion() {
   var input = document.getElementById('questionInput');
   var question = input.value.trim();
@@ -632,7 +679,7 @@ async function submitQuestion() {
 }
 
 async function doSubmit(question) {
-  document.getElementById('sendBtn').disabled = true;
+  showStopBtn();
 
   // Ensure we have a session
   if (!S.sessionId) {
@@ -654,7 +701,7 @@ async function doSubmit(question) {
   if (!turnR.ok) {
     updateProcessStep('session', 'fail', '会话处理', Date.now() - totalStart);
     appendErrorMsg('会话处理失败：' + (turnR.data?.message || 'HTTP ' + turnR.status), null);
-    document.getElementById('sendBtn').disabled = false;
+    showSendBtn();
     return;
   }
   updateProcessStep('session', 'done', '会话处理', Date.now() - totalStart);
@@ -665,7 +712,7 @@ async function doSubmit(question) {
     document.getElementById('chatInner').innerHTML = '';
     appendSystemMsg('对话已重置');
     loadSessions();
-    document.getElementById('sendBtn').disabled = false;
+    showSendBtn();
     document.getElementById('questionInput').focus();
     return;
   }
@@ -673,34 +720,42 @@ async function doSubmit(question) {
   if (turn.action === 'clarify' && turn.clarification) {
     showClarification(turn.clarification);
     loadSessions();
-    document.getElementById('sendBtn').disabled = false;
+    showSendBtn();
     document.getElementById('questionInput').focus();
     return;
   }
 
   // Step 2: SSE stream via POST /answer/stream
-  var expandedQuestion = (turn.expanded_query && turn.expanded_query.expanded_question) || question;
+  var eq = turn.expanded_query || {};
+  var expandedQuestion = eq.expanded_question || question;
+  var querySubject = eq.subject || '';
+  var queryIntent = eq.intent || '';
+  var queryConstraint = eq.constraint || '';
   var loadingEl = appendLoading();
   var retrievalStart = Date.now();
 
   try {
-    await doStreamAnswer(expandedQuestion, loadingEl, totalStart, retrievalStart, question);
+    await doStreamAnswer(expandedQuestion, loadingEl, totalStart, retrievalStart, question, querySubject, queryIntent, queryConstraint);
   } catch (e) {
-    loadingEl.remove();
-    updateProcessStep('activation', 'fail');
-    appendErrorMsg('请求失败：' + e.message, null);
+    if (e.name !== 'AbortError') {
+      loadingEl.remove();
+      updateProcessStep('activation', 'fail');
+      appendErrorMsg('请求失败：' + e.message, null);
+    }
   }
 
-  document.getElementById('sendBtn').disabled = false;
+  _abortCtrl = null;
+  showSendBtn();
   document.getElementById('questionInput').focus();
 }
 
-function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, originalQuestion) {
+function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, originalQuestion, subject, intent, constraint) {
   return new Promise(function(resolve, reject) {
     var url = S.baseUrl + '/answer/stream';
-    var body = JSON.stringify({ question: question, session_id: S.sessionId });
+    var body = JSON.stringify({ question: question, session_id: S.sessionId, subject: subject || '', intent: intent || '', constraint: constraint || '' });
+    _abortCtrl = new AbortController();
 
-    fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: body }).then(function(res) {
+    fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: body, signal: _abortCtrl.signal }).then(function(res) {
       if (!res.ok) {
         loadingEl.remove();
         res.text().then(function(t) {
@@ -961,6 +1016,13 @@ function updateTraceInAnswerCard(answerId, trace) {
   if (negBtn) { negBtn.disabled = false; negBtn.dataset.traceId = trace.trace_id; }
 }
 
+function renderMarkdown(text) {
+  if (typeof marked !== 'undefined' && marked.parse) {
+    try { return marked.parse(text); } catch(e) {}
+  }
+  return '<pre style="white-space:pre-wrap">' + esc(text) + '</pre>';
+}
+
 function extractStreamContent(raw) {
   var m = raw.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"/);
   if (m) return m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
@@ -1007,7 +1069,7 @@ function appendAnswerMsg(ans) {
 
   var el = div('msg msg-assistant');
   el.innerHTML = '\
-    <div class="ans-body">' + esc(ans.content || '（无回答内容）') + '</div>\
+    <div class="ans-body">' + renderMarkdown(ans.content || '（无回答内容）') + '</div>\
     ' + citHtml + '\
     <div class="ans-meta">\
       <span class="badge ' + path + '">' + pathLabel(path) + '</span>\
@@ -1344,19 +1406,47 @@ async function pollSourceTimeline(sourceId, title, uploadStart) {
   S.pollTimers[sourceId] = setTimeout(function() { pollSourceTimeline(sourceId, title, uploadStart); }, 3000);
 }
 
+var sourcePage = 0;
+var sourcePageSize = 10;
 async function loadSources() {
   var filter = document.getElementById('sourceStatusFilter')?.value || '';
+  var domainFilter = document.getElementById('sourceDomainFilter')?.value || '';
   var list = document.getElementById('sourcesList');
   if (!list) return;
   list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">加载中...</div>';
   try {
-    var r = await api('GET', '/sources' + (filter ? '?status=' + filter + '&' : '?') + 'limit=20&offset=0');
-    var src = Array.isArray(r.data) ? r.data : [];
+    var params = 'limit=' + sourcePageSize + '&offset=' + (sourcePage * sourcePageSize);
+    if (filter) params += '&status=' + filter;
+    if (domainFilter) params += '&domain_id=' + domainFilter;
+    var r = await api('GET', '/sources?' + params);
+    var body = r.data || {};
+    var src = Array.isArray(body.items) ? body.items : (Array.isArray(body) ? body : []);
+    var total = body.total != null ? body.total : src.length;
+    var totalPages = Math.ceil(total / sourcePageSize) || 1;
+    var countEl = document.getElementById('sourcesCount');
+    if (countEl) countEl.textContent = '(' + total + ')';
+    // update domain filter options
+    var domainSel = document.getElementById('sourceDomainFilter');
+    if (domainSel && body.domains) {
+      var curVal = domainSel.value;
+      domainSel.innerHTML = '<option value="">全部领域</option>' + body.domains.map(function(d) {
+        return '<option value="' + esc(d.domain_id) + '"' + (d.domain_id === curVal ? ' selected' : '') + '>' + esc(d.name) + '</option>';
+      }).join('');
+    }
+    // update pager
+    var pager = document.getElementById('sourcesPager');
+    if (pager) {
+      pager.style.display = totalPages > 1 ? 'flex' : 'none';
+      document.getElementById('srcPageInfo').textContent = (sourcePage + 1) + ' / ' + totalPages;
+      document.getElementById('srcPrevBtn').disabled = sourcePage <= 0;
+      document.getElementById('srcNextBtn').disabled = sourcePage >= totalPages - 1;
+    }
     if (!src.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无来源</div>'; return; }
     list.innerHTML = src.map(function(s) {
       return '<div class="source-card" id="sc-' + esc(s.source_id) + '" onclick="showTimelineForSource(\'' + esc(s.source_id) + '\')"><div class="sc-title">' + esc(s.title || s.source_id) + '</div><div class="sc-meta">\
         <span class="status-chip status-' + (s.status || 'unknown') + '">' + statusLabel(s.status) + '</span>\
         <span class="badge">' + esc(s.format || '') + '</span>\
+        ' + (s.domain_name ? '<span class="badge" style="background:var(--bg-3);color:var(--text-2)">' + esc(s.domain_name) + '</span>' : '') + '\
         <span style="font-size:10px;color:var(--text-3)">' + dateStr(s.created_at) + '</span>\
       </div><div class="sc-actions">\
         <button class="btn btn-sm" onclick="viewSource(\'' + esc(s.source_id) + '\')">详情</button>\
@@ -1428,7 +1518,7 @@ async function loadStudyReport() {
   try {
     var r = await api('GET', '/study/reports/latest');
     if (r.ok && r.data) renderStudyReport(r.data, body);
-    else if (r.status===404) body.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text-3)"><div style="margin-bottom:16px"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg></div><div>暂无学习报告</div><div style="font-size:13px;margin-top:8px">点击"立即扫描"生成第一份报告</div></div>';
+    else if (r.status===404) body.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text-3)"><div style="margin-bottom:16px"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg></div><div>暂无学习报告</div><div style="font-size:13px;margin-top:8px">点击"生成报告"生成第一份报告</div></div>';
     else body.innerHTML = '<div style="color:var(--red);padding:20px">加载失败：' + esc(JSON.stringify(r.data)) + '</div>';
   } catch(e) { body.innerHTML = '<div style="color:var(--red);padding:20px">请求失败：' + esc(e.message) + '</div>'; }
 }
@@ -1475,13 +1565,15 @@ async function loadReportList() {
 
 async function runStudy() {
   var btn = document.getElementById('runStudyBtn');
-  btn.disabled = true; btn.textContent = '扫描中...';
+  var body = document.getElementById('studyBody');
+  btn.disabled = true; btn.textContent = '生成中...';
+  body.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text-3)">正在生成学习报告...</div>';
   try {
     var r = await api('POST', '/study/run', {});
-    if (r.ok) { alert('扫描完成\n\n候选数：' + (r.data.candidates_flagged||0) + '\n缺口处理：' + (r.data.gap_events_processed||0) + '\n耗时：' + (r.data.elapsed_ms||0) + 'ms'); loadStudyReport(); }
-    else alert('扫描失败：' + JSON.stringify(r.data));
-  } catch(e) { alert('请求失败：' + e.message); }
-  btn.disabled = false; btn.textContent = '▶ 立即扫描';
+    if (r.ok) { loadStudyReport(); }
+    else { body.innerHTML = '<div style="color:var(--red);padding:20px">生成失败：' + esc(JSON.stringify(r.data)) + '</div>'; }
+  } catch(e) { body.innerHTML = '<div style="color:var(--red);padding:20px">请求失败：' + esc(e.message) + '</div>'; }
+  btn.disabled = false; btn.textContent = '生成报告';
 }
 
 // ═══════════════════════════════════════════════════════

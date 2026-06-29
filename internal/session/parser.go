@@ -20,13 +20,11 @@ func NewParser(client llm.LLMClient) *Parser {
 
 func (p *Parser) Parse(ctx context.Context, input string, state *SessionState) ParseResult {
 	vars := map[string]string{
-		"recent_subjects": formatRecentSubjects(state.Dialogue.RecentSubjects),
-		"current_subject": truncate(state.Working.CurrentSubject, 60, "（空）"),
-		"last_intent":     truncate(state.Dialogue.Intent, 60, "（空）"),
-		"user_input":      truncate(input, 200, ""),
+		"last_intent": truncate(state.Dialogue.Intent, 60, "（空）"),
+		"user_input":  truncate(input, 200, ""),
 	}
 
-	raw, err := p.llm.Complete(ctx, "session_parse.md", vars, "parse")
+	raw, err := p.llm.Complete(ctx, "session_parse.md", vars, "classification")
 	if err != nil {
 		return ParseResult{}
 	}
@@ -73,8 +71,9 @@ func truncate(s string, maxRunes int, fallback string) string {
 var jsonBlockRe = regexp.MustCompile(`\{[^{}]*\}`)
 
 type parseOutput struct {
-	Intent  string `json:"intent"`
-	Subject string `json:"subject"`
+	Intent     string `json:"intent"`
+	Subject    string `json:"subject"`
+	Constraint string `json:"constraint"`
 }
 
 func repairLayer1(raw string) (ParseResult, bool) {
@@ -101,6 +100,7 @@ func repairLayer1(raw string) (ParseResult, bool) {
 		out.Subject = string(subjectRunes[:100])
 	}
 	result.Subject = out.Subject
+	result.Constraint = out.Constraint
 
 	valid := result.Intent != ""
 	return result, valid

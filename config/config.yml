@@ -44,11 +44,11 @@ server:
 
 # 数据库
 database:
-  path: "test/testdata/seed.db"            # SQLite 文件路径，相对于工作目录
+  path: "data/wiki-brain.db"            # SQLite 文件路径，相对于工作目录
 
 # Bleve 全文索引
 index:
-  path: "test/testdata/searchindex"              # 索引根目录，内含 units / points / outlines 子目录
+  path: "data/searchindex"              # 索引根目录，内含 units / points / outlines 子目录
 
 # 异步任务队列
 queue:
@@ -63,7 +63,7 @@ fileview:
 
 # Source 模块
 source:
-  upload_dir:            "test/testdata/sources"
+  upload_dir:            "data/sources"
   segment_max_chars:     2000           # 大纲叶节点最大字符数（rune），超过此值在 Source 层触发语义目录细化
   min_segment_chars:     400            # Unit 切块：相邻叶节点合计低于此值时合并
 

@@ -101,7 +101,7 @@ func (s *Service) AnswerFromQuestion(ctx context.Context, question string, force
 // AnswerStream does retrieval then streams LLM output. The returned channel
 // emits StreamChunk (thinking/content/done/error). After ChunkDone the caller
 // can read the final AnswerResult via the callback.
-func (s *Service) AnswerStream(ctx context.Context, question string, forceDeep bool) (<-chan llm.StreamChunk, func() *AnswerResult, error) {
+func (s *Service) AnswerStream(ctx context.Context, question string, forceDeep bool, subject, intent, constraint string) (<-chan llm.StreamChunk, func() *AnswerResult, error) {
 	outCh := make(chan llm.StreamChunk, 32)
 	var finalResult *AnswerResult
 
@@ -120,7 +120,12 @@ func (s *Service) AnswerStream(ctx context.Context, question string, forceDeep b
 			outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: data}
 		}
 
-		es, err := s.retSvc.RetrieveWithProgress(ctx, question, progress)
+		es, err := s.retSvc.RetrieveWithProgress(ctx, retrieval.QueryContext{
+			Question:   question,
+			Subject:    subject,
+			Intent:     intent,
+			Constraint: constraint,
+		}, progress)
 		if err != nil {
 			slog.Error("answer: retrieval failed", "error", err)
 			slog.Debug("answer: stream retrieval error", "duration_ms", time.Since(retrievalStart).Milliseconds(), "error", err)
@@ -402,8 +407,13 @@ func needsReasoning(question string) bool {
 }
 
 func buildPromptVars(es *retrieval.EvidenceSet) map[string]string {
+	constraint := es.Constraint
+	if constraint == "" {
+		constraint = "（无）"
+	}
 	vars := map[string]string{
-		"question": es.Question,
+		"question":   es.Question,
+		"constraint": constraint,
 	}
 
 	var directLines []string

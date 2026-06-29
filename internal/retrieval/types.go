@@ -2,8 +2,16 @@ package retrieval
 
 import "encoding/json"
 
+type QueryContext struct {
+	Question   string
+	Subject    string
+	Intent     string
+	Constraint string
+}
+
 type EvidenceSet struct {
 	Question        string             `json:"question"`
+	Constraint      string             `json:"constraint,omitempty"`
 	Path            string             `json:"path"`
 	DirectEvidence  []Evidence         `json:"direct_evidence"`
 	Supporting      []Evidence         `json:"supporting"`
