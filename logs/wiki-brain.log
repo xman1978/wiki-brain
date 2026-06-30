@@ -4574,3 +4574,596 @@
 {"time":"2026-06-29T18:14:20.186471+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"072b4499-c0e9-4c4a-8d91-86733b0ad185"}
 {"time":"2026-06-29T18:14:49.062236+08:00","level":"INFO","msg":"收到退出信号","signal":15}
 {"time":"2026-06-29T18:14:49.063076+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-06-30T18:56:50.11067+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-06-30T18:56:50.300632+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-06-30T18:56:50.620885+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-06-30T18:56:50.632179+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-06-30T18:57:04.771278+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"1e866f1f-4dd1-4a87-a544-075c7cd7d6a0"}
+{"time":"2026-06-30T18:57:04.783329+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"55dfd922-1585-4ab3-9f3c-19137861a79d"}
+{"time":"2026-06-30T18:57:04.791903+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"ca09e602-ca8b-471d-89e9-55f6b3a7f056"}
+{"time":"2026-06-30T18:57:04.792512+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"866611ff-729f-4a62-a0a2-43a0f89403c0"}
+{"time":"2026-06-30T18:57:04.877103+08:00","level":"INFO","msg":"http request","method":"GET","path":"/favicon.ico","status":200,"duration_ms":0,"request_id":"54889306-3a92-4172-8612-80ffcf3ffe5f"}
+{"time":"2026-06-30T18:57:10.441409+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9d8af7bf-8dde-4c73-a13f-1fc45a8943d0"}
+{"time":"2026-06-30T18:57:14.057152+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"35db4f4b-a09d-4c6c-b7e8-5c331ed6c27d"}
+{"time":"2026-06-30T18:57:15.223894+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"dbd46cf6-a80f-4dce-8ecb-60b2e70cea0e"}
+{"time":"2026-06-30T18:57:24.507391+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/25f69a5f-9d4f-47a8-921a-04a1fb399b4a","status":200,"duration_ms":0,"request_id":"33fde765-0713-4526-b3af-29f017a6af65"}
+{"time":"2026-06-30T18:57:24.508886+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/25f69a5f-9d4f-47a8-921a-04a1fb399b4a","status":200,"duration_ms":0,"request_id":"da7f8334-7788-4389-a89a-8d3047168b5f"}
+{"time":"2026-06-30T18:57:27.347289+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/25f69a5f-9d4f-47a8-921a-04a1fb399b4a/preview","status":200,"duration_ms":24,"request_id":"ab9fc305-c36f-47ed-a9e8-e6ea3560e26b"}
+{"time":"2026-06-30T18:57:27.408769+08:00","level":"INFO","msg":"http request","method":"GET","path":"/favicon.ico","status":200,"duration_ms":0,"request_id":"8fcb34ba-c2d9-46e4-972f-f73465b08251"}
+{"time":"2026-06-30T18:57:34.792342+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"0e488650-2c29-4fe3-ad31-c8760062baff"}
+{"time":"2026-06-30T18:57:40.96231+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/c790eccf-091f-4e21-a6d3-e63d784a4373/turns","status":200,"duration_ms":3,"request_id":"914f7963-35b7-462b-9e83-d5455d83fe75"}
+{"time":"2026-06-30T18:57:40.967219+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/e6e570b0-280a-4b03-9348-a79bd44b6008","status":200,"duration_ms":1,"request_id":"74f9afdf-5d33-4178-9474-b95897058582"}
+{"time":"2026-06-30T18:57:41.00647+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"9fe1bfe6-41bc-4831-a642-b56ba4c73ba1"}
+{"time":"2026-06-30T18:57:41.007208+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/00b423d0-b721-4c9e-83f8-dfadd1097a4c","status":200,"duration_ms":1,"request_id":"2fa5586b-4e32-4198-9dbd-0bc1b3b520de"}
+{"time":"2026-06-30T18:57:41.015557+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"637c2619-028b-464e-9fd0-ea73d5d8d888"}
+{"time":"2026-06-30T18:57:41.016151+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/bf1cf003-b126-42bb-a1e7-bfc82dcaf11c","status":200,"duration_ms":0,"request_id":"44ddc5bd-b131-466d-a234-92204b1919d0"}
+{"time":"2026-06-30T18:57:41.020367+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"91df9750-d5e8-40c8-ada8-47e0d2357b89"}
+{"time":"2026-06-30T18:57:41.020762+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/391e079d-6b0d-4b58-a403-b31f7042f711","status":200,"duration_ms":0,"request_id":"7440a0b5-3169-4e61-a934-ded7e0fab43a"}
+{"time":"2026-06-30T18:57:41.0242+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"18993dde-7807-4a38-bec1-3f1b15ef80c3"}
+{"time":"2026-06-30T18:57:41.024628+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/dab03446-86d9-4d8e-a4a7-7b6c3e578850","status":200,"duration_ms":0,"request_id":"87ed45e9-6610-4395-be55-1fbc84e83c7f"}
+{"time":"2026-06-30T18:57:41.0272+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"9a7bb60a-f662-486d-89a9-cfdc35c25928"}
+{"time":"2026-06-30T18:57:50.640619+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":4,"report_id":"ed655cc2-2edf-4a1a-b79b-f94ca231a8ad","elapsed_ms":9}
+{"time":"2026-06-30T18:57:51.405547+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"33662330-367f-41a4-b3fa-891c29a719b9"}
+{"time":"2026-06-30T18:57:51.414885+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"b0602080-d8b4-4a47-b4c3-feed31a3343c"}
+{"time":"2026-06-30T18:58:04.793569+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"78b1c177-6487-45d3-b14f-8968685f9f19"}
+{"time":"2026-06-30T18:58:24.077092+08:00","level":"INFO","msg":"session parse result","input":"销售万相公文可以拿到多少奖金","intent":"查询销售奖金","subject":"公文销售激励","current_subject":""}
+{"time":"2026-06-30T18:58:24.077212+08:00","level":"INFO","msg":"session expand result","expanded_question":"销售万相公文可以拿到多少奖金","subject":"公文销售激励","plan_subject":"公文销售激励"}
+{"time":"2026-06-30T18:58:24.077993+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":791,"request_id":"958925af-1e2c-439b-a9fb-a6f6436a8908"}
+{"time":"2026-06-30T18:58:24.608826+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T18:58:25.968601+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["25f69a5f-9d4f-47a8-921a-04a1fb399b4a","7547d227-9a59-428d-9de9-f9037a986881","8014ea4f-200c-46f9-a991-ae18c742a57c"]}
+{"time":"2026-06-30T18:58:29.362094+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":5}
+{"time":"2026-06-30T18:58:29.368947+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":16}
+{"time":"2026-06-30T18:58:29.369079+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":17}
+{"time":"2026-06-30T18:58:32.595447+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":16}
+{"time":"2026-06-30T18:58:32.600277+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"short","direct":5,"supporting":11,"conflicts":0}
+{"time":"2026-06-30T18:58:34.791304+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"895ac67b-4793-4881-868a-79fde978fc9e"}
+{"time":"2026-06-30T18:58:49.169544+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":25088,"request_id":"82c16431-d0fb-46e2-bdf0-79d8febcd169"}
+{"time":"2026-06-30T18:58:49.181251+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"91a9d230-68b9-4772-baac-f4bd90e3603c"}
+{"time":"2026-06-30T18:58:49.18178+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"dcccd322-3a2e-4477-af71-67488027246e"}
+{"time":"2026-06-30T18:58:49.182451+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"bad96430-6910-486a-a902-0e49fbbb4388"}
+{"time":"2026-06-30T18:59:04.790821+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"4887b714-0d80-4903-9632-3b87d816d41f"}
+{"time":"2026-06-30T18:59:10.852091+08:00","level":"INFO","msg":"session parse result","input":"实施万相公文可以拿到多少提成","intent":"查询实施提成","subject":"项目实施激励","current_subject":"公文销售激励"}
+{"time":"2026-06-30T18:59:10.852231+08:00","level":"INFO","msg":"session expand result","expanded_question":"实施万相公文可以拿到多少提成","subject":"项目实施激励","plan_subject":"项目实施激励"}
+{"time":"2026-06-30T18:59:10.852854+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":553,"request_id":"30450131-b1be-4d4b-ada4-af1ac4821883"}
+{"time":"2026-06-30T18:59:11.30089+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T18:59:12.851336+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["25f69a5f-9d4f-47a8-921a-04a1fb399b4a","7547d227-9a59-428d-9de9-f9037a986881","8014ea4f-200c-46f9-a991-ae18c742a57c"]}
+{"time":"2026-06-30T18:59:14.807868+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":5}
+{"time":"2026-06-30T18:59:14.809413+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":11}
+{"time":"2026-06-30T18:59:14.809498+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":12}
+{"time":"2026-06-30T18:59:17.103296+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":11}
+{"time":"2026-06-30T18:59:17.104004+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"short","direct":2,"supporting":9,"conflicts":0}
+{"time":"2026-06-30T18:59:29.04121+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":18183,"request_id":"418ab559-c9f5-44f8-b5ba-760b8dd7a3ee"}
+{"time":"2026-06-30T18:59:29.050906+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"3deabae5-7054-4913-b0cd-055df8220f21"}
+{"time":"2026-06-30T18:59:29.051035+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"fcd111e4-abd2-4010-b080-cbf220a8a498"}
+{"time":"2026-06-30T18:59:29.051085+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"b1d638db-79f9-4299-9092-d8c13da3f34b"}
+{"time":"2026-06-30T18:59:34.790594+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e2c73827-fff0-4513-954d-55cd9203b972"}
+{"time":"2026-06-30T19:00:04.788341+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ca06eaca-4d1d-4a5f-be2c-f3cffe88f692"}
+{"time":"2026-06-30T19:00:34.787564+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"172be293-92f0-4d15-83ed-85b2be8ff925"}
+{"time":"2026-06-30T19:01:05.050908+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"63fca48b-dd16-47e0-b3d2-5046172f63ae"}
+{"time":"2026-06-30T19:01:34.78696+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"5f524172-9fc2-4773-94bf-95f9e7109859"}
+{"time":"2026-06-30T19:02:05.050405+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"cabf574f-0055-48b6-9e3f-167f081797f0"}
+{"time":"2026-06-30T19:02:35.048139+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a925cbec-5a70-44a3-8c5d-1d6095a3f103"}
+{"time":"2026-06-30T19:03:36.049658+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"472dd228-8e5b-4cf9-bdc3-53a58e7daa16"}
+{"time":"2026-06-30T19:04:37.046389+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9a04be6e-73af-4963-8123-998c8ae6e18f"}
+{"time":"2026-06-30T19:05:38.043846+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e06c3c06-c11d-415b-b930-85bd186aa2ae"}
+{"time":"2026-06-30T19:06:39.042805+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e9356ac2-4521-4d07-b675-6e0f01205315"}
+{"time":"2026-06-30T19:07:40.041286+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":1,"request_id":"78b33561-007f-4c20-96e4-cb190475ac18"}
+{"time":"2026-06-30T19:08:41.039552+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"0df9b71f-d26a-45da-97e6-2230b2022706"}
+{"time":"2026-06-30T19:09:42.036282+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"0d4d27a8-f962-4d96-8e48-b4a6681b53b3"}
+{"time":"2026-06-30T19:10:43.034101+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"d7155b76-1aed-45c9-bc73-f317845a2adc"}
+{"time":"2026-06-30T19:11:44.031487+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"49f0a113-0d82-4141-9e0a-0d0cf47e2148"}
+{"time":"2026-06-30T19:12:45.031456+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"bfb3fc56-14ce-4b3e-9baf-77394224390b"}
+{"time":"2026-06-30T19:13:46.028602+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"d009b5f7-b833-4431-9edb-6bd9692c30b0"}
+{"time":"2026-06-30T19:14:46.026614+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"3e75136e-c785-4935-ba56-cad6580201ef"}
+{"time":"2026-06-30T19:15:46.025004+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"245042c9-f652-4bda-94c3-37645059532f"}
+{"time":"2026-06-30T19:16:46.021276+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"64bc511f-34db-4f5a-9ff9-f23c44d791e5"}
+{"time":"2026-06-30T19:17:46.021508+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"134a8717-5d58-4af0-ae39-c52db0c14d59"}
+{"time":"2026-06-30T19:18:46.017687+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"bc8fd559-93e8-4790-b3dc-79f8d99f9395"}
+{"time":"2026-06-30T19:19:46.015801+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"80bfbe34-4622-4413-966e-81869fd0b463"}
+{"time":"2026-06-30T19:20:46.01379+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e81cbc71-cd13-4c1d-97c5-d46ab064dba0"}
+{"time":"2026-06-30T19:21:46.01298+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"14da38c1-b2f9-4e72-974c-0d86576a96b5"}
+{"time":"2026-06-30T19:22:46.009698+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"37e1cf17-294a-443b-a027-6f8982f4dcd9"}
+{"time":"2026-06-30T19:23:46.009502+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"22bc7946-5875-4483-a412-f193da37da76"}
+{"time":"2026-06-30T19:24:46.007857+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"672fb74c-52d4-495d-9256-e0eed4300e33"}
+{"time":"2026-06-30T19:25:46.005612+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e7511f10-8627-40b5-a101-b877279ec7d5"}
+{"time":"2026-06-30T19:26:46.003177+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"3bcffd78-dc7b-4e5c-9346-6abcb1d3e570"}
+{"time":"2026-06-30T19:27:46.002274+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"b1c7523a-6c7e-46bf-8564-3a714905909a"}
+{"time":"2026-06-30T19:28:46.000793+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"7924b954-0ee8-4f02-aa94-41d05b2c2cfc"}
+{"time":"2026-06-30T19:29:45.998745+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":1,"request_id":"cbf60987-eb13-472c-ba1d-7c1c2887e7c5"}
+{"time":"2026-06-30T19:30:45.996838+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"640ec391-8103-4ca0-97c5-a37df97c6e01"}
+{"time":"2026-06-30T19:31:45.993672+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"86e163d7-d638-4aa3-adfc-79eebb3c924e"}
+{"time":"2026-06-30T19:32:45.991293+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"324df0e3-686a-445d-a833-cc5207df0a62"}
+{"time":"2026-06-30T19:33:45.99064+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9057abc5-5dea-44c5-97f0-14370d29032e"}
+{"time":"2026-06-30T19:34:45.988356+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"339dd05f-1fd7-4da3-aa51-8c750bd47bc9"}
+{"time":"2026-06-30T19:35:45.986638+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"b8f6efc6-2399-4ca4-bef6-590a846011a5"}
+{"time":"2026-06-30T19:36:45.984863+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8346d3de-3647-4c82-8ff6-0a110276718e"}
+{"time":"2026-06-30T19:37:45.98094+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ebccef40-fb88-4b46-80b7-5cb4cd04c347"}
+{"time":"2026-06-30T19:38:45.983927+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"144a8966-c453-4211-b50f-123bf2a46933"}
+{"time":"2026-06-30T19:39:45.979004+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8c0b8177-55b6-4492-9e3e-88943e080ec0"}
+{"time":"2026-06-30T19:40:45.97702+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c78c3355-bbf5-4abe-b134-9bddf23281e0"}
+{"time":"2026-06-30T19:41:45.975543+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"acbf3dde-7501-440d-b9b0-50aa2d873dc8"}
+{"time":"2026-06-30T19:42:45.974281+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"b90bbc16-cdeb-4c48-8598-a13589e001f1"}
+{"time":"2026-06-30T19:43:45.972941+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"430bd3d0-b464-4dd6-8a24-b0d05fe34d52"}
+{"time":"2026-06-30T19:44:45.971279+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"edfbc65e-cbac-43f1-abd8-8ba05a67d17d"}
+{"time":"2026-06-30T19:45:45.967114+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"91a59be8-5704-49fb-9345-5de70244ff01"}
+{"time":"2026-06-30T19:46:45.964608+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"794eede9-c938-46ce-9bc1-d234b4b83800"}
+{"time":"2026-06-30T19:47:04.698846+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"0b309a77-4df4-43ab-8d61-e2955290bc95"}
+{"time":"2026-06-30T19:47:34.698243+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"0d82686c-4ace-4d99-941d-501dbe1667e9"}
+{"time":"2026-06-30T19:47:45.936999+08:00","level":"INFO","msg":"session parse result","input":"实施万相公文项目可以拿到多少提成","intent":"查询实施提成","subject":"项目实施激励","current_subject":"项目实施激励"}
+{"time":"2026-06-30T19:47:45.937162+08:00","level":"INFO","msg":"session expand result","expanded_question":"实施万相公文项目可以拿到多少提成","subject":"项目实施激励","plan_subject":"项目实施激励"}
+{"time":"2026-06-30T19:47:45.937816+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":562,"request_id":"74d0f26d-0276-4727-ad6d-89ad4da752e4"}
+{"time":"2026-06-30T19:47:46.371918+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T19:47:47.306855+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["25f69a5f-9d4f-47a8-921a-04a1fb399b4a","8014ea4f-200c-46f9-a991-ae18c742a57c"]}
+{"time":"2026-06-30T19:47:49.322961+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":3}
+{"time":"2026-06-30T19:47:49.329011+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":16}
+{"time":"2026-06-30T19:47:49.329114+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":16}
+{"time":"2026-06-30T19:47:52.321655+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":14}
+{"time":"2026-06-30T19:47:52.327265+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"short","direct":5,"supporting":11,"conflicts":0}
+{"time":"2026-06-30T19:48:03.601415+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":17656,"request_id":"deb97727-2a96-4615-96c0-2dfc09c3d53f"}
+{"time":"2026-06-30T19:48:03.612768+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"e44c365c-cd92-49a6-aba9-95f16cbda67f"}
+{"time":"2026-06-30T19:48:03.614078+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"adef0051-bed4-4aac-816c-aa5de2cebaad"}
+{"time":"2026-06-30T19:48:03.614115+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"8cabfd2c-6d53-49e4-9b4c-8c78088c196f"}
+{"time":"2026-06-30T19:48:04.696299+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"4fc9c9a3-efaf-4dc4-a8d8-60759ffcbf94"}
+{"time":"2026-06-30T19:48:34.696271+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"020a66b1-d172-40dd-938e-d74e907c51e6"}
+{"time":"2026-06-30T19:49:04.694526+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"34d4d612-b213-46bd-9e74-390463997fd6"}
+{"time":"2026-06-30T19:49:14.117264+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/c790eccf-091f-4e21-a6d3-e63d784a4373/turns","status":200,"duration_ms":0,"request_id":"9b7dd699-88da-4ed1-a33a-7bad9678ef73"}
+{"time":"2026-06-30T19:49:14.121126+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/e6e570b0-280a-4b03-9348-a79bd44b6008","status":200,"duration_ms":0,"request_id":"755d4965-2b63-470d-8170-df40af09a77c"}
+{"time":"2026-06-30T19:49:14.13218+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"784cbb94-eb2d-451f-9829-082d07aa1ed5"}
+{"time":"2026-06-30T19:49:14.132446+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/00b423d0-b721-4c9e-83f8-dfadd1097a4c","status":200,"duration_ms":0,"request_id":"a50a5554-4215-488f-8821-1c3b8749cb3a"}
+{"time":"2026-06-30T19:49:14.144101+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"c190d20b-cd54-4214-8303-768f88cb1bdc"}
+{"time":"2026-06-30T19:49:14.144332+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/bf1cf003-b126-42bb-a1e7-bfc82dcaf11c","status":200,"duration_ms":0,"request_id":"2eeaba8f-fc0b-44fe-b0d8-a82f2c827ae1"}
+{"time":"2026-06-30T19:49:14.151346+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"4db04648-fed4-477d-90d3-0f14f1e771b7"}
+{"time":"2026-06-30T19:49:14.151593+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/391e079d-6b0d-4b58-a403-b31f7042f711","status":200,"duration_ms":0,"request_id":"47227ec6-19e3-451d-9c49-4b544eae0fe1"}
+{"time":"2026-06-30T19:49:14.157922+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"6129fccd-71b9-4ede-a022-ada2a364df0f"}
+{"time":"2026-06-30T19:49:14.158167+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/dab03446-86d9-4d8e-a4a7-7b6c3e578850","status":200,"duration_ms":0,"request_id":"f6510c9a-2d56-41a3-8dd3-facb271e58c1"}
+{"time":"2026-06-30T19:49:14.164147+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"e738ded8-3829-41bf-8dd9-36c66f4d56f7"}
+{"time":"2026-06-30T19:49:25.135382+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/86336c8f-4185-4dc3-864f-5bade194bff4/turns","status":200,"duration_ms":0,"request_id":"468cd83c-c8a6-4bda-94f8-558e3d080dbc"}
+{"time":"2026-06-30T19:49:25.139528+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/325d1a61-3cbc-40e7-8501-cc67f7b1a3a7","status":200,"duration_ms":1,"request_id":"50e4e846-5357-4c91-b8fa-2bc3e9862216"}
+{"time":"2026-06-30T19:49:25.144154+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"6adbc68d-a5c6-4bfd-a6f9-93ca485fc29b"}
+{"time":"2026-06-30T19:49:25.144724+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/c821a26c-8648-4784-9e0b-71e6f339e99b","status":200,"duration_ms":0,"request_id":"5e7c04c0-a3a9-48bb-901f-628916611801"}
+{"time":"2026-06-30T19:49:25.152325+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"34b826af-029a-4f3b-9d93-53ee96d6b17a"}
+{"time":"2026-06-30T19:49:25.152494+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/cdcc7137-d4f7-40d6-b9f8-4015c21e4e5c","status":200,"duration_ms":0,"request_id":"0f89f888-02ed-4058-82ce-38a4163fb1c9"}
+{"time":"2026-06-30T19:49:25.159827+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"1de73260-fd77-495d-8f3b-1c4046204f4b"}
+{"time":"2026-06-30T19:49:25.159944+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/726be381-9276-4473-afd3-2f47ff4a2524","status":200,"duration_ms":0,"request_id":"18c151e8-1b4f-4580-b7df-9751c9955c46"}
+{"time":"2026-06-30T19:49:25.16864+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"9cdb275c-4763-4ed9-a6ee-812dc91e817e"}
+{"time":"2026-06-30T19:49:25.169217+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/4543bc63-7cec-4823-a5be-c6fb59cd7186","status":200,"duration_ms":0,"request_id":"b0022517-79d6-4656-a3cb-56c7673e4c53"}
+{"time":"2026-06-30T19:49:25.175327+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"6d6819b4-bf03-4883-97ed-08b913e9efca"}
+{"time":"2026-06-30T19:49:25.175894+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/fe029c12-f201-45f4-a63a-1cb9d4692bb6","status":200,"duration_ms":0,"request_id":"c1214ed1-4a5c-4ffb-8b75-7e3a0375728a"}
+{"time":"2026-06-30T19:49:25.180957+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"ed480bc8-7f01-4aa4-85da-d371f1ed1800"}
+{"time":"2026-06-30T19:49:25.181126+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/8825bb2e-9477-4930-9650-1d47294872aa","status":200,"duration_ms":0,"request_id":"953d10c7-1ada-4d51-88ae-568353288a04"}
+{"time":"2026-06-30T19:49:25.184253+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"ab277791-fc43-4d8c-9251-2fa80e0df96a"}
+{"time":"2026-06-30T19:49:34.694521+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"4e5d5202-f5df-46d6-8505-44cff40eda2c"}
+{"time":"2026-06-30T19:50:04.69349+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"d8d17d20-846a-4f0a-b36d-f13b6571a54b"}
+{"time":"2026-06-30T19:50:30.780366+08:00","level":"INFO","msg":"http request","method":"DELETE","path":"/sessions/9d53f93c-ab1f-44dc-a479-9ff12dc8def2","status":204,"duration_ms":0,"request_id":"c05870a3-a16e-404a-ad1d-f305d4d1e8a2"}
+{"time":"2026-06-30T19:50:30.783193+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"2905ec55-ca7b-4b74-acc7-5ac7c5cc052c"}
+{"time":"2026-06-30T19:50:33.713374+08:00","level":"INFO","msg":"http request","method":"DELETE","path":"/sessions/a25114f2-a1d2-41d6-b19c-a4fdfa3b0ee9","status":204,"duration_ms":0,"request_id":"f2573df8-8cfe-40ca-9b7a-03e004894a32"}
+{"time":"2026-06-30T19:50:33.71605+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"d42f7cb3-c7a6-4b3c-9a6e-781affe9b165"}
+{"time":"2026-06-30T19:50:34.613189+08:00","level":"INFO","msg":"http request","method":"DELETE","path":"/sessions/86336c8f-4185-4dc3-864f-5bade194bff4","status":204,"duration_ms":0,"request_id":"41a577c1-c920-4656-bbd6-af6623be656d"}
+{"time":"2026-06-30T19:50:34.616041+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"9b3bdc4e-6b69-423e-ad30-8af1e528a2be"}
+{"time":"2026-06-30T19:50:34.619705+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/c790eccf-091f-4e21-a6d3-e63d784a4373/turns","status":200,"duration_ms":0,"request_id":"1bce55d2-39da-4711-abc9-3c76a143ffe2"}
+{"time":"2026-06-30T19:50:34.623034+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/e6e570b0-280a-4b03-9348-a79bd44b6008","status":200,"duration_ms":0,"request_id":"e6c7d3a5-0723-4df5-804d-22b935b9947e"}
+{"time":"2026-06-30T19:50:34.633261+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"e21ef03d-7a72-45cc-8b51-98f8d703532b"}
+{"time":"2026-06-30T19:50:34.633535+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/00b423d0-b721-4c9e-83f8-dfadd1097a4c","status":200,"duration_ms":0,"request_id":"64206299-110a-4ba3-8981-9c226cabf6c8"}
+{"time":"2026-06-30T19:50:34.642501+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"fb18fe9e-718f-4c11-9839-a2cd3b2089d4"}
+{"time":"2026-06-30T19:50:34.642705+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/bf1cf003-b126-42bb-a1e7-bfc82dcaf11c","status":200,"duration_ms":0,"request_id":"954c3eaf-9399-41e7-905b-1e91ae09c44f"}
+{"time":"2026-06-30T19:50:34.650282+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"4d82c0c5-7b11-448b-ac8b-7798d03c4161"}
+{"time":"2026-06-30T19:50:34.650555+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/391e079d-6b0d-4b58-a403-b31f7042f711","status":200,"duration_ms":0,"request_id":"ef805078-f1dd-424b-960c-4d5b7c6b164f"}
+{"time":"2026-06-30T19:50:34.656729+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"83c9e742-0d78-4e11-af4e-8900e0765409"}
+{"time":"2026-06-30T19:50:34.65697+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/dab03446-86d9-4d8e-a4a7-7b6c3e578850","status":200,"duration_ms":0,"request_id":"85117c67-c9a1-4588-bd83-e2a95798b91e"}
+{"time":"2026-06-30T19:50:34.662538+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"31f5a6f2-c605-49fc-b732-70722b6890f9"}
+{"time":"2026-06-30T19:50:34.696732+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e5add8bc-b88e-48dc-95b7-47c0c196f480"}
+{"time":"2026-06-30T19:50:37.095201+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"e47abd91-b88d-48c2-8e30-ba1ddb20ef42"}
+{"time":"2026-06-30T19:50:37.099492+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"e3babc4f-d049-4223-a78f-24c17cdfa1b6"}
+{"time":"2026-06-30T19:50:40.446241+08:00","level":"INFO","msg":"http request","method":"DELETE","path":"/sessions/32fcfc0e-c7ea-483f-9bc1-93f35ed8ebfd","status":204,"duration_ms":0,"request_id":"77370c48-a8d3-4eff-b06f-57860f916201"}
+{"time":"2026-06-30T19:50:40.448984+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"a4f0362d-c782-4042-9367-dc53a450d110"}
+{"time":"2026-06-30T19:50:40.45375+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/c790eccf-091f-4e21-a6d3-e63d784a4373/turns","status":200,"duration_ms":0,"request_id":"ff29ab3b-8dd2-495c-8243-0dd4f099e67b"}
+{"time":"2026-06-30T19:50:40.456022+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/e6e570b0-280a-4b03-9348-a79bd44b6008","status":200,"duration_ms":0,"request_id":"c8cb32c5-f34f-4eaf-a7ed-22c640066a1d"}
+{"time":"2026-06-30T19:50:40.473467+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/00b423d0-b721-4c9e-83f8-dfadd1097a4c","status":200,"duration_ms":2,"request_id":"48ff5b08-a224-4748-be42-c4200b3060aa"}
+{"time":"2026-06-30T19:50:40.473583+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"642630c9-613e-4ea1-be22-c85cf62b7325"}
+{"time":"2026-06-30T19:50:40.484628+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"a338fb18-37f6-4599-a6fd-2c2741b2338b"}
+{"time":"2026-06-30T19:50:40.48501+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/bf1cf003-b126-42bb-a1e7-bfc82dcaf11c","status":200,"duration_ms":0,"request_id":"fe09165c-334f-4d27-9615-6f907c7c1034"}
+{"time":"2026-06-30T19:50:40.493278+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"512102e5-3e4c-4e04-86d0-acf7a22b90ac"}
+{"time":"2026-06-30T19:50:40.493545+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/391e079d-6b0d-4b58-a403-b31f7042f711","status":200,"duration_ms":0,"request_id":"344a6927-0696-4ed2-b658-5e8fe664521b"}
+{"time":"2026-06-30T19:50:40.5031+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"2459ef97-a347-458c-a88f-e4db96ee406e"}
+{"time":"2026-06-30T19:50:40.503329+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/dab03446-86d9-4d8e-a4a7-7b6c3e578850","status":200,"duration_ms":0,"request_id":"02db9079-d8bd-4b29-8c14-cc1282df0d6d"}
+{"time":"2026-06-30T19:50:40.508068+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"b97de9b5-5b68-49ab-a562-1a9b72b9ca3d"}
+{"time":"2026-06-30T19:50:43.162887+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"b187ba7b-a822-4dd7-b773-8b800ca94793"}
+{"time":"2026-06-30T19:50:43.175409+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"d0180645-c476-4fc6-98d4-9ffc6dc681c2"}
+{"time":"2026-06-30T19:50:46.479481+08:00","level":"INFO","msg":"http request","method":"DELETE","path":"/sessions/c790eccf-091f-4e21-a6d3-e63d784a4373","status":204,"duration_ms":0,"request_id":"89c215dd-82ac-4957-899a-0bfda3e1c795"}
+{"time":"2026-06-30T19:50:46.482265+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"1a28be57-4be4-4ce0-9ffd-569b775cf8b6"}
+{"time":"2026-06-30T19:51:04.691515+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"58454e6c-eb31-4568-8fb8-0eae5760bd32"}
+{"time":"2026-06-30T19:51:34.690393+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"1cea97e4-d095-4f7a-b49e-4c42aa4dec2a"}
+{"time":"2026-06-30T19:51:46.194554+08:00","level":"INFO","msg":"session parse result","input":"什么是绩效管理？什么是绩效考核？两者有什么区别？","intent":"查询定义与区别","subject":"绩效管理与考核","current_subject":""}
+{"time":"2026-06-30T19:51:46.194715+08:00","level":"INFO","msg":"session expand result","expanded_question":"什么是绩效管理？什么是绩效考核？两者有什么区别？","subject":"绩效管理与考核","plan_subject":"绩效管理与考核"}
+{"time":"2026-06-30T19:51:46.195295+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":633,"request_id":"aec7fc6c-08cb-411d-8c74-d8ec4e195a63"}
+{"time":"2026-06-30T19:51:46.532316+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T19:51:48.307258+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["25f69a5f-9d4f-47a8-921a-04a1fb399b4a","e3d1e058-3161-4afa-b669-7b5482f7693f","0eee4764-a58c-4235-b552-e2c63cc6c847","7758f2b0-56a7-4a31-92c9-4e2064725d07","8014ea4f-200c-46f9-a991-ae18c742a57c"]}
+{"time":"2026-06-30T19:51:50.973517+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":34}
+{"time":"2026-06-30T19:51:50.979392+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":83}
+{"time":"2026-06-30T19:51:50.979568+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":20}
+{"time":"2026-06-30T19:51:54.668959+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":10}
+{"time":"2026-06-30T19:51:54.66973+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"short","direct":3,"supporting":7,"conflicts":0}
+{"time":"2026-06-30T19:51:59.673302+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":13472,"request_id":"db791ff6-9935-475e-a7c8-20dcacac7d34"}
+{"time":"2026-06-30T19:51:59.680673+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"8642cf26-c945-4ffe-971c-839f7294d754"}
+{"time":"2026-06-30T19:51:59.682126+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"727e176c-4142-4235-8b7e-28bf7a5f25de"}
+{"time":"2026-06-30T19:51:59.682171+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"b8d24287-7612-421c-9512-23dc114b8e50"}
+{"time":"2026-06-30T19:52:04.689341+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"2f39a83a-4442-4727-9ff2-16b830654935"}
+{"time":"2026-06-30T19:52:34.688882+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"004b68f0-675f-4e70-8b46-27b5685db56d"}
+{"time":"2026-06-30T19:53:04.688092+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f007621b-08c7-4d09-b5cf-6d8a966eb23b"}
+{"time":"2026-06-30T19:53:23.127437+08:00","level":"INFO","msg":"session parse result","input":"无合同立项制度中，成本红线是什么意思？","intent":"查询成本红线含义","subject":"成本红线","current_subject":"绩效管理与考核"}
+{"time":"2026-06-30T19:53:23.127595+08:00","level":"INFO","msg":"session expand result","expanded_question":"无合同立项制度中，成本红线是什么意思？","subject":"成本红线","plan_subject":"成本红线"}
+{"time":"2026-06-30T19:53:23.128595+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":389,"request_id":"3e9ae878-61fb-4a1f-b9a2-e824159f8b53"}
+{"time":"2026-06-30T19:53:23.493663+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T19:53:24.339182+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["91296ea5-6408-4aab-b997-44167181c97a","8014ea4f-200c-46f9-a991-ae18c742a57c"]}
+{"time":"2026-06-30T19:53:25.30192+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":0}
+{"time":"2026-06-30T19:53:25.308433+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":14}
+{"time":"2026-06-30T19:53:25.308526+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":14}
+{"time":"2026-06-30T19:53:27.86771+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":9}
+{"time":"2026-06-30T19:53:27.868605+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"short","direct":8,"supporting":1,"conflicts":0}
+{"time":"2026-06-30T19:53:32.194602+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":9061,"request_id":"e673ed66-4b55-4746-83f4-bede674e3c44"}
+{"time":"2026-06-30T19:53:32.20197+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"ccb15f08-58b2-4b4d-9470-a53a513d1627"}
+{"time":"2026-06-30T19:53:32.203636+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"c8f415f0-c100-4d34-9160-fa10086ec63c"}
+{"time":"2026-06-30T19:53:32.203661+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"d5c9a495-3502-43f9-9878-8fe23fbcd7cb"}
+{"time":"2026-06-30T19:53:34.687098+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a1cd551b-c820-4bd8-8f18-7cc104d2742b"}
+{"time":"2026-06-30T19:54:04.684814+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f3139862-56c6-4eb7-8586-e0adf97026f8"}
+{"time":"2026-06-30T19:54:34.686502+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c47ebfc8-3383-4b7a-ac9e-38dae0500281"}
+{"time":"2026-06-30T19:55:04.684375+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"465b8ae3-4c38-4686-91a0-84c5b8c7c814"}
+{"time":"2026-06-30T19:55:24.741987+08:00","level":"INFO","msg":"session parse result","input":"无合同立项的项目已经出发成本红线，如果要继续，需要如何申请","intent":"查询申请流程","subject":"成本红线突破审批","current_subject":"成本红线"}
+{"time":"2026-06-30T19:55:24.742135+08:00","level":"INFO","msg":"session expand result","expanded_question":"无合同立项的项目已经出发成本红线，如果要继续，需要如何申请","subject":"成本红线突破审批","plan_subject":"成本红线突破审批"}
+{"time":"2026-06-30T19:55:24.74277+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":529,"request_id":"65a84f90-5895-4f71-9984-0618d8a4842d"}
+{"time":"2026-06-30T19:55:25.164001+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T19:55:25.815011+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["91296ea5-6408-4aab-b997-44167181c97a"]}
+{"time":"2026-06-30T19:55:27.267526+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":4}
+{"time":"2026-06-30T19:55:27.271483+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":9}
+{"time":"2026-06-30T19:55:27.271585+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":10}
+{"time":"2026-06-30T19:55:29.790308+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":9}
+{"time":"2026-06-30T19:55:29.791337+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"short","direct":6,"supporting":4,"conflicts":0}
+{"time":"2026-06-30T19:55:34.682328+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"5215e59b-8dd4-44fb-b0e0-2fedd22a73ab"}
+{"time":"2026-06-30T19:55:42.945056+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":18197,"request_id":"1c2a4d83-3875-4aed-9e71-403c90343e2d"}
+{"time":"2026-06-30T19:55:42.956214+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"be37c1fa-92f8-4080-81b3-662b95295870"}
+{"time":"2026-06-30T19:55:42.956908+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"249fbfe2-5254-40b9-baec-1bef071971d0"}
+{"time":"2026-06-30T19:55:42.95743+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"fbaf82ff-e19d-41e9-9eb6-1946341b12d3"}
+{"time":"2026-06-30T19:56:04.681173+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8f3a3f79-635b-4043-99f6-774e5de7ccdf"}
+{"time":"2026-06-30T19:56:34.680631+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"3948fc11-1776-4c2e-b938-13a2cf8031a6"}
+{"time":"2026-06-30T19:57:04.679327+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"b54ef084-79a4-48fb-b144-8b267cbeb9aa"}
+{"time":"2026-06-30T19:57:34.679452+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"37424e39-d37c-459c-baf7-48bc85380e5f"}
+{"time":"2026-06-30T19:57:50.527632+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"a03120e0-7b1f-40fc-ad49-1a26835cc679","elapsed_ms":0}
+{"time":"2026-06-30T19:58:04.677717+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"358a7542-28b8-4328-8a3c-b9f3a3dbdd5f"}
+{"time":"2026-06-30T19:58:34.675887+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c527ee55-6411-4a4d-ba9f-563a588d92be"}
+{"time":"2026-06-30T19:59:04.676114+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"97c91a84-c9b8-4be0-88c0-cd09d5e750a5"}
+{"time":"2026-06-30T19:59:34.674971+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f9fd4c70-c1ce-481b-9385-7459a3b77a7f"}
+{"time":"2026-06-30T19:59:44.432969+08:00","level":"INFO","msg":"session parse result","input":"出差期间如何考勤","intent":"查询考勤规则","subject":"出差考勤","current_subject":"成本红线突破审批"}
+{"time":"2026-06-30T19:59:44.433132+08:00","level":"INFO","msg":"session expand result","expanded_question":"出差考勤 查询考勤规则","subject":"出差考勤","plan_subject":"出差考勤"}
+{"time":"2026-06-30T19:59:44.433796+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":509,"request_id":"468e369d-0c04-42be-8722-370cbc7de84c"}
+{"time":"2026-06-30T19:59:44.901163+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T19:59:45.973133+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["6730fbac-004a-4a44-8494-553f229dd23f","b2310d40-4876-49c0-85bc-602d0879fca9"]}
+{"time":"2026-06-30T19:59:47.778361+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":22}
+{"time":"2026-06-30T19:59:47.780206+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":20}
+{"time":"2026-06-30T19:59:47.780332+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":20}
+{"time":"2026-06-30T19:59:51.072836+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c2","nouns":["出差考勤","查询考勤规则"]}
+{"time":"2026-06-30T19:59:51.072984+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c3","nouns":["出差考勤","查询考勤规则"]}
+{"time":"2026-06-30T19:59:51.073025+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c4","nouns":["出差考勤","查询考勤规则"]}
+{"time":"2026-06-30T19:59:51.073053+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c5","nouns":["出差考勤","查询考勤规则"]}
+{"time":"2026-06-30T19:59:51.073076+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c7","nouns":["出差考勤","查询考勤规则"]}
+{"time":"2026-06-30T19:59:51.073099+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c8","nouns":["出差考勤","查询考勤规则"]}
+{"time":"2026-06-30T19:59:51.073123+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c10","nouns":["出差考勤","查询考勤规则"]}
+{"time":"2026-06-30T19:59:51.073147+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c11","nouns":["出差考勤","查询考勤规则"]}
+{"time":"2026-06-30T19:59:51.073389+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c14","nouns":["出差考勤","查询考勤规则"]}
+{"time":"2026-06-30T19:59:51.073428+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c15","nouns":["出差考勤","查询考勤规则"]}
+{"time":"2026-06-30T19:59:51.073452+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c16","nouns":["出差考勤","查询考勤规则"]}
+{"time":"2026-06-30T19:59:51.073472+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c17","nouns":["出差考勤","查询考勤规则"]}
+{"time":"2026-06-30T19:59:51.073493+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c18","nouns":["出差考勤","查询考勤规则"]}
+{"time":"2026-06-30T19:59:51.073516+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c19","nouns":["出差考勤","查询考勤规则"]}
+{"time":"2026-06-30T19:59:51.073593+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":20}
+{"time":"2026-06-30T19:59:51.073634+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":20,"conflicts":0}
+{"time":"2026-06-30T20:00:04.674105+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f9eb2d67-5253-4082-a8fe-3a0e81f4dfc8"}
+{"time":"2026-06-30T20:00:14.252044+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":29813,"request_id":"e3fa26d0-5436-4a4b-ba1f-5aafe98cd1a4"}
+{"time":"2026-06-30T20:00:14.264863+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"6a2510c8-1bdb-45ac-916e-dd44f14c1847"}
+{"time":"2026-06-30T20:00:14.265864+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"e9a7256f-a17d-458d-96a6-f667fcb21822"}
+{"time":"2026-06-30T20:00:14.266523+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"12e65ed7-ff6e-461a-b38e-2f7f345851ce"}
+{"time":"2026-06-30T20:00:32.707955+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8a233480-64bb-4b33-b731-4a857a034b02"}
+{"time":"2026-06-30T20:00:34.671042+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8327f286-04fb-4b01-ac07-f50e0f15dcbc"}
+{"time":"2026-06-30T20:00:41.823083+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/6730fbac-004a-4a44-8494-553f229dd23f","status":200,"duration_ms":0,"request_id":"2835681e-836a-443a-ba7d-260ea03297d9"}
+{"time":"2026-06-30T20:00:43.775948+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/6730fbac-004a-4a44-8494-553f229dd23f","status":200,"duration_ms":0,"request_id":"01ef510d-c670-4754-bcca-8800138e4d6c"}
+{"time":"2026-06-30T20:00:43.776748+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/6730fbac-004a-4a44-8494-553f229dd23f/preview","status":200,"duration_ms":0,"request_id":"e09e18ad-3312-4590-9919-3d0a0035381b"}
+{"time":"2026-06-30T20:00:43.790716+08:00","level":"INFO","msg":"http request","method":"GET","path":"/favicon.ico","status":200,"duration_ms":0,"request_id":"7e48de68-c224-4149-8fef-a9019c02ecb5"}
+{"time":"2026-06-30T20:01:04.671575+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ea5ca382-d016-44af-a50b-6efd057ada9f"}
+{"time":"2026-06-30T20:01:15.899991+08:00","level":"INFO","msg":"session parse result","input":"出差期间如何考勤打卡","intent":"查询打卡方式","subject":"出差考勤","current_subject":"出差考勤"}
+{"time":"2026-06-30T20:01:15.900133+08:00","level":"INFO","msg":"session expand result","expanded_question":"出差考勤 查询打卡方式","subject":"出差考勤","plan_subject":"出差考勤"}
+{"time":"2026-06-30T20:01:15.90076+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":404,"request_id":"ef05c544-8f30-4c1b-970a-30cf1c771986"}
+{"time":"2026-06-30T20:01:16.29384+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T20:01:16.999404+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["6730fbac-004a-4a44-8494-553f229dd23f"]}
+{"time":"2026-06-30T20:01:17.849404+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":0}
+{"time":"2026-06-30T20:01:17.850748+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":4}
+{"time":"2026-06-30T20:01:17.850822+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":4}
+{"time":"2026-06-30T20:01:18.851817+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c1","nouns":["出差考勤","查询打卡方式"]}
+{"time":"2026-06-30T20:01:18.85196+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":3}
+{"time":"2026-06-30T20:01:18.851999+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":3,"conflicts":0}
+{"time":"2026-06-30T20:01:23.332439+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":7426,"request_id":"50e942a8-70c3-4e38-af2d-cab88f5d0831"}
+{"time":"2026-06-30T20:01:23.339181+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"9b55a67f-993f-4f57-b410-457e50687c3a"}
+{"time":"2026-06-30T20:01:23.340717+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"14bd38f0-c23d-4eaf-9ab8-69dc33be6a4e"}
+{"time":"2026-06-30T20:01:23.34073+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"5259df62-11ab-43a0-a909-e8e6fdb55c5c"}
+{"time":"2026-06-30T20:01:34.67165+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"bf69769c-cc23-47cf-b23d-f17bd95b8df0"}
+{"time":"2026-06-30T20:02:04.670631+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f9471a12-34e4-4e2e-bd6c-2da5c5fd15b3"}
+{"time":"2026-06-30T20:02:34.669914+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"cc3a5d79-db70-4f6c-be26-6754550a1093"}
+{"time":"2026-06-30T20:03:04.93476+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"49d7f522-b854-46ce-82f0-0f6f8b32b1c1"}
+{"time":"2026-06-30T20:03:34.932856+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"7b755f23-3feb-42eb-a44e-e7f6eac46b4b"}
+{"time":"2026-06-30T20:04:04.666087+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"5e890273-73bb-46ef-8de9-fd9deec58458"}
+{"time":"2026-06-30T20:04:14.413114+08:00","level":"INFO","msg":"http request","method":"POST","path":"/traces/fdde244a-e27b-4745-a2c0-1305941d4fad/feedback","status":200,"duration_ms":0,"request_id":"c3949068-8683-49d1-ac1f-746ae5e4b58f"}
+{"time":"2026-06-30T20:04:18.631037+08:00","level":"INFO","msg":"http request","method":"POST","path":"/traces/fdde244a-e27b-4745-a2c0-1305941d4fad/feedback","status":200,"duration_ms":0,"request_id":"68b633c1-cc38-4f75-9e99-dda22c34f1f2"}
+{"time":"2026-06-30T20:04:19.980902+08:00","level":"INFO","msg":"http request","method":"POST","path":"/traces/fdde244a-e27b-4745-a2c0-1305941d4fad/feedback","status":200,"duration_ms":0,"request_id":"9c5f69c4-061e-4d84-b57d-91e93867290f"}
+{"time":"2026-06-30T20:04:23.129639+08:00","level":"INFO","msg":"http request","method":"POST","path":"/traces/fdde244a-e27b-4745-a2c0-1305941d4fad/feedback","status":200,"duration_ms":0,"request_id":"ab8bbe16-abf0-486d-a0b6-f31b6409b72d"}
+{"time":"2026-06-30T20:04:34.933029+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"5c71d9eb-8aa4-45aa-8ded-ad5b987b00b2"}
+{"time":"2026-06-30T20:06:50.688133+08:00","level":"INFO","msg":"收到退出信号","signal":2}
+{"time":"2026-06-30T20:06:50.688514+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-06-30T21:09:33.273244+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-06-30T21:09:33.481794+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-06-30T21:09:33.86007+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-06-30T21:09:33.861079+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-06-30T21:09:37.912652+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"aa7aa457-894b-41c6-960c-a03c4198ad3c"}
+{"time":"2026-06-30T21:09:41.088069+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T21:09:42.054474+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["6730fbac-004a-4a44-8494-553f229dd23f","b2310d40-4876-49c0-85bc-602d0879fca9"]}
+{"time":"2026-06-30T21:09:43.075488+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":22}
+{"time":"2026-06-30T21:09:43.076693+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":19}
+{"time":"2026-06-30T21:09:43.076772+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":20}
+{"time":"2026-06-30T21:09:48.053974+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c16","nouns":["出差期间如何考勤"]}
+{"time":"2026-06-30T21:09:48.054083+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c18","nouns":["出差期间如何考勤"]}
+{"time":"2026-06-30T21:09:48.054113+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":19}
+{"time":"2026-06-30T21:09:48.054137+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":19,"conflicts":0}
+{"time":"2026-06-30T21:09:59.692545+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer","status":200,"duration_ms":19307,"request_id":"18a746c3-5585-4686-85e8-1af88f665658"}
+{"time":"2026-06-30T21:10:33.863141+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"924b1746-1701-4696-bd9e-5f051814dc75","elapsed_ms":2}
+{"time":"2026-06-30T21:13:34.13524+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T21:13:35.514522+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["25f69a5f-9d4f-47a8-921a-04a1fb399b4a","7547d227-9a59-428d-9de9-f9037a986881","8014ea4f-200c-46f9-a991-ae18c742a57c"]}
+{"time":"2026-06-30T21:13:37.686484+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":5}
+{"time":"2026-06-30T21:13:37.688716+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":12}
+{"time":"2026-06-30T21:13:37.688814+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":13}
+{"time":"2026-06-30T21:13:40.416244+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c1","nouns":["实施万相公文","否有提成"]}
+{"time":"2026-06-30T21:13:40.416533+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":12}
+{"time":"2026-06-30T21:13:40.416559+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":12,"conflicts":0}
+{"time":"2026-06-30T21:13:59.515216+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer","status":200,"duration_ms":25907,"request_id":"3b2d167b-8a27-4cd9-a17d-dd446d024d10"}
+{"time":"2026-06-30T21:14:15.944831+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-06-30T21:14:15.945023+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-06-30T21:26:03.910374+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-06-30T21:26:04.119058+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-06-30T21:26:04.498451+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-06-30T21:26:04.499541+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-06-30T21:26:19.377356+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T21:26:20.42939+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["6730fbac-004a-4a44-8494-553f229dd23f","b2310d40-4876-49c0-85bc-602d0879fca9"]}
+{"time":"2026-06-30T21:26:21.594995+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":22}
+{"time":"2026-06-30T21:26:21.596101+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":19}
+{"time":"2026-06-30T21:26:21.59618+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":20}
+{"time":"2026-06-30T21:26:25.106665+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c1","role":"supporting","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107084+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c2","role":"supporting","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107197+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c3","role":"supporting","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107246+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c4","role":"supporting","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107263+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c5","role":"supporting","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107277+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c6","role":"supporting","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107289+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c7","role":"supporting","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107303+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c8","role":"supporting","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107316+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c9","role":"direct","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107329+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c10","role":"supporting","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107341+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c11","role":"supporting","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107352+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c12","role":"direct","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107365+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c13","role":"direct","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107376+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c14","role":"supporting","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107387+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c15","role":"direct","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107398+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c16","role":"direct","source_id":"6730fbac-004a-4a44-8494-553f229dd23f"}
+{"time":"2026-06-30T21:26:25.107409+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c17","role":"supporting","source_id":"b2310d40-4876-49c0-85bc-602d0879fca9"}
+{"time":"2026-06-30T21:26:25.107449+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c18","role":"direct","source_id":"6730fbac-004a-4a44-8494-553f229dd23f"}
+{"time":"2026-06-30T21:26:25.10746+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c19","role":"supporting","source_id":"6730fbac-004a-4a44-8494-553f229dd23f"}
+{"time":"2026-06-30T21:26:25.10747+08:00","level":"INFO","msg":"DEBUG_RAW_RERANK","candidate_id":"c20","role":"supporting","source_id":"6730fbac-004a-4a44-8494-553f229dd23f"}
+{"time":"2026-06-30T21:26:25.108837+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c9","nouns":["出差期间如何考勤"]}
+{"time":"2026-06-30T21:26:25.1089+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c12","nouns":["出差期间如何考勤"]}
+{"time":"2026-06-30T21:26:25.108916+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c13","nouns":["出差期间如何考勤"]}
+{"time":"2026-06-30T21:26:25.108929+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c15","nouns":["出差期间如何考勤"]}
+{"time":"2026-06-30T21:26:25.10894+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c16","nouns":["出差期间如何考勤"]}
+{"time":"2026-06-30T21:26:25.10895+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c18","nouns":["出差期间如何考勤"]}
+{"time":"2026-06-30T21:26:25.108968+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":20}
+{"time":"2026-06-30T21:26:25.109078+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":20,"conflicts":0}
+{"time":"2026-06-30T21:26:34.699119+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer","status":200,"duration_ms":16052,"request_id":"e9c47a81-e2d2-4f10-b88d-d1ad8e010921"}
+{"time":"2026-06-30T21:26:42.940671+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-06-30T21:26:42.941089+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-06-30T21:32:33.41117+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-06-30T21:32:33.615145+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-06-30T21:32:33.962403+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-06-30T21:32:33.963454+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-06-30T21:32:43.829803+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T21:32:44.732583+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["6730fbac-004a-4a44-8494-553f229dd23f","b2310d40-4876-49c0-85bc-602d0879fca9"]}
+{"time":"2026-06-30T21:32:46.06442+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":22}
+{"time":"2026-06-30T21:32:46.065771+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":19}
+{"time":"2026-06-30T21:32:46.065865+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":20}
+{"time":"2026-06-30T21:32:49.542491+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":20}
+{"time":"2026-06-30T21:32:49.543367+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"short","direct":3,"supporting":18,"conflicts":0}
+{"time":"2026-06-30T21:32:49.545011+08:00","level":"INFO","msg":"http request","method":"POST","path":"/retrieval","status":200,"duration_ms":6077,"request_id":"c1e93354-ad6d-4b3e-a2c8-241de344af4e"}
+{"time":"2026-06-30T21:32:57.296949+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T21:32:59.271705+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["25f69a5f-9d4f-47a8-921a-04a1fb399b4a","7547d227-9a59-428d-9de9-f9037a986881","8014ea4f-200c-46f9-a991-ae18c742a57c"]}
+{"time":"2026-06-30T21:33:01.057751+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":5}
+{"time":"2026-06-30T21:33:01.05983+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":12}
+{"time":"2026-06-30T21:33:01.059919+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":13}
+{"time":"2026-06-30T21:33:03.574367+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c1","nouns":["实施万相公文","否有提成"]}
+{"time":"2026-06-30T21:33:03.574538+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":12}
+{"time":"2026-06-30T21:33:03.574573+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":12,"conflicts":0}
+{"time":"2026-06-30T21:33:03.575693+08:00","level":"INFO","msg":"http request","method":"POST","path":"/retrieval","status":200,"duration_ms":6642,"request_id":"e5ea952b-fe56-4168-bd3d-c107ad57d53c"}
+{"time":"2026-06-30T21:33:09.088714+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-06-30T21:33:09.088932+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-06-30T21:44:50.529616+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-06-30T21:44:50.733317+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-06-30T21:44:51.072449+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-06-30T21:44:51.073545+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-06-30T21:45:00.413985+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T21:45:02.245368+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["25f69a5f-9d4f-47a8-921a-04a1fb399b4a","7547d227-9a59-428d-9de9-f9037a986881","8014ea4f-200c-46f9-a991-ae18c742a57c"]}
+{"time":"2026-06-30T21:45:04.294587+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":5}
+{"time":"2026-06-30T21:45:04.296925+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":12}
+{"time":"2026-06-30T21:45:04.297014+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"13c4b195-5257-4369-87e1-76e5ed6d601b","source_id":"7547d227-9a59-428d-9de9-f9037a986881","score":0.03125763125763126}
+{"time":"2026-06-30T21:45:04.297051+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"f90246fc-a2a8-4c44-bea4-7800d39607cd","source_id":"7547d227-9a59-428d-9de9-f9037a986881","score":0.031054405392392875}
+{"time":"2026-06-30T21:45:04.297071+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"30cc510d-26d2-452b-a588-e3ae3034c9aa","source_id":"7547d227-9a59-428d-9de9-f9037a986881","score":0.03036576949620428}
+{"time":"2026-06-30T21:45:04.29709+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"56968092-8ab7-4496-bb21-88e4ba5c551a","source_id":"7547d227-9a59-428d-9de9-f9037a986881","score":0.029910714285714284}
+{"time":"2026-06-30T21:45:04.297107+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"dd45860e-f371-4c7c-94ca-ccd904cbd529","source_id":"7547d227-9a59-428d-9de9-f9037a986881","score":0.01639344262295082}
+{"time":"2026-06-30T21:45:04.297124+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"c1d40236-f9b4-4990-99e6-adf5a93e919f","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","score":0.01639344262295082}
+{"time":"2026-06-30T21:45:04.297141+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"753b5a32-3021-4148-81eb-56d58b210fe4","source_id":"7547d227-9a59-428d-9de9-f9037a986881","score":0.016129032258064516}
+{"time":"2026-06-30T21:45:04.297159+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"d8e29528-711d-4911-96f4-89f2b398cd2c","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","score":0.015625}
+{"time":"2026-06-30T21:45:04.297176+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"71ed9b6c-83ec-4a63-9288-288bbfc722f5","source_id":"25f69a5f-9d4f-47a8-921a-04a1fb399b4a","score":0.015384615384615385}
+{"time":"2026-06-30T21:45:04.297193+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"b346a9ca-beaa-45a3-9f0b-96aaad4616a0","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","score":0.015151515151515152}
+{"time":"2026-06-30T21:45:04.297209+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"f7db04f5-ebe1-4c78-8258-7a54a85088a9","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","score":0.014705882352941176}
+{"time":"2026-06-30T21:45:04.297226+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"f1c2b1c7-5b54-4775-a6cb-2f6f94990e4f","source_id":"7547d227-9a59-428d-9de9-f9037a986881","score":0.014084507042253521}
+{"time":"2026-06-30T21:45:04.297243+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"f0e5c542-bcd2-4600-9c95-ce212c30b9a9","source_id":"25f69a5f-9d4f-47a8-921a-04a1fb399b4a","score":0.013888888888888888}
+{"time":"2026-06-30T21:45:04.297268+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":13}
+{"time":"2026-06-30T21:45:07.057763+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c1","unit_id":"13c4b195-5257-4369-87e1-76e5ed6d601b","source_id":"7547d227-9a59-428d-9de9-f9037a986881","role":"direct"}
+{"time":"2026-06-30T21:45:07.057889+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c2","unit_id":"f90246fc-a2a8-4c44-bea4-7800d39607cd","source_id":"7547d227-9a59-428d-9de9-f9037a986881","role":"supporting"}
+{"time":"2026-06-30T21:45:07.057923+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c3","unit_id":"30cc510d-26d2-452b-a588-e3ae3034c9aa","source_id":"7547d227-9a59-428d-9de9-f9037a986881","role":"supporting"}
+{"time":"2026-06-30T21:45:07.05795+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c4","unit_id":"56968092-8ab7-4496-bb21-88e4ba5c551a","source_id":"7547d227-9a59-428d-9de9-f9037a986881","role":"supporting"}
+{"time":"2026-06-30T21:45:07.057976+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c5","unit_id":"dd45860e-f371-4c7c-94ca-ccd904cbd529","source_id":"7547d227-9a59-428d-9de9-f9037a986881","role":"irrelevant"}
+{"time":"2026-06-30T21:45:07.058002+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c6","unit_id":"c1d40236-f9b4-4990-99e6-adf5a93e919f","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","role":"supporting"}
+{"time":"2026-06-30T21:45:07.058027+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c7","unit_id":"753b5a32-3021-4148-81eb-56d58b210fe4","source_id":"7547d227-9a59-428d-9de9-f9037a986881","role":"supporting"}
+{"time":"2026-06-30T21:45:07.058054+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c8","unit_id":"d8e29528-711d-4911-96f4-89f2b398cd2c","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","role":"supporting"}
+{"time":"2026-06-30T21:45:07.058081+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c9","unit_id":"71ed9b6c-83ec-4a63-9288-288bbfc722f5","source_id":"25f69a5f-9d4f-47a8-921a-04a1fb399b4a","role":"supporting"}
+{"time":"2026-06-30T21:45:07.058105+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c10","unit_id":"b346a9ca-beaa-45a3-9f0b-96aaad4616a0","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","role":"supporting"}
+{"time":"2026-06-30T21:45:07.058141+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c11","unit_id":"f7db04f5-ebe1-4c78-8258-7a54a85088a9","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","role":"supporting"}
+{"time":"2026-06-30T21:45:07.05817+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c12","unit_id":"f1c2b1c7-5b54-4775-a6cb-2f6f94990e4f","source_id":"7547d227-9a59-428d-9de9-f9037a986881","role":"supporting"}
+{"time":"2026-06-30T21:45:07.058195+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c13","unit_id":"f0e5c542-bcd2-4600-9c95-ce212c30b9a9","source_id":"25f69a5f-9d4f-47a8-921a-04a1fb399b4a","role":"supporting"}
+{"time":"2026-06-30T21:45:07.060152+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c1","nouns":["实施万相公文","否有提成"]}
+{"time":"2026-06-30T21:45:07.060266+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":12}
+{"time":"2026-06-30T21:45:07.060302+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":12,"conflicts":0}
+{"time":"2026-06-30T21:45:07.061791+08:00","level":"INFO","msg":"http request","method":"POST","path":"/retrieval","status":200,"duration_ms":7015,"request_id":"8344c103-23ef-4890-b296-2b7ed395a837"}
+{"time":"2026-06-30T21:45:23.491249+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T21:45:25.27242+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["25f69a5f-9d4f-47a8-921a-04a1fb399b4a","7547d227-9a59-428d-9de9-f9037a986881","8014ea4f-200c-46f9-a991-ae18c742a57c"]}
+{"time":"2026-06-30T21:45:27.42595+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":5}
+{"time":"2026-06-30T21:45:27.428518+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":12}
+{"time":"2026-06-30T21:45:27.428613+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"13c4b195-5257-4369-87e1-76e5ed6d601b","source_id":"7547d227-9a59-428d-9de9-f9037a986881","score":0.03125763125763126}
+{"time":"2026-06-30T21:45:27.428649+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"f90246fc-a2a8-4c44-bea4-7800d39607cd","source_id":"7547d227-9a59-428d-9de9-f9037a986881","score":0.031054405392392875}
+{"time":"2026-06-30T21:45:27.42867+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"30cc510d-26d2-452b-a588-e3ae3034c9aa","source_id":"7547d227-9a59-428d-9de9-f9037a986881","score":0.03036576949620428}
+{"time":"2026-06-30T21:45:27.428688+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"56968092-8ab7-4496-bb21-88e4ba5c551a","source_id":"7547d227-9a59-428d-9de9-f9037a986881","score":0.029910714285714284}
+{"time":"2026-06-30T21:45:27.428704+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"c1d40236-f9b4-4990-99e6-adf5a93e919f","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","score":0.01639344262295082}
+{"time":"2026-06-30T21:45:27.428721+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"dd45860e-f371-4c7c-94ca-ccd904cbd529","source_id":"7547d227-9a59-428d-9de9-f9037a986881","score":0.01639344262295082}
+{"time":"2026-06-30T21:45:27.428739+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"753b5a32-3021-4148-81eb-56d58b210fe4","source_id":"7547d227-9a59-428d-9de9-f9037a986881","score":0.016129032258064516}
+{"time":"2026-06-30T21:45:27.428755+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"d8e29528-711d-4911-96f4-89f2b398cd2c","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","score":0.015625}
+{"time":"2026-06-30T21:45:27.428772+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"71ed9b6c-83ec-4a63-9288-288bbfc722f5","source_id":"25f69a5f-9d4f-47a8-921a-04a1fb399b4a","score":0.015384615384615385}
+{"time":"2026-06-30T21:45:27.428791+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"b346a9ca-beaa-45a3-9f0b-96aaad4616a0","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","score":0.015151515151515152}
+{"time":"2026-06-30T21:45:27.428807+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"f7db04f5-ebe1-4c78-8258-7a54a85088a9","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","score":0.014705882352941176}
+{"time":"2026-06-30T21:45:27.428822+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"f1c2b1c7-5b54-4775-a6cb-2f6f94990e4f","source_id":"7547d227-9a59-428d-9de9-f9037a986881","score":0.014084507042253521}
+{"time":"2026-06-30T21:45:27.428839+08:00","level":"WARN","msg":"DEBUGTMP topN candidate","unit_id":"f0e5c542-bcd2-4600-9c95-ce212c30b9a9","source_id":"25f69a5f-9d4f-47a8-921a-04a1fb399b4a","score":0.013888888888888888}
+{"time":"2026-06-30T21:45:27.428858+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":13}
+{"time":"2026-06-30T21:45:30.507311+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c1","unit_id":"13c4b195-5257-4369-87e1-76e5ed6d601b","source_id":"7547d227-9a59-428d-9de9-f9037a986881","role":"direct"}
+{"time":"2026-06-30T21:45:30.507446+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c2","unit_id":"f90246fc-a2a8-4c44-bea4-7800d39607cd","source_id":"7547d227-9a59-428d-9de9-f9037a986881","role":"supporting"}
+{"time":"2026-06-30T21:45:30.507479+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c3","unit_id":"30cc510d-26d2-452b-a588-e3ae3034c9aa","source_id":"7547d227-9a59-428d-9de9-f9037a986881","role":"supporting"}
+{"time":"2026-06-30T21:45:30.507508+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c4","unit_id":"56968092-8ab7-4496-bb21-88e4ba5c551a","source_id":"7547d227-9a59-428d-9de9-f9037a986881","role":"supporting"}
+{"time":"2026-06-30T21:45:30.507533+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c5","unit_id":"c1d40236-f9b4-4990-99e6-adf5a93e919f","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","role":"supporting"}
+{"time":"2026-06-30T21:45:30.507585+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c6","unit_id":"dd45860e-f371-4c7c-94ca-ccd904cbd529","source_id":"7547d227-9a59-428d-9de9-f9037a986881","role":"irrelevant"}
+{"time":"2026-06-30T21:45:30.507612+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c7","unit_id":"753b5a32-3021-4148-81eb-56d58b210fe4","source_id":"7547d227-9a59-428d-9de9-f9037a986881","role":"supporting"}
+{"time":"2026-06-30T21:45:30.507637+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c8","unit_id":"d8e29528-711d-4911-96f4-89f2b398cd2c","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","role":"supporting"}
+{"time":"2026-06-30T21:45:30.507663+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c9","unit_id":"71ed9b6c-83ec-4a63-9288-288bbfc722f5","source_id":"25f69a5f-9d4f-47a8-921a-04a1fb399b4a","role":"supporting"}
+{"time":"2026-06-30T21:45:30.507689+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c10","unit_id":"b346a9ca-beaa-45a3-9f0b-96aaad4616a0","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","role":"supporting"}
+{"time":"2026-06-30T21:45:30.507715+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c11","unit_id":"f7db04f5-ebe1-4c78-8258-7a54a85088a9","source_id":"8014ea4f-200c-46f9-a991-ae18c742a57c","role":"supporting"}
+{"time":"2026-06-30T21:45:30.50774+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c12","unit_id":"f1c2b1c7-5b54-4775-a6cb-2f6f94990e4f","source_id":"7547d227-9a59-428d-9de9-f9037a986881","role":"supporting"}
+{"time":"2026-06-30T21:45:30.507766+08:00","level":"WARN","msg":"DEBUGTMP rerank raw role","candidate_id":"c13","unit_id":"f0e5c542-bcd2-4600-9c95-ce212c30b9a9","source_id":"25f69a5f-9d4f-47a8-921a-04a1fb399b4a","role":"supporting"}
+{"time":"2026-06-30T21:45:30.510678+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c1","nouns":["实施万相公文","否有提成"]}
+{"time":"2026-06-30T21:45:30.5108+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":12}
+{"time":"2026-06-30T21:45:30.510843+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":12,"conflicts":0}
+{"time":"2026-06-30T21:45:30.512125+08:00","level":"INFO","msg":"http request","method":"POST","path":"/retrieval","status":200,"duration_ms":7471,"request_id":"ea6961ad-0a8d-4251-a156-ed6071925cd8"}
+{"time":"2026-06-30T21:45:51.073787+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"e26ba940-90ea-40e9-a818-38e6e45b1bef","elapsed_ms":0}
+{"time":"2026-06-30T21:49:42.000581+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-06-30T21:49:42.208043+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-06-30T21:49:42.556794+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-06-30T21:49:48.925536+08:00","level":"INFO","msg":"http request","method":"GET","path":"/healthz","status":200,"duration_ms":0,"request_id":"a413ba3b-d41f-482a-b117-1f7fd69c061a"}
+{"time":"2026-06-30T21:49:55.458459+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"2e5a146d-3f0e-40d8-8ed0-4fbd233c656a"}
+{"time":"2026-06-30T21:49:55.483902+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"251d8352-d855-4618-a15f-e879e763d711"}
+{"time":"2026-06-30T21:49:59.382043+08:00","level":"INFO","msg":"session parse result","input":"实施万相公文是否有提成","intent":"查询实施提成","subject":"公文系统实施激励","current_subject":""}
+{"time":"2026-06-30T21:49:59.382216+08:00","level":"INFO","msg":"session expand result","expanded_question":"公文系统实施激励 查询实施提成","subject":"公文系统实施激励","plan_subject":"公文系统实施激励"}
+{"time":"2026-06-30T21:49:59.383175+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":679,"request_id":"8a9ceacc-aa37-48c7-82d7-72799caa5c77"}
+{"time":"2026-06-30T21:56:14.577979+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-06-30T21:56:14.578159+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-06-30T21:56:14.624347+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-06-30T21:57:14.626158+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"9f3b185e-265c-47f0-9748-f0ecaa80f0a2","elapsed_ms":2}
+{"time":"2026-06-30T21:57:58.087718+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-06-30T21:57:58.088118+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-06-30T21:58:30.139973+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-06-30T21:58:30.341921+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-06-30T21:58:30.678167+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-06-30T21:58:30.679283+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-06-30T21:58:40.884285+08:00","level":"INFO","msg":"http request","method":"POST","path":"/retrieval","status":400,"duration_ms":0,"request_id":"2c14c79a-f617-44cb-abeb-8d7f1c4022a3"}
+{"time":"2026-06-30T21:58:40.895707+08:00","level":"INFO","msg":"http request","method":"POST","path":"/retrieval","status":400,"duration_ms":0,"request_id":"57ddbe30-295b-4ef1-8a43-3fc207ccb5d0"}
+{"time":"2026-06-30T21:59:19.101275+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T21:59:20.130972+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["6730fbac-004a-4a44-8494-553f229dd23f","b2310d40-4876-49c0-85bc-602d0879fca9"]}
+{"time":"2026-06-30T21:59:21.538657+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":22}
+{"time":"2026-06-30T21:59:21.539881+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":19}
+{"time":"2026-06-30T21:59:21.539966+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":20}
+{"time":"2026-06-30T21:59:25.839333+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":20}
+{"time":"2026-06-30T21:59:25.839968+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"short","direct":3,"supporting":18,"conflicts":0}
+{"time":"2026-06-30T21:59:25.841432+08:00","level":"INFO","msg":"http request","method":"POST","path":"/retrieval","status":200,"duration_ms":7191,"request_id":"3a847013-588f-4061-a911-a2e1c8ae5836"}
+{"time":"2026-06-30T21:59:26.348298+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T21:59:27.74021+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["25f69a5f-9d4f-47a8-921a-04a1fb399b4a","7547d227-9a59-428d-9de9-f9037a986881","8014ea4f-200c-46f9-a991-ae18c742a57c"]}
+{"time":"2026-06-30T21:59:29.523763+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":5}
+{"time":"2026-06-30T21:59:29.525205+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":12}
+{"time":"2026-06-30T21:59:29.525256+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":13}
+{"time":"2026-06-30T21:59:30.683115+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"cd0518fa-5e54-47b8-8dea-877e147619e8","elapsed_ms":2}
+{"time":"2026-06-30T21:59:33.929389+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c6","nouns":["实施万相公文","否有提成"]}
+{"time":"2026-06-30T21:59:33.929522+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":1}
+{"time":"2026-06-30T21:59:33.929549+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":1,"conflicts":0}
+{"time":"2026-06-30T21:59:33.929726+08:00","level":"INFO","msg":"http request","method":"POST","path":"/retrieval","status":200,"duration_ms":8069,"request_id":"c9ab32cd-0d82-4676-9a47-03a92517e8ed"}
+{"time":"2026-06-30T22:04:05.451446+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-06-30T22:04:05.451701+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-06-30T22:17:38.108632+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-06-30T22:17:38.308221+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-06-30T22:17:38.648299+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-06-30T22:17:38.649344+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-06-30T22:17:47.385957+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T22:17:48.203691+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["6730fbac-004a-4a44-8494-553f229dd23f"]}
+{"time":"2026-06-30T22:17:49.045249+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":0}
+{"time":"2026-06-30T22:17:49.046441+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":4}
+{"time":"2026-06-30T22:17:49.046534+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":4}
+{"time":"2026-06-30T22:17:50.149947+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":4}
+{"time":"2026-06-30T22:17:50.150811+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"short","direct":1,"supporting":4,"conflicts":0}
+{"time":"2026-06-30T22:17:50.151326+08:00","level":"INFO","msg":"http request","method":"POST","path":"/retrieval","status":200,"duration_ms":3220,"request_id":"05bed88d-03fe-4ba1-a4cd-cd5de4f3b16b"}
+{"time":"2026-06-30T22:17:50.561871+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T22:17:51.364598+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["6730fbac-004a-4a44-8494-553f229dd23f"]}
+{"time":"2026-06-30T22:17:52.198425+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":0}
+{"time":"2026-06-30T22:17:52.199461+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":4}
+{"time":"2026-06-30T22:17:52.199533+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":4}
+{"time":"2026-06-30T22:17:53.632572+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":4}
+{"time":"2026-06-30T22:17:53.633158+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"short","direct":1,"supporting":4,"conflicts":0}
+{"time":"2026-06-30T22:17:53.633611+08:00","level":"INFO","msg":"http request","method":"POST","path":"/retrieval","status":200,"duration_ms":3463,"request_id":"6b0992b1-bd97-48b8-ac59-f0744c461c29"}
+{"time":"2026-06-30T22:17:54.041807+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T22:17:55.338423+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["25f69a5f-9d4f-47a8-921a-04a1fb399b4a","7547d227-9a59-428d-9de9-f9037a986881","8014ea4f-200c-46f9-a991-ae18c742a57c"]}
+{"time":"2026-06-30T22:17:57.44277+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":2}
+{"time":"2026-06-30T22:17:57.445004+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":12}
+{"time":"2026-06-30T22:17:57.445076+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":12}
+{"time":"2026-06-30T22:18:00.125123+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c3","nouns":["实施万相公文","否有提成"]}
+{"time":"2026-06-30T22:18:00.125246+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":2}
+{"time":"2026-06-30T22:18:00.125272+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":2,"conflicts":0}
+{"time":"2026-06-30T22:18:00.125523+08:00","level":"INFO","msg":"http request","method":"POST","path":"/retrieval","status":200,"duration_ms":6476,"request_id":"7113cf4c-5192-40ed-96fa-4b9a8a76ff0a"}
+{"time":"2026-06-30T22:18:00.596168+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T22:18:02.657616+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["25f69a5f-9d4f-47a8-921a-04a1fb399b4a","7547d227-9a59-428d-9de9-f9037a986881","8014ea4f-200c-46f9-a991-ae18c742a57c"]}
+{"time":"2026-06-30T22:18:06.8857+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":5}
+{"time":"2026-06-30T22:18:06.888107+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":12}
+{"time":"2026-06-30T22:18:06.888205+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":13}
+{"time":"2026-06-30T22:18:09.642432+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c5","nouns":["实施万相公文","否有提成"]}
+{"time":"2026-06-30T22:18:09.642579+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":2}
+{"time":"2026-06-30T22:18:09.642617+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":2,"conflicts":0}
+{"time":"2026-06-30T22:18:09.642976+08:00","level":"INFO","msg":"http request","method":"POST","path":"/retrieval","status":200,"duration_ms":9501,"request_id":"d8a9d651-5b37-440f-a447-0cba1898416c"}
+{"time":"2026-06-30T22:18:38.65337+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"d4ace539-dadf-4cf6-9517-e81e1d4e44a7","elapsed_ms":3}
+{"time":"2026-06-30T22:18:55.820355+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-06-30T22:18:55.820582+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-06-30T22:21:11.438973+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-06-30T22:21:11.641668+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-06-30T22:21:11.984634+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-06-30T22:21:11.985939+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-06-30T22:21:21.404538+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T22:21:22.46788+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["6730fbac-004a-4a44-8494-553f229dd23f","b2310d40-4876-49c0-85bc-602d0879fca9"]}
+{"time":"2026-06-30T22:21:23.760933+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":10}
+{"time":"2026-06-30T22:21:23.762498+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":19}
+{"time":"2026-06-30T22:21:23.76263+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":20}
+{"time":"2026-06-30T22:21:28.52488+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":20}
+{"time":"2026-06-30T22:21:28.525394+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"short","direct":2,"supporting":19,"conflicts":0}
+{"time":"2026-06-30T22:21:28.526849+08:00","level":"INFO","msg":"http request","method":"POST","path":"/retrieval","status":200,"duration_ms":7657,"request_id":"bfc1aeee-6603-40bf-8bf2-abd31d6af5b7"}
+{"time":"2026-06-30T22:21:28.852467+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-06-30T22:21:30.290985+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["25f69a5f-9d4f-47a8-921a-04a1fb399b4a","7547d227-9a59-428d-9de9-f9037a986881","8014ea4f-200c-46f9-a991-ae18c742a57c"]}
+{"time":"2026-06-30T22:21:32.19189+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":5}
+{"time":"2026-06-30T22:21:32.194+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":12}
+{"time":"2026-06-30T22:21:32.19407+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":13}
+{"time":"2026-06-30T22:21:34.718509+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c5","nouns":["实施万相公文","有提成"]}
+{"time":"2026-06-30T22:21:34.718638+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":2}
+{"time":"2026-06-30T22:21:34.718666+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":2,"conflicts":0}
+{"time":"2026-06-30T22:21:34.718978+08:00","level":"INFO","msg":"http request","method":"POST","path":"/retrieval","status":200,"duration_ms":6173,"request_id":"8b2233b4-3d01-4d0b-a79c-5aa95a3f5ee7"}
+{"time":"2026-06-30T22:22:11.989453+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"f0def0c2-d557-44ba-b007-35391ac46c0d","elapsed_ms":2}
+{"time":"2026-06-30T22:23:03.177894+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-06-30T22:23:03.178007+08:00","level":"INFO","msg":"知识大脑已停止"}

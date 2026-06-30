@@ -77,7 +77,7 @@ func (s *Service) RetrieveWithProgress(ctx context.Context, qc QueryContext, pro
 	// Step 4: 目录结构检索（Outline recall）
 	emit("outline", "start", "", 0)
 	outlineStart := time.Now()
-	outlineCandidates, err := s.outlineRecall(ctx, question, sourceIDs)
+	outlineCandidates, err := s.outlineRecall(ctx, qc, sourceIDs)
 	if err != nil {
 		emit("outline", "error", err.Error(), time.Since(outlineStart).Milliseconds())
 		return nil, fmt.Errorf("retrieval: outline recall: %w", err)
@@ -168,11 +168,10 @@ func (s *Service) domainPreFilter(ctx context.Context, question string) ([]Sourc
 		fmt.Fprintf(&domainList, "[%s] %s：%s\n", d.DomainID, d.Name, d.Description)
 	}
 
-	model := s.cfg.LLM.ModelForPurpose("default").Model
 	resp, err := s.llmClient.CompleteJSON(ctx, "question_domain_match.md", map[string]string{
 		"question":    question,
 		"domain_list": domainList.String(),
-	}, model)
+	}, "classification")
 	if err != nil {
 		slog.Warn("retrieval: domain match failed, skipping", "error", err)
 		return s.store.ListAllSources()
@@ -221,13 +220,12 @@ func (s *Service) sourceSemanticFilter(ctx context.Context, qc QueryContext, can
 		intent = "（未提取）"
 	}
 
-	model := s.cfg.LLM.ModelForPurpose("default").Model
 	resp, err := s.llmClient.CompleteJSON(ctx, "source_filter.md", map[string]string{
 		"question":    qc.Question,
 		"subject":     subject,
 		"intent":      intent,
 		"source_list": sourceList.String(),
-	}, model)
+	}, "classification")
 	if err != nil {
 		slog.Warn("retrieval: source filter failed, using all candidates", "error", err)
 		return candidates, nil
@@ -262,9 +260,17 @@ func (s *Service) sourceSemanticFilter(ctx context.Context, qc QueryContext, can
 }
 
 // Step 4: Outline recall
-func (s *Service) outlineRecall(ctx context.Context, question string, sourceIDs []string) ([]candidate, error) {
+func (s *Service) outlineRecall(ctx context.Context, qc QueryContext, sourceIDs []string) ([]candidate, error) {
 	if len(sourceIDs) == 0 {
 		return nil, nil
+	}
+
+	// 目录召回按核心主题+意图整体匹配，而非裸问题文本——问题需经 session parser
+	// 解析才完整（如指代消解），裸问题字面匹配容易因同义/近义关键词误召回
+	// 场景不同的章节（如"实施"既出现在实施考核场景，也出现在销售代理场景）。
+	matchText := strings.TrimSpace(qc.Subject + " " + qc.Intent)
+	if matchText == "" {
+		matchText = qc.Question
 	}
 
 	threshold := s.cfg.Retrieval.OutlineFTSMinScore
@@ -282,7 +288,7 @@ func (s *Service) outlineRecall(ctx context.Context, question string, sourceIDs 
 		scoreBySource[sid] = &sourceScore{}
 	}
 
-	q := bleve.NewMatchQuery(question)
+	q := bleve.NewMatchQuery(matchText)
 	searchReq := bleve.NewSearchRequest(q)
 	searchReq.Size = 100
 	searchReq.Fields = []string{"source_id", "outline_id"}
@@ -317,7 +323,7 @@ func (s *Service) outlineRecall(ctx context.Context, question string, sourceIDs 
 
 	// 4.2 LLM fallback for low-score sources
 	if len(lowScoreSources) > 0 {
-		llmOutlineIDs, err := s.outlineLLMFallback(ctx, question, lowScoreSources)
+		llmOutlineIDs, err := s.outlineLLMFallback(ctx, qc, lowScoreSources)
 		if err != nil {
 			slog.Warn("retrieval: outline llm fallback error", "error", err)
 		} else {
@@ -385,7 +391,7 @@ func (s *Service) outlineRecall(ctx context.Context, question string, sourceIDs 
 	return candidates, nil
 }
 
-func (s *Service) outlineLLMFallback(ctx context.Context, question string, sourceIDs []string) ([]string, error) {
+func (s *Service) outlineLLMFallback(ctx context.Context, qc QueryContext, sourceIDs []string) ([]string, error) {
 	outlines, err := s.store.GetOutlinesBySourceIDs(sourceIDs)
 	if err != nil {
 		return nil, err
@@ -400,6 +406,15 @@ func (s *Service) outlineLLMFallback(ctx context.Context, question string, sourc
 	type result struct {
 		outlineIDs []string
 		err        error
+	}
+
+	subject := qc.Subject
+	if subject == "" {
+		subject = "（未提取）"
+	}
+	intent := qc.Intent
+	if intent == "" {
+		intent = "（未提取）"
 	}
 
 	var mu sync.Mutex
@@ -421,11 +436,12 @@ func (s *Service) outlineLLMFallback(ctx context.Context, question string, sourc
 				outlineList.WriteString(line + "\n")
 			}
 
-			model := s.cfg.LLM.ModelForPurpose("default").Model
 			resp, err := s.llmClient.CompleteJSON(ctx, "outline_filter.md", map[string]string{
-				"question":     question,
+				"question":     qc.Question,
+				"subject":      subject,
+				"intent":       intent,
 				"outline_list": outlineList.String(),
-			}, model)
+			}, "classification")
 			if err != nil {
 				slog.Warn("retrieval: outline llm fallback failed for source", "error", err)
 				return
@@ -962,7 +978,12 @@ func intFromField(v interface{}) int {
 // It splits on punctuation and particles, returning short phrases (2-8 chars)
 // that are likely entity names (place, document, product, etc).
 func extractQuestionNouns(question string) []string {
-	splitters := []string{"，", "。", "？", "?", "！", "、", "：", "的", "中", "呢", "吗", "了", "是"}
+	// 多字疑问词分隔符必须排在单字分隔符（如"是"）之前，否则会被单字分隔符提前
+	// 截断（如"是否"会被"是"拆成 ""+"否"，残留出"否..."这种无效片段）。
+	splitters := []string{
+		"如何", "是否", "能否", "怎么样", "怎么", "怎样", "为什么", "什么", "多少", "哪些",
+		"，", "。", "？", "?", "！", "、", "：", "的", "中", "呢", "吗", "了", "是",
+	}
 	parts := []string{question}
 	for _, sep := range splitters {
 		var next []string

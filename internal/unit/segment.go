@@ -46,7 +46,7 @@ func BuildSegments(outlines []source.Outline, markdownLines []string, segmentMax
 		return rawSegments[i].LineStart < rawSegments[j].LineStart
 	})
 
-	return mergeSmallSegments(rawSegments, markdownLines, minSegmentChars)
+	return mergeSmallSegments(rawSegments, outlines, markdownLines, minSegmentChars)
 }
 
 func findLeaves(outlines []source.Outline) []source.Outline {
@@ -134,7 +134,7 @@ func segmentCharCount(seg Segment, lines []string) int {
 	return utf8.RuneCountInString(sliceLines(lines, seg.LineStart, seg.LineEnd))
 }
 
-func mergeSmallSegments(segments []Segment, lines []string, minChars int) []Segment {
+func mergeSmallSegments(segments []Segment, outlines []source.Outline, lines []string, minChars int) []Segment {
 	if len(segments) <= 1 {
 		return segments
 	}
@@ -143,14 +143,18 @@ func mergeSmallSegments(segments []Segment, lines []string, minChars int) []Segm
 	var forward []Segment
 	for i := 0; i < len(segments); i++ {
 		cur := segments[i]
+		merged := false
 		for i+1 < len(segments) && segmentCharCount(cur, lines) < minChars {
 			next := segments[i+1]
 			cur.LineEnd = next.LineEnd
-			if cur.Title == "" || (!cur.OutlineID.Valid && next.OutlineID.Valid) {
-				cur.OutlineID = next.OutlineID
+			if cur.Title == "" {
 				cur.Title = next.Title
 			}
+			merged = true
 			i++
+		}
+		if merged {
+			cur.OutlineID = matchOutlineByLineRange(outlines, cur.LineStart, cur.LineEnd)
 		}
 		forward = append(forward, cur)
 	}
@@ -161,9 +165,29 @@ func mergeSmallSegments(segments []Segment, lines []string, minChars int) []Segm
 		if segmentCharCount(*last, lines) < minChars {
 			prev := &forward[len(forward)-2]
 			prev.LineEnd = last.LineEnd
+			prev.OutlineID = matchOutlineByLineRange(outlines, prev.LineStart, prev.LineEnd)
 			forward = forward[:len(forward)-1]
 		}
 	}
 
 	return forward
+}
+
+// matchOutlineByLineRange 在合并段后，按新的行范围重新匹配最深层（Level 最大）
+// 且行范围完整覆盖该段的 outline 节点；找不到完整覆盖的节点时返回 null，
+// 避免沿用合并前某个子节点的 outline_id 导致行范围与归属节点不一致。
+func matchOutlineByLineRange(outlines []source.Outline, lineStart, lineEnd int) sql.NullString {
+	var best *source.Outline
+	for i := range outlines {
+		o := &outlines[i]
+		if o.LineStart <= lineStart && o.LineEnd >= lineEnd {
+			if best == nil || o.Level > best.Level {
+				best = o
+			}
+		}
+	}
+	if best == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: best.OutlineID, Valid: true}
 }
