@@ -206,7 +206,8 @@
     .ans-body table { border-collapse:collapse; margin:0.5em 0; font-size:0.9em; }
     .ans-body th,.ans-body td { border:1px solid var(--border); padding:4px 8px; }
     .ans-body th { background:var(--bg-2); }
-    .stream-body { white-space:pre-wrap; }
+    .ans-body a[href^="evidence:"] { display:inline-block; font-size:0.8em; padding:0 6px; border-radius:4px; background:var(--surface-alt); border:1px solid var(--border); margin:0 1px; text-decoration:none; color:var(--text-2); cursor:pointer; vertical-align:2px; }
+    .ans-body a[href^="evidence:"]:hover { border-color:var(--accent); color:var(--accent); }
     .ans-meta { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; align-items:center; padding-top:12px; border-top:1px solid var(--border-lt); }
 
     .badge { font-size:11px; padding:3px 9px; border-radius:20px; border:1px solid var(--border); background:var(--surface-alt); color:var(--text-2); font-weight:500; }
@@ -223,6 +224,7 @@
     .ans-citations h4 { font-size:11px; color:var(--text-3); margin-bottom:6px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; }
     .citation-tag { display:inline-block; font-size:11px; padding:2px 8px; border-radius:4px; background:var(--surface-alt); border:1px solid var(--border); margin:2px; cursor:pointer; font-family:'SF Mono',SFMono-Regular,Menlo,monospace; }
     .citation-tag:hover { border-color:var(--accent); color:var(--accent); }
+    .kp-chip { display:inline-block; font-size:11px; padding:2px 8px; border-radius:4px; background:var(--surface-alt); border:1px solid var(--border); margin:2px 4px 2px 0; }
     .ans-feedback { margin-top:12px; display:flex; gap:8px; align-items:center; }
     .ans-feedback span { font-size:12px; color:var(--text-3); }
     .feedback-btn { background:none; border:1px solid var(--border); border-radius:var(--radius-xs); padding:4px 10px; cursor:pointer; font-size:12px; color:var(--text-2); transition:.12s; }
@@ -730,12 +732,13 @@ async function doSubmit(question) {
   var expandedQuestion = eq.expanded_question || question;
   var querySubject = eq.subject || '';
   var queryIntent = eq.intent || '';
+  var queryAudience = eq.audience || '';
   var queryConstraint = eq.constraint || '';
   var loadingEl = appendLoading();
   var retrievalStart = Date.now();
 
   try {
-    await doStreamAnswer(expandedQuestion, loadingEl, totalStart, retrievalStart, question, querySubject, queryIntent, queryConstraint);
+    await doStreamAnswer(expandedQuestion, loadingEl, totalStart, retrievalStart, question, querySubject, queryIntent, queryAudience, queryConstraint);
   } catch (e) {
     if (e.name !== 'AbortError') {
       loadingEl.remove();
@@ -749,10 +752,10 @@ async function doSubmit(question) {
   document.getElementById('questionInput').focus();
 }
 
-function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, originalQuestion, subject, intent, constraint) {
+function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, originalQuestion, subject, intent, audience, constraint) {
   return new Promise(function(resolve, reject) {
     var url = S.baseUrl + '/answer/stream';
-    var body = JSON.stringify({ question: question, session_id: S.sessionId, subject: subject || '', intent: intent || '', constraint: constraint || '' });
+    var body = JSON.stringify({ question: question, session_id: S.sessionId, subject: subject || '', intent: intent || '', audience: audience || '', constraint: constraint || '' });
     _abortCtrl = new AbortController();
 
     fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: body, signal: _abortCtrl.signal }).then(function(res) {
@@ -832,7 +835,8 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
           }
           var bodyEl = streamEl.querySelector('.stream-body');
           if (bodyEl) {
-            bodyEl.textContent = extractStreamContent(contentBuf);
+            var streamText = extractStreamContent(contentBuf);
+            bodyEl.innerHTML = renderMarkdown(streamText, buildFactIdNumbering(streamText, []));
             scrollThread();
           }
         } else if (evt === 'thinking') {
@@ -1016,11 +1020,35 @@ function updateTraceInAnswerCard(answerId, trace) {
   if (negBtn) { negBtn.disabled = false; negBtn.dataset.traceId = trace.trace_id; }
 }
 
-function renderMarkdown(text) {
-  if (typeof marked !== 'undefined' && marked.parse) {
-    try { return marked.parse(text); } catch(e) {}
+var FACT_ID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
+
+function buildFactIdNumbering(content, citations) {
+  var map = {};
+  var counter = 0;
+  var re = new RegExp(FACT_ID_RE.source, 'g');
+  var m;
+  while ((m = re.exec(content || ''))) {
+    if (!(m[0] in map)) { counter++; map[m[0]] = counter; }
   }
-  return '<pre style="white-space:pre-wrap">' + esc(text) + '</pre>';
+  (citations || []).forEach(function(fid) {
+    if (!(fid in map)) { counter++; map[fid] = counter; }
+  });
+  return map;
+}
+
+function linkifyEvidence(content, map) {
+  return (content || '').replace(FACT_ID_RE, function(fid) {
+    var num = map[fid] || '?';
+    return '[证据' + num + '](evidence:' + fid + ')';
+  });
+}
+
+function renderMarkdown(text, factMap) {
+  var src = factMap ? linkifyEvidence(text, factMap) : text;
+  if (typeof marked !== 'undefined' && marked.parse) {
+    try { return marked.parse(src); } catch(e) {}
+  }
+  return '<pre style="white-space:pre-wrap">' + esc(src) + '</pre>';
 }
 
 function extractStreamContent(raw) {
@@ -1061,15 +1089,17 @@ function appendAnswerMsg(ans) {
   var directCount = evSet ? (evSet.direct_evidence || []).length : 0;
   var supportCount = evSet ? (evSet.supporting || []).length : 0;
 
+  var factMap = buildFactIdNumbering(ans.content, citations);
+
   var citHtml = citations.length
     ? '<div class="ans-citations"><h4>引用证据</h4>' + citations.map(function(fid) {
-        return '<span class="citation-tag" onclick="openEvidenceInDrawer(\'' + esc(fid) + '\')">' + esc(fid) + '</span>';
+        return '<span class="citation-tag" onclick="openEvidenceInDrawer(\'' + esc(fid) + '\')">证据' + (factMap[fid] || '') + '</span>';
       }).join('') + '</div>'
     : '';
 
   var el = div('msg msg-assistant');
   el.innerHTML = '\
-    <div class="ans-body">' + renderMarkdown(ans.content || '（无回答内容）') + '</div>\
+    <div class="ans-body">' + renderMarkdown(ans.content || '（无回答内容）', factMap) + '</div>\
     ' + citHtml + '\
     <div class="ans-meta">\
       <span class="badge ' + path + '">' + pathLabel(path) + '</span>\
@@ -1236,7 +1266,7 @@ async function showTraceDetail(traceId) {
       var t = r.data;
       el.innerHTML = '<div class="panel-section" style="border-top:1px solid var(--border-lt);padding-top:14px;margin-top:14px"><h3>思考记录详情</h3><div style="font-size:12px;line-height:2">\
         <div><b>问题：</b>' + esc(t.question || '') + '</div>\
-        <div><b>关键词：</b><code>' + esc(t.question_terms || '') + '</code></div>\
+        <div><b>主题：</b><code>' + esc(t.question_terms || '') + '</code></div>\
         <div><b>检索质量：</b><span class="badge ' + t.retrieval_quality + '">' + qualityLabel(t.retrieval_quality) + '</span></div>\
         <div><b>直接命中：</b><code style="font-size:10px">' + esc(JSON.stringify(t.direct_point_ids || [])) + '</code></div>\
         ' + (t.has_feedback ? '<div><b>反馈：</b>' + esc(t.feedback_type || '') + '</div>' : '') + '\
@@ -1538,14 +1568,25 @@ function renderStudyReport(report, container) {
         <div class="summary-stat gap"><div class="ss-val">' + (s.gap_count||0) + '</div><div class="ss-label">缺口 ' + rt(s.gap_count,s.total_traces) + '</div></div>\
       </div></div>\
     ' + (lc.length ? '<div class="study-card"><h2>ActivationLink 候选 (' + lc.length + ')</h2><div class="table-wrap"><table>\
-      <thead><tr><th>问题关键词</th><th>知识点摘要</th><th>所属概念</th><th>命中</th><th>置信</th><th>纯度</th><th>广度</th><th>短路径</th><th>推荐</th></tr></thead>\
+      <thead><tr><th>问题主题</th><th>知识点摘要</th><th>所属概念</th><th>命中</th><th>置信</th><th>纯度</th><th>广度</th><th>短路径</th><th>推荐</th></tr></thead>\
       <tbody>' + lc.map(function(c) { var st = c.stats || {}; return '<tr><td><code style="font-size:11px">' + esc(c.question_terms||'') + '</code></td><td style="font-size:12px">' + esc((c.point_summary||'').slice(0,30)) + '</td><td style="font-size:12px">' + esc(c.concept_name||'') + '</td><td>' + (st.hit_count||0) + '</td><td>' + (st.confident_count||0) + '</td><td>' + (st.signal_purity!=null?(st.signal_purity*100).toFixed(0)+'%':'-') + '</td><td>' + (st.activation_breadth||'-') + '</td><td>' + (st.short_path_rate!=null?(st.short_path_rate*100).toFixed(0)+'%':'-') + '</td><td><span class="badge ' + (c.recommendation==='strong'?'confident':'partial') + '">' + recLabel(c.recommendation) + '</span></td></tr>'; }).join('') + '</tbody></table></div>\
       <div style="font-size:11px;color:var(--text-3);margin-top:12px">以上候选基于检索信号统计生成，仅供人工审核参考。</div></div>' : '') + '\
     ' + (wc.length ? '<div class="study-card"><h2>Wiki 候选 (' + wc.length + ')</h2><div class="table-wrap"><table>\
       <thead><tr><th>概念</th><th>达标 KP 数</th><th>平均置信</th><th>KPN 连接数</th><th>活跃天数</th><th>状态</th></tr></thead>\
-      <tbody>' + wc.map(function(w) { var ws = w.stats || {}; return '<tr><td><b>' + esc(w.concept_name||'') + '</b></td><td>' + (ws.qualifying_kp_count||0) + '</td><td>' + (ws.avg_confident_count ? ws.avg_confident_count.toFixed(1) : '-') + '</td><td>' + (ws.kpn_connection_count||0) + '</td><td>' + (ws.days_active||'-') + '</td><td><span class="badge ' + (w.recommendation==='ready'?'confident':'partial') + '">' + (w.recommendation==='ready' ? '可编译' : '数据不足') + '</span></td></tr>'; }).join('') + '</tbody></table></div></div>' : '') + '\
+      <tbody>' + wc.map(function(w) {
+        var ws = w.stats || {};
+        var points = w.qualifying_points || [];
+        var pointsHtml = points.length
+          ? points.map(function(p) {
+              var summary = (p.point_summary || p.point_id || '').slice(0, 24);
+              return '<span class="kp-chip" title="' + esc(p.point_summary || '') + '">' + esc(summary) + (summary.length >= 24 ? '…' : '') + ' (置信 ' + (p.confident_count||0) + ')</span>';
+            }).join('')
+          : (w.qualifying_point_ids || []).map(function(id) { return '<span class="kp-chip">' + esc(id) + '</span>'; }).join('');
+        return '<tr><td><b>' + esc(w.concept_name||'') + '</b></td><td>' + (ws.qualifying_kp_count||0) + '</td><td>' + (ws.avg_confident_count ? ws.avg_confident_count.toFixed(1) : '-') + '</td><td>' + (ws.kpn_connection_count||0) + '</td><td>' + (ws.days_active||'-') + '</td><td><span class="badge ' + (w.recommendation==='ready'?'confident':'partial') + '">' + (w.recommendation==='ready' ? '可编译' : '数据不足') + '</span></td></tr>'
+          + '<tr><td colspan="6" style="padding-top:0;border-top:none"><div style="font-size:11px;color:var(--text-3);margin-bottom:4px">关联知识点</div>' + pointsHtml + '</td></tr>';
+      }).join('') + '</tbody></table></div></div>' : '') + '\
     ' + (gp.length ? '<div class="study-card"><h2>高频知识盲区 (' + gp.length + ')</h2><div class="table-wrap"><table>\
-      <thead><tr><th>问题关键词</th><th>出现次数</th><th>典型问题</th></tr></thead>\
+      <thead><tr><th>问题主题</th><th>出现次数</th><th>典型问题</th></tr></thead>\
       <tbody>' + gp.map(function(g) { return '<tr><td><code style="font-size:12px">' + esc(g.question_terms||'') + '</code></td><td><span class="badge gap">' + (g.hit_count||0) + ' 次</span></td><td style="font-size:12px;color:var(--text-2)">' + esc((g.question||'').slice(0,60)) + '</td></tr>'; }).join('') + '</tbody></table></div></div>' : '') + '\
     <div class="study-card"><h2>历史报告</h2><div id="reportsList"><button class="btn btn-sm" onclick="loadReportList()">加载历史报告</button></div></div>';
 }
@@ -1794,6 +1835,13 @@ function inputKeydown(e) {
     else submitFromWelcome();
   }
 }
+
+document.getElementById('chatInner').addEventListener('click', function(e) {
+  var a = e.target.closest('a[href^="evidence:"]');
+  if (!a) return;
+  e.preventDefault();
+  openEvidenceInDrawer(a.getAttribute('href').slice('evidence:'.length));
+});
 
 // ═══════════════════════════════════════════════════════
 // INIT

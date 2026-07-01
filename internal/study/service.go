@@ -240,9 +240,15 @@ func (s *Service) buildWikiCandidates() ([]WikiCandidate, error) {
 		}
 
 		pointIDs := make([]string, len(kps))
+		qualifyingPoints := make([]WikiQualifyingPoint, len(kps))
 		totalConfident := 0
 		for i, kp := range kps {
 			pointIDs[i] = kp.PointID
+			qualifyingPoints[i] = WikiQualifyingPoint{
+				PointID:        kp.PointID,
+				PointSummary:   kp.PointSummary,
+				ConfidentCount: kp.ConfidentCount,
+			}
 			totalConfident += kp.ConfidentCount
 		}
 
@@ -274,6 +280,7 @@ func (s *Service) buildWikiCandidates() ([]WikiCandidate, error) {
 			ConceptName:        conceptName,
 			DomainID:           domainID,
 			QualifyingPointIDs: pointIDs,
+			QualifyingPoints:   qualifyingPoints,
 			Stats: WikiCandidateStats{
 				QualifyingKPCount:  len(kps),
 				AvgConfidentCount:  avgConfident,

@@ -160,7 +160,7 @@ func TestSourceSemanticFilter(t *testing.T) {
 		Output: `{"source_ids": ["s1"]}`,
 	})
 
-	filtered, err := svc.sourceSemanticFilter(context.Background(), "linear equation", candidates)
+	filtered, err := svc.sourceSemanticFilter(context.Background(), QueryContext{Question: "linear equation"}, candidates)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestSourceSemanticFilterEmptyFallback(t *testing.T) {
 		Output: `{"source_ids": []}`,
 	})
 
-	filtered, err := svc.sourceSemanticFilter(context.Background(), "random question", candidates)
+	filtered, err := svc.sourceSemanticFilter(context.Background(), QueryContext{Question: "random question"}, candidates)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestRerank(t *testing.T) {
 		Output: `{"results": [{"candidate_id": "c1", "role": "direct"}, {"candidate_id": "c2", "role": "irrelevant"}]}`,
 	})
 
-	kept, err := svc.rerank(context.Background(), "what is linear equation?", candidates)
+	kept, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestBuildEvidenceSet(t *testing.T) {
 		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50},
 	}
 
-	es, err := svc.buildEvidenceSet("test question", "short", direct, supporting, nil)
+	es, err := svc.buildEvidenceSet("test question", "", "", "", "short", direct, supporting, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

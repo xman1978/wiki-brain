@@ -237,7 +237,7 @@ func (s *Store) HasKPNNeighbors(pointID string) (bool, error) {
 
 func (s *Store) QualifyingKPsByConceptFromCandidates(wikiConfidentMin int) (map[string][]QualifyingKP, error) {
 	rows, err := s.db.Query(`
-		SELECT ku.concept_id, lc.point_id, lc.confident_count
+		SELECT ku.concept_id, lc.point_id, lc.confident_count, kp.content AS point_summary
 		FROM link_candidates lc
 		JOIN knowledge_points kp ON lc.point_id = kp.point_id
 		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
@@ -250,13 +250,14 @@ func (s *Store) QualifyingKPsByConceptFromCandidates(wikiConfidentMin int) (map[
 
 	result := make(map[string][]QualifyingKP)
 	for rows.Next() {
-		var conceptID, pointID string
+		var conceptID, pointID, pointSummary string
 		var confidentCount int
-		if err := rows.Scan(&conceptID, &pointID, &confidentCount); err != nil {
+		if err := rows.Scan(&conceptID, &pointID, &confidentCount, &pointSummary); err != nil {
 			return nil, fmt.Errorf("study store: scan qualifying kp: %w", err)
 		}
 		result[conceptID] = append(result[conceptID], QualifyingKP{
 			PointID:        pointID,
+			PointSummary:   pointSummary,
 			ConfidentCount: confidentCount,
 		})
 	}

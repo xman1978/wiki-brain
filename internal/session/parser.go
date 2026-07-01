@@ -73,6 +73,7 @@ var jsonBlockRe = regexp.MustCompile(`\{[^{}]*\}`)
 type parseOutput struct {
 	Intent     string `json:"intent"`
 	Subject    string `json:"subject"`
+	Audience   string `json:"audience"`
 	Constraint string `json:"constraint"`
 }
 
@@ -100,6 +101,13 @@ func repairLayer1(raw string) (ParseResult, bool) {
 		out.Subject = string(subjectRunes[:100])
 	}
 	result.Subject = out.Subject
+
+	audienceRunes := []rune(out.Audience)
+	if len(audienceRunes) > 50 {
+		out.Audience = string(audienceRunes[:50])
+	}
+	result.Audience = out.Audience
+
 	result.Constraint = out.Constraint
 
 	valid := result.Intent != ""

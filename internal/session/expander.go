@@ -7,6 +7,7 @@ func Expand(state *SessionState, plan PlanResult, input string) ExpandedQuery {
 		OriginalInput:  input,
 		Subject:        plan.Subject,
 		Intent:         state.Dialogue.Intent,
+		Audience:       state.Dialogue.Audience,
 		Constraint:     state.Dialogue.Constraint,
 		AllowRetrieval: true,
 	}

@@ -13,6 +13,7 @@ type DialogueState struct {
 	Topic             string                `json:"topic,omitempty"`
 	Intent            string                `json:"intent"`
 	Subject           string                `json:"subject"`
+	Audience          string                `json:"audience,omitempty"`
 	Constraint        string                `json:"constraint,omitempty"`
 	RecentSubjects    []string              `json:"recent_subjects"`
 	ClarificationLog  []ClarificationRecord `json:"clarification_log"`
@@ -105,6 +106,7 @@ type ExpandedQuery struct {
 	ExpandedQuestion   string   `json:"expanded_question"`
 	Subject            string   `json:"subject,omitempty"`
 	Intent             string   `json:"intent"`
+	Audience           string   `json:"audience,omitempty"`
 	Constraint         string   `json:"constraint,omitempty"`
 	DefaultAssumptions []string `json:"default_assumptions"`
 	AllowRetrieval     bool     `json:"allow_retrieval"`
@@ -146,5 +148,6 @@ type TurnInfo struct {
 type ParseResult struct {
 	Intent     string
 	Subject    string
+	Audience   string
 	Constraint string
 }

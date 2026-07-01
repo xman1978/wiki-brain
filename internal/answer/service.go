@@ -101,7 +101,7 @@ func (s *Service) AnswerFromQuestion(ctx context.Context, question string, force
 // AnswerStream does retrieval then streams LLM output. The returned channel
 // emits StreamChunk (thinking/content/done/error). After ChunkDone the caller
 // can read the final AnswerResult via the callback.
-func (s *Service) AnswerStream(ctx context.Context, question string, forceDeep bool, subject, intent, constraint string) (<-chan llm.StreamChunk, func() *AnswerResult, error) {
+func (s *Service) AnswerStream(ctx context.Context, question string, forceDeep bool, subject, intent, audience, constraint string) (<-chan llm.StreamChunk, func() *AnswerResult, error) {
 	outCh := make(chan llm.StreamChunk, 32)
 	var finalResult *AnswerResult
 
@@ -124,6 +124,7 @@ func (s *Service) AnswerStream(ctx context.Context, question string, forceDeep b
 			Question:   question,
 			Subject:    subject,
 			Intent:     intent,
+			Audience:   audience,
 			Constraint: constraint,
 		}, progress)
 		if err != nil {

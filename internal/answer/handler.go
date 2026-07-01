@@ -75,6 +75,7 @@ func (h *Handler) postAnswerStream(w http.ResponseWriter, r *http.Request) {
 		SessionID  string `json:"session_id"`
 		Subject    string `json:"subject"`
 		Intent     string `json:"intent"`
+		Audience   string `json:"audience"`
 		Constraint string `json:"constraint"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -86,7 +87,7 @@ func (h *Handler) postAnswerStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ch, getResult, err := h.svc.AnswerStream(r.Context(), req.Question, req.Deep, req.Subject, req.Intent, req.Constraint)
+	ch, getResult, err := h.svc.AnswerStream(r.Context(), req.Question, req.Deep, req.Subject, req.Intent, req.Audience, req.Constraint)
 	if err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return

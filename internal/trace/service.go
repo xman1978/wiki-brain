@@ -28,14 +28,30 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 		"quality", grade.Quality,
 		"direct_point_ids", grade.DirectPointIDs)
 
+	subject := ""
+	if r.EvidenceSet != nil {
+		subject = r.EvidenceSet.Subject
+	}
+
 	normalized := normalize(r.Question)
-	hash := questionHash(normalized)
-	terms := questionTerms(normalized)
+	// subject is session-resolved (LLM, using conversation history) so it disambiguates
+	// literally-identical follow-up questions ("这个怎么算？") that mean different things
+	// across sessions; folding it into the hash keeps dedup from merging those.
+	hash := questionHash(normalized + "\x1f" + subject)
+
+	// subject groups paraphrases of the same topic together; question_terms (literal
+	// tokenization) is only a fallback for the rare case subject wasn't resolved (e.g.
+	// a retrieve after the user refused clarification, see session.shouldSkipClarification).
+	groupKey := subject
+	if groupKey == "" {
+		groupKey = questionTerms(normalized)
+	}
 	slog.Debug("trace: question normalized",
 		"answer_id", r.AnswerID,
 		"normalized", normalized,
 		"hash", hash,
-		"terms", terms)
+		"subject", subject,
+		"group_key", groupKey)
 
 	directPointIDs := grade.DirectPointIDs
 	if directPointIDs == nil {
@@ -47,7 +63,7 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 		AnswerID:         r.AnswerID,
 		Question:         r.Question,
 		QuestionHash:     hash,
-		QuestionTerms:    terms,
+		QuestionTerms:    groupKey,
 		RetrievalQuality: grade.Quality,
 		Path:             r.Path,
 		DirectPointIDs:   directPointIDs,

@@ -111,6 +111,9 @@ CREATE TABLE study_reports (
       "concept_name":        "概念名称",
       "domain_id":           "domain_xxx",
       "qualifying_point_ids": ["kp_1", "kp_2", "kp_3", "kp_4"],
+      "qualifying_points": [
+        {"point_id": "kp_1", "point_summary": "KP 摘要文本", "confident_count": 9}
+      ],
       "stats": {
         "qualifying_kp_count":   4,
         "avg_confident_count":   9.5,

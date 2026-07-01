@@ -121,11 +121,12 @@ func (h *Handler) postTurn(w http.ResponseWriter, r *http.Request) {
 	parsed := h.parser.Parse(r.Context(), input.UserInput, state)
 
 	slog.Info("session parse result", "input", input.UserInput, "intent", parsed.Intent,
-		"subject", parsed.Subject, "current_subject", state.Working.CurrentSubject)
+		"subject", parsed.Subject, "audience", parsed.Audience, "current_subject", state.Working.CurrentSubject)
 
 	// 4. Update state
 	state.Dialogue.Intent = parsed.Intent
 	state.Dialogue.Subject = parsed.Subject
+	state.Dialogue.Audience = parsed.Audience
 	state.Dialogue.Constraint = parsed.Constraint
 	if parsed.Subject != "" {
 		state.Working.CurrentSubject = parsed.Subject

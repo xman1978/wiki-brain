@@ -23,6 +23,7 @@ type LinkCandidateRow struct {
 
 type QualifyingKP struct {
 	PointID        string
+	PointSummary   string
 	ConfidentCount int
 }
 
@@ -93,13 +94,20 @@ type ActivationLinkStats struct {
 }
 
 type WikiCandidate struct {
-	ConceptID          string           `json:"concept_id"`
-	ConceptName        string           `json:"concept_name"`
-	DomainID           string           `json:"domain_id"`
-	QualifyingPointIDs []string         `json:"qualifying_point_ids"`
-	Stats              WikiCandidateStats `json:"stats"`
-	Recommendation     string           `json:"recommendation"`
-	Reason             string           `json:"reason"`
+	ConceptID          string                `json:"concept_id"`
+	ConceptName        string                `json:"concept_name"`
+	DomainID           string                `json:"domain_id"`
+	QualifyingPointIDs []string              `json:"qualifying_point_ids"`
+	QualifyingPoints   []WikiQualifyingPoint `json:"qualifying_points"`
+	Stats              WikiCandidateStats    `json:"stats"`
+	Recommendation     string                `json:"recommendation"`
+	Reason             string                `json:"reason"`
+}
+
+type WikiQualifyingPoint struct {
+	PointID        string `json:"point_id"`
+	PointSummary   string `json:"point_summary"`
+	ConfidentCount int    `json:"confident_count"`
 }
 
 type WikiCandidateStats struct {

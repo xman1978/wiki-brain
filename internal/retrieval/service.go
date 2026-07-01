@@ -104,6 +104,8 @@ func (s *Service) RetrieveWithProgress(ctx context.Context, qc QueryContext, pro
 		emit("rerank", "done", "无候选", 0)
 		return &EvidenceSet{
 			Question:       question,
+			Subject:        qc.Subject,
+			Audience:       qc.Audience,
 			Constraint:     qc.Constraint,
 			Path:           "deep",
 			DirectEvidence: []Evidence{},
@@ -146,7 +148,7 @@ func (s *Service) RetrieveWithProgress(ctx context.Context, qc QueryContext, pro
 	emit("rerank", "done", fmt.Sprintf("%d 直接 · %d 补充", len(direct), len(supporting)), time.Since(rerankStart).Milliseconds())
 
 	// Step 10: Build EvidenceSet
-	es, err := s.buildEvidenceSet(question, qc.Constraint, path, direct, supporting, conflictCandidates)
+	es, err := s.buildEvidenceSet(question, qc.Subject, qc.Audience, qc.Constraint, path, direct, supporting, conflictCandidates)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: build evidence set: %w", err)
 	}
@@ -682,6 +684,10 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 	if intent == "" {
 		intent = "（未提取）"
 	}
+	audience := qc.Audience
+	if audience == "" {
+		audience = "（未提取）"
+	}
 	constraint := qc.Constraint
 	if constraint == "" {
 		constraint = "（无）"
@@ -691,6 +697,7 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 		"question":    qc.Question,
 		"subject":     subject,
 		"intent":      intent,
+		"audience":    audience,
 		"constraint":  constraint,
 		"candidates":  candidatesText.String(),
 		"json_schema": jsonSchema,
@@ -859,9 +866,11 @@ func (s *Service) kpnExpand(candidates []candidate) ([]candidate, []candidate, e
 }
 
 // Step 10: Build EvidenceSet
-func (s *Service) buildEvidenceSet(question, constraint, path string, direct, supporting, conflicts []candidate) (*EvidenceSet, error) {
+func (s *Service) buildEvidenceSet(question, subject, audience, constraint, path string, direct, supporting, conflicts []candidate) (*EvidenceSet, error) {
 	es := &EvidenceSet{
 		Question:       question,
+		Subject:        subject,
+		Audience:       audience,
 		Constraint:     constraint,
 		Path:           path,
 		DirectEvidence: make([]Evidence, 0, len(direct)),

@@ -77,7 +77,7 @@ func TestStoreList(t *testing.T) {
 		})
 	}
 
-	all, err := store.List("", 20, 0)
+	all, err := store.List("", "", 20, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

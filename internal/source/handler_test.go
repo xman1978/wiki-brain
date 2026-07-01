@@ -101,10 +101,12 @@ func TestHandlerListSources(t *testing.T) {
 		t.Fatalf("status = %d", rr.Code)
 	}
 
-	var items []map[string]interface{}
-	json.NewDecoder(rr.Body).Decode(&items)
-	if len(items) != 2 {
-		t.Errorf("len = %d, want 2", len(items))
+	var resp struct {
+		Items []map[string]interface{} `json:"items"`
+	}
+	json.NewDecoder(rr.Body).Decode(&resp)
+	if len(resp.Items) != 2 {
+		t.Errorf("len = %d, want 2", len(resp.Items))
 	}
 }
 

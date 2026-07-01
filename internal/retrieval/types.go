@@ -6,16 +6,19 @@ type QueryContext struct {
 	Question   string
 	Subject    string
 	Intent     string
+	Audience   string
 	Constraint string
 }
 
 type EvidenceSet struct {
-	Question        string             `json:"question"`
-	Constraint      string             `json:"constraint,omitempty"`
-	Path            string             `json:"path"`
-	DirectEvidence  []Evidence         `json:"direct_evidence"`
-	Supporting      []Evidence         `json:"supporting"`
-	Conflicts       []ConflictEvidence `json:"conflicts,omitempty"`
+	Question       string             `json:"question"`
+	Subject        string             `json:"subject,omitempty"`
+	Audience       string             `json:"audience,omitempty"`
+	Constraint     string             `json:"constraint,omitempty"`
+	Path           string             `json:"path"`
+	DirectEvidence []Evidence         `json:"direct_evidence"`
+	Supporting     []Evidence         `json:"supporting"`
+	Conflicts      []ConflictEvidence `json:"conflicts,omitempty"`
 }
 
 type Evidence struct {
@@ -38,11 +41,11 @@ type ProgressEvent struct {
 type ProgressFunc func(evt ProgressEvent)
 
 type ConflictEvidence struct {
-	UnitID    string          `json:"unit_id"`
-	PointID   string          `json:"point_id"`
-	Content   string          `json:"content"`
-	SourceRef json.RawMessage `json:"source_ref"`
-	SourceTitle string        `json:"source_title"`
+	UnitID      string          `json:"unit_id"`
+	PointID     string          `json:"point_id"`
+	Content     string          `json:"content"`
+	SourceRef   json.RawMessage `json:"source_ref"`
+	SourceTitle string          `json:"source_title"`
 }
 
 type SourceRef struct {
