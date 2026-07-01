@@ -219,7 +219,7 @@ study:
   wiki_confident_min:      8      # Wiki 候选 KP 的最低 confident_count
   gap_hit_threshold:       3      # gap 累积次数告警阈值
   scan_batch_size:         200    # 每次从 cooccurrence 读取的最大行数
-  report_period_days:      30     # 报告统计时间窗口
+  report_period_days:      5      # 报告统计时间窗口
   report_max_keep:         10     # 最多保留的历史报告数量
 ```
 

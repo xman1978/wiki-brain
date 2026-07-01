@@ -51,6 +51,10 @@ func (h *Handler) createSource(w http.ResponseWriter, r *http.Request) {
 			foundation.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if strings.Contains(err.Error(), "duplicate file name") {
+			foundation.WriteError(w, http.StatusConflict, "文件名已存在，请先修改文件名或删除同名文件后重新上传")
+			return
+		}
 		slog.Error("import source failed", "error", err)
 		foundation.WriteError(w, http.StatusInternalServerError, "import failed")
 		return

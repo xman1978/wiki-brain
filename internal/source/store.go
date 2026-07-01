@@ -216,6 +216,15 @@ func (s *Store) Count(status, domainID string) (int, error) {
 	return count, nil
 }
 
+func (s *Store) ExistsByFileName(fileName string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM sources WHERE file_name = ?`, fileName).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("source store: exists by file name: %w", err)
+	}
+	return count > 0, nil
+}
+
 func (s *Store) UpdateWordCount(sourceID string, wordCount int) error {
 	_, err := s.db.Exec(`UPDATE sources SET word_count = ?, updated_at = CURRENT_TIMESTAMP WHERE source_id = ?`,
 		wordCount, sourceID)

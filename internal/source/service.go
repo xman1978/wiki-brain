@@ -88,6 +88,14 @@ func (s *Service) Import(ctx context.Context, fileName string, fileReader io.Rea
 		return nil, fmt.Errorf("unsupported format: %s", ext)
 	}
 
+	exists, err := s.store.ExistsByFileName(fileName)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, fmt.Errorf("duplicate file name: %s", fileName)
+	}
+
 	format := DetectFormat(fileName)
 
 	originalDir := filepath.Join(s.baseDir, "data", "sources", "original")

@@ -86,7 +86,9 @@ func (s *Store) CreateSession() (SessionInfo, error) {
 }
 
 func (s *Store) ListSessions() ([]SessionInfo, error) {
-	rows, err := s.db.Query(`SELECT session_id, title, updated_at, created_at FROM sessions ORDER BY updated_at DESC`)
+	rows, err := s.db.Query(`SELECT session_id, title, updated_at, created_at FROM sessions
+		WHERE EXISTS (SELECT 1 FROM session_turns st WHERE st.session_id = sessions.session_id AND st.answer_id IS NOT NULL)
+		ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}

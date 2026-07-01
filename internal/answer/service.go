@@ -228,7 +228,7 @@ func (s *Service) AnswerStream(ctx context.Context, question string, forceDeep b
 			case llm.ChunkDone:
 				raw := contentBuf.String()
 				raw = stripThinkTags(raw)
-				jsonStr := extractAnswerJSON(raw)
+				jsonStr := llm.ExtractAndRepairJSON(raw)
 				slog.Debug("answer: stream LLM output received",
 					"chunk_count", chunkCount,
 					"raw_len", len(raw),
@@ -290,18 +290,6 @@ func stripThinkTags(s string) string {
 	return strings.TrimSpace(s)
 }
 
-func extractAnswerJSON(s string) string {
-	s = strings.TrimSpace(s)
-	start := strings.IndexAny(s, "{[")
-	if start == -1 {
-		return s
-	}
-	end := strings.LastIndexByte(s, '}')
-	if end <= start {
-		return s
-	}
-	return s[start : end+1]
-}
 
 func (s *Service) handleNone(_ context.Context, es *retrieval.EvidenceSet) *AnswerResult {
 	r := &AnswerResult{

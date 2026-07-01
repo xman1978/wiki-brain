@@ -81,5 +81,5 @@ study:
   wiki_confident_min:      8
   gap_hit_threshold:       3
   scan_batch_size:         200
-  report_period_days:      30
+  report_period_days:      5
   report_max_keep:         10

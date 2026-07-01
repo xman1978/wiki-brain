@@ -293,6 +293,13 @@
     .evidence-card.supporting .ev-role { color:var(--yellow); }
     .evidence-card .ev-source { font-size:11px; color:var(--text-3); margin-top:3px; }
     .evidence-card .ev-content { font-size:13px; margin-top:6px; line-height:1.5; color:var(--text-2); }
+    .evidence-card .ev-content p { margin:0.3em 0; }
+    .evidence-card .ev-content p:first-child { margin-top:0; }
+    .evidence-card .ev-content p:last-child { margin-bottom:0; }
+    .evidence-card .ev-content ul, .evidence-card .ev-content ol { margin:0.3em 0; padding-left:1.3em; }
+    .evidence-card .ev-content table { border-collapse:collapse; font-size:0.95em; margin:0.3em 0; }
+    .evidence-card .ev-content th, .evidence-card .ev-content td { border:1px solid var(--border); padding:2px 6px; }
+    .evidence-card .ev-content code { background:var(--bg-3); padding:1px 4px; border-radius:3px; font-size:0.9em; }
     .gap-item { padding:10px 12px; border-radius:var(--radius-sm); background:var(--red-lt); border:1px solid rgba(196,67,43,.15); margin-bottom:6px; font-size:13px; }
 
     /* ── FILE DRAWER ──────────────────────────────────────── */
@@ -1214,7 +1221,7 @@ function evidenceCardHtml(e, role) {
   return '<div class="evidence-card ' + role + '" id="ev-' + esc(fid) + '">\
     <div class="ev-role">' + (role === 'direct' ? '直接证据' : '补充证据') + '</div>\
     ' + (sourceId ? '<div class="ev-source">来源: ' + esc(sourceId.slice(0,16)) + '…</div>' : '') + '\
-    <div class="ev-content">' + esc((e.content||'').slice(0,200)) + ((e.content||'').length > 200 ? '…' : '') + '</div>\
+    <div class="ev-content">' + renderMarkdown((e.content||'').slice(0,200) + ((e.content||'').length > 200 ? '…' : '')) + '</div>\
     <div style="margin-top:8px;display:flex;gap:6px">\
       ' + (sourceId ? '<button class="btn btn-sm" onclick="event.stopPropagation();viewSource(\'' + esc(sourceId) + '\')">查看来源</button>' : '') + '\
       <button class="copy-btn" onclick="event.stopPropagation();copy(\'' + esc(fid) + '\',this)">复制 fact_id</button>\
@@ -1303,7 +1310,7 @@ async function doUploadFile(file) {
       showTimeline(file.name, 'uploaded', r.data, uploadStart);
       pollSourceTimeline(r.data.source_id, file.name, uploadStart);
     } else {
-      showTimeline(file.name, 'upload_failed', null, uploadStart);
+      showTimeline(file.name, 'upload_failed', r.data, uploadStart);
     }
   } catch(e) {
     showTimeline(file.name, 'upload_failed', null, uploadStart);
@@ -1413,6 +1420,9 @@ function renderTimeline(title, steps, sourceData) {
       '</div></div>';
   });
   html += '</div>';
+  if (sourceData && sourceData.message) {
+    html += '<div style="margin-top:8px;font-size:11px;color:var(--red);padding:6px 8px;background:var(--red-lt);border-radius:var(--radius-xs)">' + esc(sourceData.message) + '</div>';
+  }
   return html;
 }
 

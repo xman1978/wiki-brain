@@ -5534,3 +5534,986 @@
 {"time":"2026-07-01T19:51:55.73435+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"96d9f7d1-ab4b-42dc-a956-bba0bc13b003"}
 {"time":"2026-07-01T19:52:01.832227+08:00","level":"INFO","msg":"收到退出信号","signal":15}
 {"time":"2026-07-01T19:52:01.832427+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-07-01T20:04:17.29088+08:00","level":"INFO","msg":"applying migration","version":"001_init"}
+{"time":"2026-07-01T20:04:17.291084+08:00","level":"INFO","msg":"applying migration","version":"002_sources"}
+{"time":"2026-07-01T20:04:17.291233+08:00","level":"INFO","msg":"applying migration","version":"003_units"}
+{"time":"2026-07-01T20:04:17.291515+08:00","level":"INFO","msg":"applying migration","version":"004_answers"}
+{"time":"2026-07-01T20:04:17.291583+08:00","level":"INFO","msg":"applying migration","version":"005_traces"}
+{"time":"2026-07-01T20:04:17.291914+08:00","level":"INFO","msg":"applying migration","version":"006_study"}
+{"time":"2026-07-01T20:04:17.292087+08:00","level":"INFO","msg":"applying migration","version":"007_source_timestamps"}
+{"time":"2026-07-01T20:04:17.292329+08:00","level":"INFO","msg":"applying migration","version":"008_sessions"}
+{"time":"2026-07-01T20:04:17.29305+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-07-01T20:04:17.486042+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-07-01T20:04:17.819662+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-07-01T20:04:17.872928+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-07-01T20:05:17.873149+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"99f54fa4-246f-4a90-ba0e-0812a430b229","elapsed_ms":1}
+{"time":"2026-07-01T20:05:23.363441+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"b47c749f-452f-4d7a-acd3-bf3e029ee792"}
+{"time":"2026-07-01T20:05:23.381511+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"cb38523a-16b8-464e-8860-a55784c6d3fb"}
+{"time":"2026-07-01T20:05:23.389433+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"e284dd9f-5210-4a30-97d7-50c9652b008e"}
+{"time":"2026-07-01T20:05:23.389979+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"b2a113e8-d1bc-47e4-bf1e-18901ce0d3cc"}
+{"time":"2026-07-01T20:05:23.433845+08:00","level":"INFO","msg":"http request","method":"GET","path":"/favicon.ico","status":200,"duration_ms":0,"request_id":"0b8de15f-8544-492c-908e-17786480c6a4"}
+{"time":"2026-07-01T20:05:25.914313+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"68b4ac32-54a6-43cc-9ac2-a10d090f2d69"}
+{"time":"2026-07-01T20:05:28.927718+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports/latest","status":200,"duration_ms":0,"request_id":"6cace41d-7ccd-45a3-a905-352de42d226c"}
+{"time":"2026-07-01T20:05:30.611174+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f5dc9781-1835-4d30-bd83-99cba3bac6c5"}
+{"time":"2026-07-01T20:05:53.388935+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"28eed8bd-5995-4687-930e-0f5b8accacf9"}
+{"time":"2026-07-01T20:05:57.154372+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":2,"request_id":"a4f873a5-fc5b-4097-b455-4d66f784ea5e"}
+{"time":"2026-07-01T20:05:57.160154+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/f1e2dcb7-0db5-4965-8344-03509d22be72","status":200,"duration_ms":0,"request_id":"6b93e93f-f731-46bb-9127-437dbe400640"}
+{"time":"2026-07-01T20:05:57.160256+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"2600df52-f292-455a-b840-086676ca0949"}
+{"time":"2026-07-01T20:06:00.164063+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/f1e2dcb7-0db5-4965-8344-03509d22be72","status":200,"duration_ms":0,"request_id":"c7f095e0-d54b-43c8-a463-fbec005d54d1"}
+{"time":"2026-07-01T20:06:01.956657+08:00","level":"INFO","msg":"semantic outline triggered","source_id":"f1e2dcb7-0db5-4965-8344-03509d22be72","reasons":["E: leaf node too long"]}
+{"time":"2026-07-01T20:06:03.167067+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/f1e2dcb7-0db5-4965-8344-03509d22be72","status":200,"duration_ms":0,"request_id":"6ca5b3d5-6d9e-45ee-8d28-39d196eff3b8"}
+{"time":"2026-07-01T20:06:06.171428+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/f1e2dcb7-0db5-4965-8344-03509d22be72","status":200,"duration_ms":0,"request_id":"09a1757d-6462-4330-996d-ab76cacf16c3"}
+{"time":"2026-07-01T20:06:09.177679+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/f1e2dcb7-0db5-4965-8344-03509d22be72","status":200,"duration_ms":0,"request_id":"a8451577-38e8-40f5-b0af-3aeeae8ca35a"}
+{"time":"2026-07-01T20:06:12.183104+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/f1e2dcb7-0db5-4965-8344-03509d22be72","status":200,"duration_ms":0,"request_id":"33ad2ec1-24a0-4093-8a5a-38e8c1c19c56"}
+{"time":"2026-07-01T20:06:15.187369+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/f1e2dcb7-0db5-4965-8344-03509d22be72","status":200,"duration_ms":0,"request_id":"96d5f034-c5d2-472a-a578-e2cf79378fab"}
+{"time":"2026-07-01T20:06:15.746828+08:00","level":"INFO","msg":"outline summary generation","total_nodes":8,"batches":1}
+{"time":"2026-07-01T20:06:18.192385+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/f1e2dcb7-0db5-4965-8344-03509d22be72","status":200,"duration_ms":0,"request_id":"939e9b9a-a394-4a4e-9f10-73718e4c0fee"}
+{"time":"2026-07-01T20:06:21.19845+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/f1e2dcb7-0db5-4965-8344-03509d22be72","status":200,"duration_ms":0,"request_id":"802314fa-f963-4218-bdc4-bc504ce9354c"}
+{"time":"2026-07-01T20:06:23.388809+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e97ee50b-10a7-4908-b8c1-f72c8f583c83"}
+{"time":"2026-07-01T20:06:23.985161+08:00","level":"INFO","msg":"outline summary completed","generated":8,"total":8}
+{"time":"2026-07-01T20:06:24.2039+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/f1e2dcb7-0db5-4965-8344-03509d22be72","status":200,"duration_ms":0,"request_id":"8277a82f-10eb-4058-a2d0-39c0ef5cad37"}
+{"time":"2026-07-01T20:06:27.209755+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/f1e2dcb7-0db5-4965-8344-03509d22be72","status":200,"duration_ms":0,"request_id":"bac09169-ed00-4868-a6eb-4f05174b4f1f"}
+{"time":"2026-07-01T20:06:27.213061+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ae6ebdb4-041b-4abe-ae5f-ab53852e2aa3"}
+{"time":"2026-07-01T20:06:42.266112+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":0,"request_id":"93fd49ad-ee7b-46d0-a180-bd8d1e9ee147"}
+{"time":"2026-07-01T20:06:42.268074+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b55c2c85-c102-441b-8746-2b28e639f4fb","status":200,"duration_ms":0,"request_id":"31583b92-c33c-4546-8a67-593476b1948e"}
+{"time":"2026-07-01T20:06:42.2682+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"3e5692e0-cd03-4473-b20d-142616564f51"}
+{"time":"2026-07-01T20:06:45.27176+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b55c2c85-c102-441b-8746-2b28e639f4fb","status":200,"duration_ms":0,"request_id":"20e41861-3d2f-4287-bb74-fb2f15357f42"}
+{"time":"2026-07-01T20:06:45.361275+08:00","level":"INFO","msg":"outline summary generation","total_nodes":8,"batches":1}
+{"time":"2026-07-01T20:06:46.857669+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/f1e2dcb7-0db5-4965-8344-03509d22be72","status":200,"duration_ms":0,"request_id":"b7a76431-0e74-453c-9af9-c93128c0fe70"}
+{"time":"2026-07-01T20:06:46.859096+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/f1e2dcb7-0db5-4965-8344-03509d22be72","status":200,"duration_ms":0,"request_id":"4bba3de2-05ed-4aca-836e-427b53e43f5c"}
+{"time":"2026-07-01T20:06:48.277157+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b55c2c85-c102-441b-8746-2b28e639f4fb","status":200,"duration_ms":0,"request_id":"284a125c-c030-49cb-a7c0-2baf87a7a1ae"}
+{"time":"2026-07-01T20:06:50.777614+08:00","level":"INFO","msg":"outline summary completed","generated":7,"total":8}
+{"time":"2026-07-01T20:06:51.281631+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b55c2c85-c102-441b-8746-2b28e639f4fb","status":200,"duration_ms":0,"request_id":"71224573-352b-4cb6-a089-82c2ec80544e"}
+{"time":"2026-07-01T20:06:51.697278+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/f1e2dcb7-0db5-4965-8344-03509d22be72/preview","status":200,"duration_ms":7,"request_id":"a14a2b01-526a-4792-9034-f5cf8aab5b24"}
+{"time":"2026-07-01T20:06:51.717772+08:00","level":"INFO","msg":"http request","method":"GET","path":"/favicon.ico","status":200,"duration_ms":0,"request_id":"a3794226-31aa-4525-abf6-8e55fbe589e0"}
+{"time":"2026-07-01T20:06:54.149665+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"aca47ddd-1909-44ac-a899-630cc018578f"}
+{"time":"2026-07-01T20:06:54.358389+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b55c2c85-c102-441b-8746-2b28e639f4fb","status":200,"duration_ms":0,"request_id":"29a794a9-6eb1-4d99-8f46-322c11af71cd"}
+{"time":"2026-07-01T20:06:54.363107+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"cc55203d-319f-4f0d-a544-656a838a091f"}
+{"time":"2026-07-01T20:07:03.63613+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":1,"request_id":"067a2f43-a2d2-4ee3-bf0b-62d74fe85ca9"}
+{"time":"2026-07-01T20:07:03.638671+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d1c08541-caed-4bb6-84bb-f1b114311687","status":200,"duration_ms":0,"request_id":"962ddbc8-bb31-40b6-a5be-cd913c36cde4"}
+{"time":"2026-07-01T20:07:03.638905+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"296604c2-3fa2-426f-bec7-d8073a4ffb30"}
+{"time":"2026-07-01T20:07:06.648491+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d1c08541-caed-4bb6-84bb-f1b114311687","status":200,"duration_ms":0,"request_id":"efa51f9d-6380-4564-bb83-2d40d63e9826"}
+{"time":"2026-07-01T20:07:09.652165+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d1c08541-caed-4bb6-84bb-f1b114311687","status":200,"duration_ms":0,"request_id":"2356213c-9b58-4a5f-9f30-9fc4947031e2"}
+{"time":"2026-07-01T20:07:12.657755+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d1c08541-caed-4bb6-84bb-f1b114311687","status":200,"duration_ms":0,"request_id":"394faf4d-3691-4020-be13-5974c61e5274"}
+{"time":"2026-07-01T20:07:15.664211+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d1c08541-caed-4bb6-84bb-f1b114311687","status":200,"duration_ms":0,"request_id":"07f5406b-8c1d-4766-b7aa-4ef11d67ecc2"}
+{"time":"2026-07-01T20:07:18.668758+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d1c08541-caed-4bb6-84bb-f1b114311687","status":200,"duration_ms":0,"request_id":"fc19063c-a2ff-4187-811d-1e60c3acb9e7"}
+{"time":"2026-07-01T20:07:21.673884+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d1c08541-caed-4bb6-84bb-f1b114311687","status":200,"duration_ms":0,"request_id":"1ae71b4e-cc89-47f2-b92a-81d5bfbdccfb"}
+{"time":"2026-07-01T20:07:23.388362+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a574c0cc-c8b3-4ce3-b2f1-02a8c72273dc"}
+{"time":"2026-07-01T20:07:24.679616+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d1c08541-caed-4bb6-84bb-f1b114311687","status":200,"duration_ms":0,"request_id":"f4f700b4-707d-4a24-b76e-ebe58b516649"}
+{"time":"2026-07-01T20:07:27.684378+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d1c08541-caed-4bb6-84bb-f1b114311687","status":200,"duration_ms":0,"request_id":"9472d9af-a136-4a8e-bc14-f16c327cac59"}
+{"time":"2026-07-01T20:07:30.688582+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d1c08541-caed-4bb6-84bb-f1b114311687","status":200,"duration_ms":0,"request_id":"fcd3bd89-7bff-42d8-9975-9cdb194d39c2"}
+{"time":"2026-07-01T20:07:31.93501+08:00","level":"INFO","msg":"semantic outline triggered","source_id":"d1c08541-caed-4bb6-84bb-f1b114311687","reasons":["D: flat structure"]}
+{"time":"2026-07-01T20:07:33.694415+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d1c08541-caed-4bb6-84bb-f1b114311687","status":200,"duration_ms":0,"request_id":"1d8996ea-f2bd-4786-b1db-4bf4cc0d577b"}
+{"time":"2026-07-01T20:07:36.699427+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d1c08541-caed-4bb6-84bb-f1b114311687","status":200,"duration_ms":0,"request_id":"e0885c0b-1d53-4999-b26d-1d48f925c5d8"}
+{"time":"2026-07-01T20:07:39.704021+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d1c08541-caed-4bb6-84bb-f1b114311687","status":200,"duration_ms":0,"request_id":"e0b2cb45-3181-4b64-abdc-40146523d880"}
+{"time":"2026-07-01T20:07:39.707352+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f2af6b00-9062-43a5-aa5f-641da8ffcf93"}
+{"time":"2026-07-01T20:07:45.504522+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":5,"request_id":"7623fd1c-6c38-4ae3-b91e-ef45d94cff88"}
+{"time":"2026-07-01T20:07:45.510822+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"76ac4289-2a6b-4651-81a3-3eaf8f3b7e94"}
+{"time":"2026-07-01T20:07:45.510964+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"5716fe00-9b00-4cad-8311-5f5f39f869f0"}
+{"time":"2026-07-01T20:07:48.515296+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"c3bd4cb0-aa80-4743-bfbb-a9b28d8df5de"}
+{"time":"2026-07-01T20:07:51.532246+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"20adc1c7-f41b-4917-9e7a-1c6069fa1a53"}
+{"time":"2026-07-01T20:07:53.38775+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9164fd52-70ac-4375-b4a1-1027b4f43163"}
+{"time":"2026-07-01T20:07:54.537366+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"93afd1b4-5772-4a17-9107-e7811e9e4f70"}
+{"time":"2026-07-01T20:07:57.542892+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"203be113-a8d6-4726-b5be-dfb238f80dcb"}
+{"time":"2026-07-01T20:08:00.548777+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"fd81e473-131d-470f-a19d-c03e9b95a66c"}
+{"time":"2026-07-01T20:08:03.554003+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"dfb244ea-f6f6-48d1-8ece-4390cad5bf77"}
+{"time":"2026-07-01T20:08:06.559165+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"01241713-74f5-4049-a364-a2a4f0886441"}
+{"time":"2026-07-01T20:08:08.380192+08:00","level":"INFO","msg":"semantic outline triggered","source_id":"e2e2240b-4dd1-4b2d-b801-a70a1656ff05","reasons":["E: leaf node too long"]}
+{"time":"2026-07-01T20:08:09.563606+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"58414464-b5dc-44da-8884-698dfdd10a19"}
+{"time":"2026-07-01T20:08:12.567695+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"531f3cac-5c16-4467-935c-c8fceddde3cb"}
+{"time":"2026-07-01T20:08:15.57277+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"d655b3d7-b839-4529-af86-7e6235956838"}
+{"time":"2026-07-01T20:08:16.476533+08:00","level":"INFO","msg":"outline summary generation","total_nodes":8,"batches":3}
+{"time":"2026-07-01T20:08:18.576622+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"b39b4bc3-9beb-4407-a02e-acf6a7722387"}
+{"time":"2026-07-01T20:08:21.581644+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"7378bb31-caba-47bb-a0a5-9a81cf64a745"}
+{"time":"2026-07-01T20:08:23.389619+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"1fcab0d6-7964-40e9-8490-0e624363d646"}
+{"time":"2026-07-01T20:08:24.586605+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"c9a7276e-0b2f-45b4-b4a3-6b36241401a8"}
+{"time":"2026-07-01T20:08:27.592004+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"53e815dd-6b52-412a-8d4c-3a3e24d4d5e1"}
+{"time":"2026-07-01T20:08:30.596187+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"4f59712c-52a9-4a96-81e9-307cb7d8af59"}
+{"time":"2026-07-01T20:08:31.630663+08:00","level":"INFO","msg":"outline summary completed","generated":8,"total":8}
+{"time":"2026-07-01T20:08:33.601889+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e2e2240b-4dd1-4b2d-b801-a70a1656ff05","status":200,"duration_ms":0,"request_id":"c833d534-6077-480d-ad2d-1e34887a8248"}
+{"time":"2026-07-01T20:08:33.60523+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"bccf4179-ff11-4c02-b55c-3e89d7c791f3"}
+{"time":"2026-07-01T20:08:47.107703+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":3,"request_id":"872d3745-485d-45d1-bb16-f14091987913"}
+{"time":"2026-07-01T20:08:47.115547+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/88c3cdda-868d-4749-a2f9-9ab55e753924","status":200,"duration_ms":0,"request_id":"f4a1c062-bc2a-491d-bf62-2df855a7cf92"}
+{"time":"2026-07-01T20:08:47.115805+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"06efa89d-2856-4e73-8064-f2ea1ace88fd"}
+{"time":"2026-07-01T20:08:50.121104+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/88c3cdda-868d-4749-a2f9-9ab55e753924","status":200,"duration_ms":0,"request_id":"fe7405e3-233b-4223-8aae-d635e8b269be"}
+{"time":"2026-07-01T20:08:50.183473+08:00","level":"INFO","msg":"outline summary generation","total_nodes":7,"batches":1}
+{"time":"2026-07-01T20:08:53.126601+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/88c3cdda-868d-4749-a2f9-9ab55e753924","status":200,"duration_ms":0,"request_id":"1a46ba6a-4684-4df7-944b-164f82ba9ac8"}
+{"time":"2026-07-01T20:08:53.388897+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"0623cd86-960b-40c4-9596-518315fd3d4c"}
+{"time":"2026-07-01T20:08:56.13255+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/88c3cdda-868d-4749-a2f9-9ab55e753924","status":200,"duration_ms":0,"request_id":"88841e4f-c896-4d95-be41-1b82fc6d8e39"}
+{"time":"2026-07-01T20:08:56.410091+08:00","level":"INFO","msg":"outline summary completed","generated":7,"total":7}
+{"time":"2026-07-01T20:08:59.137293+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/88c3cdda-868d-4749-a2f9-9ab55e753924","status":200,"duration_ms":0,"request_id":"5b627ca9-7140-483d-b07a-dddfc97df1e9"}
+{"time":"2026-07-01T20:08:59.140206+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c3e54660-3933-4649-acf4-2e86933d1993"}
+{"time":"2026-07-01T20:09:13.734719+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":2,"request_id":"9df17b7f-457c-4df3-aa66-bb6aaef8ee47"}
+{"time":"2026-07-01T20:09:13.737813+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"e944f6f9-c464-47e4-adf5-4785028f8b22"}
+{"time":"2026-07-01T20:09:13.738098+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"39a0bf06-3c60-49c3-9ddf-cb5e5a134b1a"}
+{"time":"2026-07-01T20:09:16.747418+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"1ab2f47b-570a-4eb8-ab60-a1accac8f1a3"}
+{"time":"2026-07-01T20:09:19.752356+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"08178808-fd18-48dc-8715-8b0c6efb0010"}
+{"time":"2026-07-01T20:09:22.757099+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"e23983da-2018-4f76-a19e-c06abe6bfb2f"}
+{"time":"2026-07-01T20:09:23.389243+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"90e11567-d22b-4a75-bdaa-6dd5c644527d"}
+{"time":"2026-07-01T20:09:25.762698+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"b396ba60-441d-4764-b704-fc73ecd981c8"}
+{"time":"2026-07-01T20:09:28.76669+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"54074f0a-491b-4240-ac85-76a815957685"}
+{"time":"2026-07-01T20:09:31.772203+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"f2021862-a5c1-429f-bcc5-e065dc3afeeb"}
+{"time":"2026-07-01T20:09:34.777933+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"235ea014-9f2b-4cff-a53a-2dc5f5f78c71"}
+{"time":"2026-07-01T20:09:37.783717+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"988ea6fc-2b4c-4398-a600-0525f904abc2"}
+{"time":"2026-07-01T20:09:40.788373+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"cf66ebf3-6aac-4989-b448-0dc06b7042e5"}
+{"time":"2026-07-01T20:09:43.79393+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"3a7b5f57-a303-4cd7-84c9-808bf29c1101"}
+{"time":"2026-07-01T20:09:46.798596+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"2e2e0330-fc0d-422b-8df6-a0cc6d0673e4"}
+{"time":"2026-07-01T20:09:49.80231+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"f7b3965c-6fa7-4dd7-b4f4-db6da02338c5"}
+{"time":"2026-07-01T20:09:52.80692+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"1d14df72-43db-46be-a6e0-ccb775b046dc"}
+{"time":"2026-07-01T20:09:53.389443+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a04f6068-11e7-4f5d-bb8d-a84044fdc100"}
+{"time":"2026-07-01T20:09:53.772621+08:00","level":"INFO","msg":"outline summary generation","total_nodes":4,"batches":1}
+{"time":"2026-07-01T20:09:55.81151+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"f499cf8b-093a-4cb1-bca4-67b9ff2c3bb3"}
+{"time":"2026-07-01T20:09:56.519862+08:00","level":"INFO","msg":"outline summary completed","generated":4,"total":4}
+{"time":"2026-07-01T20:09:58.81549+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"69d377c7-c090-4383-9af0-d7249b2bdf1a"}
+{"time":"2026-07-01T20:09:58.818602+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"7429707a-ddeb-4671-9c2c-37f845e59279"}
+{"time":"2026-07-01T20:10:23.391445+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c28176ff-7aaa-4d1c-8ad5-4e1310087ce0"}
+{"time":"2026-07-01T20:10:31.985375+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":3,"request_id":"45a43b08-354c-4bd8-9a9a-df54ddcabf62"}
+{"time":"2026-07-01T20:10:31.991639+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b20882fa-d5d7-49cf-bf5c-83b46332b789","status":200,"duration_ms":0,"request_id":"b7fe2712-1731-4675-8cf1-6620e3bba867"}
+{"time":"2026-07-01T20:10:31.991835+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8c0c56b1-9abb-4ff2-aabe-89d0bc4807a7"}
+{"time":"2026-07-01T20:10:32.042658+08:00","level":"INFO","msg":"outline summary generation","total_nodes":4,"batches":1}
+{"time":"2026-07-01T20:10:33.89654+08:00","level":"INFO","msg":"outline summary completed","generated":2,"total":4}
+{"time":"2026-07-01T20:10:34.99543+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b20882fa-d5d7-49cf-bf5c-83b46332b789","status":200,"duration_ms":0,"request_id":"defc342a-004d-4290-a023-885c0dc87a7d"}
+{"time":"2026-07-01T20:10:37.999677+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b20882fa-d5d7-49cf-bf5c-83b46332b789","status":200,"duration_ms":0,"request_id":"5bb1188a-4530-4e41-a4c5-378b05eb92fa"}
+{"time":"2026-07-01T20:10:38.0028+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"1dfb8996-5364-4a08-9106-8ef4ed80c329"}
+{"time":"2026-07-01T20:10:38.105731+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"a6fa1a3b-ca90-4679-a5e3-adb0bddb74b0"}
+{"time":"2026-07-01T20:10:53.388306+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"04bbb14b-13c9-4e7c-8238-ab183844e4d7"}
+{"time":"2026-07-01T20:11:00.306303+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"0a24e1d8-3e00-4584-8310-8a0277234b61"}
+{"time":"2026-07-01T20:11:00.307709+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/7df26ce6-df45-4977-b904-5858010146eb","status":200,"duration_ms":0,"request_id":"005eb51b-dd43-4a69-aaee-495dc0f99d10"}
+{"time":"2026-07-01T20:11:07.788898+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b20882fa-d5d7-49cf-bf5c-83b46332b789","status":200,"duration_ms":0,"request_id":"68c109c8-a2f1-4da4-876c-52dff1bc3485"}
+{"time":"2026-07-01T20:11:07.791242+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b20882fa-d5d7-49cf-bf5c-83b46332b789/preview","status":200,"duration_ms":2,"request_id":"2899f184-aacf-47cf-857f-89697fb259dd"}
+{"time":"2026-07-01T20:11:07.808819+08:00","level":"INFO","msg":"http request","method":"GET","path":"/favicon.ico","status":200,"duration_ms":0,"request_id":"f4ec53ba-5b02-42f6-ae4a-270ad7c8a0db"}
+{"time":"2026-07-01T20:11:23.388933+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"43141607-d49f-4dcb-810a-3bbba8127546"}
+{"time":"2026-07-01T20:11:53.391741+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"fca4ffbc-91ad-41a7-9c52-1bfaa5ea590f"}
+{"time":"2026-07-01T20:12:23.389717+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"3c7945fe-65c7-4d31-8d79-00142e0da447"}
+{"time":"2026-07-01T20:12:53.390079+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e49f3225-9d1b-425a-8402-d4ca4e89d24b"}
+{"time":"2026-07-01T20:13:23.389144+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"07e1b801-4607-41e3-9951-2aad09c663eb"}
+{"time":"2026-07-01T20:13:53.390467+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"57029d88-031a-4270-a6fe-17a93d757a5f"}
+{"time":"2026-07-01T20:14:23.390373+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8141c3d7-1038-4c67-bb06-605917481772"}
+{"time":"2026-07-01T20:14:53.39175+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"b1d04462-b7e1-4c06-8b28-064efa1e0d4f"}
+{"time":"2026-07-01T20:15:23.388948+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"7d517c28-f4a4-41dd-81ec-562c687c8f77"}
+{"time":"2026-07-01T20:15:53.390052+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"2531640d-b417-4358-90a2-27eccf9d1ea4"}
+{"time":"2026-07-01T20:16:23.389115+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"31e5f540-179d-44eb-9558-09c302826e73"}
+{"time":"2026-07-01T20:16:42.988659+08:00","level":"INFO","msg":"收到退出信号","signal":2}
+{"time":"2026-07-01T20:16:42.98925+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-07-01T20:17:32.858955+08:00","level":"INFO","msg":"applying migration","version":"001_init"}
+{"time":"2026-07-01T20:17:32.8596+08:00","level":"INFO","msg":"applying migration","version":"002_sources"}
+{"time":"2026-07-01T20:17:32.860179+08:00","level":"INFO","msg":"applying migration","version":"003_units"}
+{"time":"2026-07-01T20:17:32.860769+08:00","level":"INFO","msg":"applying migration","version":"004_answers"}
+{"time":"2026-07-01T20:17:32.860896+08:00","level":"INFO","msg":"applying migration","version":"005_traces"}
+{"time":"2026-07-01T20:17:32.861549+08:00","level":"INFO","msg":"applying migration","version":"006_study"}
+{"time":"2026-07-01T20:17:32.861873+08:00","level":"INFO","msg":"applying migration","version":"007_source_timestamps"}
+{"time":"2026-07-01T20:17:32.862362+08:00","level":"INFO","msg":"applying migration","version":"008_sessions"}
+{"time":"2026-07-01T20:17:32.864103+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-07-01T20:17:33.072855+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-07-01T20:17:33.450339+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-07-01T20:17:33.500303+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-07-01T20:17:34.678782+08:00","level":"INFO","msg":"http request","method":"HEAD","path":"/","status":200,"duration_ms":0,"request_id":"1a8676b5-312a-4af0-8ae5-ba1c46d746d1"}
+{"time":"2026-07-01T20:17:34.690122+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"109fe34a-7d98-463c-a627-e498d0d5ab92"}
+{"time":"2026-07-01T20:17:34.748144+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"fb564e6f-2629-41c9-940f-051930662eff"}
+{"time":"2026-07-01T20:17:34.756554+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"f2873f00-062e-4462-bab6-1c960b103a8c"}
+{"time":"2026-07-01T20:17:34.757347+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"35ad9c74-8ab6-45ef-8965-c40bef932a48"}
+{"time":"2026-07-01T20:17:34.849237+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"fb6bfab7-f1e4-4b23-986b-9497d79aefc2"}
+{"time":"2026-07-01T20:17:34.852183+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"04c46e5a-68ac-4d31-8bce-8e29b76bcd2a"}
+{"time":"2026-07-01T20:17:34.855136+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"ec3764fb-0704-4514-bd4c-8d401c6cf4ee"}
+{"time":"2026-07-01T20:17:34.855253+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c7608073-7389-4d8f-a326-8a07a6d59ad9"}
+{"time":"2026-07-01T20:18:04.858194+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e484ad1e-f3bd-4c47-ac7c-ba6075e717da"}
+{"time":"2026-07-01T20:18:09.150428+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"66f758aa-9a02-4468-9fae-569ef2edb6de"}
+{"time":"2026-07-01T20:18:33.502511+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"09bc5f34-2fd8-4f38-9a89-c1a1a970c838","elapsed_ms":1}
+{"time":"2026-07-01T20:18:34.858661+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"21338551-b940-4fe3-8a51-7bded36a03e6"}
+{"time":"2026-07-01T20:19:04.859787+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c5e9348c-8e1a-4146-9c87-68457232bbb2"}
+{"time":"2026-07-01T20:19:09.151191+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"47ab97b0-f26b-46ac-8fe3-044d32ea5fa3"}
+{"time":"2026-07-01T20:19:34.856905+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e80e2fbb-42ec-49fd-9f4f-f7da34a93020"}
+{"time":"2026-07-01T20:19:36.794375+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":0,"request_id":"fc9398c7-4566-4faa-bc8f-27c3b06b67d1"}
+{"time":"2026-07-01T20:19:36.802175+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":409,"duration_ms":0,"request_id":"2f93e7fd-4189-4ab1-81c5-d8bbb50bbbeb"}
+{"time":"2026-07-01T20:19:39.824587+08:00","level":"INFO","msg":"semantic outline triggered","source_id":"62f4c09e-9053-4def-961a-1033cec9855e","reasons":["D: flat structure"]}
+{"time":"2026-07-01T20:19:51.546059+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"d1f59df0-b1d7-44ad-9b36-3fc55e764195"}
+{"time":"2026-07-01T20:19:57.93365+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":409,"duration_ms":0,"request_id":"480eb3d9-13e6-4aac-8a2d-68c31a086673"}
+{"time":"2026-07-01T20:19:57.938882+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ffb8ce8a-31e6-4225-b769-a1c8e702abda"}
+{"time":"2026-07-01T20:20:04.860416+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"522a701e-948c-49da-ba04-c2189cb996be"}
+{"time":"2026-07-01T20:20:09.149486+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"08cb7c1f-7261-4c4b-9fc1-613a3b7c678b"}
+{"time":"2026-07-01T20:20:09.408503+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-07-01T20:20:09.408754+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-07-01T20:20:55.825496+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-07-01T20:20:56.03888+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-07-01T20:20:56.412669+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-07-01T20:20:56.413724+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-07-01T20:20:58.083117+08:00","level":"INFO","msg":"http request","method":"HEAD","path":"/","status":200,"duration_ms":0,"request_id":"6099877d-2126-4db9-b89a-1ae76f34b801"}
+{"time":"2026-07-01T20:20:58.095036+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"f0d404ca-94cc-4a18-8dee-5e5e5397135d"}
+{"time":"2026-07-01T20:20:58.1499+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"51ea9fca-955b-409a-83fd-b579e6d6adfe"}
+{"time":"2026-07-01T20:20:58.158531+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"5398624d-1bc2-460f-b082-f25e6e2d7539"}
+{"time":"2026-07-01T20:20:58.159012+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"416565b1-9d4d-4198-a6cb-051c1012ab2a"}
+{"time":"2026-07-01T20:20:58.170199+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"598f9a8b-1ffd-479c-bd14-3aa8a51cbfc3"}
+{"time":"2026-07-01T20:20:58.183808+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"faf3fc63-116d-4dda-8f5d-ef96fd9d3ed0"}
+{"time":"2026-07-01T20:20:58.186836+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"3c38c011-a31c-47a0-8486-16b750f71960"}
+{"time":"2026-07-01T20:20:58.187415+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"7607e25d-459a-413f-a24b-0adcc06b1f95"}
+{"time":"2026-07-01T20:21:09.149257+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"041a4993-efc6-4cd7-b8f2-4dd15c266b73"}
+{"time":"2026-07-01T20:21:09.163244+08:00","level":"INFO","msg":"http request","method":"DELETE","path":"/sources/62f4c09e-9053-4def-961a-1033cec9855e","status":400,"duration_ms":0,"request_id":"2a7f7cd5-12b5-48cf-8f9e-694dceefc459"}
+{"time":"2026-07-01T20:21:28.244933+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"47664153-1f4d-476b-8d7f-0330187fb3bc"}
+{"time":"2026-07-01T20:21:56.085444+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-07-01T20:21:56.085627+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-07-01T20:23:55.184774+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-07-01T20:23:55.384017+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-07-01T20:23:55.728125+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-07-01T20:23:55.728802+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-07-01T20:23:56.130625+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"0e75ee46-be36-477e-9ed6-2d9becb0696d"}
+{"time":"2026-07-01T20:23:56.190598+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"99494727-85e9-4aa9-bb62-dc81e562058d"}
+{"time":"2026-07-01T20:23:56.198836+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"9a11659e-2874-4923-b770-56768672165b"}
+{"time":"2026-07-01T20:23:56.199158+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"616b46bc-5900-4ef0-8e01-a610a187310b"}
+{"time":"2026-07-01T20:23:58.054442+08:00","level":"INFO","msg":"http request","method":"HEAD","path":"/","status":200,"duration_ms":0,"request_id":"ad8c099e-0fb3-46af-9fc5-1edd2b6233fe"}
+{"time":"2026-07-01T20:23:58.064506+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"239da636-cbaf-4d3a-865f-ec6553fab2b2"}
+{"time":"2026-07-01T20:23:58.071189+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"7d8819b0-167f-44eb-9b42-85d1a54f526a"}
+{"time":"2026-07-01T20:23:58.081839+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c4a223a4-a318-401b-99f2-4a53ea1f0449"}
+{"time":"2026-07-01T20:23:58.083425+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":1,"request_id":"4f080145-2c15-4eb4-9d7b-dcc19fd953cc"}
+{"time":"2026-07-01T20:24:04.708516+08:00","level":"INFO","msg":"source deleted","source_id":"62f4c09e-9053-4def-961a-1033cec9855e","title":"dup_test"}
+{"time":"2026-07-01T20:24:04.708552+08:00","level":"INFO","msg":"http request","method":"DELETE","path":"/sources/62f4c09e-9053-4def-961a-1033cec9855e","status":204,"duration_ms":15,"request_id":"171ac854-8536-4a77-a8ca-0bc61f22bdb0"}
+{"time":"2026-07-01T20:24:09.204504+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"305c17cb-6123-4f4e-b862-bcc9fcd0f0f8"}
+{"time":"2026-07-01T20:24:28.079854+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f6a69d80-5b83-44b5-9188-b76678d7650d"}
+{"time":"2026-07-01T20:24:55.731336+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"fc4e85fa-ec64-45fb-9c15-753cedf6a025","elapsed_ms":0}
+{"time":"2026-07-01T20:24:58.080438+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"98158a2e-b602-4b2d-9362-f7b42ad7d024"}
+{"time":"2026-07-01T20:24:59.99794+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-07-01T20:24:59.998112+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-07-01T20:26:19.862702+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-07-01T20:26:20.058791+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-07-01T20:26:20.408119+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-07-01T20:26:20.408763+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-07-01T20:26:33.792493+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"87ef27a7-69a9-47c5-a063-38caa79645d3"}
+{"time":"2026-07-01T20:26:35.593527+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"3093c8f5-023c-4849-83ba-21ecc485e2a9"}
+{"time":"2026-07-01T20:26:35.612791+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"d08fb3ed-a3ec-4dde-9130-ed1e8a735647"}
+{"time":"2026-07-01T20:26:35.623339+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"b8e59110-6303-46bc-914e-c289d0bb2ed8"}
+{"time":"2026-07-01T20:26:35.624017+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9043d3b4-b32e-4da0-8173-a8434cfc1f51"}
+{"time":"2026-07-01T20:26:35.63003+08:00","level":"INFO","msg":"http request","method":"GET","path":"/favicon.ico","status":200,"duration_ms":0,"request_id":"2de1a1a4-4fe2-4762-a4a1-61c1aff785e6"}
+{"time":"2026-07-01T20:26:38.006029+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9aa484d4-ba91-42ae-9332-47167668caf5"}
+{"time":"2026-07-01T20:26:45.482422+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":2,"request_id":"6b07add8-0076-4b7c-9443-3567b888c329"}
+{"time":"2026-07-01T20:26:45.485281+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/501c9039-3067-45b0-b0e5-7c11358ae912","status":200,"duration_ms":0,"request_id":"301cf383-eccc-4b8f-a612-fa9e13cbafd0"}
+{"time":"2026-07-01T20:26:45.485445+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8031bb9f-8f39-4e46-8409-42a45a7bc260"}
+{"time":"2026-07-01T20:26:45.570011+08:00","level":"INFO","msg":"semantic outline triggered","source_id":"501c9039-3067-45b0-b0e5-7c11358ae912","reasons":["E: leaf node too long"]}
+{"time":"2026-07-01T20:26:48.493598+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/501c9039-3067-45b0-b0e5-7c11358ae912","status":200,"duration_ms":0,"request_id":"868ed713-6afb-4581-9437-a3faa88e2df7"}
+{"time":"2026-07-01T20:26:51.499239+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/501c9039-3067-45b0-b0e5-7c11358ae912","status":200,"duration_ms":0,"request_id":"08fdb8ff-1c60-4a1d-814c-f53502b7e03a"}
+{"time":"2026-07-01T20:26:54.506051+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/501c9039-3067-45b0-b0e5-7c11358ae912","status":200,"duration_ms":0,"request_id":"bbd21179-bb1f-4aa5-8809-591585e72933"}
+{"time":"2026-07-01T20:26:57.511625+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/501c9039-3067-45b0-b0e5-7c11358ae912","status":200,"duration_ms":0,"request_id":"c9d5eeb1-33c0-48af-8e6e-0ecde28cdccd"}
+{"time":"2026-07-01T20:26:57.843599+08:00","level":"INFO","msg":"outline summary generation","total_nodes":8,"batches":1}
+{"time":"2026-07-01T20:27:00.515745+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/501c9039-3067-45b0-b0e5-7c11358ae912","status":200,"duration_ms":0,"request_id":"e42c7675-f1c7-4750-bcde-2294f89b3190"}
+{"time":"2026-07-01T20:27:03.520481+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/501c9039-3067-45b0-b0e5-7c11358ae912","status":200,"duration_ms":0,"request_id":"49b033ff-2598-415c-a97d-844e622ea16d"}
+{"time":"2026-07-01T20:27:03.723263+08:00","level":"INFO","msg":"outline summary completed","generated":8,"total":8}
+{"time":"2026-07-01T20:27:05.626708+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"53620c2e-136c-43ab-b55a-d67482026931"}
+{"time":"2026-07-01T20:27:06.525875+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/501c9039-3067-45b0-b0e5-7c11358ae912","status":200,"duration_ms":0,"request_id":"51f835cb-9038-4ad2-a09d-08279c97105f"}
+{"time":"2026-07-01T20:27:06.529422+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"55dffcb1-d599-4ca7-8a2c-504cbd562d45"}
+{"time":"2026-07-01T20:27:20.411304+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"36ce5e8d-d57b-4f05-ab61-aaabfa968d74","elapsed_ms":0}
+{"time":"2026-07-01T20:27:26.848265+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":0,"request_id":"b5643eb9-a1a2-44ce-9f7b-12732f9a3300"}
+{"time":"2026-07-01T20:27:26.850527+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/1763efad-2a18-4c76-bdab-ce6a8f171e9c","status":200,"duration_ms":0,"request_id":"1a3fe4c8-e5bd-449d-ab5c-2012c53c9965"}
+{"time":"2026-07-01T20:27:26.850672+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9a89b1a7-60e9-44bf-8843-fb5a7560613d"}
+{"time":"2026-07-01T20:27:26.90779+08:00","level":"INFO","msg":"outline summary generation","total_nodes":8,"batches":1}
+{"time":"2026-07-01T20:27:29.854136+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/1763efad-2a18-4c76-bdab-ce6a8f171e9c","status":200,"duration_ms":0,"request_id":"2baccb4f-2258-4332-9205-e150b9c1cb38"}
+{"time":"2026-07-01T20:27:32.209291+08:00","level":"INFO","msg":"outline summary completed","generated":7,"total":8}
+{"time":"2026-07-01T20:27:32.861282+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/1763efad-2a18-4c76-bdab-ce6a8f171e9c","status":200,"duration_ms":0,"request_id":"e1af8ecb-a858-48f2-9bc2-36e8a090cb51"}
+{"time":"2026-07-01T20:27:35.627325+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"3ce63f14-de18-44eb-8705-11e8898c34ba"}
+{"time":"2026-07-01T20:27:35.866754+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/1763efad-2a18-4c76-bdab-ce6a8f171e9c","status":200,"duration_ms":0,"request_id":"0bd3a4ea-c763-47db-9f4f-52220f0f52a4"}
+{"time":"2026-07-01T20:27:35.870234+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"24ccd670-209f-4364-803e-abc165d999da"}
+{"time":"2026-07-01T20:28:01.514428+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":1,"request_id":"6501e3b8-5488-48e3-a3b7-6bec17f08b36"}
+{"time":"2026-07-01T20:28:01.517373+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/77786726-b26a-43c3-885f-0c47101cc6d3","status":200,"duration_ms":0,"request_id":"a9238e21-bef3-40f5-9e83-ddb4a97bc4b6"}
+{"time":"2026-07-01T20:28:01.517537+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"07379e5b-5d82-45a8-ab9e-704576e8c0b6"}
+{"time":"2026-07-01T20:28:04.521081+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/77786726-b26a-43c3-885f-0c47101cc6d3","status":200,"duration_ms":0,"request_id":"f8db850c-77c1-4d8f-b443-40229af0d0ce"}
+{"time":"2026-07-01T20:28:05.626751+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"080df1c6-3c1e-4f5b-8862-ebdc383feeb2"}
+{"time":"2026-07-01T20:28:07.526927+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/77786726-b26a-43c3-885f-0c47101cc6d3","status":200,"duration_ms":0,"request_id":"1f2e821d-a3c3-4cba-83e9-4138d076ea00"}
+{"time":"2026-07-01T20:28:08.929446+08:00","level":"INFO","msg":"semantic outline triggered","source_id":"77786726-b26a-43c3-885f-0c47101cc6d3","reasons":["D: flat structure"]}
+{"time":"2026-07-01T20:28:10.5314+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/77786726-b26a-43c3-885f-0c47101cc6d3","status":200,"duration_ms":0,"request_id":"bb1a9726-9f39-4bef-b37e-870ce753942f"}
+{"time":"2026-07-01T20:28:13.536482+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/77786726-b26a-43c3-885f-0c47101cc6d3","status":200,"duration_ms":0,"request_id":"009eeba7-05cc-4934-93ea-cfab1e05f9f6"}
+{"time":"2026-07-01T20:28:16.542621+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/77786726-b26a-43c3-885f-0c47101cc6d3","status":200,"duration_ms":0,"request_id":"808309df-1ef4-4f53-bb80-ec74aa047ca6"}
+{"time":"2026-07-01T20:28:16.546313+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"880219a9-cd0f-4530-babd-5827b36ff643"}
+{"time":"2026-07-01T20:28:31.188529+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":7,"request_id":"5abe4e2f-1944-48a8-96f3-c3b4ad48829f"}
+{"time":"2026-07-01T20:28:31.191353+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/199edbd6-128e-47c8-82d9-5dcc44805e3c","status":200,"duration_ms":0,"request_id":"f0a7109f-ba05-4f8e-8cfb-5a93d4a60efc"}
+{"time":"2026-07-01T20:28:31.191501+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f0a8f927-9a82-4757-b70d-917657624ab7"}
+{"time":"2026-07-01T20:28:34.195083+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/199edbd6-128e-47c8-82d9-5dcc44805e3c","status":200,"duration_ms":0,"request_id":"d59cc09a-ce45-49dd-a422-59311695b657"}
+{"time":"2026-07-01T20:28:35.628283+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a289bac2-778f-46cb-a562-48a29f745f79"}
+{"time":"2026-07-01T20:28:37.199894+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/199edbd6-128e-47c8-82d9-5dcc44805e3c","status":200,"duration_ms":0,"request_id":"d6af3294-91c2-4076-90e4-67dd7bd77b3e"}
+{"time":"2026-07-01T20:28:40.205637+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/199edbd6-128e-47c8-82d9-5dcc44805e3c","status":200,"duration_ms":0,"request_id":"b196788b-cf7a-46c1-aca4-550db8255d86"}
+{"time":"2026-07-01T20:28:40.51745+08:00","level":"INFO","msg":"semantic outline triggered","source_id":"199edbd6-128e-47c8-82d9-5dcc44805e3c","reasons":["E: leaf node too long"]}
+{"time":"2026-07-01T20:28:43.212495+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/199edbd6-128e-47c8-82d9-5dcc44805e3c","status":200,"duration_ms":0,"request_id":"37cee214-a118-484e-9de2-3fabffc6f680"}
+{"time":"2026-07-01T20:28:46.2178+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/199edbd6-128e-47c8-82d9-5dcc44805e3c","status":200,"duration_ms":0,"request_id":"7a5da481-9732-4489-9b75-79d1007b2684"}
+{"time":"2026-07-01T20:28:48.307797+08:00","level":"INFO","msg":"outline summary generation","total_nodes":8,"batches":3}
+{"time":"2026-07-01T20:28:49.223899+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/199edbd6-128e-47c8-82d9-5dcc44805e3c","status":200,"duration_ms":0,"request_id":"69721a9b-de5a-42c4-bc7a-9831fa70937a"}
+{"time":"2026-07-01T20:28:52.228706+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/199edbd6-128e-47c8-82d9-5dcc44805e3c","status":200,"duration_ms":0,"request_id":"9b486db2-5158-40c9-a28a-4260313b8439"}
+{"time":"2026-07-01T20:28:55.233581+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/199edbd6-128e-47c8-82d9-5dcc44805e3c","status":200,"duration_ms":0,"request_id":"5b269de4-f17c-4d09-bbf3-a2fd7559804c"}
+{"time":"2026-07-01T20:28:55.283588+08:00","level":"INFO","msg":"outline summary completed","generated":8,"total":8}
+{"time":"2026-07-01T20:28:58.238415+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/199edbd6-128e-47c8-82d9-5dcc44805e3c","status":200,"duration_ms":0,"request_id":"8753f6db-e7a0-495c-afbd-109218bc111e"}
+{"time":"2026-07-01T20:28:58.242065+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"49bf142a-c681-4914-95e0-bd89dbd28042"}
+{"time":"2026-07-01T20:29:05.628289+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"66ba4cc6-c541-4aab-a3eb-09bf7bce2964"}
+{"time":"2026-07-01T20:29:19.466109+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":2,"request_id":"61ce6607-9f8c-4ff6-8c04-db6213bbbc96"}
+{"time":"2026-07-01T20:29:19.468618+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e6f7c06a-10d3-48bf-afd2-576164c638e8","status":200,"duration_ms":0,"request_id":"818b31ac-58cb-4a3c-93a9-94d7322b3425"}
+{"time":"2026-07-01T20:29:19.46882+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"27c539bc-c5d3-49c7-9284-96ce78483a2c"}
+{"time":"2026-07-01T20:29:19.531141+08:00","level":"INFO","msg":"outline summary generation","total_nodes":7,"batches":1}
+{"time":"2026-07-01T20:29:22.472492+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e6f7c06a-10d3-48bf-afd2-576164c638e8","status":200,"duration_ms":0,"request_id":"267aa2d9-2a29-4ee6-bf30-664f77bce591"}
+{"time":"2026-07-01T20:29:24.729622+08:00","level":"INFO","msg":"outline summary completed","generated":7,"total":7}
+{"time":"2026-07-01T20:29:25.477834+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e6f7c06a-10d3-48bf-afd2-576164c638e8","status":200,"duration_ms":0,"request_id":"5718c6f6-8798-417c-815d-3639a065b701"}
+{"time":"2026-07-01T20:29:28.490611+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/e6f7c06a-10d3-48bf-afd2-576164c638e8","status":200,"duration_ms":0,"request_id":"a8e37d22-8099-40d9-9c7c-b0fa8148f26f"}
+{"time":"2026-07-01T20:29:28.493513+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f99d8183-b08e-418e-8261-08dc8687888a"}
+{"time":"2026-07-01T20:29:31.244611+08:00","level":"INFO","msg":"llm: schema validation failed, attempting field repair","promptFile":"unit_extract.md","error":"llm: schema validation failed: jsonschema validation failed with 'file:///Users/jxu/Code/wiki-brain/schema.json#'\n- at '/points/0/type': value must be one of 'definition', 'rule', 'method', 'case', 'question'"}
+{"time":"2026-07-01T20:29:35.628286+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"72fcc7f4-810b-4e4f-9a31-14cf312f49d5"}
+{"time":"2026-07-01T20:29:35.99142+08:00","level":"INFO","msg":"llm: field repair succeeded","promptFile":"unit_extract.md"}
+{"time":"2026-07-01T20:29:48.101445+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":21,"request_id":"6ba48e0b-08ba-4573-b7e0-7de45fc8c87f"}
+{"time":"2026-07-01T20:29:48.107052+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"f638790e-c68b-42aa-a237-c8fb89cc9115"}
+{"time":"2026-07-01T20:29:48.107247+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9ac34898-3253-4031-bb01-ce89ac0288cb"}
+{"time":"2026-07-01T20:29:51.113477+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"dedf3f9c-1de3-4d57-ae54-ac1843ed2bfa"}
+{"time":"2026-07-01T20:29:54.11809+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"c68147ea-86e1-4a2a-9025-d33f3cb30c2a"}
+{"time":"2026-07-01T20:29:57.12377+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"980b50b7-1459-409f-b364-38df373647e9"}
+{"time":"2026-07-01T20:30:00.129819+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"1f2caea5-02a4-4e4c-bf83-523c4ee3b9dc"}
+{"time":"2026-07-01T20:30:03.135319+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"9744410a-257f-4c45-a6c7-2aad4d2a663c"}
+{"time":"2026-07-01T20:30:05.628144+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"094a297f-c685-4d0b-868e-3729ec639f15"}
+{"time":"2026-07-01T20:30:06.141203+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"b2a2041d-eb39-42aa-ba91-1524cd9ddc4f"}
+{"time":"2026-07-01T20:30:09.145747+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"6f8311c0-7cb0-421a-90c8-3b917868f572"}
+{"time":"2026-07-01T20:30:12.150058+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"8b25c9e4-fa10-4155-9fc8-8c7bb5bd412e"}
+{"time":"2026-07-01T20:30:15.154858+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"d6b91297-b51c-4b59-aae0-85c883e01ac4"}
+{"time":"2026-07-01T20:30:18.160937+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"709849eb-0534-401c-851d-d7b7a21ef637"}
+{"time":"2026-07-01T20:30:19.298329+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":0,"request_id":"ec8fa7c2-73ce-43a8-8ae2-d1b5a024654c"}
+{"time":"2026-07-01T20:30:19.300239+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/854d4476-cfed-4529-a125-7c5ebacd06fb","status":200,"duration_ms":0,"request_id":"54e721dd-8bf8-47a3-a144-741a8805d506"}
+{"time":"2026-07-01T20:30:19.300485+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e977eb33-4c04-48b4-a358-2d9973f1bd61"}
+{"time":"2026-07-01T20:30:21.166077+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"a6f2f04c-ba9f-4450-b804-e864b8123a15"}
+{"time":"2026-07-01T20:30:22.304678+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/854d4476-cfed-4529-a125-7c5ebacd06fb","status":200,"duration_ms":0,"request_id":"8e24c27a-2cf1-4fac-9d32-4aebd09330b8"}
+{"time":"2026-07-01T20:30:24.173211+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"26982b78-3b52-4877-bd44-7f74f1ec8d5a"}
+{"time":"2026-07-01T20:30:25.310106+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/854d4476-cfed-4529-a125-7c5ebacd06fb","status":200,"duration_ms":0,"request_id":"17011b56-8c84-49f9-beb1-5f64fd5e1ba6"}
+{"time":"2026-07-01T20:30:27.177357+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"524885d1-13a2-4113-bfb5-2a169915db55"}
+{"time":"2026-07-01T20:30:28.314655+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/854d4476-cfed-4529-a125-7c5ebacd06fb","status":200,"duration_ms":0,"request_id":"1c86b5cd-069a-4db6-9beb-5c0fcffc4c54"}
+{"time":"2026-07-01T20:30:30.181778+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"37d76df8-379b-47ce-87c7-4ddecaa782ea"}
+{"time":"2026-07-01T20:30:31.320522+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/854d4476-cfed-4529-a125-7c5ebacd06fb","status":200,"duration_ms":0,"request_id":"caecda51-05b1-482e-a277-6b9b60d72f84"}
+{"time":"2026-07-01T20:30:32.651252+08:00","level":"INFO","msg":"outline summary generation","total_nodes":4,"batches":1}
+{"time":"2026-07-01T20:30:33.188403+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"5be214c3-9324-4bd2-8b36-0f12e8ad620e"}
+{"time":"2026-07-01T20:30:34.326901+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/854d4476-cfed-4529-a125-7c5ebacd06fb","status":200,"duration_ms":0,"request_id":"02f1fac0-1c83-487b-a4d9-1df88835b59b"}
+{"time":"2026-07-01T20:30:34.676294+08:00","level":"INFO","msg":"outline summary completed","generated":4,"total":4}
+{"time":"2026-07-01T20:30:35.62874+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"592dcfcc-2698-45d1-8432-bd98d62e517a"}
+{"time":"2026-07-01T20:30:36.193609+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/4fe3541b-b91e-4c8f-b32c-01af64fe0b35","status":200,"duration_ms":0,"request_id":"fb43a2ea-dcdd-4d51-9b98-782908ff16ea"}
+{"time":"2026-07-01T20:30:36.196847+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"97f7ce49-ed62-48e5-bc9c-331771ea5f97"}
+{"time":"2026-07-01T20:30:37.331756+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/854d4476-cfed-4529-a125-7c5ebacd06fb","status":200,"duration_ms":0,"request_id":"c18e0e13-1431-4f79-a239-e487254bad8b"}
+{"time":"2026-07-01T20:30:38.682477+08:00","level":"INFO","msg":"outline summary generation","total_nodes":10,"batches":1}
+{"time":"2026-07-01T20:30:40.336247+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/854d4476-cfed-4529-a125-7c5ebacd06fb","status":200,"duration_ms":0,"request_id":"7f43a44f-7cb7-4a11-829d-56da3abc4eec"}
+{"time":"2026-07-01T20:30:43.342507+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/854d4476-cfed-4529-a125-7c5ebacd06fb","status":200,"duration_ms":0,"request_id":"7b281a8b-047f-4565-8804-f9e6086bd12c"}
+{"time":"2026-07-01T20:30:45.716589+08:00","level":"INFO","msg":"outline summary completed","generated":10,"total":10}
+{"time":"2026-07-01T20:30:46.346832+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/854d4476-cfed-4529-a125-7c5ebacd06fb","status":200,"duration_ms":0,"request_id":"88b3465f-0df6-4257-88e4-1c5083fcf346"}
+{"time":"2026-07-01T20:30:49.352396+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/854d4476-cfed-4529-a125-7c5ebacd06fb","status":200,"duration_ms":0,"request_id":"9e442183-dd37-4df9-91b7-9abe0f89f56c"}
+{"time":"2026-07-01T20:30:49.356406+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"78bd416a-ca87-418f-8beb-7e758e043cc5"}
+{"time":"2026-07-01T20:31:05.629313+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9e4847cd-0eac-47ff-bb86-d2499cabdb69"}
+{"time":"2026-07-01T20:31:07.951893+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":3,"request_id":"d58bc5b7-2874-4e2b-8c7b-b01444b68667"}
+{"time":"2026-07-01T20:31:07.95972+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b4d54e13-b474-4d61-931b-df22f8fff98a","status":200,"duration_ms":0,"request_id":"b9bcd276-4296-4f93-98a9-eb59efa22186"}
+{"time":"2026-07-01T20:31:07.960162+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"150a7b8b-0b52-4f47-b724-5dc68d5838aa"}
+{"time":"2026-07-01T20:31:10.964172+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b4d54e13-b474-4d61-931b-df22f8fff98a","status":200,"duration_ms":0,"request_id":"5cef6d1e-7f30-47a2-8999-36c08fcecdd3"}
+{"time":"2026-07-01T20:31:11.041679+08:00","level":"INFO","msg":"semantic outline triggered","source_id":"b4d54e13-b474-4d61-931b-df22f8fff98a","reasons":["D: flat structure"]}
+{"time":"2026-07-01T20:31:13.969382+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b4d54e13-b474-4d61-931b-df22f8fff98a","status":200,"duration_ms":0,"request_id":"93405915-eb6e-430f-8483-1581b5cd5759"}
+{"time":"2026-07-01T20:31:16.974995+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b4d54e13-b474-4d61-931b-df22f8fff98a","status":200,"duration_ms":0,"request_id":"0d522045-22fb-401e-936e-f39005035f42"}
+{"time":"2026-07-01T20:31:19.9808+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/b4d54e13-b474-4d61-931b-df22f8fff98a","status":200,"duration_ms":0,"request_id":"ac03a203-5c74-4ade-9185-a66d7962f003"}
+{"time":"2026-07-01T20:31:19.984514+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f6b9b15d-e1b8-42d2-bf34-288f2365f17a"}
+{"time":"2026-07-01T20:31:35.630559+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f912040a-b4ba-4c6a-b314-950ce76272fd"}
+{"time":"2026-07-01T20:31:49.022992+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":3,"request_id":"5ab2bd62-962c-4edf-af7d-7e283f952452"}
+{"time":"2026-07-01T20:31:49.031756+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d62dc60b-e6f6-4a4c-b10e-6fdf076f7b36","status":200,"duration_ms":0,"request_id":"260dc1bd-7c06-4507-8e55-e0494d0fe061"}
+{"time":"2026-07-01T20:31:49.032269+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"876ccc86-b40b-4684-b0bc-da6d9838ce36"}
+{"time":"2026-07-01T20:31:52.036215+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d62dc60b-e6f6-4a4c-b10e-6fdf076f7b36","status":200,"duration_ms":0,"request_id":"e5e8389a-3974-432a-b371-98d2127359bf"}
+{"time":"2026-07-01T20:31:52.138493+08:00","level":"INFO","msg":"outline summary generation","total_nodes":8,"batches":1}
+{"time":"2026-07-01T20:31:55.042206+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d62dc60b-e6f6-4a4c-b10e-6fdf076f7b36","status":200,"duration_ms":0,"request_id":"71bdaa31-dc59-4ac3-9442-b6a7dccc1525"}
+{"time":"2026-07-01T20:31:56.436123+08:00","level":"INFO","msg":"outline summary completed","generated":8,"total":8}
+{"time":"2026-07-01T20:31:56.984524+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":2,"request_id":"b6de69a9-a668-45c1-8dce-f406380a901a"}
+{"time":"2026-07-01T20:31:56.987376+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/526cbf3c-1481-4ba6-8757-697f65341251","status":200,"duration_ms":0,"request_id":"000a16f8-f73c-47cd-a73d-53bafd664908"}
+{"time":"2026-07-01T20:31:56.987625+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"24f91163-fad2-4009-a216-4badbf30e9bd"}
+{"time":"2026-07-01T20:31:58.047074+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d62dc60b-e6f6-4a4c-b10e-6fdf076f7b36","status":200,"duration_ms":0,"request_id":"ebc62da4-354a-4b57-a87b-be000c285e26"}
+{"time":"2026-07-01T20:31:58.050779+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"507b77c4-2468-4257-93ec-678dcdda4c2a"}
+{"time":"2026-07-01T20:31:59.995606+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/526cbf3c-1481-4ba6-8757-697f65341251","status":200,"duration_ms":0,"request_id":"19159436-02f1-4a29-8e6e-3762439fb27b"}
+{"time":"2026-07-01T20:32:00.139573+08:00","level":"INFO","msg":"outline summary generation","total_nodes":17,"batches":1}
+{"time":"2026-07-01T20:32:02.544624+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":201,"duration_ms":13,"request_id":"c16bd6f8-a023-4421-8dac-e7646e81af64"}
+{"time":"2026-07-01T20:32:02.547656+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"c6282ec1-fd3f-4aae-8c81-acc3b1ed15c8"}
+{"time":"2026-07-01T20:32:02.547932+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9c7776b9-31f5-4409-b834-ecdaac6349a5"}
+{"time":"2026-07-01T20:32:03.000406+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/526cbf3c-1481-4ba6-8757-697f65341251","status":200,"duration_ms":0,"request_id":"31f36091-6cbc-4450-9d44-dd145a4f7465"}
+{"time":"2026-07-01T20:32:05.551957+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"8c426485-659b-4cad-9d79-537704bce693"}
+{"time":"2026-07-01T20:32:05.6297+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"72481d22-8b1e-4a95-8c30-6f9093f1d4ec"}
+{"time":"2026-07-01T20:32:06.005533+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/526cbf3c-1481-4ba6-8757-697f65341251","status":200,"duration_ms":0,"request_id":"1dcc074c-d339-4a84-829f-e52f3a34dd06"}
+{"time":"2026-07-01T20:32:08.5582+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"0730ed49-6a5f-47d0-82de-1234aa3a3cac"}
+{"time":"2026-07-01T20:32:09.011618+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/526cbf3c-1481-4ba6-8757-697f65341251","status":200,"duration_ms":0,"request_id":"39635ab1-3043-4767-bd56-4a86d0de1985"}
+{"time":"2026-07-01T20:32:11.563855+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"3ed9df74-44f7-4647-adf6-09a455b9e564"}
+{"time":"2026-07-01T20:32:12.016859+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/526cbf3c-1481-4ba6-8757-697f65341251","status":200,"duration_ms":0,"request_id":"76ae1abb-2b6a-43b5-af7b-fbf10a41ccfa"}
+{"time":"2026-07-01T20:32:13.418578+08:00","level":"INFO","msg":"outline summary completed","generated":16,"total":17}
+{"time":"2026-07-01T20:32:14.568144+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"178ddded-85d2-45aa-9048-a7604b674b30"}
+{"time":"2026-07-01T20:32:15.021243+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/526cbf3c-1481-4ba6-8757-697f65341251","status":200,"duration_ms":0,"request_id":"2b9a7a01-93f1-4018-b8ee-4258369776db"}
+{"time":"2026-07-01T20:32:15.025111+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"962ee513-54f0-4994-91f4-ff3431ac06c2"}
+{"time":"2026-07-01T20:32:17.573085+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"8ed0a57d-d79b-49c3-b0fe-4bd4c856c6e5"}
+{"time":"2026-07-01T20:32:20.577235+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"49071936-51bb-43b4-82f6-c6a88b386cbd"}
+{"time":"2026-07-01T20:32:21.145546+08:00","level":"INFO","msg":"semantic outline triggered","source_id":"c15b3d69-39b0-4b7d-9e0f-0b044741e663","reasons":["E: leaf node too long"]}
+{"time":"2026-07-01T20:32:23.581288+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"75ca8ce4-849b-474f-a422-607a4dc10a14"}
+{"time":"2026-07-01T20:32:26.586487+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"d4a7fb81-0bd7-4423-b634-24889829f810"}
+{"time":"2026-07-01T20:32:29.592535+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"0ee69d40-9e21-4d71-aac3-2d596d71203b"}
+{"time":"2026-07-01T20:32:32.597231+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"f8e71629-4ca5-4ebd-b540-e9a5da259728"}
+{"time":"2026-07-01T20:32:35.601733+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"8daa2557-b99c-441a-9ed1-bdd0888d5728"}
+{"time":"2026-07-01T20:32:35.630796+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"4b50b6a8-b6cf-4cd0-8970-b5df9d48ee70"}
+{"time":"2026-07-01T20:32:38.607788+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"148eaa5d-93c8-4bd6-b486-dee6df8bde6d"}
+{"time":"2026-07-01T20:32:41.613567+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"f06aa5c7-7210-4530-97e1-e8eb266a8d27"}
+{"time":"2026-07-01T20:32:44.619217+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"7c83fd2f-bf85-4ce7-9eb2-efea8ea59106"}
+{"time":"2026-07-01T20:32:47.625573+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"ae88db2d-489f-4ec3-b805-7698707cc72b"}
+{"time":"2026-07-01T20:32:50.630356+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"52173449-1dc2-4f9d-82dd-9e619a53b075"}
+{"time":"2026-07-01T20:32:53.635301+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"dd5c5d30-7f35-423d-8187-dfa7d8ad260d"}
+{"time":"2026-07-01T20:32:56.641188+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"ff2bd1b1-c1a8-4de6-93b8-e41916292de8"}
+{"time":"2026-07-01T20:32:59.64716+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"a69aa21a-bbbb-4a55-ae0d-e76383791ef9"}
+{"time":"2026-07-01T20:33:02.651694+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"7baeef1b-834e-4ce2-94fc-1e538752ebc2"}
+{"time":"2026-07-01T20:33:05.092979+08:00","level":"INFO","msg":"L3 semantic split","title":"解释权归属说明","parts":23,"range":"246-449"}
+{"time":"2026-07-01T20:33:05.093397+08:00","level":"INFO","msg":"outline summary generation","total_nodes":8,"batches":3}
+{"time":"2026-07-01T20:33:05.631441+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c9ca495f-52f7-41e6-9e5f-4d70a17ef80e"}
+{"time":"2026-07-01T20:33:05.657599+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"9a00c778-2d4c-418f-b731-394ce7fbbca1"}
+{"time":"2026-07-01T20:33:08.663471+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"976d0260-ab2d-4d82-9b58-6f8ebcdface3"}
+{"time":"2026-07-01T20:33:11.668797+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"14696012-a98e-4943-8444-181c096188f0"}
+{"time":"2026-07-01T20:33:12.914477+08:00","level":"INFO","msg":"outline summary completed","generated":8,"total":8}
+{"time":"2026-07-01T20:33:14.675951+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"2626991e-b62d-4bf6-8892-1ff9634021ef"}
+{"time":"2026-07-01T20:33:14.6796+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"24613e7c-310b-4e12-9500-6dc1a630821c"}
+{"time":"2026-07-01T20:33:35.631644+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"bbf3183e-b273-4188-bd0f-75833867d433"}
+{"time":"2026-07-01T20:33:36.252864+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sources","status":409,"duration_ms":1,"request_id":"1aae66b6-ec65-44f0-b7f3-a9ee2de9b433"}
+{"time":"2026-07-01T20:33:36.264682+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a342f689-997f-4204-ac25-371eaa34fb07"}
+{"time":"2026-07-01T20:33:42.441364+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e40e4494-d66f-4aea-be3d-a89cb733642f"}
+{"time":"2026-07-01T20:33:49.425023+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"966bd334-bd4a-46e8-9036-e6e0e6178326"}
+{"time":"2026-07-01T20:33:50.994288+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports/latest","status":200,"duration_ms":3,"request_id":"33b3d514-1502-4dcc-9b0a-5458e1be8831"}
+{"time":"2026-07-01T20:34:05.631558+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"69d812e5-58ae-44fd-9d21-a68f8f62e859"}
+{"time":"2026-07-01T20:34:35.630295+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"b1ba917d-5b7b-4a01-9ade-ac295f36e4ae"}
+{"time":"2026-07-01T20:35:05.63203+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"7771b818-0964-4630-b166-0f941ba8167b"}
+{"time":"2026-07-01T20:35:07.963386+08:00","level":"INFO","msg":"llm: schema validation failed, attempting field repair","promptFile":"unit_extract.md","error":"llm: schema validation failed: jsonschema validation failed with 'file:///Users/jxu/Code/wiki-brain/schema.json#'\n- at '/points/4/type': value must be one of 'definition', 'rule', 'method', 'case', 'question'"}
+{"time":"2026-07-01T20:35:17.027223+08:00","level":"WARN","msg":"llm: repaired JSON still fails schema validation","promptFile":"unit_extract.md","error":"llm: schema validation failed: jsonschema validation failed with 'file:///Users/jxu/Code/wiki-brain/schema.json#'\n- at '/points/4/type': value must be one of 'definition', 'rule', 'method', 'case', 'question'"}
+{"time":"2026-07-01T20:35:33.518283+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"ff18b1e1-2273-439e-beed-cf370ff4f548"}
+{"time":"2026-07-01T20:35:33.524496+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"98383c3a-d61f-4dc5-8261-de829172841e"}
+{"time":"2026-07-01T20:35:34.329821+08:00","level":"INFO","msg":"session parse result","input":"卖给合肥市公安局一套万相公文，合同额 40 万，可以拿到多少奖金","intent":"查询销售奖金","subject":"项目销售激励","audience":"销售人员","current_subject":""}
+{"time":"2026-07-01T20:35:34.329987+08:00","level":"INFO","msg":"session expand result","expanded_question":"卖给合肥市公安局一套万相公文，合同额 40 万，可以拿到多少奖金","subject":"项目销售激励","plan_subject":"项目销售激励"}
+{"time":"2026-07-01T20:35:34.330703+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":764,"request_id":"2a73a31c-7a7f-4fed-abf9-6eee9889a593"}
+{"time":"2026-07-01T20:35:34.789806+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-07-01T20:35:35.632112+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"535d036a-ce23-4747-af31-60abf403a36e"}
+{"time":"2026-07-01T20:35:35.894153+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["526cbf3c-1481-4ba6-8757-697f65341251","b4d54e13-b474-4d61-931b-df22f8fff98a"]}
+{"time":"2026-07-01T20:35:37.191883+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":0}
+{"time":"2026-07-01T20:35:37.195945+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":12}
+{"time":"2026-07-01T20:35:37.196043+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":12}
+{"time":"2026-07-01T20:35:39.606826+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":9}
+{"time":"2026-07-01T20:35:39.607489+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"short","direct":1,"supporting":9,"conflicts":0}
+{"time":"2026-07-01T20:35:51.587688+08:00","level":"ERROR","msg":"answer: stream parse failed","error":"invalid character '\\n' in string literal"}
+{"time":"2026-07-01T20:35:51.588642+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":17253,"request_id":"b4b4a3d0-4355-407a-9c66-c856c057cb0f"}
+{"time":"2026-07-01T20:35:51.597688+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":1,"request_id":"11335605-86da-40d5-af8a-a583f1822da9"}
+{"time":"2026-07-01T20:35:51.597742+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"9d03f7c0-941f-4198-953d-8ac2ee3f0fc3"}
+{"time":"2026-07-01T20:35:51.597988+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"1a57ad4c-19fb-4324-aee9-2f6d234e084a"}
+{"time":"2026-07-01T20:36:01.491604+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces/d07c0e12-4432-430e-bcaf-431c398ec6ff","status":200,"duration_ms":0,"request_id":"17f26df8-a43e-420a-9a5f-371b2f57c8f3"}
+{"time":"2026-07-01T20:36:05.632318+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"cea37f61-5345-454d-a784-bf8aa45b71cb"}
+{"time":"2026-07-01T20:36:05.707488+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/gaps","status":200,"duration_ms":0,"request_id":"1a50b799-5fc5-43cc-a54e-605312190e87"}
+{"time":"2026-07-01T20:36:19.291051+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces/d07c0e12-4432-430e-bcaf-431c398ec6ff","status":200,"duration_ms":0,"request_id":"7f38f700-4214-4862-90fa-96e58ba2f67a"}
+{"time":"2026-07-01T20:36:35.632795+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"82340fb8-c850-4fcf-ae6f-1ab6aea9908b"}
+{"time":"2026-07-01T20:36:46.011618+08:00","level":"INFO","msg":"session parse result","input":"卖给合肥市公安局一套万相公文，合同额 40 万，可以拿到多少奖金","intent":"查询销售奖金","subject":"销售激励","audience":"销售人员","current_subject":"项目销售激励"}
+{"time":"2026-07-01T20:36:46.011793+08:00","level":"INFO","msg":"session expand result","expanded_question":"卖给合肥市公安局一套万相公文，合同额 40 万，可以拿到多少奖金","subject":"销售激励","plan_subject":"销售激励"}
+{"time":"2026-07-01T20:36:46.012219+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":585,"request_id":"136a24e8-57e0-457c-af6c-dd760a151824"}
+{"time":"2026-07-01T20:36:46.462585+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-07-01T20:36:47.505821+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["526cbf3c-1481-4ba6-8757-697f65341251","b4d54e13-b474-4d61-931b-df22f8fff98a"]}
+{"time":"2026-07-01T20:36:48.550948+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":0}
+{"time":"2026-07-01T20:36:48.552713+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":12}
+{"time":"2026-07-01T20:36:48.55281+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":12}
+{"time":"2026-07-01T20:36:51.089612+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":9}
+{"time":"2026-07-01T20:36:51.090173+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"short","direct":1,"supporting":9,"conflicts":0}
+{"time":"2026-07-01T20:37:03.861901+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":17844,"request_id":"e3b16f94-d864-41cb-b3a4-b999d5ec3765"}
+{"time":"2026-07-01T20:37:03.870435+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"e032ca2e-845b-42d1-a844-c8350012cbdf"}
+{"time":"2026-07-01T20:37:03.871619+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"11379f0b-9d0c-4e5c-84f6-e6669d0ade8c"}
+{"time":"2026-07-01T20:37:03.871723+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"e313119c-a9c0-420f-a0f4-2a7a5cfcdbf9"}
+{"time":"2026-07-01T20:37:05.633587+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"7800b7d3-0483-4eb8-b7e8-4500a1d81a5f"}
+{"time":"2026-07-01T20:37:35.634032+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"118a26f3-9137-490d-86c5-ab9ee57380f6"}
+{"time":"2026-07-01T20:38:05.633872+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e573e476-811c-443e-a853-70ec50311382"}
+{"time":"2026-07-01T20:38:35.634562+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"3712fbb7-e00b-4cab-a6be-3f1c69b749d2"}
+{"time":"2026-07-01T20:39:05.63571+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"cfbc4c7a-5ec8-45bf-abfb-befd24069b46"}
+{"time":"2026-07-01T20:39:35.635329+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9f9b7efb-c703-4280-bc69-1a695e7d7516"}
+{"time":"2026-07-01T20:39:47.909262+08:00","level":"INFO","msg":"http request","method":"POST","path":"/traces/aeeb6d0b-78fb-417d-9157-bb70598f1e29/feedback","status":200,"duration_ms":0,"request_id":"bb8e32c9-f804-4a1c-bbf0-18007d2bb30e"}
+{"time":"2026-07-01T20:39:49.092632+08:00","level":"INFO","msg":"http request","method":"POST","path":"/traces/aeeb6d0b-78fb-417d-9157-bb70598f1e29/feedback","status":200,"duration_ms":0,"request_id":"34828b3e-494b-450e-91d4-080341a4379e"}
+{"time":"2026-07-01T20:39:51.074758+08:00","level":"INFO","msg":"http request","method":"POST","path":"/traces/aeeb6d0b-78fb-417d-9157-bb70598f1e29/feedback","status":200,"duration_ms":0,"request_id":"43e07d5c-af20-4e18-a625-766252a8f999"}
+{"time":"2026-07-01T20:39:52.092068+08:00","level":"INFO","msg":"http request","method":"POST","path":"/traces/aeeb6d0b-78fb-417d-9157-bb70598f1e29/feedback","status":200,"duration_ms":0,"request_id":"86a1fd24-c0bf-404f-84bd-a9a132ddc1ef"}
+{"time":"2026-07-01T20:40:05.635735+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"6e64684c-182c-4bb1-ba5f-e7f324f17fbe"}
+{"time":"2026-07-01T20:40:35.636842+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8fbd276d-c34e-46cd-a1d6-e9bd18aab423"}
+{"time":"2026-07-01T20:40:51.776064+08:00","level":"INFO","msg":"session parse result","input":"实施万相公文可以拿到多少提成","intent":"查询实施提成","subject":"项目实施激励","audience":"实施人员","current_subject":"销售激励"}
+{"time":"2026-07-01T20:40:51.776162+08:00","level":"INFO","msg":"session expand result","expanded_question":"实施万相公文可以拿到多少提成","subject":"项目实施激励","plan_subject":"项目实施激励"}
+{"time":"2026-07-01T20:40:51.77659+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":855,"request_id":"32383943-7bf6-41ea-beba-14e9a30b504d"}
+{"time":"2026-07-01T20:40:52.287438+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-07-01T20:40:53.517174+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["526cbf3c-1481-4ba6-8757-697f65341251","b4d54e13-b474-4d61-931b-df22f8fff98a","854d4476-cfed-4529-a125-7c5ebacd06fb"]}
+{"time":"2026-07-01T20:40:54.993069+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":3}
+{"time":"2026-07-01T20:40:54.995399+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":11}
+{"time":"2026-07-01T20:40:54.995492+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":11}
+{"time":"2026-07-01T20:40:57.92023+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c8","nouns":["提成"]}
+{"time":"2026-07-01T20:40:57.920309+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":1}
+{"time":"2026-07-01T20:40:57.920322+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":1,"conflicts":0}
+{"time":"2026-07-01T20:41:00.286376+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":8505,"request_id":"6ecab7c7-0bd3-45b2-b904-48bcf430aac0"}
+{"time":"2026-07-01T20:41:00.293638+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"52a50550-892f-4134-8609-c1679d81ba3f"}
+{"time":"2026-07-01T20:41:00.293715+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"9cf46089-9898-4439-8f0e-12d1ea1caf7b"}
+{"time":"2026-07-01T20:41:00.293699+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"5d4db22a-f168-432b-8206-f827088b4ac9"}
+{"time":"2026-07-01T20:41:05.636954+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"7f896977-9438-45d1-a2cb-af7756d2b67b"}
+{"time":"2026-07-01T20:41:35.637713+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ef746d62-a801-41d2-af55-da32c7e3b199"}
+{"time":"2026-07-01T20:42:05.637112+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"b549d538-0251-4b4b-8e31-8b3ec32adeb1"}
+{"time":"2026-07-01T20:42:35.637866+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"4ddfb2a1-d8c8-45f8-8840-5be483339d35"}
+{"time":"2026-07-01T20:43:05.639193+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8b91cc25-a853-4fa2-bd6c-36f61596d3fa"}
+{"time":"2026-07-01T20:43:16.678937+08:00","level":"INFO","msg":"收到退出信号","signal":2}
+{"time":"2026-07-01T20:43:16.679257+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-07-01T20:44:02.443365+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-07-01T20:44:02.659585+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-07-01T20:44:03.020716+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-07-01T20:44:03.02184+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-07-01T20:44:04.264128+08:00","level":"INFO","msg":"http request","method":"HEAD","path":"/","status":200,"duration_ms":0,"request_id":"04e99866-8c42-4a11-b01b-e369e3f5be84"}
+{"time":"2026-07-01T20:44:04.274965+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"b6412287-57c3-4f48-8492-7957f80dd524"}
+{"time":"2026-07-01T20:44:04.334866+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"7be19ad6-c5c7-4af6-a17a-1bc6abf005ea"}
+{"time":"2026-07-01T20:44:04.343541+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"84bbbfaf-8f91-4a4a-9829-6dc7bb0d3828"}
+{"time":"2026-07-01T20:44:04.344523+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":1,"request_id":"e0ff6686-ae8e-4c69-85d9-a8c75472b94d"}
+{"time":"2026-07-01T20:44:04.404877+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"d8e5e749-0f27-4042-809f-fd380c5ff81e"}
+{"time":"2026-07-01T20:44:04.411376+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"efb76f9e-f089-4db7-970d-016a50cc4208"}
+{"time":"2026-07-01T20:44:04.413839+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"7393f5b9-86ea-44a6-966c-af7640bb2236"}
+{"time":"2026-07-01T20:44:04.413952+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"7f095512-cf03-4261-bb8a-b5400d48db98"}
+{"time":"2026-07-01T20:44:05.64024+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8f7814bb-e093-4a4d-a4a7-cbb8301a4431"}
+{"time":"2026-07-01T20:44:16.374532+08:00","level":"INFO","msg":"session parse result","input":"实施万相公文可以拿到多少提成","intent":"查询实施提成","subject":"项目实施激励","audience":"实施人员","current_subject":"项目实施激励"}
+{"time":"2026-07-01T20:44:16.374686+08:00","level":"INFO","msg":"session expand result","expanded_question":"实施万相公文可以拿到多少提成","subject":"项目实施激励","plan_subject":"项目实施激励"}
+{"time":"2026-07-01T20:44:16.376519+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":794,"request_id":"3ff1e2b5-b24f-4381-88f6-4a2a8fc540ae"}
+{"time":"2026-07-01T20:44:16.887346+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-07-01T20:44:18.733361+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["526cbf3c-1481-4ba6-8757-697f65341251","b4d54e13-b474-4d61-931b-df22f8fff98a","854d4476-cfed-4529-a125-7c5ebacd06fb"]}
+{"time":"2026-07-01T20:44:20.011481+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":3}
+{"time":"2026-07-01T20:44:20.012042+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":11}
+{"time":"2026-07-01T20:44:20.012067+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":11}
+{"time":"2026-07-01T20:44:23.133842+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c8","nouns":["提成"]}
+{"time":"2026-07-01T20:44:23.133962+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":1}
+{"time":"2026-07-01T20:44:23.133984+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":1,"conflicts":0}
+{"time":"2026-07-01T20:44:24.587985+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":8202,"request_id":"ba2b1e77-fe04-4ad8-89d2-150270c6992d"}
+{"time":"2026-07-01T20:44:24.599341+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"36326607-f423-4087-80ae-e36f65a56551"}
+{"time":"2026-07-01T20:44:24.600692+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"cef1da03-cbf5-48b3-a5dd-3a0657818959"}
+{"time":"2026-07-01T20:44:24.601821+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"f72f190e-8bc3-479d-b41f-6fed779986e7"}
+{"time":"2026-07-01T20:44:34.418865+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f1f351a5-ae02-49a2-9839-a0305fd7a33f"}
+{"time":"2026-07-01T20:44:35.63867+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a8599815-f1a8-4c7c-a2fb-69008e0fb424"}
+{"time":"2026-07-01T20:44:54.146954+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-07-01T20:44:54.147151+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-07-01T20:45:40.494372+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-07-01T20:45:40.699884+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-07-01T20:45:41.022264+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-07-01T20:45:41.023397+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-07-01T20:45:43.026351+08:00","level":"INFO","msg":"http request","method":"HEAD","path":"/","status":200,"duration_ms":0,"request_id":"bbf2d754-76b7-425f-91c9-ed3f829d82e2"}
+{"time":"2026-07-01T20:45:43.032801+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"a4dd21f7-bdec-49c0-805f-c4c8d29d51ce"}
+{"time":"2026-07-01T20:45:43.079146+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"6433dc95-56fd-44bd-b1a5-b2ed4ceb0f34"}
+{"time":"2026-07-01T20:45:43.088335+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"71c4eb05-7dca-40f1-8a50-b40c902413ee"}
+{"time":"2026-07-01T20:45:43.088662+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"fdfb722e-1404-4704-8fd0-211b6a0d648e"}
+{"time":"2026-07-01T20:45:46.714924+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/21394565-8cde-47eb-9ef9-88834fe690a4/turns","status":200,"duration_ms":0,"request_id":"1b1cfd33-d604-4e49-94f1-fb0b453359fb"}
+{"time":"2026-07-01T20:45:46.718268+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/f7b2a477-c5a1-4bc1-a5ec-c834ca1f02a6","status":200,"duration_ms":0,"request_id":"5125ea73-58f4-4f38-a26d-ca8f7800a4ea"}
+{"time":"2026-07-01T20:45:46.737448+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"d25c4019-b521-4c15-9c3d-220b54f16626"}
+{"time":"2026-07-01T20:45:46.738463+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/5e70f473-874c-4145-857f-731aaaf0a7ce","status":200,"duration_ms":1,"request_id":"7588e839-6f71-472e-8d38-669743c6f26d"}
+{"time":"2026-07-01T20:45:46.755838+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"0760cf27-345b-48a2-833c-f1c7329b872d"}
+{"time":"2026-07-01T20:45:46.755884+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/dd529540-2b27-4d55-918b-289c84417009","status":200,"duration_ms":0,"request_id":"865593a7-fa62-46ad-98c2-b38df562d1a4"}
+{"time":"2026-07-01T20:45:46.762279+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"14f44da9-bf59-4f68-a54f-ff544f7dd549"}
+{"time":"2026-07-01T20:45:46.76267+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/7be6e685-ee7b-4497-881e-4ae24b3f2a09","status":200,"duration_ms":0,"request_id":"ec4afd0d-aa06-43d3-94da-585c2d219a40"}
+{"time":"2026-07-01T20:45:46.764178+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"a46956cb-5fb2-4ad0-9151-ab59b31b1a65"}
+{"time":"2026-07-01T20:46:05.641591+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e5a52266-8173-4236-8d92-f1f2cdda53f0"}
+{"time":"2026-07-01T20:46:13.090996+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"5fdc5566-948d-4183-8426-9e5f603818c2"}
+{"time":"2026-07-01T20:46:35.64144+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"0ba995b8-bad6-459a-b56f-609c84dcc327"}
+{"time":"2026-07-01T20:46:41.026859+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"f8aa7fbf-aebe-41e5-8fab-dc9bf96521d8","elapsed_ms":1}
+{"time":"2026-07-01T20:46:43.091068+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e19cda1a-1597-4958-a90e-225e9c953e46"}
+{"time":"2026-07-01T20:47:05.641741+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"076769a6-0a87-4d5d-9c35-9b00597cf79b"}
+{"time":"2026-07-01T20:47:13.091081+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e7c61ae8-3498-4c73-b60d-e351ca990ca0"}
+{"time":"2026-07-01T20:47:35.642064+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"3dc1dd90-96df-48a3-af75-be081ca96ade"}
+{"time":"2026-07-01T20:47:43.093971+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"36255a48-6c9e-4cd6-9fec-a4893d3f30b9"}
+{"time":"2026-07-01T20:48:05.642264+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f5e3dc5e-f556-4473-83a5-5f6734cf0967"}
+{"time":"2026-07-01T20:48:13.094616+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"562b1f4c-3b81-4c60-9bd5-418077a633b5"}
+{"time":"2026-07-01T20:48:35.641523+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"425baa2a-b2ed-405d-b7b9-463dd1d2e8fb"}
+{"time":"2026-07-01T20:48:42.676649+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-07-01T20:48:42.676879+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-07-01T20:48:48.04528+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-07-01T20:48:48.265225+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-07-01T20:48:48.638134+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-07-01T20:48:48.638887+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-07-01T20:48:48.93571+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"3d2fab15-0f66-45e0-878f-eda402f9127b"}
+{"time":"2026-07-01T20:48:49.001464+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"0e48eac1-653f-47a6-91df-8db9a4b3ed43"}
+{"time":"2026-07-01T20:48:49.010374+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"24b41419-09c4-4937-b9dc-0da8e3c2077c"}
+{"time":"2026-07-01T20:48:49.010788+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8c36dd4d-f2d3-472b-ae69-b03c1b53c57a"}
+{"time":"2026-07-01T20:48:50.863173+08:00","level":"INFO","msg":"http request","method":"HEAD","path":"/","status":200,"duration_ms":0,"request_id":"8e04317b-fbe3-4c1b-b7b6-1392aba97f6a"}
+{"time":"2026-07-01T20:48:50.874206+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"3a99e0c7-e014-4997-9221-f9b9f7a13c96"}
+{"time":"2026-07-01T20:48:50.882691+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"6172ca9b-eb4f-4758-a5e1-3474682998ba"}
+{"time":"2026-07-01T20:48:50.888305+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"2413fee4-e63a-4f9e-b12f-a3d5107aff75"}
+{"time":"2026-07-01T20:48:50.889245+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":1,"request_id":"dbf1f560-cfd8-493d-9dfc-5660abe10f01"}
+{"time":"2026-07-01T20:49:02.908173+08:00","level":"INFO","msg":"session parse result","input":"用列表说明绩效管理的定义","intent":"查询绩效管理定义","subject":"绩效管理","audience":"","current_subject":"项目实施激励"}
+{"time":"2026-07-01T20:49:02.908352+08:00","level":"INFO","msg":"session expand result","expanded_question":"用列表说明绩效管理的定义","subject":"绩效管理","plan_subject":"绩效管理"}
+{"time":"2026-07-01T20:49:02.910216+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":776,"request_id":"208093c8-455e-4ee2-bf1c-a2909e44295f"}
+{"time":"2026-07-01T20:49:03.358238+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-07-01T20:49:04.124539+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["199edbd6-128e-47c8-82d9-5dcc44805e3c"]}
+{"time":"2026-07-01T20:49:04.12636+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":17}
+{"time":"2026-07-01T20:49:04.129337+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":21}
+{"time":"2026-07-01T20:49:04.129475+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":20}
+{"time":"2026-07-01T20:49:05.642223+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"73754b5f-e948-4c2d-b82d-c8a86fc38160"}
+{"time":"2026-07-01T20:49:07.769056+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c1","nouns":["定义"]}
+{"time":"2026-07-01T20:49:07.769131+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c2","nouns":["定义"]}
+{"time":"2026-07-01T20:49:07.76915+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":6}
+{"time":"2026-07-01T20:49:07.769164+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":6,"conflicts":0}
+{"time":"2026-07-01T20:49:12.4949+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":9575,"request_id":"c838455b-2f94-4d90-b71a-a38505662f5f"}
+{"time":"2026-07-01T20:49:12.505672+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"bc3e2da3-ed16-40c8-868b-e4713f7c4f48"}
+{"time":"2026-07-01T20:49:12.506865+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"402a4d53-ca17-4e5e-ac41-acbd7026695f"}
+{"time":"2026-07-01T20:49:12.506895+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"6c54cd0f-bc7c-4bc2-a341-dc7df1f58e2f"}
+{"time":"2026-07-01T20:49:20.890375+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"df28017b-6203-4ac5-ae25-3c2f8488f5a6"}
+{"time":"2026-07-01T20:49:35.642754+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a8a94c4f-af40-40a5-9a8a-764701a887ae"}
+{"time":"2026-07-01T20:49:48.642356+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"58cc0344-8640-4858-94f2-92d6df7d6a25","elapsed_ms":1}
+{"time":"2026-07-01T20:49:50.891433+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"30b25d99-48d8-481e-95b9-14bb791b792e"}
+{"time":"2026-07-01T20:50:05.643407+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"99da520d-e69b-4cbf-8435-4a670a429eaf"}
+{"time":"2026-07-01T20:50:20.210912+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/gaps","status":200,"duration_ms":0,"request_id":"0e4c69b2-da52-4636-a55b-badc25e53a76"}
+{"time":"2026-07-01T20:50:20.891667+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"335f1c8b-6b64-41a4-99f8-3a7d46502343"}
+{"time":"2026-07-01T20:50:24.228831+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces/031e6141-961b-4fc4-9fd2-2cbe09d15212","status":200,"duration_ms":0,"request_id":"2bb94d56-1b4c-4786-a885-ef1e9aff4b3f"}
+{"time":"2026-07-01T20:50:35.643711+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"898612b1-4c4b-4b2d-99a3-fd8cc35ae733"}
+{"time":"2026-07-01T20:50:50.893165+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"4cfa2a01-9a19-4360-965a-ea6ceff49e43"}
+{"time":"2026-07-01T20:51:05.644787+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9d28c36a-2e45-4504-8a9a-e2f28afe9c9b"}
+{"time":"2026-07-01T20:51:20.894334+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"015b7ff0-aac3-464f-bdbc-7c60a3ffbc64"}
+{"time":"2026-07-01T20:51:35.645295+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"07cf84e0-bae7-48dc-9521-c996fa1610d1"}
+{"time":"2026-07-01T20:51:50.893814+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8a37641b-f022-4c8e-bad8-bf2b8e924b77"}
+{"time":"2026-07-01T20:52:05.645733+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"cc9fde43-a85a-4f00-a979-49a48eca7fcf"}
+{"time":"2026-07-01T20:52:20.891826+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"df70beae-f04a-4722-a750-1918d061b95b"}
+{"time":"2026-07-01T20:52:35.644364+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"583c8388-a52e-4154-9a00-d3623a047768"}
+{"time":"2026-07-01T20:52:50.895052+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c98d0255-41ad-45b1-a6c5-afbd68b8d389"}
+{"time":"2026-07-01T20:53:05.64574+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"48b00527-777d-41ee-aac7-44765615d70a"}
+{"time":"2026-07-01T20:53:14.196723+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/21394565-8cde-47eb-9ef9-88834fe690a4/turns","status":200,"duration_ms":0,"request_id":"51595bd2-564f-4f91-94a4-bea75c9e571b"}
+{"time":"2026-07-01T20:53:14.200357+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/f7b2a477-c5a1-4bc1-a5ec-c834ca1f02a6","status":200,"duration_ms":0,"request_id":"fc3fa0fe-452a-45a6-b565-de06a1270767"}
+{"time":"2026-07-01T20:53:14.204252+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"81fc688e-4408-4378-957f-3f0b768dfe8a"}
+{"time":"2026-07-01T20:53:14.205289+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/5e70f473-874c-4145-857f-731aaaf0a7ce","status":200,"duration_ms":0,"request_id":"5eadf568-3d9b-4655-8bb9-c46e4309a03c"}
+{"time":"2026-07-01T20:53:14.230809+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"78e43df9-2ba0-4b2d-8813-a6897230ca2d"}
+{"time":"2026-07-01T20:53:14.230822+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/dd529540-2b27-4d55-918b-289c84417009","status":200,"duration_ms":0,"request_id":"869439c1-51e4-4e34-b869-f9973a3d38ec"}
+{"time":"2026-07-01T20:53:14.237659+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"47b434d7-36e7-474b-89ca-2d218f6a94ae"}
+{"time":"2026-07-01T20:53:14.237817+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/7be6e685-ee7b-4497-881e-4ae24b3f2a09","status":200,"duration_ms":0,"request_id":"0479bee8-2012-4f8c-a086-283b6c0a7e9c"}
+{"time":"2026-07-01T20:53:14.24146+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"ddc6eb5a-6ced-4bfe-8648-b9891b69da95"}
+{"time":"2026-07-01T20:53:14.242135+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/196dcdbb-7628-40dd-8004-0145de7d3342","status":200,"duration_ms":0,"request_id":"549b0ac8-5789-411d-94a2-b0e64c06a16b"}
+{"time":"2026-07-01T20:53:14.245405+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"effb8141-7d7e-4546-87b0-c15d94660000"}
+{"time":"2026-07-01T20:53:16.729386+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"27e6469c-a35f-4d46-8745-2887d3c1af41"}
+{"time":"2026-07-01T20:53:16.733939+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"a7f18c46-c39d-4ea5-9db5-926eb9502b54"}
+{"time":"2026-07-01T20:53:19.965074+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/21394565-8cde-47eb-9ef9-88834fe690a4/turns","status":200,"duration_ms":0,"request_id":"17d46bdf-7f08-4856-9023-723afaa6f97d"}
+{"time":"2026-07-01T20:53:19.968318+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/f7b2a477-c5a1-4bc1-a5ec-c834ca1f02a6","status":200,"duration_ms":0,"request_id":"53c7d4be-2b65-4520-b6c8-26a7730f72af"}
+{"time":"2026-07-01T20:53:19.972668+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"497880d8-bad3-451a-a6b9-76541445c846"}
+{"time":"2026-07-01T20:53:19.973005+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/5e70f473-874c-4145-857f-731aaaf0a7ce","status":200,"duration_ms":0,"request_id":"d13cbfb8-80ec-4f74-979a-f290f1c9935e"}
+{"time":"2026-07-01T20:53:19.98859+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"9174fe2d-c44a-400b-a4f2-95ee2ee20faf"}
+{"time":"2026-07-01T20:53:19.988637+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/dd529540-2b27-4d55-918b-289c84417009","status":200,"duration_ms":0,"request_id":"011b404d-a8e6-4950-a46b-8b40b9267bff"}
+{"time":"2026-07-01T20:53:20.000311+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/7be6e685-ee7b-4497-881e-4ae24b3f2a09","status":200,"duration_ms":0,"request_id":"23ee6a43-68f6-41fb-a584-a7a443df2bb5"}
+{"time":"2026-07-01T20:53:20.000324+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"7212084b-26d8-4900-b28d-764199c02142"}
+{"time":"2026-07-01T20:53:20.004342+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"f8ce9db2-09db-422c-b877-1bec0fc91d9d"}
+{"time":"2026-07-01T20:53:20.004408+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/196dcdbb-7628-40dd-8004-0145de7d3342","status":200,"duration_ms":0,"request_id":"06214820-84e0-4eb1-a994-db2896f4531c"}
+{"time":"2026-07-01T20:53:20.007062+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"fd5f6925-b1f8-48fa-911b-eff04c91a049"}
+{"time":"2026-07-01T20:53:20.893136+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"89a6ccea-a1bb-4a35-84c9-b35fee4a1937"}
+{"time":"2026-07-01T20:53:27.596735+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"70497650-db51-4247-8bbb-2461c1c74bb7"}
+{"time":"2026-07-01T20:53:27.601694+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"afa1aa0b-3c56-4b49-ba5e-db75edeaeef3"}
+{"time":"2026-07-01T20:53:31.44251+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/cf0a997f-a081-4c01-837c-6cbd99d87041/turns","status":200,"duration_ms":0,"request_id":"549311e5-872f-4f52-9955-ff53863c4403"}
+{"time":"2026-07-01T20:53:33.729954+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/21394565-8cde-47eb-9ef9-88834fe690a4/turns","status":200,"duration_ms":0,"request_id":"ec01c95f-813b-4d22-85b5-9f0c0e8627e1"}
+{"time":"2026-07-01T20:53:33.73388+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/f7b2a477-c5a1-4bc1-a5ec-c834ca1f02a6","status":200,"duration_ms":0,"request_id":"1a3704aa-464c-41e9-a3f1-1ec5162a535e"}
+{"time":"2026-07-01T20:53:33.739172+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"88a7f8f3-aea4-46b4-8793-3508c5f2a3ac"}
+{"time":"2026-07-01T20:53:33.739748+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/5e70f473-874c-4145-857f-731aaaf0a7ce","status":200,"duration_ms":0,"request_id":"eb32c0bc-3576-4dfb-a4fa-a28745f1b186"}
+{"time":"2026-07-01T20:53:33.749892+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"38316e85-04da-4a72-818e-13fc0c553588"}
+{"time":"2026-07-01T20:53:33.749998+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/dd529540-2b27-4d55-918b-289c84417009","status":200,"duration_ms":0,"request_id":"307d353a-8e97-42dc-8420-c7dcebee6b88"}
+{"time":"2026-07-01T20:53:33.75852+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"0a767392-c2f2-4d7e-8ed2-2ee579349c62"}
+{"time":"2026-07-01T20:53:33.758559+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/7be6e685-ee7b-4497-881e-4ae24b3f2a09","status":200,"duration_ms":0,"request_id":"2548b81e-256d-455e-b54b-73ff24f9886b"}
+{"time":"2026-07-01T20:53:33.762985+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"4fd6bec5-c076-4538-b633-bdc05298cee2"}
+{"time":"2026-07-01T20:53:33.763219+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/196dcdbb-7628-40dd-8004-0145de7d3342","status":200,"duration_ms":0,"request_id":"df7d0982-8b30-43ee-9d67-07739413a367"}
+{"time":"2026-07-01T20:53:33.765957+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"007ee463-f4de-4cd5-a33f-e5de96dc33b2"}
+{"time":"2026-07-01T20:53:35.645497+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"2fb0f750-2f21-4dbb-9659-d8bee5e9677e"}
+{"time":"2026-07-01T20:53:41.297382+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/2a5d20d2-fbf9-4ba9-9ccc-d44c9c33bdf6/turns","status":200,"duration_ms":0,"request_id":"494451b3-a9f2-4853-a1b1-060f6b2b92ac"}
+{"time":"2026-07-01T20:53:43.478751+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/cf0a997f-a081-4c01-837c-6cbd99d87041/turns","status":200,"duration_ms":0,"request_id":"6a110ab6-819b-4546-aee4-80a72fe129a0"}
+{"time":"2026-07-01T20:53:50.894627+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"aa9dc4ad-65c6-49c6-bec8-c11e6069b09b"}
+{"time":"2026-07-01T20:54:05.645904+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f1f81d19-2636-49d0-9227-28d5b0305406"}
+{"time":"2026-07-01T20:54:20.89755+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"07f4a4f9-79c8-45d3-8f61-c35d8e169d40"}
+{"time":"2026-07-01T20:54:30.446379+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"29c27973-31b1-4aaa-9500-3568b1b3f709"}
+{"time":"2026-07-01T20:54:30.450261+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"c5b1a1b5-2b67-4aaa-820f-4786fe76d0ee"}
+{"time":"2026-07-01T20:54:32.19656+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"f68bbbac-1d3f-405c-957a-132a7d103da9"}
+{"time":"2026-07-01T20:54:32.205625+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"b667f564-d5fd-44b4-8287-7740375a72e2"}
+{"time":"2026-07-01T20:54:35.050821+08:00","level":"INFO","msg":"http request","method":"DELETE","path":"/sessions/74dd9f10-5518-4186-ad41-f440abff1179","status":204,"duration_ms":0,"request_id":"7ddc7876-560c-4db9-8294-4529bec86da5"}
+{"time":"2026-07-01T20:54:35.051975+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"ca4724d1-a218-4de7-b5f6-65f9ea7628c7"}
+{"time":"2026-07-01T20:54:35.054209+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/4b1e4a63-acf0-400f-8ab2-f166113a1937/turns","status":200,"duration_ms":0,"request_id":"ed52d941-30c0-4350-87b1-8ce4ee4ea27b"}
+{"time":"2026-07-01T20:54:35.646354+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"34f21bc1-2a4a-4e72-84fb-98c59b166366"}
+{"time":"2026-07-01T20:54:38.278179+08:00","level":"INFO","msg":"http request","method":"DELETE","path":"/sessions/4b1e4a63-acf0-400f-8ab2-f166113a1937","status":204,"duration_ms":0,"request_id":"fe85c57e-640e-426e-a8cc-0ae227467455"}
+{"time":"2026-07-01T20:54:38.27985+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"0a799aa0-e831-44c6-9964-cd5a318f9fec"}
+{"time":"2026-07-01T20:54:38.281342+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/2a5d20d2-fbf9-4ba9-9ccc-d44c9c33bdf6/turns","status":200,"duration_ms":0,"request_id":"2a31b66e-919e-4324-bb61-71fc8568da66"}
+{"time":"2026-07-01T20:54:41.444892+08:00","level":"INFO","msg":"http request","method":"DELETE","path":"/sessions/2a5d20d2-fbf9-4ba9-9ccc-d44c9c33bdf6","status":204,"duration_ms":0,"request_id":"406f3ba8-725a-4662-b0fa-51242d7a3499"}
+{"time":"2026-07-01T20:54:41.446624+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"b07cfb9c-a9a4-446e-bf34-1a3856c050f2"}
+{"time":"2026-07-01T20:54:41.448125+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/cf0a997f-a081-4c01-837c-6cbd99d87041/turns","status":200,"duration_ms":0,"request_id":"043a9a56-8d2d-4d9a-8d39-4993b07f73fd"}
+{"time":"2026-07-01T20:54:44.346028+08:00","level":"INFO","msg":"http request","method":"DELETE","path":"/sessions/cf0a997f-a081-4c01-837c-6cbd99d87041","status":204,"duration_ms":0,"request_id":"21496ec9-4028-4684-b7ca-eded55c928e1"}
+{"time":"2026-07-01T20:54:44.348518+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"c6bb8648-2be8-45b1-8167-612087b7512a"}
+{"time":"2026-07-01T20:54:44.350695+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/21394565-8cde-47eb-9ef9-88834fe690a4/turns","status":200,"duration_ms":0,"request_id":"e260bf74-1fd4-49e7-8d89-dc431b31ba61"}
+{"time":"2026-07-01T20:54:44.353693+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/f7b2a477-c5a1-4bc1-a5ec-c834ca1f02a6","status":200,"duration_ms":0,"request_id":"ca24cb9a-5a41-4ba3-9ba1-04865941a78e"}
+{"time":"2026-07-01T20:54:44.357753+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"9a1623e4-a12c-4fdc-a63a-fda29a51d801"}
+{"time":"2026-07-01T20:54:44.358051+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/5e70f473-874c-4145-857f-731aaaf0a7ce","status":200,"duration_ms":0,"request_id":"ef7448cb-876a-4e16-96e3-c61966a5f4dc"}
+{"time":"2026-07-01T20:54:44.369631+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"1480f7d2-fe7a-4ec1-bda8-3eb2e28cca49"}
+{"time":"2026-07-01T20:54:44.369632+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/dd529540-2b27-4d55-918b-289c84417009","status":200,"duration_ms":0,"request_id":"cbe270a9-fdef-41ac-8cb5-736df7953754"}
+{"time":"2026-07-01T20:54:44.376396+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"7bc7ce04-3a39-47db-9dc3-8c93d5e2ccd4"}
+{"time":"2026-07-01T20:54:44.382287+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/7be6e685-ee7b-4497-881e-4ae24b3f2a09","status":200,"duration_ms":0,"request_id":"35b89e6b-101c-40ba-89e5-a6f66b6fa114"}
+{"time":"2026-07-01T20:54:44.385425+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"30af7697-98d5-438f-a04a-8188da2a59af"}
+{"time":"2026-07-01T20:54:44.385779+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/196dcdbb-7628-40dd-8004-0145de7d3342","status":200,"duration_ms":0,"request_id":"334b6c48-b9af-495d-813c-87a4997c2b52"}
+{"time":"2026-07-01T20:54:44.389868+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"7f8c6b58-b6e6-4b8e-8ca4-fce1e6108ee3"}
+{"time":"2026-07-01T20:54:50.89369+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9063b2ff-f9a6-44f3-b1c4-5007a82daec4"}
+{"time":"2026-07-01T20:55:05.646759+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"78cb5b34-72ce-449b-9eeb-4796cb75db01"}
+{"time":"2026-07-01T20:55:09.778434+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/199edbd6-128e-47c8-82d9-5dcc44805e3c","status":200,"duration_ms":0,"request_id":"a92c6709-8930-4408-b3fd-eca7be39c3b0"}
+{"time":"2026-07-01T20:55:20.896228+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a066a002-bb11-4004-a4b2-ceef2b85f4a6"}
+{"time":"2026-07-01T20:55:35.649107+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8731777a-9f74-4889-909e-f701661e7277"}
+{"time":"2026-07-01T20:55:36.98758+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-07-01T20:55:36.988302+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-07-01T20:55:38.690206+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-07-01T20:55:38.885929+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-07-01T20:55:39.233143+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-07-01T20:55:39.233884+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-07-01T20:55:41.572399+08:00","level":"INFO","msg":"http request","method":"HEAD","path":"/","status":200,"duration_ms":0,"request_id":"b382c630-0baa-4b5c-8f8e-8514fa949b4d"}
+{"time":"2026-07-01T20:55:41.578555+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"c0dbdfd1-218f-47c9-a3d5-c44fe0ba0c78"}
+{"time":"2026-07-01T20:55:41.625084+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"ca69e712-70cf-406f-8acf-e060b9c404c2"}
+{"time":"2026-07-01T20:55:41.635049+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"b08786f5-83ad-47bf-bbec-f7a8fe7c9eee"}
+{"time":"2026-07-01T20:55:41.635202+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"4787e4d3-5b29-4b8c-8957-420a7ae3394a"}
+{"time":"2026-07-01T20:55:45.343772+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/21394565-8cde-47eb-9ef9-88834fe690a4/turns","status":200,"duration_ms":0,"request_id":"d107bfd3-ec8d-46d6-9c1d-b49e57a5f662"}
+{"time":"2026-07-01T20:55:45.352339+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/f7b2a477-c5a1-4bc1-a5ec-c834ca1f02a6","status":200,"duration_ms":0,"request_id":"e5d1fab6-f294-4713-899c-4e1c35d0e37d"}
+{"time":"2026-07-01T20:55:45.364962+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"3871be44-b46b-4065-b158-59d15a96e14c"}
+{"time":"2026-07-01T20:55:45.365356+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/5e70f473-874c-4145-857f-731aaaf0a7ce","status":200,"duration_ms":0,"request_id":"2af0c323-8444-4896-bd27-1ee9f9387aac"}
+{"time":"2026-07-01T20:55:45.37798+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"0b94f150-1dcd-4097-884a-55231a394203"}
+{"time":"2026-07-01T20:55:45.377985+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/dd529540-2b27-4d55-918b-289c84417009","status":200,"duration_ms":0,"request_id":"2fd0ab69-db85-4608-8fdc-2f76fd8e2c1b"}
+{"time":"2026-07-01T20:55:45.383145+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"29f5a062-5b26-4c96-adf3-9be0f9340203"}
+{"time":"2026-07-01T20:55:45.383267+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/7be6e685-ee7b-4497-881e-4ae24b3f2a09","status":200,"duration_ms":0,"request_id":"e8ec8c57-9d08-497c-9830-8419ebb493d4"}
+{"time":"2026-07-01T20:55:45.384884+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"18ffd88f-802b-4e75-8980-82a62ee50574"}
+{"time":"2026-07-01T20:55:45.385072+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/196dcdbb-7628-40dd-8004-0145de7d3342","status":200,"duration_ms":0,"request_id":"c615f779-58fa-4eb9-9be1-74be934c4d1c"}
+{"time":"2026-07-01T20:55:45.387468+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"67188ac0-5d3d-48eb-97a5-ae2bf434e1db"}
+{"time":"2026-07-01T20:56:02.598278+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":1,"request_id":"f4b384b5-be60-42d4-a463-361b37021d80"}
+{"time":"2026-07-01T20:56:02.602897+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"dde4e6a3-e45a-4177-8db4-6ef6d21809aa"}
+{"time":"2026-07-01T20:56:05.64897+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"30a4b842-5535-4d3f-abe0-7c421ca230a7"}
+{"time":"2026-07-01T20:56:11.637518+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f7386ef5-f05e-4250-ab56-70341e55296b"}
+{"time":"2026-07-01T20:56:19.330711+08:00","level":"INFO","msg":"session parse result","input":"无合同立项要走什么流程","intent":"查询立项流程","subject":"项目立项","audience":"","current_subject":""}
+{"time":"2026-07-01T20:56:19.330865+08:00","level":"INFO","msg":"session expand result","expanded_question":"无合同立项要走什么流程","subject":"项目立项","plan_subject":"项目立项"}
+{"time":"2026-07-01T20:56:19.331699+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":604,"request_id":"5e5c2fcf-6d4d-4515-adc3-68f731821897"}
+{"time":"2026-07-01T20:56:19.790165+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-07-01T20:56:20.545178+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["d62dc60b-e6f6-4a4c-b10e-6fdf076f7b36"]}
+{"time":"2026-07-01T20:56:20.545809+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":0}
+{"time":"2026-07-01T20:56:20.549293+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":9}
+{"time":"2026-07-01T20:56:20.549328+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":9}
+{"time":"2026-07-01T20:56:22.302319+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c4","nouns":["无合同立项要走","流程"]}
+{"time":"2026-07-01T20:56:22.302452+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c5","nouns":["无合同立项要走","流程"]}
+{"time":"2026-07-01T20:56:22.302493+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c9","nouns":["无合同立项要走","流程"]}
+{"time":"2026-07-01T20:56:22.302524+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":9}
+{"time":"2026-07-01T20:56:22.303345+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"short","direct":2,"supporting":7,"conflicts":0}
+{"time":"2026-07-01T20:56:35.64805+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"3610f9b5-2b28-40b1-8fef-8c5743909db8"}
+{"time":"2026-07-01T20:56:39.23682+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"9f0f4821-8ad7-4939-8def-4c0322eade72","elapsed_ms":1}
+{"time":"2026-07-01T20:56:41.638107+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"1c6d7ffd-3027-47b5-a4d9-d12646949aa7"}
+{"time":"2026-07-01T20:56:41.981002+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":22643,"request_id":"3542c4c3-37d8-47a1-a428-b5f36198edae"}
+{"time":"2026-07-01T20:56:41.991012+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"0ded1657-44f9-4e3d-81f7-f92efa79e217"}
+{"time":"2026-07-01T20:56:41.991852+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"2ca98c47-9f7e-4217-a3c2-09e6d2d1e75c"}
+{"time":"2026-07-01T20:56:41.992117+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"d09478fe-2f3c-4a90-94e1-dadad8a3689d"}
+{"time":"2026-07-01T20:57:05.648287+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"dde312ac-9172-4d01-87e4-18ec46841a3c"}
+{"time":"2026-07-01T20:57:11.639342+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"5b2e615f-378b-4c36-bf6a-72b67d9d8ab2"}
+{"time":"2026-07-01T20:57:20.482074+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/21394565-8cde-47eb-9ef9-88834fe690a4/turns","status":200,"duration_ms":0,"request_id":"56ae26ba-c92b-4b8c-a597-826d4bb668eb"}
+{"time":"2026-07-01T20:57:20.486242+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/f7b2a477-c5a1-4bc1-a5ec-c834ca1f02a6","status":200,"duration_ms":0,"request_id":"e671e76e-d797-497c-ba68-293e16788f65"}
+{"time":"2026-07-01T20:57:20.489276+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"19c1a066-cb32-4aa9-a815-5cd4ec22baa1"}
+{"time":"2026-07-01T20:57:20.490619+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/5e70f473-874c-4145-857f-731aaaf0a7ce","status":200,"duration_ms":0,"request_id":"dc284052-48d8-4d0f-9c02-99449c69470c"}
+{"time":"2026-07-01T20:57:20.507128+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"0defc3e2-cd72-4c81-acfb-daeeb6d27df2"}
+{"time":"2026-07-01T20:57:20.507209+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/dd529540-2b27-4d55-918b-289c84417009","status":200,"duration_ms":0,"request_id":"3742927d-f9ae-46ce-a0d0-5e1b124b0984"}
+{"time":"2026-07-01T20:57:20.513541+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"c41a96b9-f295-4a6a-99c2-00e7fd37eae9"}
+{"time":"2026-07-01T20:57:20.513547+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/7be6e685-ee7b-4497-881e-4ae24b3f2a09","status":200,"duration_ms":0,"request_id":"e9264092-4931-4b62-8db2-dcf548ebe831"}
+{"time":"2026-07-01T20:57:20.516632+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"ac5a07c0-e30c-454c-9058-6da78da679fc"}
+{"time":"2026-07-01T20:57:20.51746+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/196dcdbb-7628-40dd-8004-0145de7d3342","status":200,"duration_ms":0,"request_id":"25cbb24d-0457-4555-b4ec-75e015614841"}
+{"time":"2026-07-01T20:57:20.519803+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"36140db9-1723-49d2-a916-79f1f05bdea6"}
+{"time":"2026-07-01T20:57:35.648538+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"920ddbf0-c706-4499-96f0-49501e855b2d"}
+{"time":"2026-07-01T20:57:41.63848+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"10693375-c691-4dc7-af5f-811f736761da"}
+{"time":"2026-07-01T20:58:00.504053+08:00","level":"INFO","msg":"session parse result","input":"绩效分数有什么作用","intent":"查询绩效分数作用","subject":"绩效管理","audience":"","current_subject":"绩效管理"}
+{"time":"2026-07-01T20:58:00.504212+08:00","level":"INFO","msg":"session expand result","expanded_question":"绩效管理 查询绩效分数作用","subject":"绩效管理","plan_subject":"绩效管理"}
+{"time":"2026-07-01T20:58:00.504885+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/turn","status":200,"duration_ms":467,"request_id":"3fbdbb39-886b-480b-9a34-4b05ff45f5e4"}
+{"time":"2026-07-01T20:58:00.913478+08:00","level":"INFO","msg":"retrieval: step2 domain pre-filter done","candidates":11}
+{"time":"2026-07-01T20:58:02.449654+08:00","level":"INFO","msg":"retrieval: step3 source filter done","sources":["526cbf3c-1481-4ba6-8757-697f65341251","e6f7c06a-10d3-48bf-afd2-576164c638e8","199edbd6-128e-47c8-82d9-5dcc44805e3c"]}
+{"time":"2026-07-01T20:58:03.480581+08:00","level":"INFO","msg":"retrieval: step4 outline recall done","candidates":0}
+{"time":"2026-07-01T20:58:03.483319+08:00","level":"INFO","msg":"retrieval: step5 fts recall done","candidates":24}
+{"time":"2026-07-01T20:58:03.48342+08:00","level":"INFO","msg":"retrieval: step6 rrf merge done","merged":20}
+{"time":"2026-07-01T20:58:05.647897+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"d409297f-ced3-4a44-adee-f6ea517b86e1"}
+{"time":"2026-07-01T20:58:08.288955+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c6","nouns":["绩效管理","查询绩效分数作用"]}
+{"time":"2026-07-01T20:58:08.289073+08:00","level":"INFO","msg":"retrieval: rerank direct→supporting (question noun not in evidence)","candidate_id":"c10","nouns":["绩效管理","查询绩效分数作用"]}
+{"time":"2026-07-01T20:58:08.289104+08:00","level":"INFO","msg":"retrieval: step7 rerank done","kept":20}
+{"time":"2026-07-01T20:58:08.289128+08:00","level":"INFO","msg":"retrieval: step9 sufficiency","path":"deep","direct":0,"supporting":20,"conflicts":0}
+{"time":"2026-07-01T20:58:11.64001+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"293be7c9-d4f8-46ac-9e36-28a6ea7908a3"}
+{"time":"2026-07-01T20:58:25.725617+08:00","level":"ERROR","msg":"answer: stream parse failed","error":"invalid character '\\n' in string literal"}
+{"time":"2026-07-01T20:58:25.726556+08:00","level":"INFO","msg":"http request","method":"POST","path":"/answer/stream","status":200,"duration_ms":25215,"request_id":"2a0b57b8-eecb-4d41-969e-55cb5149662d"}
+{"time":"2026-07-01T20:58:25.730426+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"efd31a31-dcce-4932-b14c-f69f7e44abc5"}
+{"time":"2026-07-01T20:58:25.733153+08:00","level":"INFO","msg":"http request","method":"POST","path":"/session/working","status":204,"duration_ms":0,"request_id":"4477724c-9992-48d4-a5ef-763acba81702"}
+{"time":"2026-07-01T20:58:25.733184+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"a41ef675-e8ec-4fd8-8010-fb537fad5ab9"}
+{"time":"2026-07-01T20:58:35.648128+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a84dbfa9-c348-4c27-8c78-bfe98b378acf"}
+{"time":"2026-07-01T20:58:41.639879+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"75b241b0-4096-4764-bd6c-5629df3321f2"}
+{"time":"2026-07-01T20:59:05.648796+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"dafed75b-2610-4377-8e5e-d7d1dc8c67ed"}
+{"time":"2026-07-01T20:59:11.639846+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"345dfaed-9be9-4e7c-ba45-96b8f8b2322b"}
+{"time":"2026-07-01T20:59:35.650452+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"d04f4e3b-6d7a-4ea2-9822-63beb539139c"}
+{"time":"2026-07-01T20:59:41.641029+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"37b3ee25-f100-4ace-8ff8-2b6f9f3b234a"}
+{"time":"2026-07-01T21:00:05.650815+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f99fb150-3c49-4a48-8a4d-310f4cfdf3fe"}
+{"time":"2026-07-01T21:00:11.640576+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"5f4728d8-8758-4951-9e71-5eac91fcd4bb"}
+{"time":"2026-07-01T21:00:35.650957+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ed29eb1d-6e2b-43f2-b516-2d4ba68598f9"}
+{"time":"2026-07-01T21:00:41.640349+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"2d9f9651-bb86-468f-af25-4ce2053ef548"}
+{"time":"2026-07-01T21:01:05.650613+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"b9521ca8-b9f9-4063-9ae0-38cce53b746a"}
+{"time":"2026-07-01T21:01:11.642512+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"17d97874-927f-4380-8b37-f0b1fd4480d9"}
+{"time":"2026-07-01T21:01:35.6514+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e3454e8c-8ee6-4c8d-b0f8-461a9adfddbb"}
+{"time":"2026-07-01T21:01:41.642691+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"47b45858-df2f-4c0f-a792-aee09825bb23"}
+{"time":"2026-07-01T21:02:05.652349+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"722777cb-b651-4a87-b3d4-2449b0a43767"}
+{"time":"2026-07-01T21:02:11.640574+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ded2de84-3ae2-4839-b0e6-62d0739f3da9"}
+{"time":"2026-07-01T21:02:35.652952+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"7424dc93-b3ff-4584-804e-9d125b956471"}
+{"time":"2026-07-01T21:02:41.64264+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a9132c90-0e17-46aa-b116-ae1acb835d06"}
+{"time":"2026-07-01T21:03:05.652755+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"291473c4-5821-42c2-a98a-8f67e35524fe"}
+{"time":"2026-07-01T21:03:11.641999+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ebd00649-697c-40f6-bdb9-59a65798ac0e"}
+{"time":"2026-07-01T21:03:35.65242+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"6547440c-eaea-4f99-9a90-be637d909fb7"}
+{"time":"2026-07-01T21:03:41.643029+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"5dda3149-948f-4260-8af5-6e3ccefe5dfb"}
+{"time":"2026-07-01T21:04:05.653592+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c5b81237-44d0-4101-ad22-2ddfaf0920f2"}
+{"time":"2026-07-01T21:04:11.64386+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ea4f1074-3480-4f9e-92da-80d41d75a649"}
+{"time":"2026-07-01T21:04:35.65309+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"4b2f4470-82fd-4690-bd69-b0d2d33aa6ff"}
+{"time":"2026-07-01T21:04:41.643888+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"215cecf1-e995-489d-baa5-c2b0eb83ce0e"}
+{"time":"2026-07-01T21:05:05.653576+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"46ca7d7e-ac89-43d1-b783-49a83708cd94"}
+{"time":"2026-07-01T21:05:11.643985+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"57c5c861-5cb9-4ca0-98c2-860d97e432a9"}
+{"time":"2026-07-01T21:05:35.65628+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a250d7de-60eb-4aa9-89e3-9ab0b1d24021"}
+{"time":"2026-07-01T21:05:41.644208+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"acb02656-9410-4ce0-b4b4-9a860f5202ea"}
+{"time":"2026-07-01T21:06:05.653954+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"6d40ff97-6568-467f-bf4f-62b0ba345f5f"}
+{"time":"2026-07-01T21:06:11.64497+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"bd539ed3-fdc0-4c2a-8cfe-e24a1cbd0d75"}
+{"time":"2026-07-01T21:06:35.652911+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"7d1c332f-784d-4cfe-a609-82fdaae2174b"}
+{"time":"2026-07-01T21:06:41.644533+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a6693568-299d-436b-9fa6-30f19d87cfde"}
+{"time":"2026-07-01T21:07:05.657232+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"bf524418-71ec-46ff-9af9-2d4eae928776"}
+{"time":"2026-07-01T21:07:11.646134+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"32b9055f-fda3-499a-b2c4-2d18bee04cff"}
+{"time":"2026-07-01T21:07:35.65542+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"5fee0c99-e4ac-428d-9ceb-590aaec8bf5a"}
+{"time":"2026-07-01T21:07:41.646555+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9d03b0a8-07b7-498b-8f8c-aeaf1388416a"}
+{"time":"2026-07-01T21:08:05.657441+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"b9674f01-d7d5-421f-ac85-9df3cae2278f"}
+{"time":"2026-07-01T21:08:11.646931+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"b338d094-0a59-4ef0-a34a-cc134b940b69"}
+{"time":"2026-07-01T21:08:35.659875+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9b631c3b-6db5-4bf8-98b0-c88982ee996a"}
+{"time":"2026-07-01T21:08:41.676744+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"1b115002-058b-4306-9e98-3781bc3d1c7e"}
+{"time":"2026-07-01T21:09:05.656985+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f30c3b6f-4a56-4f8d-b352-bc32244e4aad"}
+{"time":"2026-07-01T21:09:11.647897+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"aa5d119e-db80-4969-92bc-e3151c3f50f8"}
+{"time":"2026-07-01T21:09:35.661763+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"1bef17d6-b1bd-431b-ab45-c07150ff6796"}
+{"time":"2026-07-01T21:09:41.653299+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ca3303f9-64a4-46d7-82e8-c344663a66c7"}
+{"time":"2026-07-01T21:10:05.66356+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"de071d8f-0960-4c6f-9207-456f4d316520"}
+{"time":"2026-07-01T21:10:11.652136+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"18636565-c58d-4a48-badf-74c44be93b99"}
+{"time":"2026-07-01T21:10:35.662916+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9bef63bd-e27b-43b2-8a35-c7b043a34ac2"}
+{"time":"2026-07-01T21:10:41.653074+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8e3318a1-0edb-4b04-a663-6845ca36b3c5"}
+{"time":"2026-07-01T21:11:05.662986+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"03499534-e760-4de2-8404-51a549d2f867"}
+{"time":"2026-07-01T21:11:11.657098+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"26433a10-ec31-44fb-91a1-6384bf8c615d"}
+{"time":"2026-07-01T21:11:35.664566+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"6d8a3f97-c261-4412-bf8f-85d8bd20a3e0"}
+{"time":"2026-07-01T21:11:41.655518+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"3927e1a2-b16c-4659-aa7c-3e7d9723a8b3"}
+{"time":"2026-07-01T21:12:05.665539+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ed75f709-0685-446d-b481-b2b32a6f12a0"}
+{"time":"2026-07-01T21:12:11.655412+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"083735f8-e3c4-498a-9d4f-cffcd87fee97"}
+{"time":"2026-07-01T21:12:35.663547+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"e18c61d5-5427-4654-b619-9e7fbfa4199f"}
+{"time":"2026-07-01T21:12:41.655587+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"5ee3ce60-d528-4a95-8452-c41692739537"}
+{"time":"2026-07-01T21:13:05.66366+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c7b8d8e2-d9dc-44d6-bd6e-5597c569f6f4"}
+{"time":"2026-07-01T21:13:11.656198+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"b23bb876-3ef7-4f33-b0e3-04ae988f3dfe"}
+{"time":"2026-07-01T21:13:35.666781+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ef046cbe-2ba6-4e13-bdda-1f7a549b851f"}
+{"time":"2026-07-01T21:13:41.654698+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"8675a26a-1d3a-44d3-9570-491804764c29"}
+{"time":"2026-07-01T21:14:05.664498+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ea94e472-f098-44a7-84e0-f6c631037fd8"}
+{"time":"2026-07-01T21:14:11.666939+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f241d7ca-e29a-435e-9c4b-b44a2d5f3abf"}
+{"time":"2026-07-01T21:14:35.66695+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"6e786c53-d82c-4cc2-85be-dc09f819f3e7"}
+{"time":"2026-07-01T21:14:41.65821+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"aca148d2-31e1-4a4c-ae9f-36972efd11bf"}
+{"time":"2026-07-01T21:15:05.666389+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f7e4793b-f28a-46e0-bbae-05b74ae5fb78"}
+{"time":"2026-07-01T21:15:11.656769+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"47d42950-d056-421a-a0bb-818d4c6493ef"}
+{"time":"2026-07-01T21:15:35.667331+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"0af1d23c-e6e9-479a-aa08-6befe5ddd438"}
+{"time":"2026-07-01T21:15:41.657573+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"f7f8418b-080c-4aac-a620-04fb34201757"}
+{"time":"2026-07-01T21:16:11.658645+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"2479037e-e6a7-4724-ac0f-c4bb193b4abc"}
+{"time":"2026-07-01T21:16:41.657759+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a3d11eba-9677-4cba-85ea-148a21e27c6d"}
+{"time":"2026-07-01T21:17:11.658374+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"85871f1a-4209-4083-90d8-6a81b6d2e345"}
+{"time":"2026-07-01T21:17:41.660877+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"84a502fd-e798-47b3-9b73-f1ac5156a991"}
+{"time":"2026-07-01T21:18:11.660592+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ddb25f53-8cdb-47a0-a3ff-bfe887397ce9"}
+{"time":"2026-07-01T21:18:24.875492+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"e09d397b-abc2-473b-a6df-f5728832b9ef"}
+{"time":"2026-07-01T21:18:24.888643+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"78e30a6f-1174-4084-8391-5387bed39766"}
+{"time":"2026-07-01T21:18:27.979352+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/21394565-8cde-47eb-9ef9-88834fe690a4/turns","status":200,"duration_ms":0,"request_id":"03bd0fab-393b-451f-9ce5-81e9b46b2e53"}
+{"time":"2026-07-01T21:18:27.982611+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/f7b2a477-c5a1-4bc1-a5ec-c834ca1f02a6","status":200,"duration_ms":0,"request_id":"edef4923-0446-45f3-9dc9-a0ca3a64b0d7"}
+{"time":"2026-07-01T21:18:27.986512+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"e5076a8d-2088-406c-80ac-73585aa6c0db"}
+{"time":"2026-07-01T21:18:27.987477+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/5e70f473-874c-4145-857f-731aaaf0a7ce","status":200,"duration_ms":0,"request_id":"6b620c17-80e2-42b1-ba86-ffc4976fe703"}
+{"time":"2026-07-01T21:18:27.999946+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"7e805d4f-b071-4998-9d3f-110bfba28bc7"}
+{"time":"2026-07-01T21:18:27.999965+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/dd529540-2b27-4d55-918b-289c84417009","status":200,"duration_ms":0,"request_id":"283bff47-aece-4125-b01c-230f577388f4"}
+{"time":"2026-07-01T21:18:28.004706+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"a906ebbc-fa3f-446d-ab40-e1518427e072"}
+{"time":"2026-07-01T21:18:28.004964+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/7be6e685-ee7b-4497-881e-4ae24b3f2a09","status":200,"duration_ms":0,"request_id":"70352e6d-e2aa-468e-815a-5e61314a608c"}
+{"time":"2026-07-01T21:18:28.012125+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"ea7b08e1-434d-45a0-96a8-c1e71bde0668"}
+{"time":"2026-07-01T21:18:28.012707+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/196dcdbb-7628-40dd-8004-0145de7d3342","status":200,"duration_ms":0,"request_id":"1bf1e685-ee29-4d4b-b123-962dc49dd685"}
+{"time":"2026-07-01T21:18:28.014575+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"5ef71519-229c-4341-8a13-ac47ac4e7750"}
+{"time":"2026-07-01T21:18:28.01543+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/8aeebbce-97c6-4edf-a60d-4b46cc7a672d","status":200,"duration_ms":0,"request_id":"e3ce13b2-4632-4704-9e63-54a98bac2730"}
+{"time":"2026-07-01T21:18:28.018338+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"a22030ad-97db-44bf-8035-ab950a2e7787"}
+{"time":"2026-07-01T21:18:31.04326+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/e3176894-a10d-42f7-b2c0-00695abae7a2/turns","status":200,"duration_ms":0,"request_id":"519756f6-1fc9-4c71-a62a-7a228bef515e"}
+{"time":"2026-07-01T21:18:31.049813+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/94e4cb4a-7723-4fbb-8780-acf928039c31","status":200,"duration_ms":1,"request_id":"85f6c849-763e-479b-b2e0-ab669afc532b"}
+{"time":"2026-07-01T21:18:31.059126+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"f1ce959f-5230-4753-92bf-9c0121c2702e"}
+{"time":"2026-07-01T21:18:36.833697+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-07-01T21:18:36.834463+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-07-01T21:18:45.821272+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-07-01T21:18:46.030476+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-07-01T21:18:46.417724+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-07-01T21:18:46.418911+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-07-01T21:18:47.752847+08:00","level":"INFO","msg":"http request","method":"HEAD","path":"/","status":200,"duration_ms":0,"request_id":"3525db69-20dc-488e-bdb7-3d7715fcaf0b"}
+{"time":"2026-07-01T21:18:47.75919+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"236b0f3e-5a54-4963-83e7-a14505dba368"}
+{"time":"2026-07-01T21:18:47.822116+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"995e2a24-4f62-4c03-b1a3-d82412c5fd6c"}
+{"time":"2026-07-01T21:18:47.831707+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"7746d303-ee33-4394-96c5-22903aa2af0a"}
+{"time":"2026-07-01T21:18:47.831969+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"89c7ee4d-9633-477e-ac6a-a16976366392"}
+{"time":"2026-07-01T21:18:50.092969+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"4adb00d3-0635-43d0-9474-1fc5fbdf7c91"}
+{"time":"2026-07-01T21:18:50.09631+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"85cd37e0-e853-4617-8e75-95063a6f243f"}
+{"time":"2026-07-01T21:18:51.108347+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"f4fab2c9-d218-42b6-a1b6-9ce21def8b3f"}
+{"time":"2026-07-01T21:18:51.11758+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"03c9be36-60cb-4988-ae57-dddd3ec6508e"}
+{"time":"2026-07-01T21:18:53.54432+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/21394565-8cde-47eb-9ef9-88834fe690a4/turns","status":200,"duration_ms":0,"request_id":"ca7573c3-9e8e-4eac-ad48-368ea76eab17"}
+{"time":"2026-07-01T21:18:53.547667+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/f7b2a477-c5a1-4bc1-a5ec-c834ca1f02a6","status":200,"duration_ms":0,"request_id":"6e01fc35-4114-4a7f-9cd3-5fdfba591d90"}
+{"time":"2026-07-01T21:18:53.568127+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"8d80e4f1-2369-43d7-8db8-e5ea3aa03e79"}
+{"time":"2026-07-01T21:18:53.569412+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/5e70f473-874c-4145-857f-731aaaf0a7ce","status":200,"duration_ms":1,"request_id":"26479f5a-0478-4aa2-8aad-388d84f2cf05"}
+{"time":"2026-07-01T21:18:53.611575+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"172a92af-b58e-4a18-95f1-191ad57bdaaa"}
+{"time":"2026-07-01T21:18:53.611578+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/dd529540-2b27-4d55-918b-289c84417009","status":200,"duration_ms":0,"request_id":"86e01d8e-6036-4773-8d06-cb55bea36d59"}
+{"time":"2026-07-01T21:18:53.615407+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"4d9726bd-6cff-4a6c-ad46-b9d1d5c4fac6"}
+{"time":"2026-07-01T21:18:53.615456+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/7be6e685-ee7b-4497-881e-4ae24b3f2a09","status":200,"duration_ms":0,"request_id":"1e88d997-e3b0-4817-906e-ebe793d022e3"}
+{"time":"2026-07-01T21:18:53.61782+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"030fae7c-f02c-46d1-b56c-e963e9efaefa"}
+{"time":"2026-07-01T21:18:53.618011+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/196dcdbb-7628-40dd-8004-0145de7d3342","status":200,"duration_ms":0,"request_id":"2d7ff362-ec39-4e35-8dc5-e4f519fb581b"}
+{"time":"2026-07-01T21:18:53.620515+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"cd840d87-7c6d-441d-b53b-72970b390f9c"}
+{"time":"2026-07-01T21:18:53.620709+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/8aeebbce-97c6-4edf-a60d-4b46cc7a672d","status":200,"duration_ms":0,"request_id":"7435d5b5-fb48-4da8-bcb5-72f03c649d76"}
+{"time":"2026-07-01T21:18:53.62201+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"0b2d6ab9-1516-44a0-a805-1dd6b3bacd7c"}
+{"time":"2026-07-01T21:19:05.643353+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/e3176894-a10d-42f7-b2c0-00695abae7a2/turns","status":200,"duration_ms":0,"request_id":"c14fe308-9b68-4635-8209-f636353d5c51"}
+{"time":"2026-07-01T21:19:05.647885+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/94e4cb4a-7723-4fbb-8780-acf928039c31","status":200,"duration_ms":0,"request_id":"986b9edd-8481-441f-96eb-cfd188e55a3d"}
+{"time":"2026-07-01T21:19:05.661609+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"84cd153e-3c16-4526-b306-07307c723984"}
+{"time":"2026-07-01T21:19:17.835868+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"2886d612-1c85-446f-8e2c-b1a1d3978cae"}
+{"time":"2026-07-01T21:19:33.941726+08:00","level":"INFO","msg":"http request","method":"POST","path":"/sessions","status":201,"duration_ms":0,"request_id":"1d7dc01b-89cf-4025-b842-771845252810"}
+{"time":"2026-07-01T21:19:33.954541+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"a6d17af3-d2a7-4e49-ac26-78641fa9a2c5"}
+{"time":"2026-07-01T21:19:39.409195+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/e3176894-a10d-42f7-b2c0-00695abae7a2/turns","status":200,"duration_ms":0,"request_id":"6271b758-6ea7-41fb-ba0c-c277ba4a7dcc"}
+{"time":"2026-07-01T21:19:39.416999+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/94e4cb4a-7723-4fbb-8780-acf928039c31","status":200,"duration_ms":0,"request_id":"15dc845b-889d-4b78-8f33-b950ef186eaf"}
+{"time":"2026-07-01T21:19:39.43411+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"cea71792-e4a9-408f-938b-50ae5a2952fa"}
+{"time":"2026-07-01T21:19:46.421612+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"fe8c2cb6-1d24-4bb2-adb9-8911f2d04ca4","elapsed_ms":1}
+{"time":"2026-07-01T21:19:47.836413+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"1f112c3a-8cd0-4471-a010-d97b17a07e95"}
+{"time":"2026-07-01T21:20:10.246461+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"77dad8d5-f4f5-4f17-bf05-249a75028099"}
+{"time":"2026-07-01T21:20:10.262922+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"2fe3f945-b3a5-4e19-b3f1-404967dca9c1"}
+{"time":"2026-07-01T21:20:10.272088+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"268c8aa5-8598-4bb3-b98b-ad5e2db3e935"}
+{"time":"2026-07-01T21:20:10.272192+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"d2eaefee-1dbb-49f8-a6ed-9fb2c962c14a"}
+{"time":"2026-07-01T21:20:10.328615+08:00","level":"INFO","msg":"http request","method":"GET","path":"/favicon.ico","status":200,"duration_ms":0,"request_id":"1a4bff0a-003f-46a3-881b-01d9fd9acf67"}
+{"time":"2026-07-01T21:20:12.696144+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/21394565-8cde-47eb-9ef9-88834fe690a4/turns","status":200,"duration_ms":0,"request_id":"aa90d638-fa44-4548-883e-be2e23e98b84"}
+{"time":"2026-07-01T21:20:12.699416+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/f7b2a477-c5a1-4bc1-a5ec-c834ca1f02a6","status":200,"duration_ms":0,"request_id":"61266590-da6a-4f1a-a962-380216764616"}
+{"time":"2026-07-01T21:20:12.720653+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"db302a8c-2eb5-4057-8fce-35c14d261ca9"}
+{"time":"2026-07-01T21:20:12.720928+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/5e70f473-874c-4145-857f-731aaaf0a7ce","status":200,"duration_ms":0,"request_id":"a7475308-eb42-4d8a-9f21-91209aa276ea"}
+{"time":"2026-07-01T21:20:12.740169+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"2442d922-b7ee-4582-8d9a-6ead6fb6642a"}
+{"time":"2026-07-01T21:20:12.740177+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/dd529540-2b27-4d55-918b-289c84417009","status":200,"duration_ms":0,"request_id":"47d8aa19-82e2-4625-88dc-6385213dceae"}
+{"time":"2026-07-01T21:20:12.745898+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"41c3d0ae-701f-4fd6-99cf-9d3a61910095"}
+{"time":"2026-07-01T21:20:12.745902+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/7be6e685-ee7b-4497-881e-4ae24b3f2a09","status":200,"duration_ms":0,"request_id":"0454cf11-7ef9-47a3-9195-586d3d330cfb"}
+{"time":"2026-07-01T21:20:12.74761+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"c44d0898-3aa0-4f88-a145-9f65de528414"}
+{"time":"2026-07-01T21:20:12.747683+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/196dcdbb-7628-40dd-8004-0145de7d3342","status":200,"duration_ms":0,"request_id":"bd11ee93-1b8e-4127-b90d-0ee7567cd295"}
+{"time":"2026-07-01T21:20:12.751229+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"960a5268-5a71-4f53-ace5-2e0a64068bab"}
+{"time":"2026-07-01T21:20:12.751741+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/8aeebbce-97c6-4edf-a60d-4b46cc7a672d","status":200,"duration_ms":0,"request_id":"b713b3f4-fd3f-4007-892d-5ecee11d0c8d"}
+{"time":"2026-07-01T21:20:12.75345+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"e8eef075-6baf-43b5-94c7-32c9a446ba0c"}
+{"time":"2026-07-01T21:20:18.250271+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"ad1f4077-1ae7-409d-a793-b54d51b2cbdd"}
+{"time":"2026-07-01T21:20:29.176764+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions/e3176894-a10d-42f7-b2c0-00695abae7a2/turns","status":200,"duration_ms":0,"request_id":"0c299e61-611e-4b6b-a167-3af921e57f19"}
+{"time":"2026-07-01T21:20:29.181607+08:00","level":"INFO","msg":"http request","method":"GET","path":"/answers/94e4cb4a-7723-4fbb-8780-acf928039c31","status":200,"duration_ms":1,"request_id":"3580c993-c35c-48b0-bc1f-28af64098b07"}
+{"time":"2026-07-01T21:20:29.195644+08:00","level":"INFO","msg":"http request","method":"GET","path":"/traces","status":200,"duration_ms":0,"request_id":"32e7b00e-626b-490d-be2e-c61ccf9fe516"}
+{"time":"2026-07-01T21:20:40.275347+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"86761a2a-57cd-46fb-9298-60c300649a95"}
+{"time":"2026-07-01T21:20:43.6097+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d62dc60b-e6f6-4a4c-b10e-6fdf076f7b36","status":200,"duration_ms":0,"request_id":"0c04fd08-3cab-4a99-8c86-d658a3a68ee9"}
+{"time":"2026-07-01T21:20:46.079916+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d62dc60b-e6f6-4a4c-b10e-6fdf076f7b36/preview","status":200,"duration_ms":17,"request_id":"2ef85ef3-2906-476a-9589-59ef28c14db8"}
+{"time":"2026-07-01T21:20:46.09404+08:00","level":"INFO","msg":"http request","method":"GET","path":"/favicon.ico","status":200,"duration_ms":0,"request_id":"97ae544e-e4cf-435e-a7c4-5cb50af35db6"}
+{"time":"2026-07-01T21:20:48.251163+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":1,"request_id":"2c4e0863-06ab-4cb5-b2b6-046503ef885d"}
+{"time":"2026-07-01T21:21:04.925188+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d62dc60b-e6f6-4a4c-b10e-6fdf076f7b36","status":200,"duration_ms":0,"request_id":"cf745893-2673-4554-852b-3ba84ea37b46"}
+{"time":"2026-07-01T21:21:06.578632+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/d62dc60b-e6f6-4a4c-b10e-6fdf076f7b36/preview","status":200,"duration_ms":1,"request_id":"c59dda11-f2fd-40eb-963e-570414bfddef"}
+{"time":"2026-07-01T21:21:06.601887+08:00","level":"INFO","msg":"http request","method":"GET","path":"/favicon.ico","status":200,"duration_ms":0,"request_id":"84b2717e-5cd2-4fb7-9ec9-8521a827aae7"}
+{"time":"2026-07-01T21:21:10.274974+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"3139db90-4860-45f9-b305-717c77c4a464"}
+{"time":"2026-07-01T21:21:18.251564+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"60937f19-364c-40c1-a29b-322ad74a09ac"}
+{"time":"2026-07-01T21:21:35.544133+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"fb4e1082-e296-4d34-8635-17e57fab9d0f"}
+{"time":"2026-07-01T21:21:40.275953+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"9af015f8-7e37-4ceb-8e7a-60b947ec173a"}
+{"time":"2026-07-01T21:21:40.694398+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663","status":200,"duration_ms":0,"request_id":"04fe4911-9adf-478a-8a3b-2195000242c5"}
+{"time":"2026-07-01T21:21:40.715661+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources/c15b3d69-39b0-4b7d-9e0f-0b044741e663/preview","status":200,"duration_ms":21,"request_id":"1bca2cd6-8914-4ff4-934b-ee7921b603db"}
+{"time":"2026-07-01T21:21:40.737041+08:00","level":"INFO","msg":"http request","method":"GET","path":"/favicon.ico","status":200,"duration_ms":0,"request_id":"6807b2aa-2ca0-4946-b9f9-0b9325364bba"}
+{"time":"2026-07-01T21:21:44.192351+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports/latest","status":200,"duration_ms":0,"request_id":"2da9beff-2b6a-48af-b40b-067159f20062"}
+{"time":"2026-07-01T21:21:46.993519+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports","status":200,"duration_ms":0,"request_id":"9964d6f7-b938-4a2a-8934-7728b8472222"}
+{"time":"2026-07-01T21:21:48.250565+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"d47de995-beda-4a26-83a7-aecb518194b1"}
+{"time":"2026-07-01T21:21:50.809528+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports/latest","status":200,"duration_ms":0,"request_id":"964d83b8-2a13-4c65-8ccd-87f959f66ab1"}
+{"time":"2026-07-01T21:21:52.027669+08:00","level":"INFO","msg":"http request","method":"POST","path":"/study/run","status":200,"duration_ms":0,"request_id":"31ce18bd-b686-4c0d-8d63-e9aeff1dc0b8"}
+{"time":"2026-07-01T21:21:52.030371+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports/latest","status":200,"duration_ms":0,"request_id":"761d0f13-7f7b-44a7-95f8-854fea5a91b3"}
+{"time":"2026-07-01T21:21:53.626733+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports","status":200,"duration_ms":0,"request_id":"8457130a-ae4e-4ebc-b035-0beac9e266d9"}
+{"time":"2026-07-01T21:22:10.2769+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"bca26607-1d44-406d-a146-e051972c2cb2"}
+{"time":"2026-07-01T21:22:18.251742+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a1e9b954-5f9d-42d3-a2fb-e393190587d8"}
+{"time":"2026-07-01T21:22:40.277767+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"55cd3095-37c0-40bc-9d09-b312ea03a353"}
+{"time":"2026-07-01T21:23:09.253929+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c11fe278-c260-4474-bdc6-6bd5b8375654"}
+{"time":"2026-07-01T21:23:10.278044+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c7d1915e-7ac6-488e-9db5-0a6275a55da4"}
+{"time":"2026-07-01T21:23:40.278091+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"1503bac3-2573-4beb-b9c8-3871b628d1c5"}
+{"time":"2026-07-01T21:23:50.463824+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-07-01T21:23:50.463991+08:00","level":"INFO","msg":"知识大脑已停止"}
+{"time":"2026-07-01T21:23:55.207801+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/s_1.txt\" "}
+{"time":"2026-07-01T21:23:55.41134+08:00","level":"INFO","msg":"Load the gse dictionary: \"/Users/jxu/go/pkg/mod/github.com/go-ego/gse@v1.0.2/data/dict/zh/t_1.txt\" "}
+{"time":"2026-07-01T21:23:55.783475+08:00","level":"INFO","msg":"Gse dictionary loaded finished."}
+{"time":"2026-07-01T21:23:55.784615+08:00","level":"INFO","msg":"知识大脑启动","addr":"0.0.0.0:8800","prefix":"","url":"http://localhost:8800/"}
+{"time":"2026-07-01T21:23:57.540389+08:00","level":"INFO","msg":"http request","method":"HEAD","path":"/","status":200,"duration_ms":0,"request_id":"69a0c1fe-2d15-4c98-98bd-01fd8c8d2133"}
+{"time":"2026-07-01T21:23:57.548891+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"78d7ddba-0cdd-4193-954d-e38d0b1b56c4"}
+{"time":"2026-07-01T21:23:57.613405+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"89594335-4434-45f1-adae-d43db8db2ed2"}
+{"time":"2026-07-01T21:23:57.618435+08:00","level":"INFO","msg":"http request","method":"GET","path":"/","status":200,"duration_ms":0,"request_id":"fc6367bc-3290-41d8-9f96-8f8c891750ca"}
+{"time":"2026-07-01T21:23:57.621267+08:00","level":"INFO","msg":"http request","method":"GET","path":"/marked.min.js","status":200,"duration_ms":0,"request_id":"a0d8aa3b-2f90-46a5-a0a9-652ae1c69da1"}
+{"time":"2026-07-01T21:23:57.627953+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sessions","status":200,"duration_ms":0,"request_id":"d74a70db-862a-4eb5-95cf-c697f8295cdd"}
+{"time":"2026-07-01T21:23:57.628113+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"375ea4c5-a1d2-4e37-be80-3b285d158128"}
+{"time":"2026-07-01T21:24:05.974558+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports/latest","status":200,"duration_ms":0,"request_id":"2ba815ac-cd33-4655-ba3a-3a7155b7dd63"}
+{"time":"2026-07-01T21:24:08.228209+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports","status":200,"duration_ms":0,"request_id":"f0ed2761-9d4c-4136-8a74-1e3cc7f9d15d"}
+{"time":"2026-07-01T21:24:10.279593+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"c2c88676-e4af-4c9c-ab57-5800a2bc62ed"}
+{"time":"2026-07-01T21:24:11.575858+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports/latest","status":200,"duration_ms":0,"request_id":"c1daf3eb-7332-40bd-8529-6197e26b4334"}
+{"time":"2026-07-01T21:24:27.629757+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"5d34f049-361f-4a43-b9ad-51a604ff6f90"}
+{"time":"2026-07-01T21:24:55.787215+08:00","level":"INFO","msg":"study: scheduled run complete","candidates_flagged":0,"gap_events_processed":0,"report_id":"e1fb44f8-8050-4cec-afe4-e4ba7078d82c","elapsed_ms":1}
+{"time":"2026-07-01T21:24:57.630189+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"30f383da-a121-434a-b0be-14c155619736"}
+{"time":"2026-07-01T21:25:27.495107+08:00","level":"INFO","msg":"http request","method":"GET","path":"/sources","status":200,"duration_ms":0,"request_id":"a99dc632-394b-41f5-a644-8f0a6c26436c"}
+{"time":"2026-07-01T21:25:41.844941+08:00","level":"INFO","msg":"http request","method":"POST","path":"/study/run","status":200,"duration_ms":0,"request_id":"b17444ea-ab1d-4c2e-9cca-495d7b5b6ee2"}
+{"time":"2026-07-01T21:25:41.855324+08:00","level":"INFO","msg":"http request","method":"GET","path":"/study/reports/latest","status":200,"duration_ms":0,"request_id":"9b845ffa-d378-4ca5-9324-0fd93eb79d14"}
+{"time":"2026-07-01T21:25:47.551382+08:00","level":"INFO","msg":"收到退出信号","signal":15}
+{"time":"2026-07-01T21:25:47.551523+08:00","level":"INFO","msg":"知识大脑已停止"}

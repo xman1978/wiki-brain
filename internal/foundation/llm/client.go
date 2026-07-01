@@ -109,15 +109,25 @@ func (c *OpenAIClient) CompleteJSON(ctx context.Context, promptFile string, vars
 }
 
 func (c *OpenAIClient) extractAndRepairJSON(raw, promptFile string) string {
-	jsonStr := extractJSON(raw)
-
-	if !json.Valid([]byte(jsonStr)) {
-		repaired, err := jsonrepair.Repair(jsonStr)
-		if err != nil {
-			return jsonStr
-		}
+	before := extractJSON(raw)
+	after := ExtractAndRepairJSON(raw)
+	if after != before {
 		slog.Debug("llm: repaired JSON syntax", "promptFile", promptFile)
-		jsonStr = repaired
+	}
+	return after
+}
+
+// ExtractAndRepairJSON extracts a JSON object/array from raw LLM output
+// (stripping markdown code fences) and repairs common syntax issues (e.g.
+// unescaped newlines) via jsonrepair. Exported so callers that accumulate
+// streamed chunks themselves (bypassing CompleteJSON) get the same
+// robustness as the non-streaming path.
+func ExtractAndRepairJSON(raw string) string {
+	jsonStr := extractJSON(raw)
+	if !json.Valid([]byte(jsonStr)) {
+		if repaired, err := jsonrepair.Repair(jsonStr); err == nil {
+			return repaired
+		}
 	}
 	return jsonStr
 }
