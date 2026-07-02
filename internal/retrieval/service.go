@@ -105,6 +105,7 @@ func (s *Service) RetrieveWithProgress(ctx context.Context, qc QueryContext, pro
 		return &EvidenceSet{
 			Question:       question,
 			Subject:        qc.Subject,
+			Intent:         qc.Intent,
 			Audience:       qc.Audience,
 			Constraint:     qc.Constraint,
 			Path:           "deep",
@@ -148,7 +149,7 @@ func (s *Service) RetrieveWithProgress(ctx context.Context, qc QueryContext, pro
 	emit("rerank", "done", fmt.Sprintf("%d 直接 · %d 补充", len(direct), len(supporting)), time.Since(rerankStart).Milliseconds())
 
 	// Step 10: Build EvidenceSet
-	es, err := s.buildEvidenceSet(question, qc.Subject, qc.Audience, qc.Constraint, path, direct, supporting, conflictCandidates)
+	es, err := s.buildEvidenceSet(question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, path, direct, supporting, conflictCandidates)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: build evidence set: %w", err)
 	}
@@ -663,15 +664,37 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 		candidates[i].candidateID = fmt.Sprintf("c%d", i+1)
 	}
 
-	// Build candidates text with content from markdown files
-	var candidatesText strings.Builder
+	// Build candidates text grouped by source document, so the LLM can see
+	// which policy/document each piece of evidence belongs to (scope/audience
+	// limitations are often stated in the document title, not repeated in
+	// every KU snippet).
+	var sourceOrder []string
+	bySource := make(map[string][]candidate)
+	titleCache := make(map[string]string)
 	for _, c := range candidates {
-		content, err := s.readUnitContent(c.sourceID, c.lineStart, c.lineEnd)
-		if err != nil {
-			slog.Warn("retrieval: rerank read content failed", "unit_id", c.unitID, "error", err)
-			continue
+		if _, ok := bySource[c.sourceID]; !ok {
+			sourceOrder = append(sourceOrder, c.sourceID)
+			title, err := s.store.GetSourceTitle(c.sourceID)
+			if err != nil {
+				slog.Warn("retrieval: rerank get source title failed", "source_id", c.sourceID, "error", err)
+				title = c.sourceID
+			}
+			titleCache[c.sourceID] = title
 		}
-		fmt.Fprintf(&candidatesText, "[%s] %s\n\n", c.candidateID, content)
+		bySource[c.sourceID] = append(bySource[c.sourceID], c)
+	}
+
+	var candidatesText strings.Builder
+	for _, sourceID := range sourceOrder {
+		fmt.Fprintf(&candidatesText, "【来源文档：%s】\n", titleCache[sourceID])
+		for _, c := range bySource[sourceID] {
+			content, err := s.readUnitContent(c.sourceID, c.lineStart, c.lineEnd)
+			if err != nil {
+				slog.Warn("retrieval: rerank read content failed", "unit_id", c.unitID, "error", err)
+				continue
+			}
+			fmt.Fprintf(&candidatesText, "[%s] %s\n\n", c.candidateID, content)
+		}
 	}
 
 	jsonSchema := `{"results": [{"candidate_id": "c1", "role": "direct|supporting|irrelevant"}]}`
@@ -866,10 +889,11 @@ func (s *Service) kpnExpand(candidates []candidate) ([]candidate, []candidate, e
 }
 
 // Step 10: Build EvidenceSet
-func (s *Service) buildEvidenceSet(question, subject, audience, constraint, path string, direct, supporting, conflicts []candidate) (*EvidenceSet, error) {
+func (s *Service) buildEvidenceSet(question, subject, intent, audience, constraint, path string, direct, supporting, conflicts []candidate) (*EvidenceSet, error) {
 	es := &EvidenceSet{
 		Question:       question,
 		Subject:        subject,
+		Intent:         intent,
 		Audience:       audience,
 		Constraint:     constraint,
 		Path:           path,

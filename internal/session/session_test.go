@@ -410,6 +410,99 @@ func TestHTTPDeleteCascade(t *testing.T) {
 	}
 }
 
+func TestTruncateTail(t *testing.T) {
+	if got := truncateTail("", 10, "（无）"); got != "（无）" {
+		t.Errorf("empty = %q, want fallback", got)
+	}
+	if got := truncateTail("短文本", 10, "（无）"); got != "短文本" {
+		t.Errorf("short = %q, want unchanged", got)
+	}
+	long := strings.Repeat("前", 20) + "结论在尾部"
+	got := truncateTail(long, 5, "（无）")
+	if got != "……结论在尾部" {
+		t.Errorf("tail = %q, want ……结论在尾部", got)
+	}
+}
+
+func TestRepairLayer1StandaloneQuestion(t *testing.T) {
+	raw := `{"intent":"查询住宿标准","subject":"出差住宿","audience":"","constraint":"漠河","standalone_question":"出差漠河的住宿标准是多少？"}`
+	result, ok := repairLayer1(raw)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if result.StandaloneQuestion != "出差漠河的住宿标准是多少？" {
+		t.Errorf("standalone = %q", result.StandaloneQuestion)
+	}
+}
+
+func TestHTTPTurnStandaloneQuestion(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	store := NewStore(db)
+	fake := llm.NewFakeClient()
+	fake.SetResponse("session_parse.md", llm.FakeResponse{
+		Output: `{"intent":"查询住宿标准","subject":"出差住宿","audience":"","constraint":"漠河","standalone_question":"出差漠河的住宿标准是多少？"}`,
+	})
+	h := NewHandler(store, NewParser(fake))
+
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("POST", "/sessions", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	var created SessionInfo
+	json.NewDecoder(w.Body).Decode(&created)
+
+	body := `{"session_id":"` + created.SessionID + `","user_input":"漠河呢？"}`
+	req = httptest.NewRequest("POST", "/session/turn", strings.NewReader(body))
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	var result TurnResult
+	json.NewDecoder(w.Body).Decode(&result)
+	if result.Action != "retrieve" {
+		t.Fatalf("action = %q, want retrieve", result.Action)
+	}
+	if result.ExpandedQuery.ExpandedQuestion != "出差漠河的住宿标准是多少？" {
+		t.Errorf("expanded = %q, want standalone question", result.ExpandedQuery.ExpandedQuestion)
+	}
+
+	// LastQuestion recorded for the next turn's context
+	st, err := store.Get(created.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Dialogue.LastQuestion != "出差漠河的住宿标准是多少？" {
+		t.Errorf("last_question = %q", st.Dialogue.LastQuestion)
+	}
+}
+
+func TestSnapshotPersistsContextFields(t *testing.T) {
+	s := &SessionState{}
+	s.Dialogue.Audience = "渠道伙伴"
+	s.Dialogue.Constraint = "星火系统"
+	s.Dialogue.LastQuestion = "对于渠道伙伴，销售星火系统可以获得多少提成？"
+
+	data, err := s.MarshalSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored SessionState
+	if err := restored.UnmarshalSnapshot(data); err != nil {
+		t.Fatal(err)
+	}
+	if restored.Dialogue.Audience != "渠道伙伴" {
+		t.Errorf("audience = %q", restored.Dialogue.Audience)
+	}
+	if restored.Dialogue.Constraint != "星火系统" {
+		t.Errorf("constraint = %q", restored.Dialogue.Constraint)
+	}
+	if restored.Dialogue.LastQuestion == "" {
+		t.Error("last_question not persisted")
+	}
+}
+
 func TestSessionParserRetry(t *testing.T) {
 	fake := llm.NewFakeClient()
 	fake.SetResponse("session_parse.md", llm.FakeResponse{Output: "无效输出"})

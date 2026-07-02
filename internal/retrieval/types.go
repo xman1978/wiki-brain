@@ -13,6 +13,7 @@ type QueryContext struct {
 type EvidenceSet struct {
 	Question       string             `json:"question"`
 	Subject        string             `json:"subject,omitempty"`
+	Intent         string             `json:"intent,omitempty"`
 	Audience       string             `json:"audience,omitempty"`
 	Constraint     string             `json:"constraint,omitempty"`
 	Path           string             `json:"path"`

@@ -184,13 +184,53 @@
     .pp-step:last-child .pp-line { display:none; }
     .pp-empty { font-size:12px; color:var(--text-3); text-align:center; }
 
+    /* Ghost icon button with a tooltip rendered above it on hover, reused by
+       user-message actions (copy/retry/edit) and the answer copy button. */
+    .icon-btn {
+      width:24px; height:24px; padding:0; border:none; border-radius:6px;
+      background:transparent; color:var(--text-3); cursor:pointer; display:flex;
+      align-items:center; justify-content:center; transition:.12s; flex-shrink:0;
+      position:relative;
+    }
+    .icon-btn:hover { background:rgba(0,0,0,.06); color:var(--text); }
+    .icon-btn svg { width:13px; height:13px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+    .icon-btn.copied { color:var(--green); }
+    .icon-btn[title]::after {
+      content:attr(title); position:absolute; bottom:calc(100% + 6px); left:50%; transform:translateX(-50%);
+      background:var(--text); color:#fff; font-size:11px; padding:3px 8px; border-radius:5px;
+      white-space:nowrap; opacity:0; pointer-events:none; transition:opacity .12s; z-index:50;
+    }
+    .icon-btn[title]:hover::after { opacity:1; }
+
     .msg { margin-bottom:24px; }
-    .msg-user { display:flex; justify-content:flex-end; }
+    .msg-user { display:flex; flex-direction:column; align-items:flex-end; }
     .msg-user .bubble {
       background:var(--surface-alt); color:var(--text); padding:12px 18px;
       border-radius:20px 20px 6px 20px; max-width:75%; line-height:1.6; white-space:pre-wrap;
       font-size:15px;
     }
+    .msg-user .msg-actions {
+      display:flex; gap:2px; margin-top:4px; opacity:0; transition:opacity .12s; height:24px;
+    }
+    .msg-user:hover .msg-actions, .msg-user:focus-within .msg-actions { opacity:1; }
+
+    .msg-edit-box {
+      background:var(--surface-alt); border:1px solid var(--border); color:var(--text);
+      padding:12px 18px; border-radius:20px 20px 6px 20px; max-width:75%; width:75%;
+    }
+    .msg-edit-box textarea {
+      width:100%; border:none; background:transparent; resize:none; outline:none;
+      font:inherit; font-size:15px; line-height:1.6; color:var(--text); font-family:inherit;
+      max-height:200px;
+    }
+    .msg-edit-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:10px; }
+    .msg-edit-actions button {
+      padding:6px 16px; border-radius:14px; font-size:13px; cursor:pointer;
+      border:1px solid var(--border); background:var(--surface); color:var(--text-2); transition:.12s;
+    }
+    .msg-edit-actions button:hover { background:var(--bg-alt); }
+    .msg-edit-actions button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+    .msg-edit-actions button.primary:hover { opacity:.9; }
 
     .msg-assistant { max-width:100%; }
     .ans-body { line-height:1.75; font-size:15px; color:var(--text); }
@@ -227,10 +267,22 @@
     .kp-chip { display:inline-block; font-size:11px; padding:2px 8px; border-radius:4px; background:var(--surface-alt); border:1px solid var(--border); margin:2px 4px 2px 0; }
     .ans-feedback { margin-top:12px; display:flex; gap:8px; align-items:center; }
     .ans-feedback span { font-size:12px; color:var(--text-3); }
-    .feedback-btn { background:none; border:1px solid var(--border); border-radius:var(--radius-xs); padding:4px 10px; cursor:pointer; font-size:12px; color:var(--text-2); transition:.12s; }
-    .feedback-btn:hover { border-color:var(--text-2); color:var(--text); }
-    .feedback-btn.selected { background:var(--accent-lt); border-color:var(--accent); color:var(--accent); }
+    .feedback-btn {
+      position:relative; display:inline-flex; align-items:center; justify-content:center;
+      width:28px; height:28px; padding:0; background:none; border:none;
+      border-radius:var(--radius-xs); cursor:pointer; color:var(--text-2); transition:.12s;
+    }
+    .feedback-btn svg { width:14px; height:14px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+    .feedback-btn:hover { background:rgba(0,0,0,.06); color:var(--text); }
+    .feedback-btn.selected { color:var(--accent); }
+    .feedback-btn.selected svg { fill:currentColor; }
     .feedback-btn:disabled { opacity:.4; cursor:not-allowed; }
+    .feedback-btn[title]::after {
+      content:attr(title); position:absolute; bottom:calc(100% + 6px); left:50%; transform:translateX(-50%);
+      background:var(--text); color:#fff; font-size:11px; padding:3px 8px; border-radius:5px;
+      white-space:nowrap; opacity:0; pointer-events:none; transition:opacity .12s; z-index:50;
+    }
+    .feedback-btn[title]:hover::after { opacity:1; }
 
     .msg-loading { display:flex; gap:8px; align-items:center; color:var(--text-3); font-size:14px; padding:12px 0; }
     .dots { display:inline-flex; gap:4px; }
@@ -699,7 +751,8 @@ async function doSubmit(question) {
     }
   }
 
-  appendUserMsg(question);
+  downgradePreviousUserMsg();     // the old "last" question no longer gets retry/edit
+  appendUserMsg(question, true);  // true: this is the last (most recent) question
 
   // Step 1: POST /session/turn
   var totalStart = Date.now();
@@ -863,7 +916,7 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
             setTimeout(function() { updateProcessStep('trace', 'done', '追踪记录'); }, 1500);
             api('POST', '/session/working', {
               session_id: S.sessionId,
-              step_summary: '已回答：' + originalQuestion,
+              step_summary: (answerResult.content || '').slice(-300),
               continuable_action: ''
             });
             loadSessions();
@@ -1074,11 +1127,122 @@ function extractStreamContent(raw) {
 // ═══════════════════════════════════════════════════════
 // CHAT MESSAGES
 // ═══════════════════════════════════════════════════════
-function appendUserMsg(text) {
+var ICON_COPY  = '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+var ICON_CHECK = '<svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>';
+var ICON_RETRY = '<svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>';
+var ICON_EDIT  = '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+var ICON_THUMB_UP   = '<svg viewBox="0 0 24 24"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2h0a3.13 3.13 0 0 1 3 3.88Z"/></svg>';
+var ICON_THUMB_DOWN = '<svg viewBox="0 0 24 24"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22h0a3.13 3.13 0 0 1-3-3.88Z"/></svg>';
+
+function userMsgActionsHtml(isLast) {
+  var html = '<div class="msg-actions">' +
+    '<button class="icon-btn msg-act-copy" title="复制">' + ICON_COPY + '</button>';
+  if (isLast) {
+    html +=
+      '<button class="icon-btn msg-act-retry" title="重新回答">' + ICON_RETRY + '</button>' +
+      '<button class="icon-btn msg-act-edit" title="编辑">' + ICON_EDIT + '</button>';
+  }
+  return html + '</div>';
+}
+
+// Only the most recent question should offer retry/edit; once a new
+// question is asked, strip those buttons from the previous "last" message.
+function downgradePreviousUserMsg() {
+  var uMsgs = chatInner().querySelectorAll('.msg-user');
+  if (!uMsgs.length) return;
+  var prev = uMsgs[uMsgs.length - 1];
+  var retry = prev.querySelector('.msg-act-retry');
+  var edit = prev.querySelector('.msg-act-edit');
+  if (retry) retry.remove();
+  if (edit) edit.remove();
+}
+
+function bindUserMsgActions(el, text, isLast) {
+  el.querySelector('.msg-act-copy').addEventListener('click', function(e) {
+    e.stopPropagation();
+    copyIconBtn(text, this);
+  });
+  if (isLast) {
+    el.querySelector('.msg-act-retry').addEventListener('click', function(e) {
+      e.stopPropagation();
+      regenerateQuestion(el, text);
+    });
+    el.querySelector('.msg-act-edit').addEventListener('click', function(e) {
+      e.stopPropagation();
+      startEditQuestion(el, text);
+    });
+  }
+}
+
+function copyIconBtn(text, btn) {
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(function() {
+    var orig = btn.innerHTML;
+    btn.innerHTML = ICON_CHECK;
+    btn.classList.add('copied');
+    setTimeout(function() { btn.innerHTML = orig; btn.classList.remove('copied'); }, 1200);
+  }).catch(function() { console.warn('Copy failed'); });
+}
+
+// Removes msgEl and every message after it (the answer/loading/error that
+// followed it), so retry/edit can resubmit without leaving stale output.
+function removeMessagesFrom(msgEl) {
+  var node = msgEl;
+  while (node) {
+    var next = node.nextSibling;
+    node.remove();
+    node = next;
+  }
+}
+
+function regenerateQuestion(msgEl, text) {
+  if (_abortCtrl) stopAnswer();
+  removeMessagesFrom(msgEl);
+  doSubmit(text);
+}
+
+function startEditQuestion(msgEl, text) {
+  msgEl.innerHTML =
+    '<div class="msg-edit-box"><textarea class="msg-edit-input" rows="1"></textarea>' +
+    '<div class="msg-edit-actions">' +
+    '<button class="msg-edit-cancel">取消</button>' +
+    '<button class="msg-edit-send primary">发送</button>' +
+    '</div></div>';
+
+  var ta = msgEl.querySelector('.msg-edit-input');
+  ta.value = text;
+  autoResize(ta);
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+  ta.addEventListener('input', function() { autoResize(ta); });
+  ta.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); confirmEdit(); }
+    if (e.key === 'Escape') { cancelEdit(); }
+  });
+
+  function confirmEdit() {
+    var newText = ta.value.trim();
+    if (!newText) return;
+    if (_abortCtrl) stopAnswer();
+    removeMessagesFrom(msgEl);
+    doSubmit(newText);
+  }
+  function cancelEdit() {
+    msgEl.innerHTML = '<div class="bubble">' + esc(text) + '</div>' + userMsgActionsHtml(true);
+    bindUserMsgActions(msgEl, text, true);
+  }
+
+  msgEl.querySelector('.msg-edit-send').addEventListener('click', function(e) { e.stopPropagation(); confirmEdit(); });
+  msgEl.querySelector('.msg-edit-cancel').addEventListener('click', function(e) { e.stopPropagation(); cancelEdit(); });
+}
+
+function appendUserMsg(text, isLast) {
   var el = div('msg msg-user');
-  el.innerHTML = '<div class="bubble">' + esc(text) + '</div>';
+  el.innerHTML = '<div class="bubble">' + esc(text) + '</div>' + userMsgActionsHtml(isLast);
   chatInner().appendChild(el);
+  bindUserMsgActions(el, text, isLast);
   scrollThread();
+  return el;
 }
 
 function appendLoading() {
@@ -1118,11 +1282,17 @@ function appendAnswerMsg(ans) {
       </span>\
     </div>\
     <div class="ans-feedback">\
-      <button class="feedback-btn" id="fb-pos-' + esc(ans.answer_id) + '" disabled onclick="sendFeedback(this.dataset.traceId,\'' + esc(ans.answer_id) + '\',\'positive\')">↑</button>\
-      <button class="feedback-btn" id="fb-neg-' + esc(ans.answer_id) + '" disabled onclick="sendFeedback(this.dataset.traceId,\'' + esc(ans.answer_id) + '\',\'negative\')">↓</button>\
+      <button class="icon-btn ans-act-copy" title="复制 Markdown">' + ICON_COPY + '</button>\
+      <button class="feedback-btn" id="fb-pos-' + esc(ans.answer_id) + '" title="有帮助" disabled onclick="sendFeedback(this.dataset.traceId,\'' + esc(ans.answer_id) + '\',\'positive\')">' + ICON_THUMB_UP + '</button>\
+      <button class="feedback-btn" id="fb-neg-' + esc(ans.answer_id) + '" title="没帮助" disabled onclick="sendFeedback(this.dataset.traceId,\'' + esc(ans.answer_id) + '\',\'negative\')">' + ICON_THUMB_DOWN + '</button>\
     </div>';
   chatInner().appendChild(el);
+  el.querySelector('.ans-act-copy').addEventListener('click', function(e) {
+    e.stopPropagation();
+    copyIconBtn(ans.content || '', this);
+  });
   scrollThread();
+  return el;
 }
 
 function appendErrorMsg(msg, rawData) {
@@ -1146,13 +1316,20 @@ function openEvidenceInDrawer(factId) {
 // ═══════════════════════════════════════════════════════
 async function sendFeedback(traceId, answerId, type) {
   if (!traceId) return;
+  var btn = document.getElementById('fb-' + (type === 'positive' ? 'pos' : 'neg') + '-' + answerId);
+  if (btn && btn.classList.contains('selected')) {
+    // Toggle off. The backend has no "clear feedback" type, so this only
+    // resets the local selection state; the last submitted feedback stands.
+    btn.classList.remove('selected');
+    return;
+  }
   try {
     var r = await api('POST', '/traces/' + traceId + '/feedback', { type: type });
     ['pos','neg'].forEach(function(t) {
       var el = document.getElementById('fb-' + t + '-' + answerId);
       if (el) el.classList.remove('selected');
     });
-    document.getElementById('fb-' + (type === 'positive' ? 'pos' : 'neg') + '-' + answerId)?.classList.add('selected');
+    if (btn) btn.classList.add('selected');
   } catch(e) { console.error('Feedback failed', e); }
 }
 
@@ -1186,10 +1363,15 @@ function renderOverviewTab(ans, container) {
   var trace = S.currentTrace;
   var quality = trace ? trace.retrieval_quality : null;
   var tid = trace ? trace.trace_id : '';
+  var analysisRow = function(label, val) {
+    return val ? '<div class="flow-step"><span class="flow-label">' + label + '</span><span class="flow-val" style="font-size:12px">' + esc(val) + '</span></div>' : '';
+  };
+  var analysisHtml = evSet ? (analysisRow('主题', evSet.subject) + analysisRow('对象', evSet.audience) + analysisRow('意图', evSet.intent) + analysisRow('约束', evSet.constraint)) : '';
   container.innerHTML = '\
     <div class="panel-section"><h3>回答依据</h3>\
       <div class="flow-step"><span class="flow-label">问题</span></div>\
       <div style="font-size:13px;padding:4px 0 10px 0;color:var(--text);line-height:1.5">' + esc(ans.question || '') + '</div>\
+      ' + analysisHtml + '\
       <div class="flow-step"><span class="flow-arrow">↓</span><span class="flow-label">检索路径</span><span class="flow-val"><span class="badge ' + path + '">' + pathLabel(path) + '</span></span></div>\
       ' + (quality ? '<div class="flow-step"><span class="flow-arrow">↓</span><span class="flow-label">检索质量</span><span class="flow-val"><span class="badge ' + quality + '">' + qualityLabel(quality) + '</span></span></div>' : '') + '\
       <div class="flow-step"><span class="flow-arrow">↓</span><span class="flow-label">引用来源</span><span class="flow-val" style="font-size:12px">' + direct.length + ' 直接 · ' + supporting.length + ' 补充</span></div>\
@@ -1751,7 +1933,8 @@ async function switchSession(sessionId) {
     if (tr.ok && tr.data && tr.data.turns) {
       for (var i = 0; i < tr.data.turns.length; i++) {
         var t = tr.data.turns[i];
-        appendUserMsg(t.user_input);
+        var isLast = (i === tr.data.turns.length - 1);
+        appendUserMsg(t.user_input, isLast);
         if (t.action === 'interrupted') {
           appendSystemMsg('对话已重置');
         } else if (t.action === 'clarify' && t.clarify_msg) {

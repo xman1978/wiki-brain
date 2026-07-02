@@ -20,8 +20,10 @@ func NewParser(client llm.LLMClient) *Parser {
 
 func (p *Parser) Parse(ctx context.Context, input string, state *SessionState) ParseResult {
 	vars := map[string]string{
-		"last_intent": truncate(state.Dialogue.Intent, 60, "（空）"),
-		"user_input":  truncate(input, 200, ""),
+		"last_question": truncate(state.Dialogue.LastQuestion, 100, "（无）"),
+		"last_answer":   truncateTail(state.Working.StepSummary, 300, "（无）"),
+		"last_parse":    formatLastParse(state),
+		"user_input":    truncate(input, 200, ""),
 	}
 
 	raw, err := p.llm.Complete(ctx, "session_parse.md", vars, "classification")
@@ -68,13 +70,36 @@ func truncate(s string, maxRunes int, fallback string) string {
 	return s
 }
 
+// truncateTail keeps the last maxRunes runes: answers state their
+// conclusions at the end, so the tail is the information-dense part.
+func truncateTail(s string, maxRunes int, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	runes := []rune(s)
+	if len(runes) > maxRunes {
+		return "……" + string(runes[len(runes)-maxRunes:])
+	}
+	return s
+}
+
+func formatLastParse(state *SessionState) string {
+	d := state.Dialogue
+	if d.Subject == "" && d.Audience == "" && d.Intent == "" && d.Constraint == "" {
+		return "（无）"
+	}
+	return fmt.Sprintf(`{"subject":%q,"audience":%q,"intent":%q,"constraint":%q}`,
+		d.Subject, d.Audience, d.Intent, d.Constraint)
+}
+
 var jsonBlockRe = regexp.MustCompile(`\{[^{}]*\}`)
 
 type parseOutput struct {
-	Intent     string `json:"intent"`
-	Subject    string `json:"subject"`
-	Audience   string `json:"audience"`
-	Constraint string `json:"constraint"`
+	Intent             string `json:"intent"`
+	Subject            string `json:"subject"`
+	Audience           string `json:"audience"`
+	Constraint         string `json:"constraint"`
+	StandaloneQuestion string `json:"standalone_question"`
 }
 
 func repairLayer1(raw string) (ParseResult, bool) {
@@ -109,6 +134,12 @@ func repairLayer1(raw string) (ParseResult, bool) {
 	result.Audience = out.Audience
 
 	result.Constraint = out.Constraint
+
+	sqRunes := []rune(out.StandaloneQuestion)
+	if len(sqRunes) > 200 {
+		out.StandaloneQuestion = string(sqRunes[:200])
+	}
+	result.StandaloneQuestion = out.StandaloneQuestion
 
 	valid := result.Intent != ""
 	return result, valid

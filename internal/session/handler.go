@@ -109,6 +109,7 @@ func (h *Handler) postTurn(w http.ResponseWriter, r *http.Request) {
 	if DetectContinuation(input.UserInput, state) {
 		eq := Expand(state, PlanResult{Action: PlanRetrieve}, input.UserInput)
 		eq.ExpandedQuestion = state.Working.ContinuableAction
+		state.Dialogue.LastQuestion = eq.ExpandedQuestion
 		result.Action = "retrieve"
 		result.ExpandedQuery = &eq
 		h.store.Set(input.SessionID, state)
@@ -117,11 +118,14 @@ func (h *Handler) postTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. SessionParser (LLM) — extracts intent/subject from input only
+	// 3. SessionParser (LLM) — context-aware parse: resolves the current input
+	// against the previous turn (question, answer tail, parsed slots) into a
+	// complete slot tuple plus a standalone question.
 	parsed := h.parser.Parse(r.Context(), input.UserInput, state)
 
 	slog.Info("session parse result", "input", input.UserInput, "intent", parsed.Intent,
-		"subject", parsed.Subject, "audience", parsed.Audience, "current_subject", state.Working.CurrentSubject)
+		"subject", parsed.Subject, "audience", parsed.Audience, "constraint", parsed.Constraint,
+		"standalone", parsed.StandaloneQuestion, "current_subject", state.Working.CurrentSubject)
 
 	// 4. Update state
 	state.Dialogue.Intent = parsed.Intent
@@ -146,6 +150,10 @@ func (h *Handler) postTurn(w http.ResponseWriter, r *http.Request) {
 	switch plan.Action {
 	case PlanRetrieve:
 		eq := Expand(state, plan, input.UserInput)
+		if parsed.StandaloneQuestion != "" {
+			eq.ExpandedQuestion = parsed.StandaloneQuestion
+		}
+		state.Dialogue.LastQuestion = eq.ExpandedQuestion
 		slog.Info("session expand result", "expanded_question", eq.ExpandedQuestion, "subject", eq.Subject, "plan_subject", plan.Subject)
 		result.Action = "retrieve"
 		result.ExpandedQuery = &eq
@@ -178,6 +186,10 @@ func (h *Handler) postTurn(w http.ResponseWriter, r *http.Request) {
 
 	case PlanSkip:
 		eq := Expand(state, plan, input.UserInput)
+		if parsed.StandaloneQuestion != "" {
+			eq.ExpandedQuestion = parsed.StandaloneQuestion
+		}
+		state.Dialogue.LastQuestion = eq.ExpandedQuestion
 		result.Action = "retrieve"
 		result.ExpandedQuery = &eq
 		h.store.Set(input.SessionID, state)
@@ -213,6 +225,7 @@ func (h *Handler) postClarify(w http.ResponseWriter, r *http.Request) {
 		}
 
 		eq := Expand(state, PlanResult{Action: PlanRetrieve, Subject: input.SelectedRef}, "")
+		state.Dialogue.LastQuestion = eq.ExpandedQuestion
 		result.Action = "retrieve"
 		result.ExpandedQuery = &eq
 	} else {

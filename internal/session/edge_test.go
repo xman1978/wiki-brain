@@ -88,9 +88,10 @@ func TestEdgeCaseSessionParser(t *testing.T) {
 		state.Dialogue.RecentSubjects = c.recentSubjects
 
 		vars := map[string]string{
-			"recent_subjects": formatRecentSubjects(c.recentSubjects),
-			"current_subject": truncate(c.currentSubject, 60, "（空）"),
-			"user_input":      truncate(c.input, 200, ""),
+			"last_question": "（无）",
+			"last_answer":   "（无）",
+			"last_parse":    formatLastParse(state),
+			"user_input":    truncate(c.input, 200, ""),
 		}
 
 		raw, err := llmClient.Complete(context.Background(), "session_parse.md", vars, "parse")

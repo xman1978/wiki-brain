@@ -15,6 +15,7 @@ type DialogueState struct {
 	Subject           string                `json:"subject"`
 	Audience          string                `json:"audience,omitempty"`
 	Constraint        string                `json:"constraint,omitempty"`
+	LastQuestion      string                `json:"last_question,omitempty"`
 	RecentSubjects    []string              `json:"recent_subjects"`
 	ClarificationLog  []ClarificationRecord `json:"clarification_log"`
 }
@@ -34,6 +35,9 @@ type SessionState struct {
 type stateSnapshot struct {
 	Intent            string                `json:"intent"`
 	Subject           string                `json:"subject"`
+	Audience          string                `json:"audience,omitempty"`
+	Constraint        string                `json:"constraint,omitempty"`
+	LastQuestion      string                `json:"last_question,omitempty"`
 	RecentSubjects    []string              `json:"recent_subjects"`
 	ClarificationLog  []ClarificationRecord `json:"clarification_log"`
 	CurrentSubject    string                `json:"current_subject"`
@@ -45,6 +49,9 @@ func (s *SessionState) MarshalSnapshot() (string, error) {
 	snap := stateSnapshot{
 		Intent:            s.Dialogue.Intent,
 		Subject:           s.Dialogue.Subject,
+		Audience:          s.Dialogue.Audience,
+		Constraint:        s.Dialogue.Constraint,
+		LastQuestion:      s.Dialogue.LastQuestion,
 		RecentSubjects:    s.Dialogue.RecentSubjects,
 		ClarificationLog:  s.Dialogue.ClarificationLog,
 		CurrentSubject:    s.Working.CurrentSubject,
@@ -68,6 +75,9 @@ func (s *SessionState) UnmarshalSnapshot(data string) error {
 	}
 	s.Dialogue.Intent = snap.Intent
 	s.Dialogue.Subject = snap.Subject
+	s.Dialogue.Audience = snap.Audience
+	s.Dialogue.Constraint = snap.Constraint
+	s.Dialogue.LastQuestion = snap.LastQuestion
 	s.Dialogue.RecentSubjects = snap.RecentSubjects
 	s.Dialogue.ClarificationLog = snap.ClarificationLog
 	s.Working.CurrentSubject = snap.CurrentSubject
@@ -146,8 +156,9 @@ type TurnInfo struct {
 }
 
 type ParseResult struct {
-	Intent     string
-	Subject    string
-	Audience   string
-	Constraint string
+	Intent             string
+	Subject            string
+	Audience           string
+	Constraint         string
+	StandaloneQuestion string
 }
