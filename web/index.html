@@ -140,6 +140,11 @@
     }
     .welcome-input::placeholder { color:var(--text-3); }
     .welcome-input:focus { border-color:#c0bfba; box-shadow:0 0 0 1px rgba(0,0,0,.05), var(--shadow-md); }
+    .welcome-input { scrollbar-width:none; }
+    .welcome-input:hover, .welcome-input:focus { scrollbar-width:thin; }
+    .welcome-input::-webkit-scrollbar { width:6px; }
+    .welcome-input::-webkit-scrollbar-thumb { background:transparent; border-radius:3px; }
+    .welcome-input:hover::-webkit-scrollbar-thumb, .welcome-input:focus::-webkit-scrollbar-thumb { background:var(--border); }
 
     .welcome-input-box { position:relative; }
     .welcome-send {
@@ -301,6 +306,11 @@
     }
     .input-bar textarea::placeholder { color:var(--text-3); }
     .input-bar textarea:focus { border-color:#c0bfba; box-shadow:0 0 0 1px rgba(0,0,0,.05), var(--shadow-md); }
+    .input-bar textarea { scrollbar-width:none; }
+    .input-bar textarea:hover, .input-bar textarea:focus { scrollbar-width:thin; }
+    .input-bar textarea::-webkit-scrollbar { width:6px; }
+    .input-bar textarea::-webkit-scrollbar-thumb { background:transparent; border-radius:3px; }
+    .input-bar textarea:hover::-webkit-scrollbar-thumb, .input-bar textarea:focus::-webkit-scrollbar-thumb { background:var(--border); }
     .input-bar .send-btn {
       position:absolute; right:10px; bottom:10px; width:32px; height:32px; border-radius:50%;
       border:none; background:var(--text); color:#fff; cursor:pointer; display:flex;
@@ -405,6 +415,7 @@
     .status-processing { background:#dbeafe; color:#1e40af; }
     .status-completed  { background:var(--green-lt); color:var(--green); }
     .status-failed     { background:var(--red-lt); color:var(--red); }
+    .status-deleted    { background:#ffedd5; color:#9a3412; }
 
     /* ── STUDY CARDS ─────────────────────────────────────── */
     .study-card { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:24px; margin-bottom:16px; }
@@ -561,6 +572,7 @@
           <div class="uz-hint">MD · TXT · PDF · DOCX · HTML · PPT/PPTX · XLS/XLSX</div>
         </div>
         <input type="file" id="fileInput" style="display:none" accept=".pdf,.docx,.md,.txt,.html,.ppt,.pptx,.xls,.xlsx" onchange="fileSelected(event)" />
+        <input type="file" id="reuploadFileInput" style="display:none" accept=".pdf,.docx,.md,.txt,.html,.ppt,.pptx,.xls,.xlsx" onchange="onReuploadFileSelected(event)" />
       </div>
       <div class="sidebar-divider"></div>
       <div id="timelinePanel">
@@ -579,6 +591,7 @@
           <option value="processing">处理中</option>
           <option value="pending">等待中</option>
           <option value="failed">失败</option>
+          <option value="deleted">已删除</option>
         </select>
         <select id="sourceDomainFilter" onchange="sourcePage=0;loadSources()" style="font-size:12px;padding:4px 8px;">
           <option value="">全部领域</option>
@@ -804,6 +817,9 @@ async function doSubmit(question) {
       loadingEl.remove();
       updateProcessStep('activation', 'fail');
       appendErrorMsg('请求失败：' + e.message, null);
+    } else if (loadingEl.parentNode) {
+      loadingEl.remove();
+      appendSystemMsg('这条消息已停止');
     }
   }
 
@@ -1673,8 +1689,10 @@ async function loadSources() {
       </div><div class="sc-actions">\
         <button class="btn btn-sm" onclick="viewSource(\'' + esc(s.source_id) + '\')">详情</button>\
         ' + (s.status==='completed' ? '<button class="btn btn-sm" onclick="window.open(S.baseUrl+\'/sources/' + esc(s.source_id) + '/preview\',\'_blank\')">预览</button>' : '') + '\
+        ' + (s.status==='completed' ? '<button class="btn btn-sm" onclick="event.stopPropagation();reuploadSource(\'' + esc(s.source_id) + '\')">重新上传</button>' : '') + '\
+        ' + (s.status==='completed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="event.stopPropagation();deleteSource(\'' + esc(s.source_id) + '\',false)">删除</button>' : '') + '\
         ' + (s.status==='failed' ? '<button class="btn btn-sm" onclick="event.stopPropagation();retrySource(\'' + esc(s.source_id) + '\')">重试</button>' : '') + '\
-        ' + (s.status==='failed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="event.stopPropagation();deleteSource(\'' + esc(s.source_id) + '\')" title="删除"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>' : '') + '\
+        ' + (s.status==='failed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="event.stopPropagation();deleteSource(\'' + esc(s.source_id) + '\',true)">删除</button>' : '') + '\
         <button class="copy-btn" onclick="event.stopPropagation();copy(\'' + esc(s.source_id) + '\',this)">复制ID</button>\
       </div></div>';
     }).join('');
@@ -1701,7 +1719,10 @@ async function viewSource(sourceId) {
         <div class="detail-row"><span class="dl">创建时间</span><span class="dv">' + dateStr(d.created_at) + '</span></div>\
         <div class="modal-actions">\
           ' + (d.status==='completed' ? '<button class="btn btn-sm" onclick="window.open(S.baseUrl+\'/sources/' + esc(d.source_id) + '/preview\',\'_blank\')">预览</button>' : '') + '\
+          ' + (d.status==='completed' ? '<button class="btn btn-sm" onclick="reuploadSource(\'' + esc(d.source_id) + '\')">重新上传</button>' : '') + '\
+          ' + (d.status==='completed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteSource(\'' + esc(d.source_id) + '\',false);closeSourceDetail()">删除</button>' : '') + '\
           ' + (d.status==='failed' ? '<button class="btn btn-sm" onclick="retrySource(\'' + esc(d.source_id) + '\');closeSourceDetail()">重试</button>' : '') + '\
+          ' + (d.status==='failed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteSource(\'' + esc(d.source_id) + '\',true);closeSourceDetail()">删除</button>' : '') + '\
           <button class="btn" onclick="closeSourceDetail()">关闭</button>\
         </div>\
         <details style="margin-top:14px"><summary style="font-size:11px;cursor:pointer;color:var(--text-3)">原始 JSON</summary><div class="raw-json" style="margin-top:6px">' + esc(JSON.stringify(d,null,2)) + '</div></details>';
@@ -1711,21 +1732,81 @@ async function viewSource(sourceId) {
 function closeSourceDetail() { document.getElementById('sourceDetailModal').classList.add('hidden'); }
 
 async function retrySource(sourceId) {
-  try { var r = await api('POST', '/sources/' + sourceId + '/retry'); if (r.ok) loadSources(); else alert('重试失败：' + JSON.stringify(r.data)); }
-  catch(e) { alert('重试出错：' + e.message); }
+  try {
+    var r = await api('POST', '/sources/' + sourceId + '/retry');
+    if (r.ok) loadSources();
+    else alert('重试失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+  } catch(e) { alert('重试出错：' + e.message); }
 }
 
-async function deleteSource(sourceId) {
-  if (!confirm('确定删除此失败文件？')) return;
+// isFailed 决定确认文案：失败文件是彻底删除，其余状态走逻辑删除（保留原文件与
+// 记录，仅将已提取知识标记为 deprecated，可追溯），后端按当前 status 自动分派。
+async function deleteSource(sourceId, isFailed) {
+  var msg = isFailed
+    ? '确定彻底删除此失败文件？此操作不可恢复。'
+    : '确定删除此文件？已提取的知识将标记为失效（逻辑删除），原文件仍会保留以便追溯。';
+  if (!confirm(msg)) return;
   try {
     var r = await api('DELETE', '/sources/' + sourceId);
-    if (r.ok || r.status === 204) {
+    if (r.ok) {
       document.getElementById('timelinePanel').innerHTML = '<div class="tl-empty">选择右侧文件查看处理过程</div>';
       loadSources();
     } else {
-      alert('删除失败：' + (r.data?.error?.message || r.data?.raw || JSON.stringify(r.data)));
+      alert('删除失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
     }
   } catch(e) { alert('删除出错：' + e.message); }
+}
+
+// ── REUPLOAD (Shadow Source, docs/impl/v1/lifecycle.md) ──────────────
+var reuploadTargetId = null;
+function reuploadSource(sourceId) {
+  reuploadTargetId = sourceId;
+  document.getElementById('reuploadFileInput').click();
+}
+
+async function onReuploadFileSelected(e) {
+  var file = e.target.files[0];
+  e.target.value = '';
+  var sourceId = reuploadTargetId;
+  reuploadTargetId = null;
+  if (!file || !sourceId) return;
+
+  var title = '重新上传：' + file.name;
+  var uploadStart = new Date();
+  showTimeline(title, 'uploading', null, uploadStart);
+
+  var fd = new FormData();
+  fd.append('file', file);
+  try {
+    var r = await api('POST', '/sources/' + sourceId + '/reupload', fd, true);
+    if (r.ok && r.data && r.data.shadow_source_id) {
+      showTimeline(title, 'uploaded', null, uploadStart);
+      pollReuploadTimeline(r.data.shadow_source_id, title, uploadStart);
+    } else {
+      showTimeline(title, 'upload_failed', r.data, uploadStart);
+    }
+  } catch(err) {
+    showTimeline(title, 'upload_failed', null, uploadStart);
+  }
+  loadSources();
+}
+
+// 影子 Source 换血成功后其行会被删除（见 lifecycle.md 步骤 2），所以轮询时
+// 404 视为成功完成，而不是异常；status=failed 则是影子自身处理失败。
+async function pollReuploadTimeline(shadowId, title, uploadStart) {
+  clearTimeout(S.pollTimers[shadowId]);
+  try {
+    var r = await api('GET', '/sources/' + shadowId);
+    if (r.status === 404) {
+      showTimeline(title, 'completed', null, uploadStart);
+      loadSources();
+      return;
+    }
+    var status = (r.data && r.data.status) || 'unknown';
+    if (status === 'failed') { showTimeline(title, 'failed', r.data, uploadStart); loadSources(); return; }
+    showTimeline(title, 'processing', r.data, uploadStart);
+  } catch(e) { /* ignore, retry */ }
+  S.pollTimers[shadowId] = setTimeout(function() { pollReuploadTimeline(shadowId, title, uploadStart); }, 3000);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2010,7 +2091,7 @@ function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'
 function dateStr(s) { if (!s) return ''; try { return new Date(s).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}); } catch(e) { return s||''; } }
 function qualityLabel(q) { return {confident:'置信',partial:'部分',gap:'缺口'}[q] || q || '未知'; }
 function pathLabel(p) { return {short:'简洁模式',deep:'深度推理',none:'无法回答',error:'出错'}[p] || p || '未知'; }
-function statusLabel(s) { return {pending:'等待中',processing:'处理中',completed:'已完成',failed:'失败'}[s] || s || '未知'; }
+function statusLabel(s) { return {pending:'等待中',processing:'处理中',completed:'已完成',failed:'失败',deleted:'已删除'}[s] || s || '未知'; }
 function recLabel(r) { return {strong:'强推荐',candidate:'候选',ready:'可编译',needs_more_data:'数据不足'}[r] || r || '-'; }
 
 async function copy(text, el) {

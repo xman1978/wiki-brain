@@ -17,8 +17,10 @@
   -> 形成知识单元和知识点
   -> 使用中形成或验证 ActivationLink
   -> 问题触发思维模式选择
+  -> 知识加工模式给出领域知识结构和证据槽位
   -> ActivationLink 激活知识
   -> KPN 在必要时补充上下文
+  -> 证据挖掘从知识单元中摘选片段级证据
   -> Working Model 在复杂问题中组织思考
   -> 生成回答
 
@@ -93,6 +95,15 @@ ActivationLink
 
 KnowledgePoint Network
     负责补充上下文
+
+Knowledge Processing Pattern
+    负责给出领域知识结构（见 knowledge-processing-pattern.md）
+
+Evidence Mining
+    负责摘选证据（见 evidence-mining.md）
+
+Reasoning Pattern
+    负责在组织好的结构上执行推理（见 reasoning-pattern.md）
 
 Working Model
     负责组织思考
@@ -551,7 +562,7 @@ Study 根据 Learning Event 调整长期记忆，尤其是 ActivationLink 的强
 
 旧知识可以保留，用于解释历史思考和知识演化，但不应该默认作为当前答案依据。
 
-生命周期管理在知识大脑中相当于记忆的有效性判断和重新验证机制。知识状态应细分为 current、candidate、needs_verification、conflicted、superseded、deprecated、historical 和 retracted，而不是只用有效、过期、历史三类粗粒度标签。
+生命周期管理在知识大脑中相当于记忆的有效性判断机制。知识状态只需要 current、superseded、deprecated 三种——当前有效的、被新版本替代的、来源被删除的——就足以覆盖知识从产生到失效的完整过程，不需要 candidate/needs_verification/conflicted/historical/retracted 这类更细的中间状态（详见 `lifecycle.md` 第 2 节的场景倒推）。
 
 ## 7. 认知稳定性与质量控制
 
@@ -571,9 +582,9 @@ Study 根据 Learning Event 调整长期记忆，尤其是 ActivationLink 的强
 
 临时认知模型在输出前应检查问题边界、变量完整性、证据覆盖、缺口显式性、正反证据并存、推理可回溯性，以及回答边界是否与证据强度匹配。Working Model 是一次性思考结构，不能直接沉淀为长期记忆。
 
-**知识生命周期需要支持冲突、候选、废弃、撤回**
+**知识生命周期需要区分当前、替代、废弃**
 
-长期记忆应区分 current、candidate、needs_verification、conflicted、superseded、deprecated、historical 和 retracted。conflicted 不等于错误；historical 和 retracted 不应默认参与当前回答；current 也不是永久状态。
+长期记忆应区分 current、superseded、deprecated 三种状态。current 也不是永久状态，会因为来源更新或删除而让位；superseded 和 deprecated 都保留数据用于追溯，不代表错误，只代表"不再是当前依据"。知识之间的冲突由 KPN 的 contradicts 关系在检索时动态呈现（见 `unit.md` / `retrieval.md`），不需要单独的冲突状态。
 
 **Wiki 编译需要防止长期结论固化**
 

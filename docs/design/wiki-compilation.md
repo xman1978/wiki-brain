@@ -229,13 +229,13 @@ Wiki 页面不是最终真理，而是当前阶段的稳定表达。
 
 证据来源让页面结论能够回到材料侧依据，而不是脱离证据独立存在。
 
-争议点和待验证点保留 conflicted、candidate 或 needs_verification 状态的知识，不允许 Wiki 把冲突强行压平为单一结论。
+争议点和待验证点保留存在 contradicts 关系（见 unit.md / retrieval.md）或尚未被充分引用验证的知识，不允许 Wiki 把冲突强行压平为单一结论。
 
 最近更新时间帮助读者判断页面是否可能落后于底层记忆。
 
 依赖的核心知识单元和 ActivationLink 说明页面建立在哪些材料侧和使用侧对象之上，便于生命周期变化时定位影响范围。
 
-被替代或修订记录保留 superseded、deprecated 或 retracted 相关的演化轨迹，便于理解页面为何更新。
+被替代或修订记录保留 superseded、deprecated 相关的演化轨迹，便于理解页面为何更新。
 
 Wiki 防固化的基本原则是：
 

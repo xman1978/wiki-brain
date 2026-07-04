@@ -11,6 +11,8 @@ type Trace struct {
 	RetrievalQuality string    `json:"retrieval_quality"`
 	Path             string    `json:"path,omitempty"`
 	DirectPointIDs   []string  `json:"direct_point_ids,omitempty"`
+	KPNCitedCount    int       `json:"kpn_cited_count"`
+	CitedCount       int       `json:"cited_count"`
 	HasFeedback      bool      `json:"has_feedback"`
 	FeedbackType     string    `json:"feedback_type,omitempty"`
 	FeedbackContent  string    `json:"feedback_content,omitempty"`

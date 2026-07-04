@@ -26,6 +26,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sources/{id}", h.getSource)
 	mux.HandleFunc("DELETE /sources/{id}", h.deleteSource)
 	mux.HandleFunc("POST /sources/{id}/retry", h.retrySource)
+	mux.HandleFunc("POST /sources/{id}/reupload", h.reuploadSource)
+	mux.HandleFunc("POST /sources/{id}/reupload/retry", h.reuploadRetry)
 	mux.HandleFunc("GET /sources/{id}/outlines", h.getOutlines)
 	mux.HandleFunc("GET /sources/{id}/markdown", h.getMarkdown)
 	mux.HandleFunc("GET /sources/{id}/preview", h.getPreview)
@@ -209,24 +211,116 @@ func (h *Handler) getSource(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, resp)
 }
 
+// deleteSource dispatches DELETE /sources/:id by current status
+// (docs/impl/v1/lifecycle.md 步骤 2): failed sources are hard-deleted
+// (unchanged MVP behavior — nothing useful to preserve), any other status
+// is soft-deleted (KU/KP marked deprecated, rows and files kept).
 func (h *Handler) deleteSource(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	if err := h.svc.Delete(id); err != nil {
-		if strings.Contains(err.Error(), "source not found") {
-			foundation.WriteError(w, http.StatusNotFound, "source not found")
+	src, err := h.svc.Store().GetByID(id)
+	if err != nil {
+		foundation.WriteError(w, http.StatusNotFound, "source not found")
+		return
+	}
+
+	if src.Status == "deleted" {
+		foundation.WriteError(w, http.StatusBadRequest, "source already deleted")
+		return
+	}
+
+	if src.Status == "failed" {
+		if err := h.svc.Delete(id); err != nil {
+			slog.Error("delete source failed", "error", err)
+			foundation.WriteError(w, http.StatusInternalServerError, "delete failed")
 			return
 		}
-		if strings.Contains(err.Error(), "only failed sources") {
-			foundation.WriteError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		slog.Error("delete source failed", "error", err)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	deprecated, err := h.svc.SoftDelete(id)
+	if err != nil {
+		slog.Error("soft delete source failed", "error", err)
 		foundation.WriteError(w, http.StatusInternalServerError, "delete failed")
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"source_id":        id,
+		"deprecated_units": deprecated,
+	})
+}
+
+// reuploadSource implements POST /sources/:id/reupload (docs/impl/v1/lifecycle.md
+// 步骤 2): the new file is processed through a hidden Shadow Source; the target
+// itself is untouched until the shadow's unit_extract finishes successfully.
+func (h *Handler) reuploadSource(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	if err := r.ParseMultipartForm(100 << 20); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid multipart form")
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "missing file field")
+		return
+	}
+	defer file.Close()
+
+	shadow, err := h.svc.ImportShadow(r.Context(), id, header.Filename, file)
+	if err != nil {
+		if strings.Contains(err.Error(), "source not found") {
+			foundation.WriteError(w, http.StatusNotFound, "source not found")
+			return
+		}
+		if strings.Contains(err.Error(), "unsupported format") {
+			foundation.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "duplicate file name") {
+			foundation.WriteError(w, http.StatusConflict, "文件名已存在，请先修改文件名或删除同名文件后重新上传")
+			return
+		}
+		if strings.Contains(err.Error(), "cannot reupload a shadow") {
+			foundation.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		slog.Error("reupload source failed", "error", err)
+		foundation.WriteError(w, http.StatusInternalServerError, "reupload failed")
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusAccepted, map[string]interface{}{
+		"source_id":        id,
+		"shadow_source_id": shadow.SourceID,
+		"status":           "processing",
+	})
+}
+
+// reuploadRetry implements POST /sources/:id/reupload/retry, resuming the
+// existing failed shadow rather than starting a new one.
+func (h *Handler) reuploadRetry(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	shadow, err := h.svc.ReuploadRetry(r.Context(), id)
+	if err != nil {
+		if strings.Contains(err.Error(), "no failed shadow") {
+			foundation.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		slog.Error("reupload retry failed", "error", err)
+		foundation.WriteError(w, http.StatusInternalServerError, "reupload retry failed")
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"source_id":        id,
+		"shadow_source_id": shadow.SourceID,
+		"status":           "processing",
+	})
 }
 
 func (h *Handler) retrySource(w http.ResponseWriter, r *http.Request) {

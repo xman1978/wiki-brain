@@ -1,0 +1,283 @@
+package source
+
+import (
+	"context"
+	"database/sql"
+	"strings"
+	"testing"
+
+	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+)
+
+type fakeLifecycleSetter struct {
+	calls []struct {
+		unitIDs   []string
+		lifecycle string
+		reason    string
+	}
+}
+
+func (f *fakeLifecycleSetter) SetUnitLifecycle(unitIDs []string, lifecycle, reason string) error {
+	f.calls = append(f.calls, struct {
+		unitIDs   []string
+		lifecycle string
+		reason    string
+	}{unitIDs, lifecycle, reason})
+	return nil
+}
+
+func insertUnitForSource(t *testing.T, svc *Service, sourceID, unitID string) {
+	t.Helper()
+	_, err := svc.store.db.Exec(`INSERT INTO knowledge_units (unit_id, source_id, center, line_start, line_end, status, prompt_version)
+		VALUES (?, ?, 'test center', 1, 5, 'completed', 'v1')`, unitID, sourceID)
+	if err != nil {
+		t.Fatalf("insert unit: %v", err)
+	}
+}
+
+func TestSoftDelete_MarksUnitsDeprecatedAndStatus(t *testing.T) {
+	svc, _ := setupTestService(t)
+	lc := &fakeLifecycleSetter{}
+	svc.SetLifecycleSetter(lc)
+
+	svc.store.Create(&Source{
+		SourceID: "sd-1", Title: "Test", Format: "markdown", FileName: "sd.md",
+		OriginalPath: "o/sd.md", MarkdownPath: "m/sd.md", Status: "completed",
+	})
+	insertUnitForSource(t, svc, "sd-1", "u1")
+	insertUnitForSource(t, svc, "sd-1", "u2")
+
+	n, err := svc.SoftDelete("sd-1")
+	if err != nil {
+		t.Fatalf("SoftDelete: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("deprecated count = %d, want 2", n)
+	}
+
+	if len(lc.calls) != 1 {
+		t.Fatalf("expected 1 SetUnitLifecycle call, got %d", len(lc.calls))
+	}
+	if lc.calls[0].lifecycle != "deprecated" {
+		t.Errorf("lifecycle = %q, want deprecated", lc.calls[0].lifecycle)
+	}
+
+	got, err := svc.store.GetByID("sd-1")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Status != "deleted" {
+		t.Errorf("status = %q, want deleted", got.Status)
+	}
+}
+
+func TestList_ExcludesShadowSources(t *testing.T) {
+	svc, _ := setupTestService(t)
+
+	svc.store.Create(&Source{
+		SourceID: "vis-1", Title: "Visible", Format: "markdown", FileName: "vis.md",
+		OriginalPath: "o/vis.md", MarkdownPath: "m/vis.md", Status: "completed",
+	})
+	svc.store.Create(&Source{
+		SourceID: "shadow-1", Title: "Shadow", Format: "markdown", FileName: "vis.md",
+		OriginalPath: "o/shadow.md", MarkdownPath: "m/shadow.md", Status: "completed",
+		ShadowOf: sql.NullString{String: "vis-1", Valid: true},
+	})
+
+	list, err := svc.store.List("", "", 100, 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, s := range list {
+		if s.SourceID == "shadow-1" {
+			t.Error("shadow source should not appear in List")
+		}
+	}
+
+	count, err := svc.store.Count("", "")
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1 (shadow excluded)", count)
+	}
+}
+
+func TestExistsByFileNameExcept(t *testing.T) {
+	svc, _ := setupTestService(t)
+	svc.store.Create(&Source{
+		SourceID: "orig-1", Title: "Orig", Format: "markdown", FileName: "same.md",
+		OriginalPath: "o/orig.md", MarkdownPath: "m/orig.md", Status: "completed",
+	})
+
+	// Excluding the source that owns the name: no collision.
+	exists, err := svc.store.ExistsByFileNameExcept("same.md", "orig-1")
+	if err != nil {
+		t.Fatalf("ExistsByFileNameExcept: %v", err)
+	}
+	if exists {
+		t.Error("expected no collision when excluding the file's own owner")
+	}
+
+	// A different source with the same name still collides.
+	exists, err = svc.store.ExistsByFileNameExcept("same.md", "other-id")
+	if err != nil {
+		t.Fatalf("ExistsByFileNameExcept: %v", err)
+	}
+	if !exists {
+		t.Error("expected collision against an unrelated source")
+	}
+}
+
+func TestImportShadow_AllowsSameFileNameAsTarget(t *testing.T) {
+	svc, fake := setupTestService(t)
+	fake.SetResponse("source_summary.md", llm.FakeResponse{Output: "摘要"})
+	fake.SetResponse("source_domain_match.md", llm.FakeResponse{Output: `{"domain_id": null}`})
+
+	target, err := svc.Import(context.Background(), "report.md", strings.NewReader("# Report\n\nOld content"))
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	shadow, err := svc.ImportShadow(context.Background(), target.SourceID, "report.md", strings.NewReader("# Report\n\nNew content"))
+	if err != nil {
+		t.Fatalf("ImportShadow: %v", err)
+	}
+	if !shadow.ShadowOf.Valid || shadow.ShadowOf.String != target.SourceID {
+		t.Errorf("shadow_of = %v, want %s", shadow.ShadowOf, target.SourceID)
+	}
+	if shadow.SourceID == target.SourceID {
+		t.Error("shadow must get its own source_id")
+	}
+}
+
+func TestImportShadow_RejectsUnrelatedDuplicateFileName(t *testing.T) {
+	svc, fake := setupTestService(t)
+	fake.SetResponse("source_summary.md", llm.FakeResponse{Output: "摘要"})
+	fake.SetResponse("source_domain_match.md", llm.FakeResponse{Output: `{"domain_id": null}`})
+
+	target, err := svc.Import(context.Background(), "a.md", strings.NewReader("# A"))
+	if err != nil {
+		t.Fatalf("Import target: %v", err)
+	}
+	if _, err := svc.Import(context.Background(), "b.md", strings.NewReader("# B")); err != nil {
+		t.Fatalf("Import other: %v", err)
+	}
+
+	_, err = svc.ImportShadow(context.Background(), target.SourceID, "b.md", strings.NewReader("# New"))
+	if err == nil || !strings.Contains(err.Error(), "duplicate file name") {
+		t.Fatalf("expected duplicate file name error, got %v", err)
+	}
+}
+
+func TestImportShadow_DiscardsStaleFailedShadow(t *testing.T) {
+	svc, fake := setupTestService(t)
+	fake.SetResponse("source_summary.md", llm.FakeResponse{Output: "摘要"})
+	fake.SetResponse("source_domain_match.md", llm.FakeResponse{Output: `{"domain_id": null}`})
+
+	target, err := svc.Import(context.Background(), "a.md", strings.NewReader("# A"))
+	if err != nil {
+		t.Fatalf("Import target: %v", err)
+	}
+
+	firstShadow, err := svc.ImportShadow(context.Background(), target.SourceID, "attempt1.md", strings.NewReader("# Attempt 1"))
+	if err != nil {
+		t.Fatalf("ImportShadow first: %v", err)
+	}
+	errMsg := "boom"
+	if err := svc.store.UpdateStatus(firstShadow.SourceID, "failed", &errMsg); err != nil {
+		t.Fatalf("UpdateStatus: %v", err)
+	}
+
+	secondShadow, err := svc.ImportShadow(context.Background(), target.SourceID, "attempt2.md", strings.NewReader("# Attempt 2"))
+	if err != nil {
+		t.Fatalf("ImportShadow second: %v", err)
+	}
+	if secondShadow.SourceID == firstShadow.SourceID {
+		t.Error("expected a fresh shadow row, not a reused one")
+	}
+
+	if _, err := svc.store.GetByID(firstShadow.SourceID); err == nil {
+		t.Error("stale failed shadow should have been discarded")
+	}
+
+	got, err := svc.store.GetShadowByTarget(target.SourceID)
+	if err != nil {
+		t.Fatalf("GetShadowByTarget: %v", err)
+	}
+	if got == nil || got.SourceID != secondShadow.SourceID {
+		t.Errorf("expected only the second shadow to remain, got %v", got)
+	}
+}
+
+func TestReuploadRetry_RequiresFailedShadow(t *testing.T) {
+	svc, fake := setupTestService(t)
+	fake.SetResponse("source_summary.md", llm.FakeResponse{Output: "摘要"})
+	fake.SetResponse("source_domain_match.md", llm.FakeResponse{Output: `{"domain_id": null}`})
+
+	target, err := svc.Import(context.Background(), "a.md", strings.NewReader("# A"))
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	// No shadow at all yet.
+	if _, err := svc.ReuploadRetry(context.Background(), target.SourceID); err == nil {
+		t.Error("expected error when no shadow exists")
+	}
+}
+
+func TestSwapShadowIntoTarget_ReparentsAndCopiesMetadata(t *testing.T) {
+	svc, _ := setupTestService(t)
+
+	svc.store.Create(&Source{
+		SourceID: "target-1", Title: "Target Title", Format: "markdown", FileName: "old.md",
+		OriginalPath: "o/target-1.md", MarkdownPath: "m/target-1.md", Status: "completed",
+		Summary: sql.NullString{String: "old summary", Valid: true},
+	})
+	svc.store.Create(&Source{
+		SourceID: "shadow-1", Title: "Shadow Title", Format: "markdown", FileName: "new.md",
+		OriginalPath: "o/shadow-1.md", MarkdownPath: "m/shadow-1.md", Status: "completed",
+		Summary:   sql.NullString{String: "new summary", Valid: true},
+		WordCount: sql.NullInt64{Int64: 42, Valid: true},
+		ShadowOf:  sql.NullString{String: "target-1", Valid: true},
+	})
+
+	_, err := svc.store.db.Exec(`INSERT INTO knowledge_units (unit_id, source_id, center, line_start, line_end, status, prompt_version)
+		VALUES ('shadow-u1', 'shadow-1', 'c', 1, 5, 'completed', 'v1')`)
+	if err != nil {
+		t.Fatalf("insert shadow unit: %v", err)
+	}
+
+	if err := svc.store.SwapShadowIntoTarget("shadow-1", "target-1", "o/target-1-new.md", sql.NullString{}); err != nil {
+		t.Fatalf("SwapShadowIntoTarget: %v", err)
+	}
+
+	got, err := svc.store.GetByID("target-1")
+	if err != nil {
+		t.Fatalf("GetByID target: %v", err)
+	}
+	if got.Title != "Target Title" {
+		t.Errorf("title = %q, want unchanged Target Title", got.Title)
+	}
+	if got.FileName != "new.md" {
+		t.Errorf("file_name = %q, want new.md (copied from shadow)", got.FileName)
+	}
+	if !got.Summary.Valid || got.Summary.String != "new summary" {
+		t.Errorf("summary = %v, want new summary (copied from shadow)", got.Summary)
+	}
+	if got.OriginalPath != "o/target-1-new.md" {
+		t.Errorf("original_path = %q, want o/target-1-new.md", got.OriginalPath)
+	}
+
+	if _, err := svc.store.GetByID("shadow-1"); err == nil {
+		t.Error("shadow row should be deleted after swap")
+	}
+
+	var reparented string
+	if err := svc.store.db.QueryRow(`SELECT source_id FROM knowledge_units WHERE unit_id = 'shadow-u1'`).Scan(&reparented); err != nil {
+		t.Fatalf("query reparented unit: %v", err)
+	}
+	if reparented != "target-1" {
+		t.Errorf("shadow unit source_id = %q, want target-1", reparented)
+	}
+}

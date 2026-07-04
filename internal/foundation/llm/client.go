@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kaptinlin/jsonrepair"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
+	"github.com/kaptinlin/jsonrepair"
 )
 
 type OpenAIClient struct {

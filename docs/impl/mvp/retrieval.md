@@ -49,6 +49,8 @@ EvidenceSet：
   path               short / deep（由步骤 9 充分性判断写入，Answer 层按此分发路径）
   direct_evidence[]  直接证据列表
   supporting[]       支持性证据列表
+  conflicts[]        冲突证据列表（KPN contradicts 扩展产出，见步骤 8），无 fact_id，
+                     不参与 Answer 引用，仅作为提示信息随 EvidenceSet 传递给 Answer
 
 每条 Evidence：
   fact_id            全局唯一标识，由步骤 10 统一分配，供 Answer 层引用
@@ -74,9 +76,17 @@ EvidenceSet：
                      序列化后存入 answers.evidence_snapshot，供 Trace 和调试反查；
                      不需要对 source_ref 做额外数据库查询，仅用于展示和追溯。
   role               direct / supporting
+  origin             rerank / kpn_expansion，标记该证据是 Rerank 直接分类产出还是步骤 8 的 KPN
+                     邻居扩展补充；direct 恒为 rerank（KPN 扩展只补充 supporting）；
+                     随 EvidenceSet 序列化进 evidence_snapshot，供 Trace 计算 KPN 引用采纳率
+                     （见 trace.md / study.md summary.kpn_citation_rate）
+
+每条 ConflictEvidence（conflicts[] 中的元素，字段少于 Evidence，无 fact_id / role）：
+  unit_id / point_id / content / source_ref   含义同 Evidence
+  source_title       冲突材料所属 Source 标题，供 Answer 提示用户注意来源差异
 ```
 
-fact_id 是 Answer 层引用证据的唯一标识，Answer 只能使用 EvidenceSet 中已存在的 fact_id。candidate_id 仅在步骤 6～9 的内存处理阶段使用，不对外暴露。
+fact_id 是 Answer 层引用证据的唯一标识，Answer 只能使用 EvidenceSet 中已存在的 fact_id。candidate_id 仅在步骤 6～9 的内存处理阶段使用，不对外暴露。conflicts[] 不分配 fact_id，Answer 不能引用它作为证据，只能在回答中提示"存在冲突信息"。
 
 ### 步骤 2：Domain 预过滤
 
@@ -321,29 +331,33 @@ supporting；仅凭"同属一个大类"不构成 supporting 的理由。
 
 ### 步骤 8：KPN 上下文扩展
 
-Rerank 完成后，对标记为直接证据的 KU 做 KPN 扩展，补充变量、边界、前提等上下文。
+Rerank 完成后，对标记为直接证据的 KU 做 KPN 扩展，补充变量、边界、前提等上下文；`contradicts` 关系单独查询，产出 conflicts 而非 supporting。
+
+KPN 关系类型 MVP 阶段只有 2 种（related / contradicts，见 unit.md 设计决策），均写入为 `direction = 'bidirectional'`。查询按用途拆成两条，而非按 type 统一处理：
 
 ```text
 取所有 direct 证据的 unit_id；
 查询这些 unit 下的全部 KnowledgePoint，得到 seed_point_ids；
-在 knowledge_point_relations 中查找 seed_point_ids 的邻居 KP，方向规则如下：
 
-  direction = 'bidirectional'（related / contradicts）：
-    邻居 = target_point_id WHERE source_point_id IN seed_point_ids
-         UNION
-           source_point_id WHERE target_point_id IN seed_point_ids
+邻居查询（GetKPNNeighbors，排除 contradicts）：
+  target_point_id WHERE source_point_id IN seed_point_ids AND relation_type != 'contradicts'
+  UNION
+  source_point_id WHERE target_point_id IN seed_point_ids
+    AND direction = 'bidirectional' AND relation_type != 'contradicts'
+  去除 seed_point_ids 本身，得到 neighbor_point_ids；
+  取 neighbor_point_ids 所属的 KnowledgeUnit（unit_id 去重），排除已存在于候选集中的 KU；
+  新增 KU 加入候选集，role 标记为 supporting，point_id 填写触发该扩展的邻居 KP 的 point_id。
 
-  direction = 'directed'（hierarchical / depends / supplements）：
-    邻居 = target_point_id WHERE source_point_id IN seed_point_ids
-    （只跟随 source → target 方向，不反向追溯）
-
-合并两类查询结果，去除 seed_point_ids 本身，得到 neighbor_point_ids；
-取 neighbor_point_ids 所属的 KnowledgeUnit（unit_id 去重）；
-排除已存在于候选集中的 KU；
-将新增 KU 加入候选集，role 标记为 supporting，point_id 填写触发该扩展的邻居 KP 的 point_id（即 neighbor_point_ids 中对应该 KU 的 point_id）。
+冲突查询（GetKPNConflicts，仅 contradicts）：
+  target_point_id WHERE source_point_id IN seed_point_ids AND relation_type = 'contradicts'
+  UNION
+  source_point_id WHERE target_point_id IN seed_point_ids AND relation_type = 'contradicts'
+  （contradicts 恒按双向处理，不依赖 direction 列）
+  排除 seed_point_ids 本身；查到对应 KnowledgeUnit 后写入 EvidenceSet.conflicts（见步骤 1），
+  不加入候选集、不参与 Rerank、不分配 fact_id。
 ```
 
-KPN 扩展结果直接作为 supporting 证据加入，不再经过 Rerank。
+邻居查询的 `direction = 'bidirectional'` 条件是为未来可能引入的有向关系类型（如原设计中的 hierarchical / depends）保留的通用机制：MVP 当前只产生 bidirectional 数据，所以该条件目前恒为真，仅在未来又出现 directed 类型时才会生效收窄邻居范围。
 direct_evidence 为空时跳过此步骤。
 
 ### 步骤 9：直接回答充分性判断
@@ -405,6 +419,8 @@ FTS 召回命中 units index 和 points index；
 RRF 合并正确去重、多路得分累加并保留来源路径，按 RRF 分截取 Top N（默认 20）后进入 Rerank；
 LLM Rerank 对每条候选正确分类，输出结构通过 JSON Schema 校验；
 KPN 扩展能正确查询直接证据 KU 的邻居 KP，新增 KU 以 supporting 角色加入 EvidenceSet；
+KPN contradicts 邻居正确写入 EvidenceSet.conflicts（不加入候选集、不分配 fact_id）；
+Evidence.origin 正确标记（KPN 扩展补充的 supporting 为 kpn_expansion，其余为 rerank）；
 短路径和深路径分叉逻辑正常工作；
 EvidenceSet 中每条证据可回溯到 KnowledgeUnit 和来源位置；
 fake LLM client 下测试可稳定运行。

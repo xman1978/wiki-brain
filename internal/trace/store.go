@@ -29,10 +29,10 @@ func (s *Store) SaveTrace(t *Trace) error {
 	}
 
 	_, err = s.db.Exec(`INSERT INTO traces (trace_id, answer_id, question, question_hash, question_terms,
-		retrieval_quality, path, direct_point_ids, has_feedback, feedback_type, feedback_content)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		retrieval_quality, path, direct_point_ids, kpn_cited_count, cited_count, has_feedback, feedback_type, feedback_content)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.TraceID, t.AnswerID, t.Question, t.QuestionHash, t.QuestionTerms,
-		t.RetrievalQuality, t.Path, string(pointIDsJSON), hasFeedback,
+		t.RetrievalQuality, t.Path, string(pointIDsJSON), t.KPNCitedCount, t.CitedCount, hasFeedback,
 		nullString(t.FeedbackType), nullString(t.FeedbackContent),
 	)
 	if err != nil {
@@ -43,18 +43,18 @@ func (s *Store) SaveTrace(t *Trace) error {
 
 func (s *Store) GetTrace(traceID string) (*Trace, error) {
 	var (
-		t             Trace
-		pointIDsStr   string
-		hasFeedbackInt int
-		feedbackType  sql.NullString
+		t               Trace
+		pointIDsStr     string
+		hasFeedbackInt  int
+		feedbackType    sql.NullString
 		feedbackContent sql.NullString
 	)
 	err := s.db.QueryRow(`SELECT trace_id, answer_id, question, question_hash, question_terms,
-		retrieval_quality, path, direct_point_ids, has_feedback, feedback_type, feedback_content,
+		retrieval_quality, path, direct_point_ids, kpn_cited_count, cited_count, has_feedback, feedback_type, feedback_content,
 		created_at, updated_at
 		FROM traces WHERE trace_id = ?`, traceID).
 		Scan(&t.TraceID, &t.AnswerID, &t.Question, &t.QuestionHash, &t.QuestionTerms,
-			&t.RetrievalQuality, &t.Path, &pointIDsStr, &hasFeedbackInt,
+			&t.RetrievalQuality, &t.Path, &pointIDsStr, &t.KPNCitedCount, &t.CitedCount, &hasFeedbackInt,
 			&feedbackType, &feedbackContent, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -244,4 +244,3 @@ func nullString(s string) interface{} {
 	}
 	return s
 }
-

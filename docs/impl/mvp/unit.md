@@ -77,11 +77,11 @@ CREATE TABLE knowledge_point_relations (
     source_point_id  TEXT NOT NULL REFERENCES knowledge_points(point_id),
     target_point_id  TEXT NOT NULL REFERENCES knowledge_points(point_id),
     relation_type    TEXT NOT NULL,
-    -- related / hierarchical / depends / supplements / contradicts
-    -- MVP 阶段只保留 KPN Prompt 实际生成的 5 种类型
+    -- related / contradicts（枚举 2 种，见下方设计决策说明）
     direction        TEXT NOT NULL DEFAULT 'directed',
     -- directed（有向）/ bidirectional（双向）
-    -- related / contradicts → bidirectional；hierarchical / depends / supplements → directed
+    -- related / contradicts → bidirectional；程序当前只写 bidirectional
+    -- 字段保留 directed 语义与默认值，为未来引入有向关系类型预留扩展空间，不代表当前会产生 directed 数据
     prompt_version   TEXT NOT NULL,
     created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -89,6 +89,15 @@ CREATE TABLE knowledge_point_relations (
 CREATE INDEX idx_kp_relations_source ON knowledge_point_relations(source_point_id);
 CREATE INDEX idx_kp_relations_target ON knowledge_point_relations(target_point_id);
 ```
+
+**设计决策（`prompt_version: v2` 起生效）**：KPN 关系类型最初设计为 5 种（related / hierarchical / depends / supplements / contradicts），MVP 实践中发现细粒度分类对检索召回质量提升有限，反而因 LLM 分类不稳定导致关系数量膨胀、噪音增多。收窄为 2 种：
+
+```text
+related：主题相关、互补、依赖或层级关系（原 related/hierarchical/depends/supplements 合并），双向
+contradicts：约束冲突，双向
+```
+
+收窄后 `direction` 恒为 `bidirectional`，有向关系（directed）分支不再产生数据，但 schema 和 retrieval 侧查询逻辑保留对 directed 类型的支持（见 retrieval.md 步骤 8），便于未来若重新引入有向关系类型时无需迁移。
 
 ## 任务执行模型
 
@@ -270,12 +279,9 @@ Prompt 文件：`config/prompts/kpn_extract.md`
 ```
 分析以下知识点列表，找出知识点之间的语义连接。
 
-关系类型：
-- related：主题相关（双向）
-- hierarchical：from 是 to 的上位概念或 to 是 from 的细化（有向）
-- depends：from 成立需要 to 作为前提（有向）
-- supplements：from 为 to 补充细节（有向）
-- contradicts：两者存在约束冲突（双向）
+关系类型（仅 2 种）：
+- related：两个知识点主题相关、互为补充、存在依赖或层级关系（双向）
+- contradicts：两个知识点存在约束冲突或矛盾（双向）
 
 原则：
 - 只建立有明确依据的关系，不推测
@@ -291,14 +297,14 @@ Prompt 文件：`config/prompts/kpn_extract.md`
 
 #### 4.3 KPN 输出格式
 
-`direction` 由程序从 `type` 推断（`related`/`contradicts` → bidirectional，其余 → directed），不让模型输出。
+`direction` 不由模型输出，程序统一写入 `bidirectional`（`related`/`contradicts` 均为双向关系）。
 
 注入 prompt 的 `{{json_schema}}` 是示例 JSON，不是 JSON Schema DSL：
 
 ```json
 {
   "relations": [
-    {"from": "point_id", "to": "point_id", "type": "related|hierarchical|depends|supplements|contradicts"}
+    {"from": "point_id", "to": "point_id", "type": "related|contradicts"}
   ]
 }
 ```
@@ -314,9 +320,7 @@ Prompt 文件：`config/prompts/kpn_extract.md`
 
 校验通过后写入 knowledge_point_relations：
   - source_point_id = from，target_point_id = to
-  - direction 由程序从 type 推断：
-      related / contradicts  → bidirectional
-      hierarchical / depends / supplements → directed
+  - direction 恒为 bidirectional（related / contradicts 均为双向关系）
 
 KPN 生成失败（Schema 校验失败或 LLM 报错）记录 warn 日志，不阻塞 Source 完成；
 KPN 生成不改变 KU / KP 的状态。

@@ -104,7 +104,7 @@ Study 定期扫描此表，执行以下动作：
 
 ```text
 条件：某主题（domain/concept）下多个 KP 都积累了较高的 confident_count，
-      且这些 KP 之间存在 KPN 连接（related / hierarchical）
+      且这些 KP 之间存在 KPN 连接（related，KPN 关系类型 MVP 阶段收窄为 related / contradicts 2 种，见 impl/mvp/unit.md 设计决策）
 动作：生成 wiki_update_candidate 事件，建议将这批 KP 编译为 Wiki 页面
 说明：Wiki 页面一旦形成，后续同类问题可直接命中，不再经历完整检索链
 ```
@@ -239,6 +239,14 @@ KPN 上下文被采用 ≠ 立即晋升为 ActivationLink。
 当 activation_gap 或 repeated_success 表明某条补充路径在多次事件中稳定有效时，Study 可以形成候选 ActivationLink。
 
 candidate ActivationLink 仍必须经过独立补充查找、实际采用、证据回链和反馈验证，才能晋升为 verified。Study 不应根据 KPN 扩散过程本身晋升链接。
+
+### 从模式组装中沉淀关系
+
+知识点间的关系（属于、先后、依赖、因果）不应在导入期批量抽取，而应从使用中生长。
+
+知识加工模式的槽位组装是关系发现的自然时机：来自不同材料的知识点填入同一模式的槽位时，它们之间的归属和顺序关系已经在本次使用中显现（见 `knowledge-processing-pattern.md` 第 4 节）。这类关系可随 Learning Event 进入 Study。
+
+Study 对其遵守与 ActivationLink 相同的谨慎原则：单次组装不建立关系；只有当同一组知识点在多次事件中稳定地以相同结构被组装时，才沉淀为知识点间的长期关系，供 KPN 上下文补充使用。
 
 ## 7. 实践路径：从 Working Model 到 Experience Path
 

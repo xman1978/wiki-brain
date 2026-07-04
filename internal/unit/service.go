@@ -21,14 +21,39 @@ import (
 )
 
 type Service struct {
-	store       *Store
-	sourceStore *source.Store
-	llmClient   llm.LLMClient
-	unitsIndex  bleve.Index
-	pointsIndex bleve.Index
-	queue       *queue.Queue
-	cfg         *config.Config
-	broadcaster *progress.Broadcaster
+	store              *Store
+	sourceStore        *source.Store
+	llmClient          llm.LLMClient
+	unitsIndex         bleve.Index
+	pointsIndex        bleve.Index
+	queue              *queue.Queue
+	cfg                *config.Config
+	broadcaster        *progress.Broadcaster
+	wikiNotifier       WikiNotifier
+	activationNotifier ActivationNotifier
+}
+
+// WikiNotifier lets the (not yet implemented) Wiki module learn about
+// lifecycle changes so it can mark dependent pages needs_recompile
+// (docs/impl/v1/lifecycle.md 步骤 4). SetUnitLifecycle no-ops when unset.
+type WikiNotifier interface {
+	NotifyPointsLifecycleChanged(pointIDs []string) error
+}
+
+// ActivationNotifier lets the Activation module's Matcher learn about KP
+// lifecycle changes, since its verified-link cache only holds links whose
+// target KP is lifecycle=current (docs/impl/v1/activation.md 步骤 2 候选加载).
+// SetUnitLifecycle no-ops when unset.
+type ActivationNotifier interface {
+	InvalidateCache() error
+}
+
+func (s *Service) SetWikiNotifier(n WikiNotifier) {
+	s.wikiNotifier = n
+}
+
+func (s *Service) SetActivationNotifier(n ActivationNotifier) {
+	s.activationNotifier = n
 }
 
 func NewService(store *Store, sourceStore *source.Store, llmClient llm.LLMClient, unitsIdx, pointsIdx bleve.Index, q *queue.Queue, cfg *config.Config) *Service {
@@ -592,6 +617,10 @@ func (s *Service) indexUnit(ku *KnowledgeUnit, mdLines []string) {
 		return
 	}
 	content := sliceLines(mdLines, ku.LineStart, ku.LineEnd)
+	lifecycle := ku.Lifecycle
+	if lifecycle == "" {
+		lifecycle = LifecycleCurrent
+	}
 	doc := map[string]interface{}{
 		"unit_id":    ku.UnitID,
 		"source_id":  ku.SourceID,
@@ -599,6 +628,7 @@ func (s *Service) indexUnit(ku *KnowledgeUnit, mdLines []string) {
 		"line_start": ku.LineStart,
 		"line_end":   ku.LineEnd,
 		"content":    content,
+		"lifecycle":  lifecycle,
 	}
 	if err := s.unitsIndex.Index(ku.UnitID, doc); err != nil {
 		slog.Error("unit: bleve index unit failed", "error", err)
@@ -609,14 +639,109 @@ func (s *Service) indexPoint(kp *KnowledgePoint) {
 	if s.pointsIndex == nil {
 		return
 	}
+	lifecycle := kp.Lifecycle
+	if lifecycle == "" {
+		lifecycle = LifecycleCurrent
+	}
 	doc := map[string]interface{}{
 		"point_id":   kp.PointID,
 		"unit_id":    kp.UnitID,
 		"source_id":  kp.SourceID,
 		"content":    kp.Content,
 		"point_type": kp.PointType,
+		"lifecycle":  lifecycle,
 	}
 	if err := s.pointsIndex.Index(kp.PointID, doc); err != nil {
 		slog.Error("unit: bleve index point failed", "error", err)
+	}
+}
+
+// SetUnitLifecycle is the single entry point for changing KU lifecycle state
+// (docs/impl/v1/lifecycle.md 步骤 1). It cascades to the units' KPs, keeps
+// Bleve in sync, logs the reason, and notifies the Wiki module if wired in.
+// Business code must never UPDATE the lifecycle column directly.
+func (s *Service) SetUnitLifecycle(unitIDs []string, lifecycle, reason string) error {
+	if len(unitIDs) == 0 {
+		return nil
+	}
+	switch lifecycle {
+	case LifecycleCurrent, LifecycleSuperseded, LifecycleDeprecated:
+	default:
+		return fmt.Errorf("unit: invalid lifecycle %q", lifecycle)
+	}
+
+	units, err := s.store.GetUnitsByIDs(unitIDs)
+	if err != nil {
+		return fmt.Errorf("unit: set lifecycle: get units: %w", err)
+	}
+
+	if err := s.store.UpdateUnitsLifecycle(unitIDs, lifecycle); err != nil {
+		return fmt.Errorf("unit: set lifecycle: update units: %w", err)
+	}
+	if err := s.store.UpdatePointsLifecycleByUnitIDs(unitIDs, lifecycle); err != nil {
+		return fmt.Errorf("unit: set lifecycle: update points: %w", err)
+	}
+
+	points, err := s.store.GetPointsByUnitIDs(unitIDs)
+	if err != nil {
+		slog.Warn("unit: set lifecycle: get points for reindex failed", "error", err)
+	}
+
+	s.reindexLifecycle(units, points, lifecycle)
+
+	slog.Info("unit: lifecycle changed", "unit_ids", unitIDs, "lifecycle", lifecycle, "reason", reason)
+
+	if s.wikiNotifier != nil {
+		pointIDs := make([]string, len(points))
+		for i, p := range points {
+			pointIDs[i] = p.PointID
+		}
+		if err := s.wikiNotifier.NotifyPointsLifecycleChanged(pointIDs); err != nil {
+			slog.Warn("unit: wiki notify failed", "error", err)
+		}
+	}
+
+	if s.activationNotifier != nil {
+		if err := s.activationNotifier.InvalidateCache(); err != nil {
+			slog.Warn("unit: activation notify failed", "error", err)
+		}
+	}
+
+	return nil
+}
+
+// reindexLifecycle rewrites the affected units/points into Bleve with their new
+// lifecycle value. Bleve documents are replaced wholesale (no partial update),
+// so unit content is re-sliced from the owning source's markdown file.
+func (s *Service) reindexLifecycle(units []KnowledgeUnit, points []KnowledgePoint, lifecycle string) {
+	mdCache := make(map[string][]string)
+	pointsByUnit := make(map[string][]KnowledgePoint)
+	for _, p := range points {
+		pointsByUnit[p.UnitID] = append(pointsByUnit[p.UnitID], p)
+	}
+
+	for _, ku := range units {
+		ku := ku
+		ku.Lifecycle = lifecycle
+
+		mdLines, cached := mdCache[ku.SourceID]
+		if !cached {
+			src, err := s.sourceStore.GetByID(ku.SourceID)
+			if err != nil {
+				slog.Warn("unit: reindex lifecycle: get source failed", "source_id", ku.SourceID, "error", err)
+			} else if data, err := os.ReadFile(src.MarkdownPath); err != nil {
+				slog.Warn("unit: reindex lifecycle: read markdown failed", "source_id", ku.SourceID, "error", err)
+			} else {
+				mdLines = strings.Split(string(data), "\n")
+			}
+			mdCache[ku.SourceID] = mdLines
+		}
+		s.indexUnit(&ku, mdLines)
+
+		for _, kp := range pointsByUnit[ku.UnitID] {
+			kp := kp
+			kp.Lifecycle = lifecycle
+			s.indexPoint(&kp)
+		}
 	}
 }

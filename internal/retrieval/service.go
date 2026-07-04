@@ -851,6 +851,7 @@ func (s *Service) kpnExpand(candidates []candidate) ([]candidate, []candidate, e
 			lineStart:   u.LineStart,
 			lineEnd:     u.LineEnd,
 			sourcePaths: []string{"supporting"},
+			origin:      OriginKPNExpansion,
 		})
 	}
 
@@ -914,6 +915,11 @@ func (s *Service) buildEvidenceSet(question, subject, intent, audience, constrai
 		}
 		refJSON, _ := json.Marshal(ref)
 
+		origin := c.origin
+		if origin == "" {
+			origin = OriginRerank
+		}
+
 		return Evidence{
 			FactID:    uuid.New().String(),
 			UnitID:    c.unitID,
@@ -921,6 +927,7 @@ func (s *Service) buildEvidenceSet(question, subject, intent, audience, constrai
 			Content:   content,
 			SourceRef: refJSON,
 			Role:      role,
+			Origin:    origin,
 		}, nil
 	}
 

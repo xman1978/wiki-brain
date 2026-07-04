@@ -23,48 +23,48 @@
 
 ## 2. 记忆状态
 
-知识在不同阶段可能处于不同状态。生命周期不应只区分「有效、过期、历史」，而需要更细的状态表达：
+知识的生命周期只需要 3 种状态，就能覆盖知识从产生到失效的完整过程——就像人脑中的记忆：正在使用的、被更新记忆覆盖的、被主动忘记的。不需要为"可能有问题""可能冲突""纯粹用于回忆"等中间状态单独建模：
 
 ```text
-current：当前有效；
-candidate：候选理解；
-needs_verification：需要验证；
-conflicted：存在冲突；
-superseded：已被替代；
-deprecated：不再推荐；
-historical：仅用于历史解释；
-retracted：已确认错误。
+current：当前有效，参与检索、激活与回答；
+superseded：已被更新版本替代，不参与召回，保留追溯；
+deprecated：来源已被删除，不参与召回，保留追溯。
 ```
 
-各状态含义如下：
+各状态含义与触发条件如下：
 
 **current** 表示当前可用、可追溯、适合进入回答和 Wiki 维护。current 不是永久状态，仍需持续接受新证据、反馈和生命周期挑战。
-
-**candidate** 表示尚未充分验证的理解或结构。candidate 不能直接作为稳定结论，也不应默认进入正式激活或 Wiki 正文。
-
-**needs_verification** 表示知识仍被保留，但当前有效性存疑，需要重新验证后才能继续作为依据。
-
-**conflicted** 表示不同来源、不同语境或不同时间下存在不一致。conflicted 不等于错误；它说明系统尚未完成冲突消解，不应被强行合并为单一结论。
+触发条件：KU/KP 新提取入库时的默认状态；Source 重新上传时，只要新内容尚未成功产出，旧 KU/KP 始终保持 current，不会被提前改变（见 `impl/v1/lifecycle.md` 步骤 2）。
 
 **superseded** 表示已有更新、更准确的替代知识，旧内容让位于新证据。
+触发条件：Source 重新上传（`POST /sources/:id/reupload`）且新内容的 Unit 提取已经完成（无论个别分段是否提取失败，这与 MVP 正常导入时的部分失败容忍一致）后，该 source 原有全部 KU/KP 一次性标记为 superseded，同时新 KU/KP 以 current 状态写入（见 `impl/v1/lifecycle.md` 步骤 2）。
 
 **deprecated** 表示不再推荐继续使用，但仍可能保留解释价值。
+触发条件：`DELETE /sources/:id`（软删除）时，该 source 全部 KU/KP 标记为 deprecated（见 `impl/v1/lifecycle.md` 步骤 2）。
 
-**historical** 表示仅用于解释过去回答、观察知识演化或追溯当时依据。historical 不应默认参与当前回答。
-
-**retracted** 表示已确认错误。retracted 不应再作为证据使用，只能用于解释系统纠错历史。
-
-这些状态会影响知识是否进入当前回答、ActivationLink 是否继续强化，以及 Wiki 页面是否需要重新编译。
-
-### 状态使用原则
+**为什么不需要更多状态**：早期设计曾考虑过 candidate（候选未验证）、needs_verification（存疑待验证）、conflicted（冲突未消解）、historical（仅历史解释）、retracted（确认错误）等更细的状态，但逐一从场景倒推后发现：
 
 ```text
-conflicted 不等于错误，表示存在未消解的不一致；
-historical 不应默认参与当前回答；
-retracted 不应再作为证据使用，只能解释纠错历史；
-candidate 不能直接作为稳定结论；
-current 也不是永久状态，需要持续接受新证据挑战。
+needs_verification 想解决的"reupload 失败提醒用户重试"，
+  已经被 sources.status=failed + POST /sources/:id/retry 覆盖，
+  旧 KU/KP 在失败时根本不会被改动，不需要专门状态标记；
+
+conflicted 想表达的"知识之间存在不一致"，
+  是 KPN 的 contradicts 关系已经在描述的东西，且已经是运行时机制
+  （检索时动态查出放入 EvidenceSet.conflicts，见 retrieval.md 步骤 8），
+  再加一个持久化状态是重复建设；
+
+historical 在所有文档里都找不到独立于 superseded / deprecated 的
+  触发场景——"仅用于历史解释"是所有非 current 状态本身就具备的性质，
+  不是它独有的；
+
+candidate 和 retracted 分别要求"提取后先候选、验证通过才生效"和
+  "错误知识需要单独标记纠错历史"这类更大的流程变化，且 candidate 与
+  ActivationLink 已有的 candidate/verified 状态机（见 activation.md）
+  概念上会冲突，在没有具体产品需求驱动之前不引入。
 ```
+
+3 种状态已经能完整覆盖知识生命周期：current 是唯一参与检索的状态，superseded 和 deprecated 分别对应"被替换"和"被删除"这两个互不重叠的失效原因，且都保留数据用于追溯。
 
 ## 3. 当前使用和历史解释
 
@@ -76,7 +76,7 @@ current 也不是永久状态，需要持续接受新证据挑战。
 
 但旧知识不应该默认作为当前答案依据。
 
-## 生命周期如何影响激活和 Wiki
+## 4. 生命周期如何影响激活和 Wiki
 
 生命周期状态不仅影响知识是否进入当前回答，也会影响知识如何被激活、被引用和被沉淀。
 
@@ -89,53 +89,41 @@ ActivationLink 是否仍然有效；
 Wiki 页面是否需要重新编译或标记过期。
 ```
 
-一条知识单元进入 needs_verification、conflicted、superseded、deprecated 或 retracted 状态时，其下的知识点不应再被默认激活。依赖这些知识点的 ActivationLink 也应暂停无条件强化，直到重新验证或状态迁移完成。目录结构树保留材料的原有组织，但如果底层来源已失效或处于 retracted 状态，目录路径只能帮助定位历史材料，不能自动赋予其当前证据效力。Wiki 页面建立在知识单元、知识点和稳定激活路径之上，底层记忆状态变化时，相关 Wiki 页面也需要重新检查。
+一条知识单元进入 superseded 或 deprecated 状态时，其下的知识点不再被激活。依赖这些知识点的 ActivationLink 也应暂停无条件强化（见 `activation.md` 状态机，ActivationLink 自身的 candidate/verified/weakened/deprecated 是独立于 KU/KP lifecycle 的另一套状态，不受此处影响，只是匹配时会联合过滤 `lifecycle=current`）。目录结构树保留材料的原有组织，但如果底层来源已失效，目录路径只能帮助定位历史材料，不能自动赋予其当前证据效力。Wiki 页面建立在知识单元、知识点和稳定激活路径之上，底层记忆状态变化时，相关 Wiki 页面也需要重新检查。
 
-当来源材料过期、删除或被替代时，影响会沿证据链向上传导：
+当来源材料被替换或删除时，影响会沿证据链向上传导：
 
 ```text
-相关知识单元需要重新判断；
-相关知识点应降低可信度或进入需要验证状态；
+相关知识单元和知识点转为 superseded 或 deprecated；
 依赖这些知识点的 ActivationLink 不应继续无条件强化；
 使用这些知识形成的 Wiki 页面需要重新检查。
 ```
 
 这不是要求立即删除旧内容。旧知识仍可用于解释历史回答、追溯当时依据和观察知识演化过程。但它不能默认作为当前回答依据，也不应继续通过旧 ActivationLink 被优先激活。
 
-生命周期管理的目标不是清理旧内容，而是让系统区分：
-
-```text
-current：当前可用知识；
-candidate / needs_verification：待验证知识；
-conflicted：存在冲突、尚未消解的知识；
-superseded / deprecated：已被替代或不再推荐的知识；
-historical：历史解释知识；
-retracted：已确认错误、仅保留纠错解释的知识。
-```
-
-current 知识可以进入激活、回答和 Wiki 维护，但仍需持续校验。historical 和 retracted 保留解释能力，但不默认参与当前推理。candidate 和 needs_verification 应触发重新判断，而不是被继续强化。conflicted 应进入冲突检测，而不是被强行合并。superseded、deprecated 和 retracted 让位于新证据或纠错结论，旧路径和旧页面应被标记或更新，而不是与新知识并列作为同等依据。
+current 知识可以进入激活、回答和 Wiki 维护，但仍需持续校验。superseded 和 deprecated 让位于新证据或来源移除，旧路径和旧页面应被标记或更新，而不是与新知识并列作为同等依据。
 
 记忆生命周期让知识大脑不仅能学习新知识，也能避免旧知识通过旧激活路径继续误导当前回答。
 
-## 4. 生命周期如何影响学习
+## 5. 生命周期如何影响学习
 
-当材料更新或知识状态变化时，相关长期记忆也需要重新判断。
+当材料更新或被删除时，相关长期记忆也需要重新判断。
 
 例如：
 
 ```text
-来源过期，相关知识需要重新验证；
-新证据出现，旧关系可能需要修正；
-实践反馈失败，相关路径可能需要降权；
-原始材料删除，相关知识不能继续作为证据。
+来源被替换，旧知识转为 superseded，相关 ActivationLink 暂停强化；
+来源被删除，旧知识转为 deprecated；
+实践反馈失败，相关路径可能需要降权（ActivationLink 自身的状态机，见 activation.md）。
 ```
 
-## 5. 总结
+## 6. 总结
 
 生命周期管理是知识大脑的记忆有效性机制。
 
 一句话总结：
 
 ```text
-记忆生命周期让系统区分当前可用知识和历史知识。
+记忆生命周期让系统区分当前可用知识和历史知识，
+用最少的状态（current / superseded / deprecated）就能表达完整的知识生命周期。
 ```

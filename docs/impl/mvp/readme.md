@@ -68,7 +68,7 @@ MVP 不是完整的认知系统，而是验证上述四点的最小可运行闭�
 
 - 按大纲叶节点分段（`segment_max_chars=4000`），单次 LLM 调用同时产出 KU[] 和 KP[]（平铺 JSON，uid 关联）
 - Concept 批量匹配（≤50 KU/次，按 source domain 缩小候选 concept 列表）
-- KPN 关系生成：5 种关系类型（related / hierarchical / depends / supplements / contradicts），方向由程序从类型映射，不让模型输出
+- KPN 关系生成：2 种关系类型（related / contradicts，`prompt_version: v2` 起收窄自最初的 5 种，详见 unit.md 设计决策），direction 恒为 bidirectional，不让模型输出
 - 写入 Bleve 索引（units index / points index）
 
 核心表：`knowledge_units`、`knowledge_points`、`knowledge_point_relations`

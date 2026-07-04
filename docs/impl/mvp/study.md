@@ -80,7 +80,10 @@ CREATE TABLE study_reports (
     "gap_count":             gap 级别次数,
     "confident_rate":        confident 比率（小数）,
     "total_cooccurrence_pairs": 共现表行数,
-    "candidates_flagged":    已达阈值的候选数
+    "candidates_flagged":    已达阈值的候选数,
+    "kpn_cited_count":       窗口内 Answer 引用的证据中，来自 KPN 扩展的数量,
+    "cited_count":           窗口内 Answer 引用且能解析出 origin 的证据总数,
+    "kpn_citation_rate":     kpn_cited_count / cited_count（cited_count=0 时为 0）
   },
 
   "activation_link_candidates": [
@@ -147,7 +150,18 @@ total_traces / confident_count / partial_count / gap_count：
 
 total_cooccurrence_pairs：SELECT COUNT(*) FROM question_kp_cooccurrence；
 candidates_flagged：SELECT COUNT(*) FROM link_candidates。
+
+kpn_cited_count / cited_count（窗口内聚合，衡量 KPN 扩展是否被真正采纳，而非只是召回但未被引用）：
+  SELECT COALESCE(SUM(kpn_cited_count), 0), COALESCE(SUM(cited_count), 0)
+  FROM traces WHERE created_at >= now() - period_days；
+  两值均来自 Trace 写入（见 trace.md「KPN 引用采纳率统计」）。
+kpn_citation_rate = kpn_cited_count / cited_count（cited_count = 0 时为 0，不做除零）。
 ```
+
+**设计背景**：KPN 关系类型从 5 种收窄为 2 种（related/contradicts，见 unit.md 设计决策）后，
+需要一个可持续观测的信号判断"扩展补充的证据是否真的对回答有价值"，而不是只凭直觉判断。
+kpn_citation_rate 长期偏低（扩展召回的证据很少被引用）是收窄关系类型或调整扩展策略的量化依据；
+偏低本身不直接说明扩展无用——也可能是分母 cited_count 过小、样本不足，需结合 total_traces 一起看。
 
 **activation_link_candidates 各维度**
 
@@ -330,6 +344,7 @@ Foundation：JOIN concepts、domains 补充 Wiki 候选归属信息（只读）
 共现扫描正确 UPSERT link_candidates；
 knowledge_gap 事件正确聚合，达阈值输出 warn 日志；
 报告中 signal_purity / activation_breadth / short_path_rate 计算结果准确；
+summary.kpn_citation_rate 正确聚合窗口内 traces.kpn_cited_count / cited_count，cited_count 为 0 时不报错、结果为 0；
 wiki_candidates 的 kpn_connection_count 正确统计 qualifying KP 之间的连接数；
 recommendation 字段按判断逻辑正确分级（ActivationLink 候选：strong / candidate；Wiki 候选：ready / needs_more_data）；
 GET /study/reports/latest 可返回完整报告供人工阅读；

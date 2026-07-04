@@ -1,0 +1,297 @@
+# Wiki-Brain V1 实现概览（能力提升版）
+
+## 定位
+
+MVP 已验证核心假设：知识可组织、检索可命中、回答可追溯、检索信号可积累为激活路径候选。但 MVP 的学习是「只看不动」的——Study 只输出报告，候选不改变系统行为，检索每次都走完整链路。
+
+V1 的目标是让系统**基本具备学习转化能力**：
+
+```text
+使用信号（检索事件）
+  -> 转化为长期记忆结构（ActivationLink、Wiki 初版）
+  -> 反过来改变检索与回答行为（激活路径优先、LLM 调用减少、同类问题更快更稳）
+```
+
+一句话概括：MVP 验证「信号能积累」，V1 实现「积累能转化、转化能生效」。
+
+设计依据：`docs/design/study.md`（检索事件驱动学习）、`docs/design/precompile.md`（ActivationLink）、`docs/design/retrieval.md`（分层检索）、`docs/design/evidence-mining.md`（片段级证据挖掘）、`docs/design/lifecycle.md`（记忆状态，V1 完整实现——3 状态模型即完整设计，非子集）、`docs/design/wiki-compilation.md`（Wiki 编译，V1 实现初版）。
+
+---
+
+## 与 MVP 的边界
+
+| 能力 | MVP | V1 |
+|------|-----|----|
+| ActivationLink | 仅 `link_candidates` 报告候选，不参与检索 | 正式数据结构 + 状态机，verified 链接参与召回 |
+| 学习信号 | Rerank 质量分级（confident / partial / gap）+ 共现统计 | 增加激活类事件：activation_success / activation_failure / activation_gap 及 repeated_* 累积 |
+| Study | 定时扫描，只产报告 | 执行学习动作：形成候选、晋升、降权、淘汰，输出 Learning Result + Learning Reason |
+| 检索链路 | 每次问答完整链路（≥4 次 LLM 调用） | ActivationLink 优先激活层；熟悉问题降至 1-2 次 LLM 调用 |
+| 证据粒度 | 知识单元整段正文进入回答与引用 | 证据挖掘：Rerank 后逐字摘选片段级证据，程序原文校验 |
+| KPN | 单 Source 内关系 | 跨 Source KP 对齐与关系合并 |
+| 生命周期 | 无 | 完整 3 状态：current / superseded / deprecated |
+| Wiki | 仅报告 Wiki 候选 | 编译初版：主题页 / 概念页，人工确认发布 |
+| 用户反馈 | 无 | user_correction 通道（补充加速信号，非学习前提） |
+
+---
+
+## 核心能力
+
+### 1. ActivationLink 落地
+
+依据 `precompile.md` 与 `study.md` 第 8 节。
+
+**数据模型**：ActivationLink 连接「问题条件」与一组 KnowledgePoint，可经 KP 反查 KU、回到来源证据。激活条件采用 Session 四元组（主题/意图作匹配计分，对象/约束作硬性守门；question_terms 保留作展示与回退，预留 scene / goal 字段），另含目标 point_id、状态、统计信号（采用次数、失败次数、最近使用时间）、创建来源（哪些 Learning Event）。匹配以 standalone 补全后的 expanded_question 及四元组为基准，与 traces 记录同源（见 activation.md 步骤 2）。
+
+**状态机（V1 子集）**：
+
+```text
+candidate  候选链接，只辅助探索，不参与正式召回
+verified   已验证链接，参与正式召回，持续接受校验
+weakened   被降权链接，不作为首选激活路径
+deprecated 已淘汰链接，不再使用
+```
+
+`conflicted` 状态依赖冲突检测模式，推迟到 V2；V1 预留状态枚举值。
+
+**状态迁移规则**（由 Study 执行，阈值可配置）：
+
+```text
+共现积累 / activation_gap 满足阈值   -> 创建 candidate
+candidate 在相似条件下 repeated_success -> 晋升 verified
+verified 在相似条件下 repeated_failure  -> 降权 weakened
+weakened 长期无有效使用                -> 淘汰 deprecated
+```
+
+单次事件不改变状态；只有跨事件累积信号才推动迁移（`study.md` 第 3 节学习信号使用原则）。
+
+### 2. 检索事件体系
+
+依据 `trace.md` 与 `study.md` 第 2 节。V1 在既有 Trace 分级之上，增加激活类 Learning Event 的自动产生：
+
+```text
+activation_success  ActivationLink 命中，且其 KP 进入 direct evidence 并被回答引用
+activation_failure  ActivationLink 命中，但 KP 未被采用或未支撑有效回答
+activation_gap      无合适 ActivationLink，但补充查找（outline / FTS 链路）找到被采用的知识
+```
+
+这些事件在问答中自动产生，不需要用户表态。写入沿用 MVP 的 `learning_events` 表和 `trace_write` 异步队列，扩展事件类型枚举。
+
+`repeated_success / repeated_failure` 不是独立记录的事件，而是 Study 扫描时对同类条件下事件的累积判定。
+
+### 3. Study 从报告升级为执行
+
+依据 `study.md` 第 3、8、9、10 节。MVP 的定位是「验证而非执行」，V1 转为「执行 + 可审计」：
+
+**学习动作**：
+
+```text
+形成候选：共现阈值或 activation_gap 累积 -> 创建 candidate ActivationLink
+强化晋升：repeated_success               -> candidate 晋升 verified
+降权：    repeated_failure               -> verified 降为 weakened
+淘汰：    长期无效                        -> weakened 转 deprecated
+缺口：    knowledge_gap 聚合              -> 知识缺口清单（沿用 MVP）
+Wiki：    稳定 KP 簇                      -> Wiki 编译候选（见能力 8）
+```
+
+**Learning Result 与 Learning Reason**：每个学习动作落库为 Learning Result，附 Learning Reason，说明触发来源（哪些 Learning Event）、影响对象、动作类型、依据和适用边界，支持事后追踪与回滚（`study.md` 第 9 节）。
+
+**人工监督**：candidate 的创建与降权、淘汰全自动执行；**candidate → verified 的晋升在 V1 默认需人工在 Page 上确认**（可配置为自动），因为 verified 直接影响正式召回，V1 需要先建立对信号质量的信心。这是 V1 的谨慎选择，不是设计约束；V2 视数据表现转为全自动。
+
+**运行方式**：沿用 MVP 的 `time.Ticker` 定时扫描，不走异步队列；报告继续生成，内容扩展为「本周期执行了哪些学习动作及原因」。
+
+### 4. 检索链路升级：ActivationLink 优先激活层
+
+依据 `retrieval.md` 与 `design.md` 第 3 节「分层检索与激活」。V1 检索流程变为：
+
+```text
+问题（经 Session 补全）
+  -> ActivationLink 激活层：verified 链接按激活条件匹配，直接召回 KP -> KU
+       ├─ 命中且充分：跳过 Domain 预过滤 / Source 过滤 / Outline 召回，
+       │              直接进入 Rerank（或轻量校验）+ Answer   ← 快路径
+       └─ 未命中或不足：回落到 MVP 完整链路（补充查找）        ← 慢路径
+  -> 两路结果统一比较相关性与证据质量，不按来源层级简单排序
+  -> KPN 扩展、充分性判断、EvidenceSet 构建（沿用 MVP）
+```
+
+关键约束：
+
+- candidate 链接不参与快路径召回，最多作为 Rerank 候选的补充探索线索，且不得单独决定答案；
+- 快路径命中后仍产生 activation_success / activation_failure 事件，verified 不免审；
+- weakened / deprecated 不参与召回；
+- 快路径目标：熟悉问题的 LLM 调用从 ≥4 次降至 1-2 次（Rerank 精简或跳过 + Answer），这是 MVP readme 预留的演进方向。
+
+### 5. 证据挖掘：片段级证据
+
+依据 `evidence-mining.md`。知识单元是主题单位，证据是回答单位；MVP 中 Rerank 保留的知识单元整段进入回答，噪声、引用粒度和学习信号都停留在 KU 级。V1 在 Rerank 之后、EvidenceSet 构建之前增加证据挖掘环节：
+
+```text
+Rerank 保留的每个 KU
+  -> LLM 逐字摘选真正支撑回答的原文片段（句、步骤、命令、表行）
+  -> 程序做原文子串校验：匹配不上的片段即幻构，重试或丢弃
+  -> 校验通过的片段反算出 KU 内位置，fact_id 细化到片段级
+  -> 整个 KU 挖掘失败时回退整段证据，标记"未挖掘"
+```
+
+关键收益与 V1 主线直接相关：**学习信号精度**。activation_success / failure 的判定依据从"这个 KU 被引用"细化为"KU 中哪个片段被采用"，ActivationLink 的强化与降权建立在更准的事实上；"KU 命中但挖不出片段"是一类新信号（主题相关、内容缺失），进入知识缺口清单。
+
+无知识加工模式时按问题摘选；按槽位定向摘选依赖知识加工模式，属 V2。
+
+### 6. 跨 Source KPN
+
+MVP 的 KPN 关系在单 Source 内生成。V1 扩展：
+
+- 新 Source 完成 Unit 提取后，将其 KP 与既有同 Concept / 同 Domain 下的 KP 做批量匹配（LLM 批处理，复用 concept match 的批量模式）；
+- 语义等价的 KP 建立跨 Source 关系（related / contradicts，与 MVP 内部关系类型一致，见 unit.md 设计决策），不合并删除原 KP——KP 保留各自来源以维持可追溯；
+- contradicts 关系在 V1 只标记、进入学习报告提示，不做冲突消解（冲突检测是 V2 能力）。
+
+### 7. 生命周期完整版
+
+依据 `lifecycle.md`。3 状态即完整设计，不是子集，作用于 KnowledgeUnit / KnowledgePoint：
+
+```text
+current      默认状态，参与激活与回答
+superseded   已被新版本替代，不参与当前回答
+deprecated   来源已删除，不参与当前回答
+```
+
+触发与传导（`lifecycle.md` 第 2、4 节）：
+
+```text
+Source 重新上传成功（新内容 Unit 提取完成）-> 旧 KU/KP 一次性标记 superseded；
+  上传处理链失败时旧 KU/KP 不受影响，仍为 current，复用既有
+  sources.status=failed + POST /sources/:id/retry 提示重试，不引入新状态；
+Source 删除 -> 该 source 全部 KU/KP（含已 superseded 的）标记 deprecated；
+状态变化    -> 依赖的 ActivationLink 暂停强化，Bleve 索引同步过滤。
+```
+
+candidate / needs_verification / conflicted / historical / retracted 均已从场景倒推评估过，没有找到独立于 current/superseded/deprecated 的必要场景，不引入（详见 `lifecycle.md` 第 2 节）。
+
+### 8. Wiki 编译初版
+
+依据 `wiki-compilation.md`。V1 只做两种页面类型的最小闭环：
+
+- **主题页 / 概念页**：Study 识别的 Wiki 候选（同 Concept 下多个高置信 KP + KPN 连接，沿用 MVP 候选逻辑）经人工在 Page 上确认后，触发 LLM 编译生成页面；
+- 页面要素（防固化最小集）：稳定结论、证据来源（回链 KP / KU / source_ref）、待验证点、最近更新时间、依赖的核心 KU 列表；
+- **重编译**：底层 KU/KP 状态变化或新的 wiki_update_candidate 信号时，Study 标记页面「待重编译」，人工确认后执行；每次编译记录触发来源，可追溯到 Learning Event；
+- **检索接入**：已发布 Wiki 页面建立独立 Bleve 索引，作为快路径的直接命中层——同主题问题可直接引用 Wiki 结论并附证据回链（`study.md` 2.5 节所述正向反馈）。
+
+方法页 / 经验页 / 问题页 / 决策页、认知视角差异化页面，推迟到 V2。
+
+### 9. 用户反馈通道
+
+依据 `study.md` 第 2 节：user_correction 是补充加速信号，不是学习前提。V1 实现最小通道：
+
+- Page 问答界面提供「有用 / 纠正」反馈入口，纠正可附文字说明；
+- 反馈写入 `learning_events`（类型 user_correction），关联 answer_id 与本次采用的 KP；
+- Study 消费：纠正事件加速相关 ActivationLink 的重新验证或降权（提高该链接累积信号的权重），不单独直接改状态。
+
+### 10. Page 升级
+
+- **ActivationLink 管理视图**：按状态分列（candidate / verified / weakened / deprecated），展示激活条件、命中统计、Learning Reason；支持人工确认晋升、驳回候选；
+- **Wiki 视图**：候选确认、页面阅读、待重编译标记、修订记录；
+- **学习动作审计**：Learning Result 列表，可从动作回溯到触发它的 Learning Event；
+- 问答界面增加反馈入口（能力 9）与快路径标识（本次回答走了激活层还是完整链路，便于验证学习效果）。
+
+---
+
+## 实现顺序
+
+模块间依赖决定顺序，沿用 MVP「实现完成、测试通过再进入下一步」的原则：
+
+```text
+1. Lifecycle 基础     KU/KP 状态字段 + 索引过滤（后续所有能力都要感知状态）
+2. ActivationLink     数据模型 + 状态机 + 存储（学习转化的核心对象）
+3. 检索事件           activation_* 事件产生与写入（学习燃料）
+4. Study 执行         学习动作 + Learning Result / Reason + 人工确认流
+5. 检索激活层         verified 链接参与召回，快慢路径分叉
+6. 证据挖掘           Rerank 后片段级摘选 + 原文校验（引用与学习信号细化到片段级）
+7. 跨 Source KPN      KP 对齐与关系合并
+8. Wiki 编译初版      候选确认 -> 编译 -> 发布 -> 检索接入 -> 重编译标记
+9. 反馈通道 + Page    user_correction、管理视图、审计视图
+```
+
+1-5 构成「学习转化」最小闭环，是 V1 的主体；6-9 在闭环跑通后叠加。证据挖掘（6）独立于闭环，可视情况提前——它不依赖 ActivationLink，只依赖 Rerank 之后的既有链路。
+
+---
+
+## 数据与存储变化（概要）
+
+```text
+新增表
+  activation_links        ActivationLink 主体（条件、目标 KP、状态、统计）
+  learning_results        Study 学习动作记录（动作、对象、reason、关联事件）
+  wiki_pages              Wiki 页面（内容、类型、状态、依赖 KU 列表、修订记录）
+
+扩展
+  knowledge_units / knowledge_points  增加 lifecycle 状态字段
+  learning_events                     事件类型增加 activation_*（user_correction 沿用 MVP 通道）
+  knowledge_point_relations           增加 scope 字段（intra/cross）与唯一索引
+  traces                              增加 path_type / activation_link_ids
+  EvidenceSet / evidence_snapshot     证据细化为片段级：片段原文 + KU 内位置，
+                                      整段回退时保留"未挖掘"标记
+
+Bleve
+  新增 wiki 索引；units / points 索引查询按 lifecycle 状态过滤
+```
+
+具体 schema 在各模块实现文档中定义，migration 按版本号追加。
+
+## 模块实现文档
+
+按实现顺序阅读：
+
+| 顺序 | 文档 | 内容 |
+| --- | --- | --- |
+| 1 | [lifecycle.md](./lifecycle.md) | KU/KP 生命周期状态、reupload/删除触发、Bleve 同步过滤、向链接与 Wiki 的传导 |
+| 2 | [activation.md](./activation.md) | activation_links 数据模型、状态机与迁移约束、激活条件匹配器、人工确认 API |
+| 3 | [trace.md](./trace.md) | activation_success / failure / gap 事件产生规则、traces 表扩展、反馈通道扩展 |
+| 4 | [study.md](./study.md) | 学习动作执行（创建/晋升/降权/淘汰）、learning_results、晋升确认流、报告扩展 |
+| 5 | [retrieval.md](./retrieval.md) | Wiki 直答层与激活层、快慢路径分叉与回落、生命周期过滤改动点、LLM 调用预算 |
+| 6 | [evidence.md](./evidence.md) | 证据挖掘：分批摘选 Prompt、原文校验与行号定位、失败回退、片段级 fact_id |
+| 7 | [kpn.md](./kpn.md) | 跨 Source KP 匹配、scope 字段与去重、contradicts 报告接入 |
+| 8 | [wiki.md](./wiki.md) | 页面编译 Prompt 与白名单校验、发布与 Wiki 直答、重编译生命周期 |
+| 9 | [page.md](./page.md) | 反馈入口与路径徽标、链接管理 / Wiki / 审计视图、lifecycle 操作入口 |
+
+---
+
+## V1 不做什么（推迟到 V2）
+
+```text
+认知路由与七种思维模式、认知预算（V1 只有快/慢路径分叉，不是完整路由）
+Working Model 临时认知模型
+知识加工模式（KPP）与推理模式（RP）：模式识别、证据槽位、槽位驱动检索扩展
+  （V1 证据挖掘按问题摘选；按槽位定向摘选依赖知识加工模式，属 V2）
+实践路径（Practice Path）提炼与经验路径模式
+查证模式（外部证据查找）
+冲突检测模式（基于 contradicts 关系的正反证据整理，不引入 conflicted 生命周期状态——
+  详见 `lifecycle.md` 第 2 节，3 状态已是完整设计，candidate / needs_verification /
+  conflicted / historical / retracted 均无独立必要场景，不再规划引入）
+认知视角（perspective 差异化的 ActivationLink 与 Wiki）
+Concept / Domain 边界演化（拆分、合并、候选晋升）
+Wiki 全部六种页面类型与视角化编译
+Agent 接入层（service / agent 架构对外开放）
+```
+
+---
+
+## V1 成功标准
+
+```text
+学习转化闭环：同类问题反复问答后，系统自动形成 candidate ActivationLink，
+              人工确认晋升 verified 后，后续同类问题走快路径命中；
+检索行为改变：熟悉问题 LLM 调用降至 1-2 次，回答延迟明显下降，
+              且 direct evidence 命中率不低于完整链路；
+学习可审计：  每个 ActivationLink 状态迁移都能回溯到 Learning Result、
+              Learning Reason 和支撑它的 Learning Event；
+引用精确：    回答引用可定位到知识单元内的原文片段，幻构片段被
+              原文校验拦截；挖掘失败回退整段且退化可观察；
+自我修正：    人为制造失败场景（如删除相关 Source）后，
+              repeated_failure 累积能推动链接降权，快路径自动回落慢路径；
+生命周期生效：Source 更新/删除后，旧 KU/KP 不再进入回答，
+              依赖链接停止强化；
+Wiki 初版：   至少一个稳定主题完成「候选 -> 确认 -> 编译 -> 检索命中 -> 
+              底层变化 -> 待重编译标记」的完整生命周期；
+反馈生效：    user_correction 能在报告和链接信号中观察到加速作用。
+```
+
+如果上述标准成立，说明「使用信号 → 长期记忆 → 检索行为」的转化链路工程可行，可进入 V2 实现完整认知系统。

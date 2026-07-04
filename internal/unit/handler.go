@@ -20,6 +20,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sources/{id}/units", h.listUnits)
 	mux.HandleFunc("GET /units/{id}", h.getUnit)
 	mux.HandleFunc("GET /units/{id}/points", h.listPoints)
+	mux.HandleFunc("GET /points/{id}", h.getPoint)
 	mux.HandleFunc("GET /points/{id}/relations", h.listRelations)
 }
 
@@ -48,19 +49,22 @@ func (h *Handler) listUnits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	units, err := h.svc.store.GetUnitsBySourceID(sourceID)
+	lifecycle := r.URL.Query().Get("lifecycle")
+	units, err := h.svc.store.GetUnitsBySourceIDFiltered(sourceID, lifecycle)
 	if err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	type unitResp struct {
-		UnitID    string `json:"unit_id"`
-		OutlineID string `json:"outline_id,omitempty"`
-		Center    string `json:"center"`
-		LineStart int    `json:"line_start"`
-		LineEnd   int    `json:"line_end"`
-		Status    string `json:"status"`
+		UnitID             string  `json:"unit_id"`
+		OutlineID          string  `json:"outline_id,omitempty"`
+		Center             string  `json:"center"`
+		LineStart          int     `json:"line_start"`
+		LineEnd            int     `json:"line_end"`
+		Status             string  `json:"status"`
+		Lifecycle          string  `json:"lifecycle"`
+		LifecycleChangedAt *string `json:"lifecycle_changed_at,omitempty"`
 	}
 
 	result := make([]unitResp, 0, len(units))
@@ -71,9 +75,14 @@ func (h *Handler) listUnits(w http.ResponseWriter, r *http.Request) {
 			LineStart: u.LineStart,
 			LineEnd:   u.LineEnd,
 			Status:    u.Status,
+			Lifecycle: u.Lifecycle,
 		}
 		if u.OutlineID.Valid {
 			r.OutlineID = u.OutlineID.String
+		}
+		if u.LifecycleChangedAt.Valid {
+			t := u.LifecycleChangedAt.Time.Format("2006-01-02T15:04:05Z")
+			r.LifecycleChangedAt = &t
 		}
 		result = append(result, r)
 	}
@@ -101,21 +110,25 @@ func (h *Handler) getUnit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type pointResp struct {
-		PointID   string `json:"point_id"`
-		Content   string `json:"content"`
-		PointType string `json:"point_type"`
+		PointID            string  `json:"point_id"`
+		Content            string  `json:"content"`
+		PointType          string  `json:"point_type"`
+		Lifecycle          string  `json:"lifecycle"`
+		LifecycleChangedAt *string `json:"lifecycle_changed_at,omitempty"`
 	}
 
 	type unitDetail struct {
-		UnitID    string      `json:"unit_id"`
-		SourceID  string      `json:"source_id"`
-		OutlineID string      `json:"outline_id,omitempty"`
-		ConceptID string      `json:"concept_id,omitempty"`
-		Center    string      `json:"center"`
-		LineStart int         `json:"line_start"`
-		LineEnd   int         `json:"line_end"`
-		Status    string      `json:"status"`
-		Points    []pointResp `json:"points"`
+		UnitID             string      `json:"unit_id"`
+		SourceID           string      `json:"source_id"`
+		OutlineID          string      `json:"outline_id,omitempty"`
+		ConceptID          string      `json:"concept_id,omitempty"`
+		Center             string      `json:"center"`
+		LineStart          int         `json:"line_start"`
+		LineEnd            int         `json:"line_end"`
+		Status             string      `json:"status"`
+		Lifecycle          string      `json:"lifecycle"`
+		LifecycleChangedAt *string     `json:"lifecycle_changed_at,omitempty"`
+		Points             []pointResp `json:"points"`
 	}
 
 	resp := unitDetail{
@@ -125,6 +138,7 @@ func (h *Handler) getUnit(w http.ResponseWriter, r *http.Request) {
 		LineStart: ku.LineStart,
 		LineEnd:   ku.LineEnd,
 		Status:    ku.Status,
+		Lifecycle: ku.Lifecycle,
 		Points:    make([]pointResp, 0, len(points)),
 	}
 	if ku.OutlineID.Valid {
@@ -133,12 +147,22 @@ func (h *Handler) getUnit(w http.ResponseWriter, r *http.Request) {
 	if ku.ConceptID.Valid {
 		resp.ConceptID = ku.ConceptID.String
 	}
+	if ku.LifecycleChangedAt.Valid {
+		t := ku.LifecycleChangedAt.Time.Format("2006-01-02T15:04:05Z")
+		resp.LifecycleChangedAt = &t
+	}
 	for _, p := range points {
-		resp.Points = append(resp.Points, pointResp{
+		pr := pointResp{
 			PointID:   p.PointID,
 			Content:   p.Content,
 			PointType: p.PointType,
-		})
+			Lifecycle: p.Lifecycle,
+		}
+		if p.LifecycleChangedAt.Valid {
+			t := p.LifecycleChangedAt.Time.Format("2006-01-02T15:04:05Z")
+			pr.LifecycleChangedAt = &t
+		}
+		resp.Points = append(resp.Points, pr)
 	}
 
 	foundation.WriteJSON(w, http.StatusOK, resp)
@@ -158,21 +182,68 @@ func (h *Handler) listPoints(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type pointResp struct {
-		PointID   string `json:"point_id"`
-		Content   string `json:"content"`
-		PointType string `json:"point_type"`
+		PointID            string  `json:"point_id"`
+		Content            string  `json:"content"`
+		PointType          string  `json:"point_type"`
+		Lifecycle          string  `json:"lifecycle"`
+		LifecycleChangedAt *string `json:"lifecycle_changed_at,omitempty"`
 	}
 
 	result := make([]pointResp, 0, len(points))
 	for _, p := range points {
-		result = append(result, pointResp{
+		pr := pointResp{
 			PointID:   p.PointID,
 			Content:   p.Content,
 			PointType: p.PointType,
-		})
+			Lifecycle: p.Lifecycle,
+		}
+		if p.LifecycleChangedAt.Valid {
+			t := p.LifecycleChangedAt.Time.Format("2006-01-02T15:04:05Z")
+			pr.LifecycleChangedAt = &t
+		}
+		result = append(result, pr)
 	}
 
 	foundation.WriteJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) getPoint(w http.ResponseWriter, r *http.Request) {
+	pointID := r.PathValue("id")
+	if pointID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "missing point id")
+		return
+	}
+
+	kp, err := h.svc.store.GetPointByID(pointID)
+	if err != nil {
+		foundation.WriteError(w, http.StatusNotFound, "point not found")
+		return
+	}
+
+	type pointDetail struct {
+		PointID            string  `json:"point_id"`
+		UnitID             string  `json:"unit_id"`
+		SourceID           string  `json:"source_id"`
+		Content            string  `json:"content"`
+		PointType          string  `json:"point_type"`
+		Lifecycle          string  `json:"lifecycle"`
+		LifecycleChangedAt *string `json:"lifecycle_changed_at,omitempty"`
+	}
+
+	resp := pointDetail{
+		PointID:   kp.PointID,
+		UnitID:    kp.UnitID,
+		SourceID:  kp.SourceID,
+		Content:   kp.Content,
+		PointType: kp.PointType,
+		Lifecycle: kp.Lifecycle,
+	}
+	if kp.LifecycleChangedAt.Valid {
+		t := kp.LifecycleChangedAt.Time.Format("2006-01-02T15:04:05Z")
+		resp.LifecycleChangedAt = &t
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) listRelations(w http.ResponseWriter, r *http.Request) {

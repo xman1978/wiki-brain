@@ -69,6 +69,11 @@ type TraceSummary struct {
 	ConfidentRate          float64 `json:"confident_rate"`
 	TotalCooccurrencePairs int     `json:"total_cooccurrence_pairs"`
 	CandidatesFlagged      int     `json:"candidates_flagged"`
+	KPNCitedCount          int     `json:"kpn_cited_count"`
+	CitedCount             int     `json:"cited_count"`
+	KPNCitationRate        float64 `json:"kpn_citation_rate"`
+	// kpn_citation_rate = kpn_cited_count / cited_count（窗口内 Answer 实际引用的证据中，
+	// 来自 KPN 扩展而非 Rerank 直接产出的比例；cited_count = 0 时为 0，见 unit.md KPN 关系类型收窄的设计决策）
 }
 
 type ActivationLinkCandidate struct {

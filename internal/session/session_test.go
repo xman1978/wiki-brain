@@ -50,6 +50,9 @@ func TestDetectInterrupt(t *testing.T) {
 	if DetectInterrupt("出差住宿费标准是什么") {
 		t.Error("should not trigger interrupt for normal input")
 	}
+	if DetectInterrupt("如何停掉 k8s") {
+		t.Error("should not trigger interrupt for a real question containing a keyword substring")
+	}
 }
 
 // --- ContinuationDetector ---

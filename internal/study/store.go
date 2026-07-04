@@ -161,6 +161,18 @@ func (s *Store) QueryTraceSummary(periodDays int) (*TraceSummary, error) {
 		return nil, fmt.Errorf("study store: candidates count: %w", err)
 	}
 
+	err = s.db.QueryRow(`
+		SELECT COALESCE(SUM(kpn_cited_count), 0), COALESCE(SUM(cited_count), 0)
+		FROM traces
+		WHERE created_at >= datetime('now', '-' || ? || ' days')`, periodDays).
+		Scan(&summary.KPNCitedCount, &summary.CitedCount)
+	if err != nil {
+		return nil, fmt.Errorf("study store: kpn citation stats: %w", err)
+	}
+	if summary.CitedCount > 0 {
+		summary.KPNCitationRate = float64(summary.KPNCitedCount) / float64(summary.CitedCount)
+	}
+
 	return &summary, nil
 }
 

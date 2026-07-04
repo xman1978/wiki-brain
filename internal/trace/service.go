@@ -67,6 +67,8 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 		RetrievalQuality: grade.Quality,
 		Path:             r.Path,
 		DirectPointIDs:   directPointIDs,
+		KPNCitedCount:    grade.KPNCitedCount,
+		CitedCount:       grade.CitedCount,
 	}
 
 	if err := s.store.SaveTrace(t); err != nil {

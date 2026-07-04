@@ -242,7 +242,10 @@ func TestHandlerRetrySource(t *testing.T) {
 	}
 }
 
-func TestHandlerDeleteSource_CompletedRejected(t *testing.T) {
+// TestHandlerDeleteSource_CompletedSoftDeletes verifies the lifecycle module's
+// dispatch rule (docs/impl/v1/lifecycle.md 步骤 2): completed (non-failed)
+// sources are soft-deleted (200 + deprecated_units), not hard-deleted.
+func TestHandlerDeleteSource_CompletedSoftDeletes(t *testing.T) {
 	svc, _ := setupTestService(t)
 	handler := NewHandler(svc)
 	mux := http.NewServeMux()
@@ -256,8 +259,37 @@ func TestHandlerDeleteSource_CompletedRejected(t *testing.T) {
 	req := httptest.NewRequest("DELETE", "/sources/del-complete", nil)
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (soft delete)", rr.Code)
+	}
+
+	got, err := svc.store.GetByID("del-complete")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Status != "deleted" {
+		t.Errorf("status = %q, want deleted", got.Status)
+	}
+}
+
+// TestHandlerDeleteSource_AlreadyDeletedRejected verifies re-deleting an
+// already soft-deleted source is rejected rather than silently re-processed.
+func TestHandlerDeleteSource_AlreadyDeletedRejected(t *testing.T) {
+	svc, _ := setupTestService(t)
+	handler := NewHandler(svc)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	svc.store.Create(&Source{
+		SourceID: "del-already", Title: "Test", Format: "markdown", FileName: "test.md",
+		OriginalPath: "o/test.md", MarkdownPath: "m/test.md", Status: "deleted",
+	})
+
+	req := httptest.NewRequest("DELETE", "/sources/del-already", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400 (completed sources cannot be deleted)", rr.Code)
+		t.Errorf("status = %d, want 400 (already deleted)", rr.Code)
 	}
 }
 

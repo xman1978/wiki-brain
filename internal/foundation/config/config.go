@@ -22,11 +22,11 @@ type Config struct {
 }
 
 type LLMConfig struct {
-	BaseURL        string                    `yaml:"base_url"`
-	APIKey         string                    `yaml:"api_key"`
-	TimeoutSeconds int                       `yaml:"timeout_seconds"`
-	MaxRetries     int                       `yaml:"max_retries"`
-	Models         map[string]ModelConfig    `yaml:"models"`
+	BaseURL        string                 `yaml:"base_url"`
+	APIKey         string                 `yaml:"api_key"`
+	TimeoutSeconds int                    `yaml:"timeout_seconds"`
+	MaxRetries     int                    `yaml:"max_retries"`
+	Models         map[string]ModelConfig `yaml:"models"`
 }
 
 type ModelConfig struct {
@@ -72,8 +72,11 @@ type SourceConfig struct {
 }
 
 type RetrievalConfig struct {
-	OutlineFTSMinScore float64 `yaml:"outline_fts_min_score"`
-	RerankTopN         int     `yaml:"rerank_top_n"`
+	OutlineFTSMinScore         float64 `yaml:"outline_fts_min_score"`
+	RerankTopN                 int     `yaml:"rerank_top_n"`
+	ActivationMatchMin         float64 `yaml:"activation_match_min"`
+	ActivationMatchMinFallback float64 `yaml:"activation_match_min_fallback"`
+	ActivationMatchTop         int     `yaml:"activation_match_top"`
 }
 
 type StudyConfig struct {
@@ -166,15 +169,15 @@ func findConfigFile(explicit string) (string, error) {
 
 func applyEnvOverrides(cfg *Config) {
 	overrides := map[string]*string{
-		"WB_LLM_BASE_URL":          &cfg.LLM.BaseURL,
-		"WB_LLM_API_KEY":           &cfg.LLM.APIKey,
-		"WB_DATABASE_PATH":         &cfg.Database.Path,
-		"WB_INDEX_PATH":            &cfg.Index.Path,
-		"WB_SOURCE_UPLOAD_DIR":     &cfg.Source.UploadDir,
-		"WB_SERVER_HOST":           &cfg.Server.Host,
-		"WB_SERVER_PATH_PREFIX":    &cfg.Server.PathPrefix,
-		"WB_SERVER_READ_TIMEOUT":   &cfg.Server.ReadTimeout,
-		"WB_SERVER_WRITE_TIMEOUT":  &cfg.Server.WriteTimeout,
+		"WB_LLM_BASE_URL":         &cfg.LLM.BaseURL,
+		"WB_LLM_API_KEY":          &cfg.LLM.APIKey,
+		"WB_DATABASE_PATH":        &cfg.Database.Path,
+		"WB_INDEX_PATH":           &cfg.Index.Path,
+		"WB_SOURCE_UPLOAD_DIR":    &cfg.Source.UploadDir,
+		"WB_SERVER_HOST":          &cfg.Server.Host,
+		"WB_SERVER_PATH_PREFIX":   &cfg.Server.PathPrefix,
+		"WB_SERVER_READ_TIMEOUT":  &cfg.Server.ReadTimeout,
+		"WB_SERVER_WRITE_TIMEOUT": &cfg.Server.WriteTimeout,
 	}
 
 	for env, ptr := range overrides {
@@ -186,8 +189,8 @@ func applyEnvOverrides(cfg *Config) {
 	intOverrides := map[string]*int{
 		"WB_SERVER_PORT":            &cfg.Server.Port,
 		"WB_SERVER_MAX_CONCURRENCY": &cfg.Server.MaxConcurrency,
-		"WB_LLM_TIMEOUT_SECONDS":   &cfg.LLM.TimeoutSeconds,
-		"WB_LLM_MAX_RETRIES":       &cfg.LLM.MaxRetries,
+		"WB_LLM_TIMEOUT_SECONDS":    &cfg.LLM.TimeoutSeconds,
+		"WB_LLM_MAX_RETRIES":        &cfg.LLM.MaxRetries,
 		"WB_QUEUE_BUFFER_SIZE":      &cfg.Queue.BufferSize,
 		"WB_QUEUE_WORKERS":          &cfg.Queue.Workers,
 	}

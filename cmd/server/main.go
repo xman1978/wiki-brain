@@ -7,11 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/answer"
 	"github.com/jxman78/wiki-brain/internal/foundation"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
@@ -103,6 +104,7 @@ func main() {
 	traceStore := trace.NewStore(database)
 	sessionStore := session.NewStore(database)
 	studyStore := study.NewStore(database)
+	activationStore := activation.NewStore(database)
 
 	// ── Services ────────────────────────────────────────
 	sourceSvc := source.NewService(sourceStore, fvClient, llmClient, idxMgr.Outlines, q, cfg, baseDir)
@@ -111,6 +113,11 @@ func main() {
 
 	unitSvc := unit.NewService(unitStore, sourceStore, llmClient, idxMgr.Units, idxMgr.Points, q, cfg)
 	unitSvc.SetBroadcaster(broadcaster)
+	sourceSvc.SetLifecycleSetter(unitSvc)
+
+	activationMatcher := activation.NewMatcher(activationStore)
+	activationSvc := activation.NewService(activationStore, activationMatcher)
+	unitSvc.SetActivationNotifier(activationSvc)
 
 	retrievalSvc := retrieval.NewService(retrievalStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg)
 	answerSvc := answer.NewService(answerStore, llmClient, q, retrievalSvc)
@@ -130,6 +137,10 @@ func main() {
 		task := payload.(queue.UnitTask)
 		if err := unitSvc.Extract(context.Background(), task.SourceID); err != nil {
 			slog.Error("unit extract failed", "source_id", task.SourceID, "error", err)
+		} else if err := sourceSvc.CompleteShadowSwap(context.Background(), task.SourceID); err != nil {
+			// No-op when task.SourceID isn't a shadow; a real failure here means
+			// task.SourceID *is* a shadow but the swap itself failed.
+			slog.Error("shadow swap failed", "source_id", task.SourceID, "error", err)
 		}
 		broadcaster.Close(task.SourceID)
 	})
@@ -191,6 +202,7 @@ func main() {
 	trace.NewHandler(traceSvc).RegisterRoutes(apiMux)
 	study.NewHandler(studySvc).RegisterRoutes(apiMux)
 	session.NewHandler(sessionStore, session.NewParser(llmClient)).RegisterRoutes(apiMux)
+	activation.NewHandler(activationSvc).RegisterRoutes(apiMux)
 
 	var rootHandler http.Handler = mux
 	if prefix != "" {

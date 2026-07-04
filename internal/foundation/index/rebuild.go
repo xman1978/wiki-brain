@@ -71,12 +71,12 @@ func (m *Manager) rebuildUnits(db *sql.DB, readMarkdown func(sourceID string) ([
 		content := sliceLines(lines, lineStart, lineEnd)
 
 		batch.Index(unitID, map[string]interface{}{
-			"unit_id":   unitID,
-			"source_id": sourceID,
-			"center":    center,
+			"unit_id":    unitID,
+			"source_id":  sourceID,
+			"center":     center,
 			"line_start": lineStart,
 			"line_end":   lineEnd,
-			"content":   content,
+			"content":    content,
 		})
 		count++
 

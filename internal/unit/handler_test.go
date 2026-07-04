@@ -151,6 +151,87 @@ func TestHandler_ListRelations(t *testing.T) {
 	}
 }
 
+func TestHandler_ListUnits_LifecycleFilter(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	insertTestSource(t, db)
+
+	store := NewStore(db)
+	store.InsertUnit(&KnowledgeUnit{UnitID: "ku-1", SourceID: "src-1", Center: "主题一", LineStart: 1, LineEnd: 5, Status: "completed", PromptVersion: "v1"})
+	store.InsertUnit(&KnowledgeUnit{UnitID: "ku-2", SourceID: "src-1", Center: "主题二", LineStart: 6, LineEnd: 10, Status: "completed", PromptVersion: "v1"})
+	if err := store.UpdateUnitsLifecycle([]string{"ku-2"}, LifecycleSuperseded); err != nil {
+		t.Fatalf("UpdateUnitsLifecycle: %v", err)
+	}
+
+	handler := &Handler{svc: &Service{store: store}}
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/sources/src-1/units?lifecycle=current", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var result []map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&result)
+	if len(result) != 1 {
+		t.Fatalf("got %d units filtered by lifecycle=current, want 1", len(result))
+	}
+	if result[0]["unit_id"] != "ku-1" {
+		t.Errorf("unit_id = %v, want ku-1", result[0]["unit_id"])
+	}
+	if result[0]["lifecycle"] != "current" {
+		t.Errorf("lifecycle = %v, want current", result[0]["lifecycle"])
+	}
+}
+
+func TestHandler_GetPoint(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	insertTestSource(t, db)
+
+	store := NewStore(db)
+	store.InsertUnit(&KnowledgeUnit{UnitID: "ku-1", SourceID: "src-1", Center: "主题", LineStart: 1, LineEnd: 5, Status: "completed", PromptVersion: "v1"})
+	store.InsertPoint(&KnowledgePoint{PointID: "kp-1", UnitID: "ku-1", SourceID: "src-1", Content: "知识点内容", PointType: "definition"})
+
+	handler := &Handler{svc: &Service{store: store}}
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/points/kp-1", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var result map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&result)
+	if result["content"] != "知识点内容" {
+		t.Errorf("content = %v, want 知识点内容", result["content"])
+	}
+	if result["lifecycle"] != "current" {
+		t.Errorf("lifecycle = %v, want current", result["lifecycle"])
+	}
+}
+
+func TestHandler_GetPoint_NotFound(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	store := NewStore(db)
+
+	handler := &Handler{svc: &Service{store: store}}
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/points/nonexistent", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
 func TestHandler_GetUnit_NotFound(t *testing.T) {
 	db := foundation.NewTestDB(t)
 	store := NewStore(db)

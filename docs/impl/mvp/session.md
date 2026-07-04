@@ -213,6 +213,8 @@ recall / rerank（见 retrieval.md）。
 
 ```text
 1. InterruptDetector（规则）
+   仅当输入去除首尾空白后长度 ≤ 6 字符时才做打断词匹配（真实打断都是极短的独立发话；
+   避免"如何停掉 k8s"这类问题因包含"停"被误判为打断）：
    匹配打断词：停 / 停下 / 别说了 / 不用了 / 清空 / 重来 / 重置 / 从头 / 算了重来
    → 命中：清空 SessionState，返回 action=interrupted，流程结束
 
@@ -551,7 +553,8 @@ Session → Foundation：
 
 ### 步骤 2：实现 InterruptDetector 和 ContinuationDetector
 
-`internal/session/interrupt.go`：`DetectInterrupt(input string) bool`，关键词列表硬编码。
+`internal/session/interrupt.go`：`DetectInterrupt(input string) bool`，关键词列表硬编码；
+匹配前先判断输入长度（≤6 字符），避免关键词作为子串出现在正常长问题中时被误判为打断。
 
 `internal/session/continuation.go`：`DetectContinuation(input string, state *SessionState) bool`，匹配连续词且校验 `continuable_action` 非空。
 

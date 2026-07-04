@@ -37,6 +37,12 @@ CREATE TABLE traces (
     direct_point_ids  TEXT NOT NULL DEFAULT '[]',
     -- JSON 数组：被 Answer 实际引用的 direct evidence 的 point_id 列表
     -- 只有 confident 级别才有值
+    kpn_cited_count   INTEGER NOT NULL DEFAULT 0,
+    -- Answer 引用的 fact_id 中，Evidence.origin = 'kpn_expansion' 的数量（见 retrieval.md 步骤 1）
+    cited_count       INTEGER NOT NULL DEFAULT 0,
+    -- Answer 引用的 fact_id 中，能在 evidence_snapshot 解析出 origin 的总数（分母）
+    -- 与 confident/partial/gap 分级无关，独立统计：confident trace 也可能同时引用了
+    -- 一条 KPN 扩展来源的 supporting 证据，不止统计 direct 引用
     has_feedback      INTEGER NOT NULL DEFAULT 0,
     feedback_type     TEXT,
     -- positive / negative / correction（用户反馈，可为空）
@@ -127,6 +133,22 @@ direct 和 supporting 均为空  → gap（知识库无相关材料）
 ```
 
 `confident` 级别的 direct_point_ids 是后续共现统计和 Study 学习的核心输入。
+
+**KPN 引用采纳率统计**（与上述分级并行计算，不影响 confident/partial/gap 判定）：
+
+```text
+遍历 Answer 实际引用的 citations（fact_id 列表），在 evidence_snapshot 的
+  direct_evidence[] + supporting[] 中查找每个 fact_id 对应的 Evidence.origin：
+
+  cited_count      = citations 中能解析出 origin 的 fact_id 数（去重）
+  kpn_cited_count  = 其中 origin = 'kpn_expansion' 的数量
+
+direct_evidence 恒为 origin = 'rerank'（KPN 扩展只补充 supporting，见 retrieval.md 步骤 8），
+  但一次问答可能同时引用 direct 证据和某条 KPN 扩展的 supporting 证据，
+  因此该统计独立于 confident/partial/gap 分支、覆盖全部引用，而不仅是 direct 引用。
+写入 traces.kpn_cited_count / traces.cited_count，供 Study 按窗口聚合出
+  kpn_citation_rate = SUM(kpn_cited_count) / SUM(cited_count)（见 study.md）。
+```
 
 ### 步骤 2：问题归一化与哈希
 
@@ -271,6 +293,7 @@ Study：消费 question_kp_cooccurrence 和 learning_events 表，Trace 不直�
 ```text
 Answer 写库后异步投入队列，Trace 消费并完成步骤 1~5，不阻塞 HTTP 响应；
 质量分级正确：confident / partial / gap 按规则分级，direct_point_ids 仅在 confident 时有值；
+kpn_cited_count / cited_count 正确统计（与分级并行计算，confident trace 引用 KPN 补充证据时也能计入）；
 path 正确写入 traces 表（取自 AnswerResult.path）；
 question_hash 对相同归一化问题产生相同值，不同问题产生不同值；
 同一问题首次提问时正常累加共现计数，再次提问时跳过累加并记录 debug 日志；

@@ -14,8 +14,11 @@ think.md          总体思想与核心闭环
   -> kpn.md        KnowledgePoint Network 激活与扩展边界
   -> precompile.md 导入阶段 vs 使用阶段；ActivationLink
   -> cognitive-routing.md  思维模式选择与问题分流
+  -> knowledge-processing-pattern.md  领域知识加工模式与证据槽位
   -> retrieval.md  分层检索与证据查找
-  -> working-model.md      复杂问题的临时认知模型
+  -> evidence-mining.md    片段级证据挖掘
+  -> working-model.md      复杂问题的认知工作空间
+  -> reasoning-pattern.md  领域无关推理形式
   -> trace.md      Learning Event 与 Trace
   -> study.md      长期记忆学习
   -> lifecycle.md  记忆生命周期
@@ -33,8 +36,11 @@ think.md          总体思想与核心闭环
 | [kpn.md](./kpn.md) | KnowledgePoint Network 设计 | 定义 KPN 的定位、激活边界、扩展边界和停止条件；说明 KPN 与 Concept、KnowledgePoint、ActivationLink 的职责边界。 |
 | [precompile.md](./precompile.md) | 初始激活结构 | 区分导入阶段形成的材料侧知识，与使用阶段形成的认知侧结构；说明领域、概念、ActivationLink 为何来自使用而非导入。 |
 | [cognitive-routing.md](./cognitive-routing.md) | 思维模式选择 | 描述系统如何根据问题类型、熟悉度、不确定性和风险选择处理模式；定义直接记忆、快速检索、工作模型、查证、冲突检测等思维模式。 |
-| [retrieval.md](./retrieval.md) | 知识激活与证据检索 | 描述 ActivationLink、目录结构树、全文检索和外部证据的分层检索路径；说明 KPN 如何在核心知识点召回后做局部上下文补充；说明认知结构检索与补充查找如何协作。 |
-| [working-model.md](./working-model.md) | 临时认知模型 | 描述复杂问题如何组织本次思考的工作结构；说明 KPN 如何补充上下文变量；说明它与检索、Learning Event 和 Study 之间的关系。 |
+| [knowledge-processing-pattern.md](./knowledge-processing-pattern.md) | 知识加工模式 | 定义领域相关的知识组织模板与证据槽位；说明模式为何前置于检索以跨越词汇鸿沟；说明槽位填充如何承担知识转换、缺口暴露和关系发现；说明模式挂载 Domain/Concept 与库演化。 |
+| [retrieval.md](./retrieval.md) | 知识激活与证据检索 | 描述 ActivationLink、目录结构树、全文检索和外部证据的分层检索路径；说明知识加工模式槽位如何驱动召回扩展；说明 KPN 如何在核心知识点召回后做局部上下文补充；说明认知结构检索与补充查找如何协作。 |
+| [evidence-mining.md](./evidence-mining.md) | 证据挖掘 | 定义知识单元与证据的粒度区别；说明 Rerank 之后如何从知识单元中逐字摘选片段级证据；说明逐字摘录与程序校验如何拦截幻构；说明片段级证据对引用精度和学习信号的价值。 |
+| [working-model.md](./working-model.md) | 临时认知模型 | 定义复杂问题的认知工作空间：由知识加工模式实例化的五层结构（问题 / 槽位 / 推理状态 / 派生知识 / 候选回答）与生命周期；说明派生知识的出处校验约束；说明它与检索、Learning Event 和 Study 之间的关系。 |
+| [reasoning-pattern.md](./reasoning-pattern.md) | 推理模式 | 定义领域无关的推理形式库（演绎/归纳/因果/比较/决策/编排）；说明其工程形态是推理脚手架而非推理引擎；说明输入是 Working Model、选择由 intent 映射、结论必须回链槽位证据。 |
 | [trace.md](./trace.md) | Learning Event 与 Trace | 定义 Learning Event 与 Trace；说明检索事件是主学习驱动、用户反馈是补充加速；系统只记录对长期记忆学习有价值的事件和结果，不记录完整思考过程。 |
 | [study.md](./study.md) | 长期记忆学习 | 描述 Study 如何根据 Learning Event 调整长期记忆；说明 ActivationLink 演化主要由检索事件累积驱动、无需依赖用户纠正；区分 KPN 与 ActivationLink 的学习边界；说明 Working Model 结构如何经多次事件提炼为实践路径；区分材料层、认知层和表达层学习。 |
 | [lifecycle.md](./lifecycle.md) | 记忆生命周期 | 说明知识为何需要状态管理；描述生命周期如何影响激活、ActivationLink 和 Wiki 页面，以及如何区分当前可用与历史解释知识。 |
@@ -55,8 +61,11 @@ flowchart TB
   precompile["precompile.md<br/>初始激活结构"]
 
   routing["cognitive-routing.md<br/>思维模式选择"]
+  kpp["knowledge-processing-pattern.md<br/>知识加工模式"]
   retrieval["retrieval.md<br/>知识激活与证据检索"]
+  mining["evidence-mining.md<br/>证据挖掘"]
   working["working-model.md<br/>临时认知模型"]
+  rp["reasoning-pattern.md<br/>推理模式"]
 
   trace["trace.md<br/>Learning Event"]
   study["study.md<br/>长期记忆学习"]
@@ -83,13 +92,25 @@ flowchart TB
   precompile --> study
   precompile --> wiki
 
+  routing --> kpp
+  routing --> rp
   routing --> retrieval
   routing --> working
   routing --> trace
 
-  retrieval --> working
+  kpp --> retrieval
+  kpp --> working
+  kpp --> study
+
+  retrieval --> mining
   retrieval --> trace
   retrieval --> study
+
+  mining --> working
+  mining --> trace
+
+  working --> rp
+  rp --> trace
 
   working --> trace
   working --> study
@@ -119,7 +140,10 @@ flowchart TB
 **问题处理**
 
 - `cognitive-routing.md` 决定问题走轻量路径还是深度路径，并调度后续环节。
+- `knowledge-processing-pattern.md` 在问题理解阶段按领域给出知识组织结构与证据槽位：槽位驱动检索扩展（跨越词汇鸿沟）、承载知识转换、以填充率定义证据充分性；模式实例是 Working Model 的骨架。
+- `reasoning-pattern.md` 在填充完成的 Working Model 上执行领域无关的推理形式（演绎/归纳/因果/比较/决策/编排）；工程形态是推理脚手架（步骤模板 + 输出契约 + 程序检查），结论必须回链槽位证据。
 - `retrieval.md` 在 ActivationLink、目录结构树、全文检索和外部证据之间分层召回；核心 KnowledgePoint 确定后，在 Working Model 需要时由 KPN 做局部上下文补充。
+- `evidence-mining.md` 在 Rerank 之后把知识单元粒度的候选加工为片段粒度的证据：逐字摘选、程序校验、可回链来源；有模式时按槽位定向摘选。
 - `working-model.md` 承接复杂问题，把激活结果和证据组织为本次思考结构；其完整内容不默认进入 Trace。
 
 **学习与沉淀**
@@ -142,8 +166,11 @@ flowchart TB
   -> KnowledgePoint Network 补充上下文（unit / kpn / retrieval）
   -> 使用中形成 ActivationLink（precompile / study）
   -> 思维模式选择（cognitive-routing）
+  -> 知识加工模式识别与证据槽位生成（knowledge-processing-pattern）
   -> 分层检索与证据查找（retrieval）
+  -> 片段级证据挖掘（evidence-mining）
   -> 复杂问题进入临时认知模型（working-model）
+  -> 推理模式执行受约束推理（reasoning-pattern）
   -> 生成回答
 
 Only if learning value exists:
@@ -159,7 +186,10 @@ Only if learning value exists:
 ```text
 ActivationLink 负责找到知识；
 KPN 负责补充上下文；
-Working Model 负责组织思考；
+Knowledge Processing Pattern 负责给出领域知识结构；
+Evidence Mining 负责摘选证据；
+Working Model 负责承载本次认知工作空间；
+Reasoning Pattern 负责在其上执行推理；
 Learning Event / Trace 负责记录学习相关事件和结果；
 Study 负责根据 Learning Event 修正长期记忆；
 Wiki 负责长期表达沉淀。

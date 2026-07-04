@@ -111,9 +111,9 @@ func TestFindLeaves(t *testing.T) {
 func TestBuildSegments_MergeSmallIntoLargeNeighbor(t *testing.T) {
 	outlines := []source.Outline{
 		makeOutline("root", "", 1, "Root", 1, 50),
-		makeOutline("a", "root", 2, "A", 1, 20),   // 20 lines * 31 chars = 620 chars
-		makeOutline("b", "root", 2, "B", 21, 22),   // 2 lines = 62 chars (< 400)
-		makeOutline("c", "root", 2, "C", 23, 50),   // 28 lines = 868 chars
+		makeOutline("a", "root", 2, "A", 1, 20),  // 20 lines * 31 chars = 620 chars
+		makeOutline("b", "root", 2, "B", 21, 22), // 2 lines = 62 chars (< 400)
+		makeOutline("c", "root", 2, "C", 23, 50), // 28 lines = 868 chars
 	}
 
 	lines := make([]string, 50)

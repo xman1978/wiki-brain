@@ -22,16 +22,26 @@ import (
 )
 
 type Service struct {
-	store       *Store
-	fileView    FileViewClient
-	llmClient   llm.LLMClient
-	outlineIdx  bleve.Index
-	unitsIdx    bleve.Index
-	pointsIdx   bleve.Index
-	queue       *queue.Queue
-	cfg         *config.Config
-	baseDir     string
-	broadcaster *progress.Broadcaster
+	store           *Store
+	fileView        FileViewClient
+	llmClient       llm.LLMClient
+	outlineIdx      bleve.Index
+	unitsIdx        bleve.Index
+	pointsIdx       bleve.Index
+	queue           *queue.Queue
+	cfg             *config.Config
+	baseDir         string
+	broadcaster     *progress.Broadcaster
+	lifecycleSetter LifecycleSetter
+}
+
+// LifecycleSetter is implemented by the unit package's Service. Source depends
+// on it only through this interface to avoid an import cycle (unit already
+// imports source). It is the sole path by which Source marks KU/KP as
+// superseded (reupload swap) or deprecated (soft delete) — see
+// docs/impl/v1/lifecycle.md 步骤 1-2.
+type LifecycleSetter interface {
+	SetUnitLifecycle(unitIDs []string, lifecycle, reason string) error
 }
 
 func NewService(store *Store, fv FileViewClient, lc llm.LLMClient, outlineIdx bleve.Index, q *queue.Queue, cfg *config.Config, baseDir string) *Service {
@@ -53,6 +63,10 @@ func (s *Service) Store() *Store {
 func (s *Service) SetUnitIndexes(unitsIdx, pointsIdx bleve.Index) {
 	s.unitsIdx = unitsIdx
 	s.pointsIdx = pointsIdx
+}
+
+func (s *Service) SetLifecycleSetter(ls LifecycleSetter) {
+	s.lifecycleSetter = ls
 }
 
 func (s *Service) SetBroadcaster(b *progress.Broadcaster) {
@@ -81,6 +95,35 @@ type OutlineIndexDoc struct {
 // Import handles the full upload flow: save file, create source record.
 // Returns the source for the caller; processing happens async.
 func (s *Service) Import(ctx context.Context, fileName string, fileReader io.Reader) (*Source, error) {
+	return s.importInternal(ctx, fileName, fileReader, "")
+}
+
+// ImportShadow creates a hidden Shadow Source for POST /sources/:id/reupload
+// (docs/impl/v1/lifecycle.md 步骤 2). It runs through the exact same import +
+// source_process/unit_extract pipeline as a normal Import, only shadow_of is
+// set and the file-name dedup check is relaxed against targetSourceID. Any
+// stale shadow left over from an abandoned attempt is discarded first.
+func (s *Service) ImportShadow(ctx context.Context, targetSourceID, fileName string, fileReader io.Reader) (*Source, error) {
+	target, err := s.store.GetByID(targetSourceID)
+	if err != nil {
+		return nil, fmt.Errorf("source not found: %w", err)
+	}
+	if target.ShadowOf.Valid {
+		return nil, fmt.Errorf("cannot reupload a shadow source")
+	}
+
+	if existing, err := s.store.GetShadowByTarget(targetSourceID); err != nil {
+		slog.Warn("reupload: check existing shadow failed", "target_id", targetSourceID, "error", err)
+	} else if existing != nil {
+		if err := s.discardShadow(existing); err != nil {
+			slog.Warn("reupload: discard stale shadow failed", "shadow_id", existing.SourceID, "error", err)
+		}
+	}
+
+	return s.importInternal(ctx, fileName, fileReader, targetSourceID)
+}
+
+func (s *Service) importInternal(ctx context.Context, fileName string, fileReader io.Reader, shadowOf string) (*Source, error) {
 	sourceID := uuid.New().String()
 	ext := strings.ToLower(filepath.Ext(fileName))
 
@@ -88,7 +131,13 @@ func (s *Service) Import(ctx context.Context, fileName string, fileReader io.Rea
 		return nil, fmt.Errorf("unsupported format: %s", ext)
 	}
 
-	exists, err := s.store.ExistsByFileName(fileName)
+	var exists bool
+	var err error
+	if shadowOf != "" {
+		exists, err = s.store.ExistsByFileNameExcept(fileName, shadowOf)
+	} else {
+		exists, err = s.store.ExistsByFileName(fileName)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +170,9 @@ func (s *Service) Import(ctx context.Context, fileName string, fileReader io.Rea
 		OriginalPath: filepath.Join("data", "sources", "original", sourceID+ext),
 		MarkdownPath: markdownPath,
 		Status:       "pending",
+	}
+	if shadowOf != "" {
+		src.ShadowOf = sql.NullString{String: shadowOf, Valid: true}
 	}
 
 	if err := s.store.Create(src); err != nil {
@@ -446,19 +498,14 @@ func (s *Service) indexOutlines(outlines []Outline) {
 	}
 }
 
-// Retry re-processes a failed source.
-// Delete 删除失败状态的 Source 及其关联资源（文件、DB 记录、Bleve 索引）。
-// 仅对 status=failed 的 Source 生效；已完成的 Source 删除在 lifecycle 模块中实现。
-func (s *Service) Delete(sourceID string) error {
-	src, err := s.store.GetByID(sourceID)
-	if err != nil {
-		return fmt.Errorf("source not found: %w", err)
-	}
-	if src.Status != "failed" {
-		return fmt.Errorf("only failed sources can be deleted (current: %s)", src.Status)
-	}
+// removeIndexedArtifacts deletes a source's outlines/units/points from Bleve
+// and its original/markdown/html files from disk. Shared by Delete (hard
+// delete of a failed source) and discardShadow (abandoning an incomplete
+// or superseded-before-swap Shadow Source) — neither leaves orphaned index
+// docs or files behind.
+func (s *Service) removeIndexedArtifacts(src *Source) {
+	sourceID := src.SourceID
 
-	// 1. 从 Bleve 索引删除
 	outlineIDs, err := s.store.GetOutlineIDs(sourceID)
 	if err != nil {
 		slog.Warn("get outline IDs for index cleanup failed", "error", err)
@@ -502,7 +549,6 @@ func (s *Service) Delete(sourceID string) error {
 		}
 	}
 
-	// 2. 删除文件系统上的文件
 	filesToDelete := []string{
 		filepath.Join(s.baseDir, src.OriginalPath),
 		filepath.Join(s.baseDir, src.MarkdownPath),
@@ -515,14 +561,217 @@ func (s *Service) Delete(sourceID string) error {
 			slog.Warn("delete file failed", "path", f, "error", err)
 		}
 	}
+}
 
-	// 3. 删除 DB 记录（含关联的 outlines、KU、KP、KPN）
+// Delete 删除失败状态的 Source 及其关联资源（文件、DB 记录、Bleve 索引）。
+// 仅对 status=failed 的 Source 生效；其他状态走 SoftDelete（软删除）。
+func (s *Service) Delete(sourceID string) error {
+	src, err := s.store.GetByID(sourceID)
+	if err != nil {
+		return fmt.Errorf("source not found: %w", err)
+	}
+	if src.Status != "failed" {
+		return fmt.Errorf("only failed sources can be deleted (current: %s)", src.Status)
+	}
+
+	s.removeIndexedArtifacts(src)
+
 	if err := s.store.DeleteSource(sourceID); err != nil {
 		return fmt.Errorf("delete source: %w", err)
 	}
 
 	slog.Info("source deleted", "source_id", sourceID, "title", src.Title)
 	return nil
+}
+
+// SoftDelete implements DELETE /sources/:id for non-failed sources
+// (docs/impl/v1/lifecycle.md 步骤 2): KU/KP (including already-superseded ones)
+// are marked deprecated, outline index nodes are removed, but rows and files
+// are kept for evidence_snapshot traceability. Returns the number of KUs
+// marked deprecated.
+func (s *Service) SoftDelete(sourceID string) (int, error) {
+	src, err := s.store.GetByID(sourceID)
+	if err != nil {
+		return 0, fmt.Errorf("source not found: %w", err)
+	}
+
+	unitIDs, err := s.store.GetUnitIDs(sourceID)
+	if err != nil {
+		return 0, fmt.Errorf("get unit ids: %w", err)
+	}
+	if len(unitIDs) > 0 && s.lifecycleSetter != nil {
+		if err := s.lifecycleSetter.SetUnitLifecycle(unitIDs, "deprecated", fmt.Sprintf("source %s deleted", sourceID)); err != nil {
+			return 0, fmt.Errorf("mark deprecated: %w", err)
+		}
+	}
+
+	if outlineIDs, err := s.store.GetOutlineIDs(sourceID); err != nil {
+		slog.Warn("soft delete: get outline IDs failed", "error", err)
+	} else if len(outlineIDs) > 0 {
+		batch := s.outlineIdx.NewBatch()
+		for _, id := range outlineIDs {
+			batch.Delete(id)
+		}
+		if err := s.outlineIdx.Batch(batch); err != nil {
+			slog.Warn("soft delete: remove outlines from index failed", "error", err)
+		}
+	}
+
+	if err := s.store.MarkDeleted(sourceID); err != nil {
+		return 0, fmt.Errorf("mark deleted: %w", err)
+	}
+
+	slog.Info("source soft-deleted", "source_id", sourceID, "title", src.Title, "deprecated_units", len(unitIDs))
+	return len(unitIDs), nil
+}
+
+// discardShadow abandons an incomplete or stale Shadow Source: removes its
+// indexed artifacts and hard-deletes its DB rows and files, regardless of
+// status. Used when a new reupload attempt supersedes a failed shadow, or
+// when POST /sources/:id/reupload/retry is not applicable.
+func (s *Service) discardShadow(shadow *Source) error {
+	s.removeIndexedArtifacts(shadow)
+	if err := s.store.DeleteSource(shadow.SourceID); err != nil {
+		return fmt.Errorf("delete shadow source: %w", err)
+	}
+	slog.Info("shadow source discarded", "shadow_id", shadow.SourceID, "shadow_of", shadow.ShadowOf.String)
+	return nil
+}
+
+// ReuploadRetry implements POST /sources/:id/reupload/retry: it reuses the
+// existing failed shadow's Retry() idempotent resume logic rather than
+// starting a new shadow from scratch (docs/impl/v1/lifecycle.md 步骤 2).
+func (s *Service) ReuploadRetry(ctx context.Context, targetSourceID string) (*Source, error) {
+	shadow, err := s.store.GetShadowByTarget(targetSourceID)
+	if err != nil {
+		return nil, fmt.Errorf("get shadow: %w", err)
+	}
+	if shadow == nil || shadow.Status != "failed" {
+		return nil, fmt.Errorf("no failed shadow to retry for source %s", targetSourceID)
+	}
+
+	if err := s.Retry(ctx, shadow.SourceID); err != nil {
+		return nil, fmt.Errorf("retry shadow: %w", err)
+	}
+
+	return shadow, nil
+}
+
+// CompleteShadowSwap performs the one-shot "换血" transaction once a Shadow
+// Source's unit_extract has finished (docs/impl/v1/lifecycle.md 步骤 2, step 3):
+// the target's pre-existing KUs are marked superseded (using their original
+// markdown content, read before it gets overwritten), the shadow's KU/KP/
+// outlines are re-parented onto the target, original/markdown files are
+// swapped with the old ones archived, and the shadow row is dropped. No-op
+// (returns nil) if shadowSourceID does not refer to a shadow.
+func (s *Service) CompleteShadowSwap(ctx context.Context, shadowSourceID string) error {
+	shadow, err := s.store.GetByID(shadowSourceID)
+	if err != nil {
+		return fmt.Errorf("get shadow source: %w", err)
+	}
+	if !shadow.ShadowOf.Valid {
+		return nil
+	}
+	targetID := shadow.ShadowOf.String
+
+	target, err := s.store.GetByID(targetID)
+	if err != nil {
+		return fmt.Errorf("get target source: %w", err)
+	}
+
+	oldUnitIDs, err := s.store.GetUnitIDs(targetID)
+	if err != nil {
+		return fmt.Errorf("get target unit ids: %w", err)
+	}
+	if len(oldUnitIDs) > 0 && s.lifecycleSetter != nil {
+		if err := s.lifecycleSetter.SetUnitLifecycle(oldUnitIDs, "superseded", fmt.Sprintf("source %s reuploaded", targetID)); err != nil {
+			return fmt.Errorf("mark superseded: %w", err)
+		}
+	}
+
+	newOriginalPath, newHTMLPath, err := s.archiveAndSwapFiles(target, shadow)
+	if err != nil {
+		return fmt.Errorf("archive files: %w", err)
+	}
+
+	if err := s.store.SwapShadowIntoTarget(shadowSourceID, targetID, newOriginalPath, newHTMLPath); err != nil {
+		return fmt.Errorf("swap shadow into target: %w", err)
+	}
+
+	slog.Info("shadow swap completed", "target_id", targetID, "shadow_id", shadowSourceID, "superseded_units", len(oldUnitIDs))
+	return nil
+}
+
+// archiveAndSwapFiles moves target's current original/markdown files to
+// data/sources/archived/<target_id>/<timestamp>/, then copies the shadow's
+// files into target's paths so target's file paths keep pointing at valid
+// content under target's own source_id. Returns the (possibly new, since
+// reupload may change format/extension) original_path and html_path target
+// should be updated to, for the caller to persist alongside the rest of the
+// swap transaction.
+func (s *Service) archiveAndSwapFiles(target, shadow *Source) (originalPath string, htmlPath sql.NullString, err error) {
+	archiveRelDir := filepath.Join("data", "sources", "archived", target.SourceID, time.Now().UTC().Format("20060102T150405Z"))
+	archiveDir := filepath.Join(s.baseDir, archiveRelDir)
+	if err := os.MkdirAll(archiveDir, 0755); err != nil {
+		return "", sql.NullString{}, fmt.Errorf("create archive dir: %w", err)
+	}
+
+	archiveOne := func(relPath string) error {
+		if relPath == "" {
+			return nil
+		}
+		oldFull := filepath.Join(s.baseDir, relPath)
+		if _, statErr := os.Stat(oldFull); statErr != nil {
+			if os.IsNotExist(statErr) {
+				return nil
+			}
+			return fmt.Errorf("stat old file %s: %w", oldFull, statErr)
+		}
+		newFull := filepath.Join(archiveDir, filepath.Base(relPath))
+		return os.Rename(oldFull, newFull)
+	}
+	if err := archiveOne(target.OriginalPath); err != nil {
+		return "", sql.NullString{}, fmt.Errorf("archive original: %w", err)
+	}
+	if err := archiveOne(target.MarkdownPath); err != nil {
+		return "", sql.NullString{}, fmt.Errorf("archive markdown: %w", err)
+	}
+	if target.HTMLPath.Valid {
+		if err := archiveOne(target.HTMLPath.String); err != nil {
+			return "", sql.NullString{}, fmt.Errorf("archive html: %w", err)
+		}
+	}
+
+	// Copy shadow's freshly processed content into target's identity.
+	newOriginalPath := filepath.Join("data", "sources", "original", target.SourceID+filepath.Ext(shadow.OriginalPath))
+	if copyErr := copyFile(filepath.Join(s.baseDir, shadow.OriginalPath), filepath.Join(s.baseDir, newOriginalPath)); copyErr != nil {
+		return "", sql.NullString{}, fmt.Errorf("copy shadow original: %w", copyErr)
+	}
+	os.Remove(filepath.Join(s.baseDir, shadow.OriginalPath))
+
+	if copyErr := copyFile(filepath.Join(s.baseDir, shadow.MarkdownPath), filepath.Join(s.baseDir, target.MarkdownPath)); copyErr != nil {
+		return "", sql.NullString{}, fmt.Errorf("copy shadow markdown: %w", copyErr)
+	}
+	os.Remove(filepath.Join(s.baseDir, shadow.MarkdownPath))
+
+	newHTMLPath := sql.NullString{}
+	if shadow.HTMLPath.Valid {
+		targetHTMLPath := filepath.Join("data", "sources", "html", target.SourceID+".html")
+		if copyErr := copyFile(filepath.Join(s.baseDir, shadow.HTMLPath.String), filepath.Join(s.baseDir, targetHTMLPath)); copyErr == nil {
+			os.Remove(filepath.Join(s.baseDir, shadow.HTMLPath.String))
+			newHTMLPath = sql.NullString{String: targetHTMLPath, Valid: true}
+		}
+	}
+
+	return newOriginalPath, newHTMLPath, nil
+}
+
+func copyFile(srcPath, dstPath string) error {
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dstPath, data, 0644)
 }
 
 func (s *Service) Retry(ctx context.Context, sourceID string) error {

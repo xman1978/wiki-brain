@@ -23,6 +23,7 @@ type Source struct {
 	Summary             sql.NullString
 	DomainID            sql.NullString
 	WordCount           sql.NullInt64
+	ShadowOf            sql.NullString
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 	ProcessingStartedAt sql.NullTime
@@ -66,11 +67,11 @@ func (s *Store) Create(src *Source) error {
 	if src.SourceID == "" {
 		src.SourceID = uuid.New().String()
 	}
-	_, err := s.db.Exec(`INSERT INTO sources (source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := s.db.Exec(`INSERT INTO sources (source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, shadow_of)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		src.SourceID, src.Title, src.Format, src.FileName, src.OriginalPath,
 		src.HTMLPath, src.MarkdownPath, src.Status, src.ErrorMsg,
-		src.OutlineType, src.Summary, src.DomainID, src.WordCount)
+		src.OutlineType, src.Summary, src.DomainID, src.WordCount, src.ShadowOf)
 	if err != nil {
 		return fmt.Errorf("source store: create: %w", err)
 	}
@@ -79,12 +80,12 @@ func (s *Store) Create(src *Source) error {
 
 func (s *Store) GetByID(sourceID string) (*Source, error) {
 	src := &Source{}
-	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, created_at, updated_at, processing_started_at, completed_at
+	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, created_at, updated_at, processing_started_at, completed_at
 		FROM sources WHERE source_id = ?`, sourceID).Scan(
 		&src.SourceID, &src.Title, &src.Format, &src.FileName,
 		&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status,
 		&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
-		&src.WordCount, &src.CreatedAt, &src.UpdatedAt,
+		&src.WordCount, &src.ShadowOf, &src.CreatedAt, &src.UpdatedAt,
 		&src.ProcessingStartedAt, &src.CompletedAt)
 	if err != nil {
 		return nil, fmt.Errorf("source store: get by id: %w", err)
@@ -92,11 +93,13 @@ func (s *Store) GetByID(sourceID string) (*Source, error) {
 	return src, nil
 }
 
+// List returns sources visible to the outside world — shadow rows created for
+// POST /sources/:id/reupload are always excluded (docs/impl/v1/lifecycle.md 步骤 2).
 func (s *Store) List(status, domainID string, limit, offset int) ([]Source, error) {
 	var rows *sql.Rows
 	var err error
-	base := `SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, created_at, updated_at, processing_started_at, completed_at FROM sources`
-	var where []string
+	base := `SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, created_at, updated_at, processing_started_at, completed_at FROM sources`
+	where := []string{"shadow_of IS NULL"}
 	var args []any
 	if status != "" {
 		where = append(where, "status = ?")
@@ -106,10 +109,7 @@ func (s *Store) List(status, domainID string, limit, offset int) ([]Source, erro
 		where = append(where, "domain_id = ?")
 		args = append(args, domainID)
 	}
-	q := base
-	if len(where) > 0 {
-		q += " WHERE " + strings.Join(where, " AND ")
-	}
+	q := base + " WHERE " + strings.Join(where, " AND ")
 	q += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 	rows, err = s.db.Query(q, args...)
@@ -124,7 +124,7 @@ func (s *Store) List(status, domainID string, limit, offset int) ([]Source, erro
 		if err := rows.Scan(&src.SourceID, &src.Title, &src.Format, &src.FileName,
 			&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status,
 			&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
-			&src.WordCount, &src.CreatedAt, &src.UpdatedAt,
+			&src.WordCount, &src.ShadowOf, &src.CreatedAt, &src.UpdatedAt,
 			&src.ProcessingStartedAt, &src.CompletedAt); err != nil {
 			return nil, fmt.Errorf("source store: scan: %w", err)
 		}
@@ -193,10 +193,11 @@ func (s *Store) UpdateDomainID(sourceID string, domainID *string) error {
 	return nil
 }
 
+// Count mirrors List's visibility rule: shadow rows are always excluded.
 func (s *Store) Count(status, domainID string) (int, error) {
 	var count int
 	q := `SELECT COUNT(*) FROM sources`
-	var where []string
+	where := []string{"shadow_of IS NULL"}
 	var args []any
 	if status != "" {
 		where = append(where, "status = ?")
@@ -206,9 +207,7 @@ func (s *Store) Count(status, domainID string) (int, error) {
 		where = append(where, "domain_id = ?")
 		args = append(args, domainID)
 	}
-	if len(where) > 0 {
-		q += " WHERE " + strings.Join(where, " AND ")
-	}
+	q += " WHERE " + strings.Join(where, " AND ")
 	err := s.db.QueryRow(q, args...).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("source store: count: %w", err)
@@ -223,6 +222,94 @@ func (s *Store) ExistsByFileName(fileName string) (bool, error) {
 		return false, fmt.Errorf("source store: exists by file name: %w", err)
 	}
 	return count > 0, nil
+}
+
+// ExistsByFileNameExcept is like ExistsByFileName but ignores excludeSourceID —
+// used when creating a Shadow Source for reupload, which is allowed to reuse
+// its own target's file name (docs/impl/v1/lifecycle.md 步骤 2).
+func (s *Store) ExistsByFileNameExcept(fileName, excludeSourceID string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM sources WHERE file_name = ? AND source_id != ?`, fileName, excludeSourceID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("source store: exists by file name except: %w", err)
+	}
+	return count > 0, nil
+}
+
+// GetShadowByTarget returns the shadow Source row for targetSourceID (any
+// status), or nil if none exists. A target can have at most one live shadow
+// at a time (enforced by discarding stale ones before creating a new one).
+func (s *Store) GetShadowByTarget(targetSourceID string) (*Source, error) {
+	src := &Source{}
+	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, created_at, updated_at, processing_started_at, completed_at
+		FROM sources WHERE shadow_of = ?`, targetSourceID).Scan(
+		&src.SourceID, &src.Title, &src.Format, &src.FileName,
+		&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status,
+		&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
+		&src.WordCount, &src.ShadowOf, &src.CreatedAt, &src.UpdatedAt,
+		&src.ProcessingStartedAt, &src.CompletedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("source store: get shadow by target: %w", err)
+	}
+	return src, nil
+}
+
+// MarkDeleted soft-deletes a Source (docs/impl/v1/lifecycle.md 步骤 2):
+// rows and files are kept, only status flips to 'deleted'.
+func (s *Store) MarkDeleted(sourceID string) error {
+	_, err := s.db.Exec(`UPDATE sources SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE source_id = ?`, sourceID)
+	if err != nil {
+		return fmt.Errorf("source store: mark deleted: %w", err)
+	}
+	return nil
+}
+
+// SwapShadowIntoTarget re-parents a shadow's knowledge_units / knowledge_points /
+// source_outlines onto targetID and drops the now-empty shadow row, in one
+// transaction (docs/impl/v1/lifecycle.md 步骤 2, 换血事务 a + d). Metadata fields
+// computed by the shadow's own source_process run (summary/domain/outline_type/
+// word_count/format/file_name — everything except title) are copied onto the
+// target row so they describe the new content, not the superseded one.
+// originalPath/htmlPath are the post-swap file paths on disk, computed by the
+// caller (Service.archiveAndSwapFiles) since Store does not touch the filesystem.
+func (s *Store) SwapShadowIntoTarget(shadowID, targetID, originalPath string, htmlPath sql.NullString) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("source store: swap: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	shadow := &Source{}
+	err = tx.QueryRow(`SELECT file_name, format, summary, domain_id, outline_type, word_count
+		FROM sources WHERE source_id = ?`, shadowID).Scan(
+		&shadow.FileName, &shadow.Format, &shadow.Summary, &shadow.DomainID,
+		&shadow.OutlineType, &shadow.WordCount)
+	if err != nil {
+		return fmt.Errorf("source store: swap: get shadow: %w", err)
+	}
+
+	if _, err := tx.Exec(`UPDATE knowledge_units SET source_id = ? WHERE source_id = ?`, targetID, shadowID); err != nil {
+		return fmt.Errorf("source store: swap: reparent units: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE knowledge_points SET source_id = ? WHERE source_id = ?`, targetID, shadowID); err != nil {
+		return fmt.Errorf("source store: swap: reparent points: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE source_outlines SET source_id = ? WHERE source_id = ?`, targetID, shadowID); err != nil {
+		return fmt.Errorf("source store: swap: reparent outlines: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE sources SET file_name = ?, format = ?, summary = ?, domain_id = ?, outline_type = ?, word_count = ?, original_path = ?, html_path = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE source_id = ?`,
+		shadow.FileName, shadow.Format, shadow.Summary, shadow.DomainID, shadow.OutlineType, shadow.WordCount, originalPath, htmlPath, targetID); err != nil {
+		return fmt.Errorf("source store: swap: update target metadata: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM sources WHERE source_id = ?`, shadowID); err != nil {
+		return fmt.Errorf("source store: swap: delete shadow row: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 func (s *Store) UpdateWordCount(sourceID string, wordCount int) error {

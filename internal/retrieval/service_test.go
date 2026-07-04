@@ -21,7 +21,7 @@ func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *Store) {
 
 	// Create markdown files for sources
 	tmpDir := foundation.NewTestDir(t)
-	mdContent := "# Algebra\n\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10\n" +
+	mdContent := "# Algebra\nLinear equations ax+b=0 is linear\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10\n" +
 		"Line 11\nLine 12\nLine 13\nLine 14\nLine 15\nLine 16\nLine 17\nLine 18\nLine 19\nLine 20\n" +
 		"Line 21\nLine 22\nLine 23\nLine 24\nLine 25\n" +
 		"Line 26\nLine 27\nLine 28\nLine 29\nLine 30\n" +
