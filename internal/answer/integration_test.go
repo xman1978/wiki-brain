@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"database/sql"
+	"github.com/jxman78/wiki-brain/internal/foundation/config"
 
 	fdb "github.com/jxman78/wiki-brain/internal/foundation/db"
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
@@ -69,7 +69,7 @@ func TestIntegrationAnswerQuality(t *testing.T) {
 	rebuildIndexes(t, database, idxMgr, testdataDir)
 
 	retStore := retrieval.NewStore(database)
-	retSvc := retrieval.NewService(retStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg)
+	retSvc := retrieval.NewService(retStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, nil, nil, nil)
 
 	ansStore := NewStore(database)
 	q := queue.New(100)

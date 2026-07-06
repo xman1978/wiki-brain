@@ -77,7 +77,7 @@ func (s *Store) ListSourcesByDomainIDs(domainIDs []string) ([]SourceInfo, error)
 	}
 	query := fmt.Sprintf(
 		`SELECT source_id, title, summary, domain_id, markdown_path FROM sources
-		 WHERE domain_id IN (%s) OR domain_id IS NULL
+		 WHERE (domain_id IN (%s) OR domain_id IS NULL) AND shadow_of IS NULL
 		 ORDER BY created_at DESC`,
 		strings.Join(placeholders, ","))
 
@@ -89,8 +89,11 @@ func (s *Store) ListSourcesByDomainIDs(domainIDs []string) ([]SourceInfo, error)
 	return scanSources(rows)
 }
 
+// ListAllSources excludes shadow sources (shadow_of IS NOT NULL) — a reupload
+// in progress must not participate in retrieval until the swap completes
+// (docs/impl/v1/lifecycle.md 步骤 2).
 func (s *Store) ListAllSources() ([]SourceInfo, error) {
-	rows, err := s.db.Query(`SELECT source_id, title, summary, domain_id, markdown_path FROM sources ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT source_id, title, summary, domain_id, markdown_path FROM sources WHERE shadow_of IS NULL ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval store: list all sources: %w", err)
 	}
@@ -154,7 +157,7 @@ func (s *Store) GetUnitsByOutlineIDs(outlineIDs []string) ([]UnitInfo, error) {
 	}
 	query := fmt.Sprintf(
 		`SELECT unit_id, source_id, outline_id, line_start, line_end
-		 FROM knowledge_units WHERE outline_id IN (%s) AND status = 'completed'`,
+		 FROM knowledge_units WHERE outline_id IN (%s) AND status = 'completed' AND lifecycle = 'current'`,
 		strings.Join(placeholders, ","))
 
 	rows, err := s.db.Query(query, args...)
@@ -198,7 +201,7 @@ func (s *Store) GetSourceMarkdownPath(sourceID string) (string, error) {
 func (s *Store) GetFirstPointByUnitID(unitID string) (string, error) {
 	var pointID string
 	err := s.db.QueryRow(
-		`SELECT point_id FROM knowledge_points WHERE unit_id = ? ORDER BY created_at ASC LIMIT 1`,
+		`SELECT point_id FROM knowledge_points WHERE unit_id = ? AND lifecycle = 'current' ORDER BY created_at ASC LIMIT 1`,
 		unitID).Scan(&pointID)
 	if err != nil {
 		return "", fmt.Errorf("retrieval store: get first point: %w", err)
@@ -209,11 +212,67 @@ func (s *Store) GetFirstPointByUnitID(unitID string) (string, error) {
 func (s *Store) GetPointUnitID(pointID string) (string, error) {
 	var unitID string
 	err := s.db.QueryRow(
-		`SELECT unit_id FROM knowledge_points WHERE point_id = ?`, pointID).Scan(&unitID)
+		`SELECT unit_id FROM knowledge_points WHERE point_id = ? AND lifecycle = 'current'`, pointID).Scan(&unitID)
 	if err != nil {
 		return "", fmt.Errorf("retrieval store: get point unit id: %w", err)
 	}
 	return unitID, nil
+}
+
+// DirectHit is a fast-path activation hit resolved to its current KU
+// (docs/impl/v1/retrieval.md 步骤 2).
+type DirectHit struct {
+	PointID   string
+	UnitID    string
+	SourceID  string
+	LineStart int
+	LineEnd   int
+}
+
+// GetCurrentUnitsByPointIDs reverse-looks-up the KU for each matched
+// ActivationLink's point_id, requiring both the KP and its KU to still be
+// lifecycle=current (docs/impl/v1/retrieval.md 步骤 2). Point_ids whose KP or
+// KU is no longer current are silently omitted from the result.
+func (s *Store) GetCurrentUnitsByPointIDs(pointIDs []string) ([]DirectHit, error) {
+	if len(pointIDs) == 0 {
+		return nil, nil
+	}
+	ph, args := buildPlaceholders(pointIDs)
+	query := fmt.Sprintf(`
+		SELECT p.point_id, u.unit_id, u.source_id, u.line_start, u.line_end
+		FROM knowledge_points p JOIN knowledge_units u ON p.unit_id = u.unit_id
+		WHERE p.point_id IN (%s) AND p.lifecycle = 'current' AND u.lifecycle = 'current'`, ph)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval store: get current units by points: %w", err)
+	}
+	defer rows.Close()
+
+	var result []DirectHit
+	for rows.Next() {
+		var h DirectHit
+		if err := rows.Scan(&h.PointID, &h.UnitID, &h.SourceID, &h.LineStart, &h.LineEnd); err != nil {
+			return nil, fmt.Errorf("retrieval store: scan direct hit: %w", err)
+		}
+		result = append(result, h)
+	}
+	return result, rows.Err()
+}
+
+// UnitLifecycleCurrent re-checks a KU's lifecycle right before its content is
+// sliced for Rerank, guarding against a lifecycle change in the gap between
+// recall and rerank (docs/impl/v1/retrieval.md 步骤 5, "防扫描间隙状态变更").
+func (s *Store) UnitLifecycleCurrent(unitID string) (bool, error) {
+	var lifecycle string
+	err := s.db.QueryRow(`SELECT lifecycle FROM knowledge_units WHERE unit_id = ?`, unitID).Scan(&lifecycle)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("retrieval store: unit lifecycle: %w", err)
+	}
+	return lifecycle == "current", nil
 }
 
 func (s *Store) GetPointsByUnitIDs(unitIDs []string) ([]struct {
@@ -262,7 +321,9 @@ type KPNNeighbor struct {
 }
 
 // GetKPNNeighbors returns neighbor point_ids following direction rules,
-// excluding contradicts relations (those are handled separately by GetKPNConflicts).
+// excluding contradicts relations (those are handled separately by
+// GetKPNConflicts). Both the neighbor KP and its owning KU must be
+// lifecycle=current (docs/impl/v1/retrieval.md 步骤 5).
 func (s *Store) GetKPNNeighbors(seedPointIDs []string) ([]KPNNeighbor, error) {
 	if len(seedPointIDs) == 0 {
 		return nil, nil
@@ -271,7 +332,9 @@ func (s *Store) GetKPNNeighbors(seedPointIDs []string) ([]KPNNeighbor, error) {
 
 	query := fmt.Sprintf(`
 		SELECT DISTINCT kp.point_id, kp.unit_id FROM knowledge_points kp
-		WHERE kp.point_id IN (
+		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
+		WHERE kp.lifecycle = 'current' AND ku.lifecycle = 'current'
+		AND kp.point_id IN (
 			SELECT target_point_id FROM knowledge_point_relations
 			WHERE source_point_id IN (%s) AND relation_type != 'contradicts'
 			UNION
@@ -283,7 +346,8 @@ func (s *Store) GetKPNNeighbors(seedPointIDs []string) ([]KPNNeighbor, error) {
 	return scanKPNNeighbors(s.db, query, allArgs)
 }
 
-// GetKPNConflicts returns neighbor point_ids that have a contradicts relation with any seed point.
+// GetKPNConflicts returns neighbor point_ids that have a contradicts relation
+// with any seed point. Same lifecycle requirement as GetKPNNeighbors.
 func (s *Store) GetKPNConflicts(seedPointIDs []string) ([]KPNNeighbor, error) {
 	if len(seedPointIDs) == 0 {
 		return nil, nil
@@ -292,7 +356,9 @@ func (s *Store) GetKPNConflicts(seedPointIDs []string) ([]KPNNeighbor, error) {
 
 	query := fmt.Sprintf(`
 		SELECT DISTINCT kp.point_id, kp.unit_id FROM knowledge_points kp
-		WHERE kp.point_id IN (
+		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
+		WHERE kp.lifecycle = 'current' AND ku.lifecycle = 'current'
+		AND kp.point_id IN (
 			SELECT target_point_id FROM knowledge_point_relations
 			WHERE source_point_id IN (%s) AND relation_type = 'contradicts'
 			UNION

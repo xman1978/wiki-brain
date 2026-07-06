@@ -1,4 +1,8 @@
-package session
+// package session_test (not session): this integration test depends on
+// retrieval, which since docs/impl/v1/retrieval.md now depends on session
+// (session.ExpandedQuery for the activation Match() call) — a white-box
+// `package session` test importing retrieval would create an import cycle.
+package session_test
 
 import (
 	"context"
@@ -19,6 +23,7 @@ import (
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 	"github.com/jxman78/wiki-brain/internal/foundation/queue"
 	"github.com/jxman78/wiki-brain/internal/retrieval"
+	"github.com/jxman78/wiki-brain/internal/session"
 )
 
 type sessionTestCase struct {
@@ -89,7 +94,7 @@ func TestIntegrationSessionFlow(t *testing.T) {
 	rebuildIndexes(t, database, idxMgr, testdataDir)
 
 	retStore := retrieval.NewStore(database)
-	retSvc := retrieval.NewService(retStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg)
+	retSvc := retrieval.NewService(retStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, nil, nil, nil)
 	ansStore := answer.NewStore(database)
 	q := queue.New(100)
 	q.RegisterHandler(queue.TaskTypeTrace, func(payload interface{}) {})
@@ -97,8 +102,8 @@ func TestIntegrationSessionFlow(t *testing.T) {
 	defer q.Shutdown()
 	ansSvc := answer.NewService(ansStore, llmClient, q, retSvc)
 
-	sessionStore := NewStore(database)
-	parser := NewParser(llmClient)
+	sessionStore := session.NewStore(database)
+	parser := session.NewParser(llmClient)
 
 	qData, err := os.ReadFile(filepath.Join(testdataDir, "session_questions.json"))
 	if err != nil {
@@ -151,8 +156,8 @@ func TestIntegrationSessionFlow(t *testing.T) {
 			logf("")
 			logf("  Turn %d: %s", ti+1, turn.Input)
 
-			if DetectInterrupt(turn.Input) {
-				*state = SessionState{}
+			if session.DetectInterrupt(turn.Input) {
+				*state = session.SessionState{}
 				sessionStore.Set(sid, state)
 				sessionStore.InsertTurn(sid, turn.Input, "interrupted", "")
 				stat.actualAction = "interrupted"
@@ -164,8 +169,8 @@ func TestIntegrationSessionFlow(t *testing.T) {
 				continue
 			}
 
-			if DetectContinuation(turn.Input, state) {
-				eq := Expand(state, PlanResult{Action: PlanRetrieve}, turn.Input)
+			if session.DetectContinuation(turn.Input, state) {
+				eq := session.Expand(state, session.PlanResult{Action: session.PlanRetrieve}, turn.Input)
 				eq.ExpandedQuestion = state.Working.ContinuableAction
 				sessionStore.Set(sid, state)
 				sessionStore.InsertTurn(sid, turn.Input, "retrieve", "")
@@ -203,16 +208,16 @@ func TestIntegrationSessionFlow(t *testing.T) {
 					state.Dialogue.RecentSubjects = state.Dialogue.RecentSubjects[len(state.Dialogue.RecentSubjects)-3:]
 				}
 			}
-			UpdateTopic(state)
+			session.UpdateTopic(state)
 
-			gaps := DetectGaps(parsed, state, turn.Input)
-			plan := Plan(gaps, parsed, state)
+			gaps := session.DetectGaps(parsed, state, turn.Input)
+			plan := session.Plan(gaps, parsed, state)
 
 			logf("    intent=%q subject=%q gaps=%v plan=%s", parsed.Intent, parsed.Subject, gaps, plan.Action)
 
 			switch plan.Action {
-			case PlanRetrieve:
-				eq := Expand(state, plan, turn.Input)
+			case session.PlanRetrieve:
+				eq := session.Expand(state, plan, turn.Input)
 				stat.expanded = eq.ExpandedQuestion
 				sessionStore.Set(sid, state)
 				sessionStore.InsertTurn(sid, turn.Input, "retrieve", "")
@@ -232,7 +237,7 @@ func TestIntegrationSessionFlow(t *testing.T) {
 				logf("    → retrieve (expanded=%s)", truncStr(eq.ExpandedQuestion, 60))
 				logf("    → answer: path=%s has_answer=%v", stat.ansPath, aok)
 
-			case PlanClarify:
+			case session.PlanClarify:
 				clarifyMsg := ""
 				if plan.Clarification != nil {
 					clarifyMsg = plan.Clarification.Question

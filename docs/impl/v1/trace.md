@@ -64,6 +64,8 @@ EvidenceItem 新增（证据挖掘产出，见 evidence.md）：
 { "question_terms": "...", "direct_point_ids": ["..."] }
 ```
 
+概念演化模块（顺序 10）启用后，`activation_gap` payload 增加 `gap_level` / `null_concept_ratio` 两个字段；判定规则与存量事件兼容策略见 `concept-evolution.md`「activation_gap payload 扩展」。本模块实现时无需预留。
+
 ## 实现步骤
 
 ### 步骤 1：质量分级与共现统计（沿用 MVP）

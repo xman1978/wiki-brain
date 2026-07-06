@@ -21,7 +21,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *Handler) retrieve(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Question string `json:"question"`
+		Question  string `json:"question"`
+		ForceFull bool   `json:"force_full"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -32,7 +33,7 @@ func (h *Handler) retrieve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	es, err := h.svc.Retrieve(r.Context(), req.Question)
+	es, err := h.svc.RetrieveWithProgress(r.Context(), QueryContext{Question: req.Question, ForceFull: req.ForceFull}, nil)
 	if err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return

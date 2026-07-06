@@ -293,6 +293,70 @@ func TestHandlerDeleteSource_AlreadyDeletedRejected(t *testing.T) {
 	}
 }
 
+// TestHandlerRestoreSource_DeletedFlipsBackToCompleted covers 文件管理 恢复按钮:
+// POST /sources/:id/restore on a soft-deleted source flips it back to completed.
+func TestHandlerRestoreSource_DeletedFlipsBackToCompleted(t *testing.T) {
+	svc, _ := setupTestService(t)
+	handler := NewHandler(svc)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	svc.store.Create(&Source{
+		SourceID: "restore-1", Title: "Test", Format: "markdown", FileName: "test.md",
+		OriginalPath: "o/test.md", MarkdownPath: "m/test.md", Status: "deleted",
+	})
+
+	req := httptest.NewRequest("POST", "/sources/restore-1/restore", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want 200", rr.Code, rr.Body.String())
+	}
+
+	got, err := svc.store.GetByID("restore-1")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Status != "completed" {
+		t.Errorf("status = %q, want completed", got.Status)
+	}
+}
+
+// TestHandlerRestoreSource_NonDeletedRejected verifies restoring a source
+// that isn't currently soft-deleted is rejected.
+func TestHandlerRestoreSource_NonDeletedRejected(t *testing.T) {
+	svc, _ := setupTestService(t)
+	handler := NewHandler(svc)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	svc.store.Create(&Source{
+		SourceID: "restore-2", Title: "Test", Format: "markdown", FileName: "test.md",
+		OriginalPath: "o/test.md", MarkdownPath: "m/test.md", Status: "completed",
+	})
+
+	req := httptest.NewRequest("POST", "/sources/restore-2/restore", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (not deleted)", rr.Code)
+	}
+}
+
+func TestHandlerRestoreSource_NotFound(t *testing.T) {
+	svc, _ := setupTestService(t)
+	handler := NewHandler(svc)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("POST", "/sources/nonexistent/restore", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
 func TestHandlerDeleteSource_Failed(t *testing.T) {
 	svc, _ := setupTestService(t)
 	handler := NewHandler(svc)

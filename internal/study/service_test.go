@@ -1,11 +1,21 @@
 package study
 
 import (
+	"database/sql"
 	"encoding/json"
 	"testing"
 
+	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 )
+
+// newTestActivationSvc wires an activation.Service against the same *sql.DB
+// study is using, so both packages see the same activation_links /
+// learning_results rows.
+func newTestActivationSvc(db *sql.DB) *activation.Service {
+	store := activation.NewStore(db)
+	return activation.NewService(store, activation.NewMatcher(store))
+}
 
 func testConfig() config.StudyConfig {
 	return config.StudyConfig{
@@ -18,13 +28,23 @@ func testConfig() config.StudyConfig {
 		ScanBatchSize:         200,
 		ReportPeriodDays:      30,
 		ReportMaxKeep:         10,
+		AutoPromote:           false,
+		PromoteSuccessMin:     3,
+		PromoteDistinctMin:    2,
+		WeakenFailureMin:      3,
+		WeakenRatioMin:        0.5,
+		ReverifySuccessMin:    2,
+		EventWindowDays:       30,
+		CandidateIdleDays:     30,
+		DeprecateIdleDays:     60,
+		CorrectionWeight:      2,
 	}
 }
 
 func TestService_Run_Empty(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, testConfig())
+	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0)
 
 	result, err := svc.Run()
 	if err != nil {
@@ -59,7 +79,7 @@ func TestService_Run_WithData(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0)
 
 	// Seed prerequisite data
 	seedSource(t, db, "src1")
@@ -122,7 +142,7 @@ func TestService_GapThresholdWarning(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.GapHitThreshold = 2
-	svc := NewService(store, cfg)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -154,7 +174,7 @@ func TestService_RecommendationLogic(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -163,7 +183,7 @@ func TestService_RecommendationLogic(t *testing.T) {
 	seedKP(t, db, "kp1", "ku1", "src1", "c1")
 
 	// High purity + needs breadth ≥ 3
-	seedCooccurrence(t, db, "t1", "kp1", 10, 8)  // purity 0.8
+	seedCooccurrence(t, db, "t1", "kp1", 10, 8) // purity 0.8
 	seedCooccurrence(t, db, "t2", "kp1", 5, 4)
 	seedCooccurrence(t, db, "t3", "kp1", 3, 2)
 
@@ -204,7 +224,7 @@ func TestService_WikiCandidates(t *testing.T) {
 	cfg := testConfig()
 	cfg.WikiKPMin = 2
 	cfg.WikiConfidentMin = 5
-	svc := NewService(store, cfg)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")

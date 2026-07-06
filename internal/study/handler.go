@@ -23,6 +23,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /study/reports/{id}", h.getReport)
 	mux.HandleFunc("GET /study/candidates", h.listCandidates)
 	mux.HandleFunc("GET /study/gaps", h.listGaps)
+	mux.HandleFunc("GET /study/results", h.listResults)
+	mux.HandleFunc("GET /study/results/{id}", h.getResult)
 }
 
 func (h *Handler) runStudy(w http.ResponseWriter, r *http.Request) {
@@ -134,6 +136,45 @@ func (h *Handler) listGaps(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	foundation.WriteJSON(w, http.StatusOK, result)
+}
+
+// listResults implements GET /study/results (docs/impl/v1/study.md 步骤 8).
+func (h *Handler) listResults(w http.ResponseWriter, r *http.Request) {
+	action := r.URL.Query().Get("action")
+	objectType := r.URL.Query().Get("object_type")
+	objectID := r.URL.Query().Get("object_id")
+	status := r.URL.Query().Get("status")
+	limit := queryInt(r, "limit", 50)
+
+	results, err := h.svc.store.ListLearningResults(action, objectType, objectID, status, limit)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if results == nil {
+		results = []LearningResultRow{}
+	}
+	foundation.WriteJSON(w, http.StatusOK, results)
+}
+
+// getResult implements GET /study/results/:id (docs/impl/v1/study.md 步骤 8).
+func (h *Handler) getResult(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "result id is required")
+		return
+	}
+
+	detail, err := h.svc.store.GetLearningResult(id)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if detail == nil {
+		foundation.WriteError(w, http.StatusNotFound, "learning result not found")
+		return
+	}
+	foundation.WriteJSON(w, http.StatusOK, detail)
 }
 
 func queryInt(r *http.Request, key string, defaultVal int) int {

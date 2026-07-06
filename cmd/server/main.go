@@ -14,6 +14,8 @@ import (
 
 	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/answer"
+	"github.com/jxman78/wiki-brain/internal/concept"
+	"github.com/jxman78/wiki-brain/internal/evidence"
 	"github.com/jxman78/wiki-brain/internal/foundation"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/db"
@@ -27,6 +29,7 @@ import (
 	"github.com/jxman78/wiki-brain/internal/study"
 	"github.com/jxman78/wiki-brain/internal/trace"
 	"github.com/jxman78/wiki-brain/internal/unit"
+	"github.com/jxman78/wiki-brain/internal/wiki"
 	"github.com/jxman78/wiki-brain/web"
 )
 
@@ -105,6 +108,8 @@ func main() {
 	sessionStore := session.NewStore(database)
 	studyStore := study.NewStore(database)
 	activationStore := activation.NewStore(database)
+	wikiStore := wiki.NewStore(database)
+	conceptStore := concept.NewStore(database)
 
 	// ── Services ────────────────────────────────────────
 	sourceSvc := source.NewService(sourceStore, fvClient, llmClient, idxMgr.Outlines, q, cfg, baseDir)
@@ -119,10 +124,27 @@ func main() {
 	activationSvc := activation.NewService(activationStore, activationMatcher)
 	unitSvc.SetActivationNotifier(activationSvc)
 
-	retrievalSvc := retrieval.NewService(retrievalStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg)
+	evidenceSvc := evidence.NewService(llmClient, cfg.Evidence)
+
+	wikiSvc := wiki.NewService(wikiStore, llmClient, idxMgr.Wiki, cfg.Wiki, cfg.Study.WikiConfidentMin)
+	wikiSvc.SetActivationSvc(activationSvc)
+	unitSvc.SetWikiNotifier(wikiSvc)
+
+	retrievalSvc := retrieval.NewService(retrievalStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, activationSvc, evidenceSvc, wikiSvc)
 	answerSvc := answer.NewService(answerStore, llmClient, q, retrievalSvc)
-	traceSvc := trace.NewService(traceStore)
-	studySvc := study.NewService(studyStore, cfg.Study)
+	traceSvc := trace.NewService(traceStore, cfg.Study.ConceptNullRatioMin)
+	studySvc := study.NewService(studyStore, cfg.Study, activationSvc, wikiSvc, cfg.Wiki.RecompileNewKPMin)
+
+	conceptSvc := concept.NewService(conceptStore, concept.Config{
+		AddEventMin:       cfg.Study.ConceptAddEventMin,
+		AddDistinctMin:    cfg.Study.ConceptAddDistinctMin,
+		AddOverlapMin:     cfg.Study.ConceptAddOverlapMin,
+		MergeCooccurMin:   cfg.Study.ConceptMergeCooccurMin,
+		MergeOverlapMin:   cfg.Study.ConceptMergeOverlapMin,
+		CandidateIdleDays: cfg.Study.ConceptCandidateIdleDays,
+		EventWindowDays:   cfg.Study.ConceptEventWindowDays,
+	}, wikiSvc)
+	studySvc.SetConceptSvc(conceptSvc)
 
 	// ── Queue handlers ──────────────────────────────────
 	q.RegisterHandler(queue.TaskTypeSourceProcess, func(payload interface{}) {
@@ -203,6 +225,8 @@ func main() {
 	study.NewHandler(studySvc).RegisterRoutes(apiMux)
 	session.NewHandler(sessionStore, session.NewParser(llmClient)).RegisterRoutes(apiMux)
 	activation.NewHandler(activationSvc).RegisterRoutes(apiMux)
+	wiki.NewHandler(wikiSvc).RegisterRoutes(apiMux)
+	concept.NewHandler(conceptSvc).RegisterRoutes(apiMux)
 
 	var rootHandler http.Handler = mux
 	if prefix != "" {

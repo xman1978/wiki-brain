@@ -110,7 +110,16 @@ Learning Event 按学习信号分类，每种类型对应一类可被 Study 消�
 
 **activation_failure**：ActivationLink 命中但未能支撑有效回答，或命中知识未被采用、导致回答失败或降级。单次失败可能来自问题理解偏差或证据不足，不应立即废弃整条链接；多次在相似条件下重复出现，可累积为 `repeated_failure` 并推动降权或淘汰。
 
-**activation_gap**：当前没有合适 ActivationLink，但通过目录结构召回、全文检索、外部证据或用户补充找到了有效知识，暴露激活路径缺口。若补充结果被实际采用，Study 可据此形成候选 ActivationLink，无需等待用户纠正。
+**activation_gap**：当前没有合适 ActivationLink，但通过目录结构召回、全文检索、外部证据或用户补充找到了有效知识，暴露激活路径缺口。事件应记录缺口层级 `gap_level`，判定是程序性的——回答完成回写采用结果时，对照被采用 KnowledgePoint 与本次命中概念、链接的挂载关系即可：
+
+```text
+link_gap     概念匹配成功，但被采用的 KP 不在该概念的链接下、
+             靠补充查找进入 → 候选 ActivationLink 的原料；
+concept_gap  概念匹配整体失败，被采用的 KP 全靠目录 / FTS 兜底
+             → 候选概念的原料（见 concept-evolution.md）。
+```
+
+若补充结果被实际采用，Study 可据此形成候选 ActivationLink（link_gap）或聚类出候选概念（concept_gap），无需等待用户纠正。
 
 **knowledge_conflict**：检索或回答中出现多来源、多结论或路径间的稳定冲突，需要标记或进入冲突处理。
 
@@ -124,7 +133,7 @@ Learning Event 按学习信号分类，每种类型对应一类可被 Study 消�
 
 **wiki_update_candidate**：底层知识、Concept 边界或 ActivationLink 变化，使某 Wiki 页面可能需要重编译或调整适用边界。
 
-**concept_boundary_signal**：Concept 在分类、导航或激活中出现混淆、过宽、过窄，需要拆分、合并或收窄边界。
+**concept_boundary_signal**：Concept 在分类、导航或激活中出现边界问题。在线只记录一种子类型，产生点是 Concept 匹配器：当前两名概念的匹配分数差小于阈值时，记录 `ambiguous_match`，携带两个概念、各自分数和本次 scene / goal——这是匹配器顺手记录的程序事实，不增加模型调用。边界过宽、过窄不靠在线事件判定，由 Study 离线统计同一概念下累积事件的 scene / goal 分布得出。事件的消费规则见 `concept-evolution.md`。
 
 同一问题处理可能产生零个、一个或多个 Learning Event，取决于实际暴露的学习信号，而不是处理深度。
 

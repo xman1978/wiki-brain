@@ -151,7 +151,7 @@ func runIntegrationFiles(t *testing.T, cfg *config.Config, testFiles []string) {
 		t.Logf("知识点总数: %d", len(allPoints))
 
 		for _, p := range allPoints {
-			rels, _ := unitStore.GetRelationsByPointID(p.PointID)
+			rels, _ := unitStore.GetRelationsByPointID(p.PointID, "")
 			if len(rels) > 0 {
 				t.Logf("  KPN 关系 (%s): %d 条", p.Content[:min(20, len(p.Content))], len(rels))
 			}

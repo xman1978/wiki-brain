@@ -7,14 +7,15 @@ import (
 )
 
 type AnswerResult struct {
-	AnswerID    string               `json:"answer_id"`
-	Question    string               `json:"question"`
-	Content     string               `json:"content"`
-	Citations   []string             `json:"citations"`
-	HasAnswer   bool                 `json:"has_answer"`
-	Path        string               `json:"path"`
+	AnswerID    string                 `json:"answer_id"`
+	Question    string                 `json:"question"`
+	Content     string                 `json:"content"`
+	Citations   []string               `json:"citations"`
+	HasAnswer   bool                   `json:"has_answer"`
+	Path        string                 `json:"path"`
+	PathType    string                 `json:"path_type,omitempty"`
 	EvidenceSet *retrieval.EvidenceSet `json:"evidence_snapshot"`
-	CreatedAt   time.Time            `json:"created_at,omitempty"`
+	CreatedAt   time.Time              `json:"created_at,omitempty"`
 }
 
 type llmAnswerOutput struct {

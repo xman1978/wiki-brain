@@ -223,21 +223,27 @@ func TestGapAggregation(t *testing.T) {
 		t.Errorf("expected question_terms=并发, got %s", events[0].QuestionTerms)
 	}
 
-	hitCount, err := store.UpsertKnowledgeGap("并发", "什么是并发")
+	gapID, hitCount, err := store.UpsertKnowledgeGap("并发", "什么是并发")
 	if err != nil {
 		t.Fatalf("UpsertKnowledgeGap: %v", err)
 	}
 	if hitCount != 1 {
 		t.Errorf("expected hit_count=1, got %d", hitCount)
 	}
+	if gapID == "" {
+		t.Error("expected non-empty gap_id")
+	}
 
-	// Second upsert increments
-	hitCount, err = store.UpsertKnowledgeGap("并发", "什么是并发模型")
+	// Second upsert increments, keeps the same gap_id
+	gapID2, hitCount2, err := store.UpsertKnowledgeGap("并发", "什么是并发模型")
 	if err != nil {
 		t.Fatalf("UpsertKnowledgeGap 2nd: %v", err)
 	}
-	if hitCount != 2 {
-		t.Errorf("expected hit_count=2, got %d", hitCount)
+	if hitCount2 != 2 {
+		t.Errorf("expected hit_count=2, got %d", hitCount2)
+	}
+	if gapID2 != gapID {
+		t.Errorf("expected gap_id to stay stable across upserts, got %q then %q", gapID, gapID2)
 	}
 
 	// Verify question updated
@@ -485,5 +491,37 @@ func TestGetLatestReport_Empty(t *testing.T) {
 	}
 	if got != nil {
 		t.Error("expected nil when no reports exist")
+	}
+}
+
+// TestQualifyingKPsByConceptFromCandidates_ExcludesMerged covers
+// docs/impl/v1/concept-evolution.md 步骤 4: a merged concept must not
+// surface as a Wiki candidate entry point.
+func TestQualifyingKPsByConceptFromCandidates_ExcludesMerged(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+
+	seedDomain(t, db, "d1", "Domain One")
+	seedConcept(t, db, "c-active", "d1", "Active")
+	if _, err := db.Exec(`INSERT INTO concepts (concept_id, domain_id, name, merged_into) VALUES ('c-merged', 'd1', 'Merged', 'c-active')`); err != nil {
+		t.Fatal(err)
+	}
+	seedSource(t, db, "src1")
+	seedKU(t, db, "ku-active", "src1", "c-active")
+	seedKU(t, db, "ku-merged", "src1", "c-merged")
+	seedKP(t, db, "kp-active", "ku-active", "src1", "active point")
+	seedKP(t, db, "kp-merged", "ku-merged", "src1", "merged point")
+	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc1', 't1', 'kp-active', 10, 12)`)
+	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc2', 't2', 'kp-merged', 10, 12)`)
+
+	result, err := store.QualifyingKPsByConceptFromCandidates(5)
+	if err != nil {
+		t.Fatalf("QualifyingKPsByConceptFromCandidates: %v", err)
+	}
+	if _, ok := result["c-merged"]; ok {
+		t.Errorf("expected merged concept excluded, got %+v", result)
+	}
+	if _, ok := result["c-active"]; !ok {
+		t.Errorf("expected active concept present, got %+v", result)
 	}
 }

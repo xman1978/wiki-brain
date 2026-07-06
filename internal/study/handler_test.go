@@ -23,7 +23,7 @@ func setupHandler(t *testing.T) (*Handler, *Service) {
 		ReportPeriodDays:      30,
 		ReportMaxKeep:         10,
 	}
-	svc := NewService(store, cfg)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0)
 	handler := NewHandler(svc)
 	return handler, svc
 }

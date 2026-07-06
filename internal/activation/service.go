@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+
+	"github.com/jxman78/wiki-brain/internal/session"
 )
 
 type Service struct {
@@ -17,6 +19,16 @@ func NewService(store *Store, matcher *Matcher) *Service {
 
 func (s *Service) Store() *Store {
 	return s.store
+}
+
+// Match is Retrieval's entry point into the activation layer
+// (docs/impl/v1/retrieval.md 步骤 2): a thin passthrough to the Matcher so
+// Retrieval only needs one dependency on this package.
+func (s *Service) Match(query session.ExpandedQuery, cfg MatchConfig) ([]LinkMatch, error) {
+	if s.matcher == nil {
+		return nil, nil
+	}
+	return s.matcher.Match(query, cfg)
 }
 
 // CreateLink is idempotent on (question_terms, point_id): a second call with

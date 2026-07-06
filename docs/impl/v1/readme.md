@@ -14,7 +14,7 @@ V1 的目标是让系统**基本具备学习转化能力**：
 
 一句话概括：MVP 验证「信号能积累」，V1 实现「积累能转化、转化能生效」。
 
-设计依据：`docs/design/study.md`（检索事件驱动学习）、`docs/design/precompile.md`（ActivationLink）、`docs/design/retrieval.md`（分层检索）、`docs/design/evidence-mining.md`（片段级证据挖掘）、`docs/design/lifecycle.md`（记忆状态，V1 完整实现——3 状态模型即完整设计，非子集）、`docs/design/wiki-compilation.md`（Wiki 编译，V1 实现初版）。
+设计依据：`docs/design/study.md`（检索事件驱动学习）、`docs/design/precompile.md`（ActivationLink）、`docs/design/retrieval.md`（分层检索）、`docs/design/evidence-mining.md`（片段级证据挖掘）、`docs/design/lifecycle.md`（记忆状态，V1 完整实现——3 状态模型即完整设计，非子集）、`docs/design/wiki-compilation.md`（Wiki 编译，V1 实现初版）、`docs/design/concept-evolution.md`（概念演化，V1 实现新增与合并）。
 
 ---
 
@@ -51,7 +51,7 @@ weakened   被降权链接，不作为首选激活路径
 deprecated 已淘汰链接，不再使用
 ```
 
-`conflicted` 状态依赖冲突检测模式，推迟到 V2；V1 预留状态枚举值。
+`conflicted` 状态依赖深想路径的 conflict 槽位处理，推迟到 V2；V1 预留状态枚举值。
 
 **状态迁移规则**（由 Study 执行，阈值可配置）：
 
@@ -208,6 +208,8 @@ candidate / needs_verification / conflicted / historical / retracted 均已从�
 7. 跨 Source KPN      KP 对齐与关系合并
 8. Wiki 编译初版      候选确认 -> 编译 -> 发布 -> 检索接入 -> 重编译标记
 9. 反馈通道 + Page    user_correction、管理视图、审计视图
+10. 概念演化          gap_level 判定 + 候选聚合 + 人工确认迁移
+                      （依赖 trace / study / wiki 均已完成）
 ```
 
 1-5 构成「学习转化」最小闭环，是 V1 的主体；6-9 在闭环跑通后叠加。证据挖掘（6）独立于闭环，可视情况提前——它不依赖 ActivationLink，只依赖 Rerank 之后的既有链路。
@@ -251,23 +253,29 @@ Bleve
 | 7 | [kpn.md](./kpn.md) | 跨 Source KP 匹配、scope 字段与去重、contradicts 报告接入 |
 | 8 | [wiki.md](./wiki.md) | 页面编译 Prompt 与白名单校验、发布与 Wiki 直答、重编译生命周期 |
 | 9 | [page.md](./page.md) | 反馈入口与路径徽标、链接管理 / Wiki / 审计视图、lifecycle 操作入口 |
+| 10 | [concept-evolution.md](./concept-evolution.md) | 概念新增 / 合并：gap_level 判定、候选聚合、人工确认与迁移事务、preset 优先级 |
 
 ---
 
 ## V1 不做什么（推迟到 V2）
 
 ```text
-认知路由与七种思维模式、认知预算（V1 只有快/慢路径分叉，不是完整路由）
-Working Model 临时认知模型
+认知路由三路径（找 / 浅想 / 深想）的完整实现与升级信号
+  （V1 只有快/慢路径分叉，不是完整路由；快≈找+浅想，慢≈深想的前身）
+Working Model 临时认知模型（三层结构、槽位状态机、处理上限）
 知识加工模式（KPP）与推理模式（RP）：模式识别、证据槽位、槽位驱动检索扩展
   （V1 证据挖掘按问题摘选；按槽位定向摘选依赖知识加工模式，属 V2）
-实践路径（Practice Path）提炼与经验路径模式
-查证模式（外部证据查找）
-冲突检测模式（基于 contradicts 关系的正反证据整理，不引入 conflicted 生命周期状态——
-  详见 `lifecycle.md` 第 2 节，3 状态已是完整设计，candidate / needs_verification /
+实践路径（Practice Path）提炼与深想快路径调用
+insufficient 槽位的外部补证（外部证据查找）
+conflict 槽位处理与条件化结论（基于 contradicts 关系的正反证据整理，
+  不引入 conflicted 生命周期状态——详见 `lifecycle.md` 第 2 节，
+  3 状态已是完整设计，candidate / needs_verification /
   conflicted / historical / retracted 均无独立必要场景，不再规划引入）
 认知视角（perspective 差异化的 ActivationLink 与 Wiki）
-Concept / Domain 边界演化（拆分、合并、候选晋升）
+概念拆分与合并信号的在线产生点 ambiguous_match
+  （V1 概念演化只做新增 / 合并，合并信号用离线共同采用统计，
+  见 concept-evolution.md「与设计文档的 V1 适配」）
+Domain 层面的新增与合并（门槛与影响面更大，机制同概念演化）
 Wiki 全部六种页面类型与视角化编译
 Agent 接入层（service / agent 架构对外开放）
 ```

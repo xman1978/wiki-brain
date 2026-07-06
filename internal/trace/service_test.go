@@ -13,7 +13,7 @@ func setupService(t *testing.T) (*Service, *Store, *sql.DB) {
 	t.Helper()
 	db := foundation.NewTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store)
+	svc := NewService(store, 0.7)
 	return svc, store, db
 }
 
@@ -38,7 +38,7 @@ func TestProcessTrace_Confident(t *testing.T) {
 
 	svc.ProcessTrace(r)
 
-	traces, _ := store.ListTraces(QualityConfident, "", 20, 0)
+	traces, _ := store.ListTraces(QualityConfident, "", "", 20, 0)
 	if len(traces) != 1 {
 		t.Fatalf("expected 1 confident trace, got %d", len(traces))
 	}
@@ -116,7 +116,7 @@ func TestProcessTrace_DuplicateQuestion_NoDuplicateCooccurrence(t *testing.T) {
 	svc.ProcessTrace(r2)
 
 	// Should have 2 traces but cooccurrence count still 1
-	traces, _ := store.ListTraces("", "", 20, 0)
+	traces, _ := store.ListTraces("", "", "", 20, 0)
 	if len(traces) != 2 {
 		t.Errorf("expected 2 traces, got %d", len(traces))
 	}
@@ -180,7 +180,8 @@ func TestSubmitFeedback_Negative_CreatesEvent(t *testing.T) {
 		DirectPointIDs:   []string{},
 	})
 
-	err := svc.SubmitFeedback("t-fb", FeedbackRequest{Type: "negative", Content: "wrong"})
+	tr0, _ := store.GetTrace("t-fb")
+	err := svc.SubmitFeedback(tr0, FeedbackRequest{Type: "negative", Content: "wrong"})
 	if err != nil {
 		t.Fatalf("SubmitFeedback: %v", err)
 	}
@@ -211,7 +212,8 @@ func TestSubmitFeedback_Positive_NoEvent(t *testing.T) {
 		DirectPointIDs:   []string{},
 	})
 
-	svc.SubmitFeedback("t-pos", FeedbackRequest{Type: "positive"})
+	trPos, _ := store.GetTrace("t-pos")
+	svc.SubmitFeedback(trPos, FeedbackRequest{Type: "positive"})
 
 	events, _ := store.ListLearningEvents("user_correction", 0, 20)
 	if len(events) != 0 {

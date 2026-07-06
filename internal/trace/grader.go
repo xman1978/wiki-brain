@@ -23,6 +23,13 @@ func gradeQuality(r *answer.AnswerResult) gradeResult {
 		return gradeResult{Quality: QualityGap}
 	}
 
+	if r.EvidenceSet.PathType == retrieval.PathTypeWiki {
+		if len(r.EvidenceSet.CitedPointIDs) > 0 {
+			return gradeResult{Quality: QualityConfident, DirectPointIDs: r.EvidenceSet.CitedPointIDs}
+		}
+		return gradeResult{Quality: QualityPartial}
+	}
+
 	kpnCited, cited := kpnCitationCounts(r.EvidenceSet, r.Citations)
 	directPointIDs := directCitedPointIDs(r.EvidenceSet, r.Citations)
 

@@ -171,6 +171,7 @@
       overflow-y:auto; padding:16px 14px; background:var(--bg-alt);
     }
     .process-panel.empty { display:flex; align-items:center; justify-content:center; }
+    .process-panel.pp-hidden { display:none; }
     .pp-title { font-size:11px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; margin-bottom:12px; }
     .pp-step { display:flex; gap:8px; position:relative; min-height:32px; }
     .pp-rail { display:flex; flex-direction:column; align-items:center; width:14px; flex-shrink:0; }
@@ -464,6 +465,41 @@
     ::-webkit-scrollbar-thumb:hover { background:#b0b0a8; }
     .send-btn.stop-btn { background:var(--red); }
     .send-btn.stop-btn:hover { background:#c0392b; }
+
+    /* ── V1: path-type badge, correction box, evidence extras ────── */
+    .badge.fast { background:#eaf2fc; border-color:#4a7fc9; color:#2f5fa8; }
+    .badge.wiki { background:var(--green-lt); border-color:var(--green); color:var(--green); }
+    .wiki-link-badge { cursor:pointer; }
+    .wiki-link-badge:hover { text-decoration:underline; }
+    .correction-box { margin-top:8px; }
+    .correction-box textarea { width:100%; border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 10px; font:inherit; font-size:13px; resize:vertical; min-height:60px; outline:none; }
+    .correction-box .correction-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:6px; }
+    .ev-badges { display:flex; gap:4px; margin-top:3px; flex-wrap:wrap; align-items:center; }
+    .ev-mined-badge { font-size:10px; padding:1px 6px; border-radius:4px; background:var(--surface-alt); border:1px solid var(--border); color:var(--text-3); }
+    .ev-lines { font-size:10px; color:var(--text-3); font-family:'SF Mono',SFMono-Regular,Menlo,monospace; }
+    .ku-context { margin-top:8px; padding:10px; border-radius:var(--radius-sm); background:var(--bg-alt); font-size:12px; color:var(--text-2); border:1px solid var(--border-lt); }
+    .activation-hit-card { border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:6px; font-size:12px; }
+    .activation-hit-card .ah-score { color:var(--text-3); }
+
+    /* ── V1: split list+detail drawers (activation / wiki views) ── */
+    .split-drawer { width:min(900px, 96vw); right:-1000px; }
+    .split-list { width:340px; border-right:1px solid var(--border-lt); display:flex; flex-direction:column; overflow:hidden; flex-shrink:0; }
+    .split-list-tabs { display:flex; border-bottom:1px solid var(--border-lt); padding:0 8px; flex-shrink:0; overflow-x:auto; }
+    .split-list-items { flex:1; overflow-y:auto; padding:8px; }
+    .split-detail { flex:1; overflow-y:auto; padding:18px 22px; }
+    .split-detail-empty { display:flex; align-items:center; justify-content:center; height:100%; color:var(--text-3); font-size:13px; }
+    .link-row, .page-row, .result-row { border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:6px; cursor:pointer; transition:.12s; }
+    .link-row:hover, .page-row:hover, .result-row:hover { border-color:var(--text-3); background:var(--bg-alt); }
+    .link-row.active, .page-row.active, .result-row.active { border-color:var(--accent); background:var(--accent-lt); }
+    .link-row .lr-terms, .page-row .pr-title, .result-row .rr-action { font-size:13px; font-weight:500; }
+    .link-row .lr-meta, .page-row .pr-meta, .result-row .rr-meta { font-size:11px; color:var(--text-3); margin-top:4px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .nav-item { position:relative; }
+    .nav-badge { position:absolute; top:3px; right:6px; min-width:15px; height:15px; padding:0 3px; border-radius:8px; background:var(--accent); color:#fff; font-size:9px; font-weight:700; display:flex; align-items:center; justify-content:center; line-height:1; }
+    .sidebar.expanded .nav-badge { position:static; margin-left:auto; }
+    .timeline-event { padding:8px 10px; border-radius:var(--radius-sm); background:var(--bg-alt); margin-bottom:6px; font-size:12px; }
+    .wiki-page-content a[href^="point:"] { color:var(--accent); text-decoration:none; border-bottom:1px dotted var(--accent); cursor:pointer; }
+    .wiki-page-content a[href^="point:"]:hover { background:var(--accent-lt); }
+    .needs-recompile-card { border-left:3px solid var(--yellow) !important; background:var(--yellow-lt); }
   </style>
   <script src="marked.min.js"></script>
 </head>
@@ -484,6 +520,9 @@
     <button class="nav-item" onclick="toggleHistoryPopover()" title="历史记录" id="historyNavBtn"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span><span class="nav-label">历史记录</span></button>
     <button class="nav-item" onclick="openFileDrawer()" title="文件管理"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span class="nav-label">文件</span></button>
     <button class="nav-item" onclick="openStudyView()" title="学习报告"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg></span><span class="nav-label">学习报告</span></button>
+    <button class="nav-item" onclick="openActivationView()" title="激活链接"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg></span><span class="nav-label">激活链接</span><span class="nav-badge hidden" id="activationPendingBadge">0</span></button>
+    <button class="nav-item" onclick="openWikiView()" title="Wiki"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span><span class="nav-label">Wiki</span><span class="nav-badge hidden" id="wikiPendingBadge">0</span></button>
+    <button class="nav-item" onclick="openConceptView()" title="概念演化"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="7" r="3"/><circle cx="12" cy="18" r="3"/><path d="M9.5 8.5L14.5 15.5M14.5 8.5L9.5 15.5"/></svg></span><span class="nav-label">概念演化</span><span class="nav-badge hidden" id="conceptPendingBadge">0</span></button>
   </div>
 
   <div class="sidebar-divider"></div>
@@ -618,12 +657,107 @@
     <span>学习报告</span>
     <div style="display:flex;gap:6px;align-items:center">
       <button class="btn btn-sm" onclick="runStudy()" id="runStudyBtn">生成报告</button>
-      <button class="btn btn-sm" onclick="loadStudyReport()">刷新</button>
+      <button class="btn btn-sm" onclick="studyTab==='overview'?loadStudyReport():loadLearningResults()">刷新</button>
       <button class="btn-ghost" onclick="closeStudyView()">✕</button>
     </div>
   </div>
+  <div class="panel-tabs">
+    <button class="panel-tab active" data-study-tab="overview" onclick="switchStudyTab('overview')">概览</button>
+    <button class="panel-tab" data-study-tab="actions" onclick="switchStudyTab('actions')">学习动作</button>
+  </div>
   <div class="study-body" id="studyBody" style="flex:1;overflow-y:auto;padding:16px 20px;">
     <div style="text-align:center;padding:60px;color:var(--text-3)">加载中...</div>
+  </div>
+</div>
+
+<!-- ── ACTIVATION LINK DRAWER OVERLAY ──────────────────── -->
+<div class="file-overlay hidden" id="activationOverlay" onclick="closeActivationView()"></div>
+
+<!-- ── ACTIVATION LINK DRAWER ──────────────────────────── -->
+<div class="file-drawer split-drawer" id="activationDrawer">
+  <div class="drawer-header">
+    <span>激活链接管理</span>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-sm" onclick="loadActivationLinks()">刷新</button>
+      <button class="btn-ghost" onclick="closeActivationView()">✕</button>
+    </div>
+  </div>
+  <div class="drawer-body">
+    <div class="split-list">
+      <div class="split-list-tabs" id="activationStatusTabs">
+        <button class="panel-tab active" data-status="candidate" onclick="switchActivationStatus('candidate')">候选</button>
+        <button class="panel-tab" data-status="verified" onclick="switchActivationStatus('verified')">已验证</button>
+        <button class="panel-tab" data-status="weakened" onclick="switchActivationStatus('weakened')">已弱化</button>
+        <button class="panel-tab" data-status="deprecated" onclick="switchActivationStatus('deprecated')">已废弃</button>
+      </div>
+      <div class="split-list-items" id="activationLinksList">
+        <div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>
+      </div>
+    </div>
+    <div class="split-detail" id="activationLinkDetail">
+      <div class="split-detail-empty">选择左侧链接查看详情</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── WIKI DRAWER OVERLAY ──────────────────────────────── -->
+<div class="file-overlay hidden" id="wikiOverlay" onclick="closeWikiView()"></div>
+
+<!-- ── WIKI DRAWER ───────────────────────────────────────── -->
+<div class="file-drawer split-drawer" id="wikiDrawer">
+  <div class="drawer-header">
+    <span>Wiki</span>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-sm" onclick="loadWikiPages()">刷新</button>
+      <button class="btn-ghost" onclick="closeWikiView()">✕</button>
+    </div>
+  </div>
+  <div class="drawer-body">
+    <div class="split-list">
+      <div class="split-list-tabs" id="wikiStatusTabs">
+        <button class="panel-tab active" data-wiki-status="" onclick="switchWikiStatus('')">候选</button>
+        <button class="panel-tab" data-wiki-status="draft" onclick="switchWikiStatus('draft')">草稿</button>
+        <button class="panel-tab" data-wiki-status="published" onclick="switchWikiStatus('published')">已发布</button>
+        <button class="panel-tab" data-wiki-status="needs_recompile" onclick="switchWikiStatus('needs_recompile')">待重编译</button>
+        <button class="panel-tab" data-wiki-status="archived" onclick="switchWikiStatus('archived')">已归档</button>
+      </div>
+      <div class="split-list-items" id="wikiListItems">
+        <div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>
+      </div>
+    </div>
+    <div class="split-detail" id="wikiDetail">
+      <div class="split-detail-empty">选择左侧候选或页面查看详情</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── CONCEPT EVOLUTION DRAWER OVERLAY ──────────────────── -->
+<div class="file-overlay hidden" id="conceptOverlay" onclick="closeConceptView()"></div>
+
+<!-- ── CONCEPT EVOLUTION DRAWER ──────────────────────────── -->
+<div class="file-drawer split-drawer" id="conceptDrawer">
+  <div class="drawer-header">
+    <span>概念演化</span>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-sm" onclick="loadConceptCandidates()">刷新</button>
+      <button class="btn-ghost" onclick="closeConceptView()">✕</button>
+    </div>
+  </div>
+  <div class="drawer-body">
+    <div class="split-list">
+      <div class="split-list-tabs" id="conceptStatusTabs">
+        <button class="panel-tab active" data-concept-status="pending_confirm" onclick="switchConceptStatus('pending_confirm')">待确认</button>
+        <button class="panel-tab" data-concept-status="applied" onclick="switchConceptStatus('applied')">已执行</button>
+        <button class="panel-tab" data-concept-status="rejected" onclick="switchConceptStatus('rejected')">已驳回</button>
+        <button class="panel-tab" data-concept-status="expired" onclick="switchConceptStatus('expired')">已过期</button>
+      </div>
+      <div class="split-list-items" id="conceptCandidatesList">
+        <div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>
+      </div>
+    </div>
+    <div class="split-detail" id="conceptCandidateDetail">
+      <div class="split-detail-empty">选择左侧候选查看详情</div>
+    </div>
   </div>
 </div>
 
@@ -646,6 +780,16 @@ const S = {
   chatMode:      false,
   sessionId:     null,
   sessions:      [],
+  studyTab:            'overview',
+  activationStatus:    'candidate',
+  activationLinks:     [],
+  activationSelectedId: null,
+  wikiStatus:          '',
+  wikiListData:        [],
+  wikiSelectedId:      null,
+  conceptStatus:       'pending_confirm',
+  conceptCandidates:   [],
+  conceptSelectedId:   null,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -968,6 +1112,8 @@ var PP_STEPS = ['session','activation','outline','fts','rerank','generation','tr
 var PP_STATE = {};
 
 function initProcessPanel(startTime) {
+  var pp = document.getElementById('processPanel');
+  if (pp) pp.classList.remove('pp-hidden');
   PP_STATE = {};
   PP_STEPS.forEach(function(id) { PP_STATE[id] = { state:'wait', label:'', dur:null, detail:'' }; });
   PP_STATE.session.label = '会话处理';
@@ -1092,8 +1238,10 @@ function updateTraceInAnswerCard(answerId, trace) {
   el.innerHTML = '<span class="badge ' + trace.retrieval_quality + '">' + qualityLabel(trace.retrieval_quality) + '</span> <span class="id-text" title="点击复制 trace_id" onclick="event.stopPropagation();copy(\'' + esc(trace.trace_id) + '\',this)">trace:' + trace.trace_id.slice(0,10) + '…</span>';
   var posBtn = document.getElementById('fb-pos-' + answerId);
   var negBtn = document.getElementById('fb-neg-' + answerId);
+  var corBtn = document.getElementById('fb-cor-' + answerId);
   if (posBtn) { posBtn.disabled = false; posBtn.dataset.traceId = trace.trace_id; }
   if (negBtn) { negBtn.disabled = false; negBtn.dataset.traceId = trace.trace_id; }
+  if (corBtn) { corBtn.disabled = false; corBtn.dataset.traceId = trace.trace_id; }
 }
 
 var FACT_ID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
@@ -1269,6 +1417,21 @@ function appendLoading() {
   return el;
 }
 
+// pathTypeBadgeHtml renders the docs/impl/v1/page.md 步骤 1 路径徽标
+// (⚡ fast / 📖 wiki / 🔍 full), sourced from POST /answer's path_type field.
+// The wiki badge links to the Wiki view for the page that answered directly.
+function pathTypeBadgeHtml(ans) {
+  var pt = ans.path_type;
+  if (!pt) return '';
+  var evSet = ans.evidence_snapshot || {};
+  if (pt === 'fast') return '<span class="badge fast" title="激活层直达证据，未走完整检索链路">⚡ 快路径</span>';
+  if (pt === 'wiki') {
+    var pageId = evSet.wiki_page_id || '';
+    return '<span class="badge wiki wiki-link-badge" title="由已发布 Wiki 页面直答" onclick="event.stopPropagation();openWikiPageFromBadge(\'' + esc(pageId) + '\')">📖 Wiki</span>';
+  }
+  return '<span class="badge full" title="走完整检索链路：Domain/Source 过滤 → 召回 → Rerank">🔍 完整链路</span>';
+}
+
 function appendAnswerMsg(ans) {
   var path = ans.path || 'unknown';
   var citations = ans.citations || [];
@@ -1289,6 +1452,7 @@ function appendAnswerMsg(ans) {
     <div class="ans-body">' + renderMarkdown(ans.content || '（无回答内容）', factMap) + '</div>\
     ' + citHtml + '\
     <div class="ans-meta">\
+      ' + pathTypeBadgeHtml(ans) + '\
       <span class="badge ' + path + '">' + pathLabel(path) + '</span>\
       ' + (directCount ? '<span class="badge">' + directCount + ' 直接</span>' : '') + '\
       ' + (supportCount ? '<span class="badge">' + supportCount + ' 补充</span>' : '') + '\
@@ -1301,6 +1465,14 @@ function appendAnswerMsg(ans) {
       <button class="icon-btn ans-act-copy" title="复制 Markdown">' + ICON_COPY + '</button>\
       <button class="feedback-btn" id="fb-pos-' + esc(ans.answer_id) + '" title="有帮助" disabled onclick="sendFeedback(this.dataset.traceId,\'' + esc(ans.answer_id) + '\',\'positive\')">' + ICON_THUMB_UP + '</button>\
       <button class="feedback-btn" id="fb-neg-' + esc(ans.answer_id) + '" title="没帮助" disabled onclick="sendFeedback(this.dataset.traceId,\'' + esc(ans.answer_id) + '\',\'negative\')">' + ICON_THUMB_DOWN + '</button>\
+      <button class="feedback-btn" id="fb-cor-' + esc(ans.answer_id) + '" title="纠正" disabled onclick="toggleCorrectionBox(\'' + esc(ans.answer_id) + '\')">' + ICON_EDIT + '</button>\
+    </div>\
+    <div class="correction-box hidden" id="correction-' + esc(ans.answer_id) + '">\
+      <textarea id="correction-input-' + esc(ans.answer_id) + '" placeholder="说明这个回答哪里不对..."></textarea>\
+      <div class="correction-actions">\
+        <button class="btn btn-sm" onclick="toggleCorrectionBox(\'' + esc(ans.answer_id) + '\')">取消</button>\
+        <button class="btn btn-sm btn-primary" onclick="submitCorrection(\'' + esc(ans.answer_id) + '\')">提交纠正</button>\
+      </div>\
     </div>';
   chatInner().appendChild(el);
   el.querySelector('.ans-act-copy').addEventListener('click', function(e) {
@@ -1347,6 +1519,29 @@ async function sendFeedback(traceId, answerId, type) {
     });
     if (btn) btn.classList.add('selected');
   } catch(e) { console.error('Feedback failed', e); }
+}
+
+function toggleCorrectionBox(answerId) {
+  var box = document.getElementById('correction-' + answerId);
+  if (!box) return;
+  box.classList.toggle('hidden');
+  if (!box.classList.contains('hidden')) {
+    var ta = document.getElementById('correction-input-' + answerId);
+    if (ta) ta.focus();
+  }
+}
+
+async function submitCorrection(answerId) {
+  var corBtn = document.getElementById('fb-cor-' + answerId);
+  var traceId = corBtn && corBtn.dataset.traceId;
+  var ta = document.getElementById('correction-input-' + answerId);
+  var content = ta ? ta.value.trim() : '';
+  if (!traceId || !content) return;
+  try {
+    await api('POST', '/traces/' + traceId + '/feedback', { type: 'correction', content: content });
+    corBtn.classList.add('selected');
+    toggleCorrectionBox(answerId);
+  } catch(e) { console.error('Correction failed', e); }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1405,8 +1600,22 @@ function renderSourcesTab(ans, container) {
   if (!evSet) { container.innerHTML = '<div class="panel-empty">本次回答未返回证据来源</div>'; return; }
   var direct = evSet.direct_evidence || [];
   var supporting = evSet.supporting || [];
-  if (!direct.length && !supporting.length) { container.innerHTML = '<div class="panel-empty">本次回答未返回证据来源</div>'; return; }
+  var hits = evSet.activation_hits || [];
   var html = '';
+  if (evSet.path_type === 'fast' && hits.length) {
+    html += '<div class="panel-section"><h3>激活命中 (' + hits.length + ')</h3>' + hits.map(function(h) {
+      return '<div class="activation-hit-card">\
+        <div><span class="id-text" title="点击复制 link_id" onclick="copy(\'' + esc(h.link_id||'') + '\',this)">link:' + esc((h.link_id||'').slice(0,10)) + '…</span></div>\
+        <div style="margin-top:2px">point: <code style="font-size:11px">' + esc((h.point_id||'').slice(0,16)) + '…</code></div>\
+        <div class="ah-score" style="margin-top:2px">match_score: ' + (h.match_score!=null ? h.match_score.toFixed(2) : '-') + '</div>\
+      </div>';
+    }).join('') + '</div>';
+  }
+  if (!direct.length && !supporting.length) {
+    if (!html) container.innerHTML = '<div class="panel-empty">本次回答未返回证据来源</div>';
+    else container.innerHTML = html;
+    return;
+  }
   if (direct.length) html += '<div class="panel-section"><h3>直接证据 (' + direct.length + ')</h3>' + direct.map(function(e) { return evidenceCardHtml(e, 'direct'); }).join('') + '</div>';
   if (supporting.length) html += '<div class="panel-section"><h3>补充证据 (' + supporting.length + ')</h3>' + supporting.map(function(e) { return evidenceCardHtml(e, 'supporting'); }).join('') + '</div>';
   container.innerHTML = html;
@@ -1414,16 +1623,38 @@ function renderSourcesTab(ans, container) {
 
 function evidenceCardHtml(e, role) {
   var fid = e.fact_id || '';
-  var sourceId = '';
-  try { var ref = typeof e.source_ref === 'string' ? JSON.parse(e.source_ref) : e.source_ref; if (ref) sourceId = ref.source_id || ''; } catch(ex) {}
+  var sourceId = '', lineStart = null, lineEnd = null;
+  try { var ref = typeof e.source_ref === 'string' ? JSON.parse(e.source_ref) : e.source_ref; if (ref) { sourceId = ref.source_id || ''; lineStart = ref.line_start; lineEnd = ref.line_end; } } catch(ex) {}
+  var minedLabel = e.mined ? '片段' : '整段';
+  var lineLabel = (lineStart != null && lineEnd != null) ? ('L' + lineStart + '-L' + lineEnd) : '';
   return '<div class="evidence-card ' + role + '" id="ev-' + esc(fid) + '">\
     <div class="ev-role">' + (role === 'direct' ? '直接证据' : '补充证据') + '</div>\
-    ' + (sourceId ? '<div class="ev-source">来源: ' + esc(sourceId.slice(0,16)) + '…</div>' : '') + '\
+    <div class="ev-badges">\
+      ' + (sourceId ? '<span class="ev-source">来源: ' + esc(sourceId.slice(0,16)) + '…</span>' : '') + '\
+      <span class="ev-mined-badge">' + minedLabel + '</span>\
+      ' + (lineLabel ? '<span class="ev-lines">' + lineLabel + '</span>' : '') + '\
+    </div>\
     <div class="ev-content">' + renderMarkdown((e.content||'').slice(0,200) + ((e.content||'').length > 200 ? '…' : '')) + '</div>\
+    <div id="ku-ctx-' + esc(e.unit_id||'') + '-' + esc(fid) + '"></div>\
     <div style="margin-top:8px;display:flex;gap:6px">\
       ' + (sourceId ? '<button class="btn btn-sm" onclick="event.stopPropagation();viewSource(\'' + esc(sourceId) + '\')">查看来源</button>' : '') + '\
+      ' + (e.unit_id ? '<button class="btn btn-sm" onclick="event.stopPropagation();toggleUnitContext(\'' + esc(e.unit_id) + '\',\'' + esc(fid) + '\')">展开上下文</button>' : '') + '\
       <button class="copy-btn" onclick="event.stopPropagation();copy(\'' + esc(fid) + '\',this)">复制 fact_id</button>\
     </div></div>';
+}
+
+async function toggleUnitContext(unitId, fid) {
+  var el = document.getElementById('ku-ctx-' + unitId + '-' + fid);
+  if (!el) return;
+  if (el.innerHTML) { el.innerHTML = ''; return; }
+  el.innerHTML = '<div class="ku-context">加载中...</div>';
+  try {
+    var r = await api('GET', '/units/' + unitId);
+    if (!r.ok || !r.data) { el.innerHTML = '<div class="ku-context">加载失败</div>'; return; }
+    var u = r.data;
+    var pts = (u.points || []).map(function(p) { return '<div style="margin-top:4px">· ' + esc(p.content) + '</div>'; }).join('');
+    el.innerHTML = '<div class="ku-context"><b>' + esc(u.center || '') + '</b> (L' + u.line_start + '-L' + u.line_end + ')' + pts + '</div>';
+  } catch(ex) { el.innerHTML = '<div class="ku-context">加载失败</div>'; }
 }
 
 function renderGapsTab(ans, container) {
@@ -1693,6 +1924,7 @@ async function loadSources() {
         ' + (s.status==='completed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="event.stopPropagation();deleteSource(\'' + esc(s.source_id) + '\',false)">删除</button>' : '') + '\
         ' + (s.status==='failed' ? '<button class="btn btn-sm" onclick="event.stopPropagation();retrySource(\'' + esc(s.source_id) + '\')">重试</button>' : '') + '\
         ' + (s.status==='failed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="event.stopPropagation();deleteSource(\'' + esc(s.source_id) + '\',true)">删除</button>' : '') + '\
+        ' + (s.status==='deleted' ? '<button class="btn btn-sm" style="color:var(--green)" onclick="event.stopPropagation();restoreSource(\'' + esc(s.source_id) + '\')">恢复</button>' : '') + '\
         <button class="copy-btn" onclick="event.stopPropagation();copy(\'' + esc(s.source_id) + '\',this)">复制ID</button>\
       </div></div>';
     }).join('');
@@ -1723,13 +1955,39 @@ async function viewSource(sourceId) {
           ' + (d.status==='completed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteSource(\'' + esc(d.source_id) + '\',false);closeSourceDetail()">删除</button>' : '') + '\
           ' + (d.status==='failed' ? '<button class="btn btn-sm" onclick="retrySource(\'' + esc(d.source_id) + '\');closeSourceDetail()">重试</button>' : '') + '\
           ' + (d.status==='failed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteSource(\'' + esc(d.source_id) + '\',true);closeSourceDetail()">删除</button>' : '') + '\
+          ' + (d.status==='deleted' ? '<button class="btn btn-sm" style="color:var(--green)" onclick="restoreSource(\'' + esc(d.source_id) + '\');closeSourceDetail()">恢复</button>' : '') + '\
           <button class="btn" onclick="closeSourceDetail()">关闭</button>\
         </div>\
+        ' + (d.status==='completed' ? '<h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">知识单元</h3><div id="sourceKUList" style="margin-top:8px"><div style="font-size:12px;color:var(--text-3)">加载中...</div></div>' : '') + '\
         <details style="margin-top:14px"><summary style="font-size:11px;cursor:pointer;color:var(--text-3)">原始 JSON</summary><div class="raw-json" style="margin-top:6px">' + esc(JSON.stringify(d,null,2)) + '</div></details>';
+      if (d.status === 'completed') loadSourceUnits(d.source_id);
     } else content.innerHTML = '<h2>来源详情</h2><div style="color:var(--red)">加载失败</div><div class="modal-actions"><button class="btn" onclick="closeSourceDetail()">关闭</button></div>';
   } catch(e) { content.innerHTML = '<h2>来源详情</h2><div style="color:var(--red)">' + esc(e.message) + '</div><div class="modal-actions"><button class="btn" onclick="closeSourceDetail()">关闭</button></div>'; }
 }
 function closeSourceDetail() { document.getElementById('sourceDetailModal').classList.add('hidden'); }
+
+// KU lifecycle 徽标（docs/impl/v1/page.md 步骤 5，current 之外的状态标灰/标黄）。
+function lifecycleBadgeHtml(lifecycle) {
+  if (!lifecycle || lifecycle === 'current') return '';
+  var cls = lifecycle === 'deprecated' ? 'gap' : 'partial';
+  return '<span class="badge ' + cls + '">' + esc(lifecycle) + '</span>';
+}
+
+async function loadSourceUnits(sourceId) {
+  var el = document.getElementById('sourceKUList');
+  if (!el) return;
+  try {
+    var r = await api('GET', '/sources/' + sourceId + '/units');
+    var units = Array.isArray(r.data) ? r.data : [];
+    if (!units.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text-3)">暂无知识单元</div>'; return; }
+    el.innerHTML = units.map(function(u) {
+      return '<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border-lt);font-size:12px">\
+        <span style="flex:1">' + esc(u.center || '') + ' <span style="color:var(--text-3)">(L' + u.line_start + '-L' + u.line_end + ')</span></span>\
+        ' + lifecycleBadgeHtml(u.lifecycle) + '\
+      </div>';
+    }).join('');
+  } catch(e) { el.innerHTML = '<div style="font-size:12px;color:var(--red)">加载失败</div>'; }
+}
 
 async function retrySource(sourceId) {
   try {
@@ -1755,6 +2013,18 @@ async function deleteSource(sourceId, isFailed) {
       alert('删除失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
     }
   } catch(e) { alert('删除出错：' + e.message); }
+}
+
+async function restoreSource(sourceId) {
+  if (!confirm('确定恢复此文件？已提取的知识点会恢复到删除前的状态（原本已被替代的部分仍保持替代状态）。')) return;
+  try {
+    var r = await api('POST', '/sources/' + sourceId + '/restore');
+    if (r.ok) {
+      loadSources();
+    } else {
+      alert('恢复失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+    }
+  } catch(e) { alert('恢复出错：' + e.message); }
 }
 
 // ── REUPLOAD (Shadow Source, docs/impl/v1/lifecycle.md) ──────────────
@@ -1831,6 +2101,9 @@ function renderStudyReport(report, container) {
   var lc = report.activation_link_candidates || [];
   var wc = report.wiki_candidates || [];
   var gp = report.knowledge_gaps || [];
+  var cc = report.concept_candidates || {};
+  var ccPendingAdd = cc.pending_add || [];
+  var ccPendingMerge = cc.pending_merge || [];
   function rt(n,t) { return t ? (n/t*100).toFixed(0)+'%' : '-'; }
   container.innerHTML = '\
     <div class="study-card"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px"><h2 style="margin:0">概览统计</h2><span style="font-size:12px;color:var(--text-3)">' + (report.period_days || 30) + ' 天 · ' + dateStr(report.generated_at) + '</span></div>\
@@ -1861,6 +2134,14 @@ function renderStudyReport(report, container) {
     ' + (gp.length ? '<div class="study-card"><h2>高频知识盲区 (' + gp.length + ')</h2><div class="table-wrap"><table>\
       <thead><tr><th>问题主题</th><th>出现次数</th><th>典型问题</th></tr></thead>\
       <tbody>' + gp.map(function(g) { return '<tr><td><code style="font-size:12px">' + esc(g.question_terms||'') + '</code></td><td><span class="badge gap">' + (g.hit_count||0) + ' 次</span></td><td style="font-size:12px;color:var(--text-2)">' + esc((g.question||'').slice(0,60)) + '</td></tr>'; }).join('') + '</tbody></table></div></div>' : '') + '\
+    <div class="study-card"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">概念演化</h2><button class="btn btn-sm" onclick="openConceptView()">打开审计视图</button></div>\
+      <div class="study-summary-grid">\
+        <div class="summary-stat"><div class="ss-val">' + (cc.concept_gap_event_count||0) + '</div><div class="ss-label">窗口内 concept_gap 事件</div></div>\
+        <div class="summary-stat confident"><div class="ss-val">' + (cc.add_created||0) + '</div><div class="ss-label">本轮新增候选</div></div>\
+        <div class="summary-stat confident"><div class="ss-val">' + (cc.merge_created||0) + '</div><div class="ss-label">本轮合并候选</div></div>\
+        <div class="summary-stat partial"><div class="ss-val">' + (ccPendingAdd.length + ccPendingMerge.length) + '</div><div class="ss-label">待确认候选</div></div>\
+      </div>\
+      <div style="font-size:11px;color:var(--text-3);margin-top:12px">新增/合并候选的确认与执行请到「概念演化」审计视图操作，Study 只负责识别候选，不自动执行。</div></div>\
     <div class="study-card"><h2>历史报告</h2><div id="reportsList"><button class="btn btn-sm" onclick="loadReportList()">加载历史报告</button></div></div>';
 }
 
@@ -1888,6 +2169,540 @@ async function runStudy() {
     else { body.innerHTML = '<div style="color:var(--red);padding:20px">生成失败：' + esc(JSON.stringify(r.data)) + '</div>'; }
   } catch(e) { body.innerHTML = '<div style="color:var(--red);padding:20px">请求失败：' + esc(e.message) + '</div>'; }
   btn.disabled = false; btn.textContent = '生成报告';
+}
+
+// ═══════════════════════════════════════════════════════
+// STUDY: 学习动作 TAB (docs/impl/v1/page.md 步骤 4)
+// ═══════════════════════════════════════════════════════
+function switchStudyTab(tab) {
+  S.studyTab = tab;
+  document.querySelectorAll('[data-study-tab]').forEach(function(t) { t.classList.toggle('active', t.dataset.studyTab === tab); });
+  if (tab === 'overview') loadStudyReport();
+  else loadLearningResults();
+}
+
+async function loadLearningResults() {
+  var body = document.getElementById('studyBody');
+  body.innerHTML = '\
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">\
+      <select id="lrActionFilter" onchange="loadLearningResults()"><option value="">全部动作</option>\
+        <option value="create_candidate">create_candidate</option><option value="promote">promote</option>\
+        <option value="weaken">weaken</option><option value="reverify">reverify</option><option value="deprecate">deprecate</option>\
+        <option value="gap_flag">gap_flag</option><option value="wiki_candidate">wiki_candidate</option><option value="recompile_flag">recompile_flag</option></select>\
+      <select id="lrObjectTypeFilter" onchange="loadLearningResults()"><option value="">全部对象</option>\
+        <option value="activation_link">activation_link</option><option value="knowledge_gap">knowledge_gap</option><option value="wiki_page">wiki_page</option></select>\
+      <select id="lrStatusFilter" onchange="loadLearningResults()"><option value="">全部状态</option>\
+        <option value="applied">applied</option><option value="pending_confirm">pending_confirm</option><option value="rejected">rejected</option></select>\
+    </div>\
+    <div id="lrList"><div style="text-align:center;padding:40px;color:var(--text-3)">加载中...</div></div>';
+  var action = document.getElementById('lrActionFilter').value;
+  var objectType = document.getElementById('lrObjectTypeFilter').value;
+  var status = document.getElementById('lrStatusFilter').value;
+  var params = 'limit=50';
+  if (action) params += '&action=' + action;
+  if (objectType) params += '&object_type=' + objectType;
+  if (status) params += '&status=' + status;
+  var list = document.getElementById('lrList');
+  try {
+    var r = await api('GET', '/study/results?' + params);
+    var rows = Array.isArray(r.data) ? r.data : [];
+    if (!rows.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无学习动作记录</div>'; return; }
+    list.innerHTML = '<div class="table-wrap"><table><thead><tr><th>时间</th><th>动作</th><th>对象</th><th>原因</th><th>状态</th></tr></thead><tbody>' +
+      rows.map(function(row) {
+        var obj = row.question_terms ? esc(row.question_terms) : esc((row.object_id||'').slice(0,20));
+        return '<tr style="cursor:pointer" onclick="showLearningResultDetail(\'' + esc(row.result_id) + '\')">\
+          <td style="font-size:11px">' + dateStr(row.created_at) + '</td>\
+          <td><code style="font-size:11px">' + esc(row.action) + '</code></td>\
+          <td style="font-size:12px">' + obj + '</td>\
+          <td style="font-size:12px;color:var(--text-2)">' + esc((row.reason||'').slice(0,50)) + '</td>\
+          <td><span class="badge ' + (row.status==='applied'?'confident':(row.status==='rejected'?'gap':'partial')) + '">' + esc(row.status) + '</span></td>\
+        </tr>';
+      }).join('') + '</tbody></table></div><div id="lrDetail"></div>';
+  } catch(e) { list.innerHTML = '<div style="color:var(--red);padding:20px">加载失败：' + esc(e.message) + '</div>'; }
+}
+
+async function showLearningResultDetail(resultId) {
+  var el = document.getElementById('lrDetail');
+  if (!el) return;
+  el.innerHTML = '<div class="study-card">加载中...</div>';
+  try {
+    var r = await api('GET', '/study/results/' + resultId);
+    if (!r.ok || !r.data) { el.innerHTML = '<div class="study-card">加载失败</div>'; return; }
+    var d = r.data;
+    var events = d.events || [];
+    el.innerHTML = '<div class="study-card">\
+      <h2>动作详情</h2>\
+      <div class="detail-row"><span class="dl">action</span><span class="dv">' + esc(d.action) + '</span></div>\
+      <div class="detail-row"><span class="dl">object_id</span><span class="dv">' + esc(d.object_id) + '</span></div>\
+      <div class="detail-row"><span class="dl">reason</span><span class="dv">' + esc(d.reason) + '</span></div>\
+      <div class="detail-row"><span class="dl">status</span><span class="dv">' + esc(d.status) + '</span></div>\
+      <h3 style="margin-top:14px;font-size:13px">支撑事件 (' + events.length + ')</h3>' +
+      (events.length
+        ? events.map(function(ev) {
+            return '<div class="timeline-event"><b>' + esc(ev.event_type) + '</b> · ' + dateStr(ev.created_at) + '<div style="color:var(--text-2);margin-top:2px">' + esc((ev.payload||'').slice(0,150)) + '</div></div>';
+          }).join('')
+        : '<div style="font-size:12px;color:var(--text-3)">暂无支撑事件</div>') +
+      '</div>';
+  } catch(e) { el.innerHTML = '<div class="study-card">加载失败：' + esc(e.message) + '</div>'; }
+}
+
+// ═══════════════════════════════════════════════════════
+// ACTIVATION LINK MANAGEMENT (docs/impl/v1/page.md 步骤 2)
+// ═══════════════════════════════════════════════════════
+function openActivationView() {
+  document.getElementById('activationDrawer').classList.add('open');
+  document.getElementById('activationOverlay').classList.remove('hidden');
+  loadActivationLinks();
+}
+function closeActivationView() {
+  document.getElementById('activationDrawer').classList.remove('open');
+  document.getElementById('activationOverlay').classList.add('hidden');
+}
+
+function switchActivationStatus(status) {
+  S.activationStatus = status;
+  document.querySelectorAll('#activationStatusTabs .panel-tab').forEach(function(t) { t.classList.toggle('active', t.dataset.status === status); });
+  loadActivationLinks();
+}
+
+async function loadActivationLinks() {
+  var list = document.getElementById('activationLinksList');
+  list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>';
+  try {
+    var r = await api('GET', '/activation-links?status=' + S.activationStatus + '&limit=100');
+    S.activationLinks = Array.isArray(r.data) ? r.data : [];
+    renderActivationLinksList();
+  } catch(e) { list.innerHTML = '<div style="color:var(--red);padding:20px;font-size:12px">加载失败</div>'; }
+}
+
+function renderActivationLinksList() {
+  var list = document.getElementById('activationLinksList');
+  if (!S.activationLinks.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无链接</div>'; return; }
+  list.innerHTML = S.activationLinks.map(function(l) {
+    return '<div class="link-row' + (l.link_id === S.activationSelectedId ? ' active' : '') + '" onclick="selectActivationLink(\'' + esc(l.link_id) + '\')">\
+      <div class="lr-terms">' + esc(l.question_terms || '') + '</div>\
+      <div style="font-size:12px;color:var(--text-2);margin-top:2px">' + esc((l.point_summary||'').slice(0,40)) + '</div>\
+      <div class="lr-meta">\
+        <span>' + esc(l.unit_center||'') + '</span>\
+        <span>采纳 ' + (l.adopt_count||0) + ' / 失败 ' + (l.fail_count||0) + '</span>\
+        ' + (l.last_used_at ? '<span>最近使用 ' + dateStr(l.last_used_at) + '</span>' : '') + '\
+      </div>\
+    </div>';
+  }).join('');
+}
+
+async function selectActivationLink(linkId) {
+  S.activationSelectedId = linkId;
+  renderActivationLinksList();
+  var detail = document.getElementById('activationLinkDetail');
+  detail.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3)">加载中...</div>';
+  try {
+    var r = await api('GET', '/activation-links/' + linkId);
+    if (!r.ok || !r.data) { detail.innerHTML = '<div class="split-detail-empty">加载失败</div>'; return; }
+    renderActivationLinkDetail(r.data);
+  } catch(e) { detail.innerHTML = '<div class="split-detail-empty">加载失败</div>'; }
+}
+
+function renderActivationLinkDetail(d) {
+  var detail = document.getElementById('activationLinkDetail');
+  var results = d.learning_results || [];
+  var pendingPromote = results.find(function(r) { return r.Action === 'promote' && r.Status === 'pending_confirm'; });
+  var actionsHtml = '';
+  if (d.status === 'candidate') {
+    actionsHtml = '<div class="modal-actions" style="margin-top:0;justify-content:flex-start">\
+      <button class="btn btn-primary btn-sm" onclick="confirmActivationLink(\'' + esc(d.link_id) + '\')">确认晋升</button>\
+      <button class="btn btn-sm" style="color:var(--red)" onclick="rejectActivationLink(\'' + esc(d.link_id) + '\')">驳回</button>\
+    </div>' + (pendingPromote ? '<div style="font-size:12px;color:var(--text-3);margin-top:8px">Learning Reason：' + esc(pendingPromote.Reason || '') + '</div>' : '');
+  }
+  var timelineHtml = results.length
+    ? results.map(function(r) {
+        return '<div class="timeline-event"><b>' + esc(r.Action) + '</b> · <span class="badge">' + esc(r.Status) + '</span> · ' + dateStr(r.CreatedAt) + '<div style="color:var(--text-2);margin-top:2px">' + esc(r.Reason || '') + '</div></div>';
+      }).join('')
+    : '<div style="font-size:12px;color:var(--text-3)">暂无状态迁移记录</div>';
+  detail.innerHTML = '\
+    <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">' + esc(d.question_terms || '') + '</h2>\
+    <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="badge">' + esc(d.status) + '</span></span></div>\
+    <div class="detail-row"><span class="dl">知识点</span><span class="dv">' + esc(d.point_summary || d.point_id || '') + '</span></div>\
+    <div class="detail-row"><span class="dl">所属单元</span><span class="dv">' + esc(d.unit_center || '') + '</span></div>\
+    <div class="detail-row"><span class="dl">主体/意图</span><span class="dv">' + esc(d.subject_terms || '-') + ' / ' + esc(d.intent_terms || '-') + '</span></div>\
+    <div class="detail-row"><span class="dl">采纳/失败</span><span class="dv">' + (d.adopt_count||0) + ' / ' + (d.fail_count||0) + '</span></div>\
+    ' + actionsHtml + '\
+    <h3 style="margin-top:16px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">状态迁移史</h3>\
+    <div style="margin-top:8px">' + timelineHtml + '</div>';
+}
+
+async function confirmActivationLink(linkId) {
+  if (!confirm('确认将该候选链接晋升为 verified？')) return;
+  try {
+    var r = await api('POST', '/activation-links/' + linkId + '/confirm');
+    if (r.ok) { loadActivationLinks(); selectActivationLink(linkId); pollActivationPendingCount(); }
+    else alert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+  } catch(e) { alert('操作出错：' + e.message); }
+}
+
+async function rejectActivationLink(linkId) {
+  if (!confirm('确认驳回该候选链接？')) return;
+  try {
+    var r = await api('POST', '/activation-links/' + linkId + '/reject');
+    if (r.ok) { loadActivationLinks(); selectActivationLink(linkId); pollActivationPendingCount(); }
+    else alert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+  } catch(e) { alert('操作出错：' + e.message); }
+}
+
+// 待确认徽标：pending_confirm 的 promote 与 wiki_candidate 数量，30 秒轮询
+// （docs/impl/v1/page.md 步骤 2/3），与健康检查共用定时器周期。
+async function pollActivationPendingCount() {
+  try {
+    var r1 = await api('GET', '/study/results?action=promote&status=pending_confirm&limit=200');
+    var n1 = Array.isArray(r1.data) ? r1.data.length : 0;
+    var badge1 = document.getElementById('activationPendingBadge');
+    if (badge1) { badge1.textContent = n1; badge1.classList.toggle('hidden', n1 === 0); }
+  } catch(e) { /* ignore */ }
+  try {
+    var r2 = await api('GET', '/study/results?action=wiki_candidate&status=pending_confirm&limit=200');
+    var n2 = Array.isArray(r2.data) ? r2.data.length : 0;
+    var badge2 = document.getElementById('wikiPendingBadge');
+    if (badge2) { badge2.textContent = n2; badge2.classList.toggle('hidden', n2 === 0); }
+  } catch(e) { /* ignore */ }
+}
+
+// ═══════════════════════════════════════════════════════
+// WIKI VIEW (docs/impl/v1/page.md 步骤 3)
+// ═══════════════════════════════════════════════════════
+function openWikiView() {
+  document.getElementById('wikiDrawer').classList.add('open');
+  document.getElementById('wikiOverlay').classList.remove('hidden');
+  loadWikiPages();
+}
+function closeWikiView() {
+  document.getElementById('wikiDrawer').classList.remove('open');
+  document.getElementById('wikiOverlay').classList.add('hidden');
+}
+
+function openWikiPageFromBadge(pageId) {
+  if (!pageId) return;
+  openWikiView();
+  switchWikiStatus('published');
+  setTimeout(function() { selectWikiPage(pageId); }, 300);
+}
+
+function switchWikiStatus(status) {
+  S.wikiStatus = status;
+  document.querySelectorAll('#wikiStatusTabs .panel-tab').forEach(function(t) { t.classList.toggle('active', t.dataset.wikiStatus === status); });
+  loadWikiPages();
+}
+
+async function loadWikiPages() {
+  if (S.wikiStatus === '') { loadWikiCandidates(); return; }
+  var list = document.getElementById('wikiListItems');
+  list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>';
+  try {
+    var r = await api('GET', '/wiki/pages?status=' + S.wikiStatus + '&limit=100');
+    S.wikiListData = Array.isArray(r.data) ? r.data : [];
+    renderWikiPagesList();
+  } catch(e) { list.innerHTML = '<div style="color:var(--red);padding:20px;font-size:12px">加载失败</div>'; }
+}
+
+function renderWikiPagesList() {
+  var list = document.getElementById('wikiListItems');
+  if (!S.wikiListData.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无页面</div>'; return; }
+  list.innerHTML = S.wikiListData.map(function(p) {
+    return '<div class="page-row' + (p.page_id === S.wikiSelectedId ? ' active' : '') + (p.status === 'needs_recompile' ? ' needs-recompile-card' : '') + '" onclick="selectWikiPage(\'' + esc(p.page_id) + '\')">\
+      <div class="pr-title">' + esc(p.title || '(未命名)') + '</div>\
+      <div class="pr-meta"><span class="badge">' + esc(p.page_type||'') + '</span><span>' + dateStr(p.compiled_at || p.published_at) + '</span></div>\
+    </div>';
+  }).join('');
+}
+
+async function loadWikiCandidates() {
+  var list = document.getElementById('wikiListItems');
+  list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>';
+  try {
+    var rr = await api('GET', '/study/results?action=wiki_candidate&status=pending_confirm&limit=100');
+    var pending = Array.isArray(rr.data) ? rr.data : [];
+    var rp = await api('GET', '/study/reports/latest');
+    var wcMap = {};
+    if (rp.ok && rp.data && Array.isArray(rp.data.wiki_candidates)) {
+      rp.data.wiki_candidates.forEach(function(w) { wcMap[w.concept_id] = w; });
+    }
+    S.wikiListData = pending.map(function(row) {
+      var w = wcMap[row.object_id] || {};
+      var st = w.stats || {};
+      return { resultId: row.result_id, conceptId: row.object_id, conceptName: w.concept_name || row.object_id, reason: row.reason, qualifyingKpCount: st.qualifying_kp_count };
+    });
+    renderWikiCandidatesList();
+  } catch(e) { list.innerHTML = '<div style="color:var(--red);padding:20px;font-size:12px">加载失败</div>'; }
+}
+
+function renderWikiCandidatesList() {
+  var list = document.getElementById('wikiListItems');
+  if (!S.wikiListData.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无待编译候选</div>'; return; }
+  list.innerHTML = S.wikiListData.map(function(c) {
+    return '<div class="page-row' + (c.resultId === S.wikiSelectedId ? ' active' : '') + '" onclick="selectWikiCandidate(\'' + esc(c.resultId) + '\')">\
+      <div class="pr-title">' + esc(c.conceptName) + '</div>\
+      <div class="pr-meta"><span>合格 KP ' + (c.qualifyingKpCount != null ? c.qualifyingKpCount : '-') + ' 个</span></div>\
+    </div>';
+  }).join('');
+}
+
+function selectWikiCandidate(resultId) {
+  S.wikiSelectedId = resultId;
+  renderWikiCandidatesList();
+  var c = S.wikiListData.find(function(x) { return x.resultId === resultId; });
+  var detail = document.getElementById('wikiDetail');
+  if (!c) { detail.innerHTML = '<div class="split-detail-empty">未找到候选</div>'; return; }
+  detail.innerHTML = '\
+    <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">' + esc(c.conceptName) + '</h2>\
+    <div class="detail-row"><span class="dl">合格 KP</span><span class="dv">' + (c.qualifyingKpCount != null ? c.qualifyingKpCount : '-') + ' 个</span></div>\
+    <div class="detail-row"><span class="dl">Learning Reason</span><span class="dv">' + esc(c.reason || '') + '</span></div>\
+    <div style="margin-top:16px;display:flex;gap:8px;align-items:center">\
+      <select id="wikiPageTypeSelect"><option value="concept">concept（概念页）</option><option value="topic">topic（主题页）</option></select>\
+      <button class="btn btn-primary btn-sm" onclick="compileWikiCandidate(\'' + esc(c.conceptId) + '\',\'' + esc(c.resultId) + '\')">编译</button>\
+    </div>\
+    <div id="wikiCompileStatus" style="margin-top:10px;font-size:12px;color:var(--text-3)"></div>';
+}
+
+async function compileWikiCandidate(conceptId, resultId) {
+  var statusEl = document.getElementById('wikiCompileStatus');
+  var pageType = document.getElementById('wikiPageTypeSelect').value;
+  statusEl.textContent = '编译中，可能需要一些时间...';
+  try {
+    var r = await api('POST', '/wiki/compile', { concept_id: conceptId, page_type: pageType, result_id: resultId });
+    if (r.ok) {
+      statusEl.innerHTML = '<span style="color:var(--green)">编译成功，已生成草稿</span>';
+      switchWikiStatus('draft');
+      pollActivationPendingCount();
+    } else {
+      statusEl.innerHTML = '<span style="color:var(--red)">编译失败：' + esc(r.data && r.data.message ? r.data.message : JSON.stringify(r.data)) + '</span>';
+    }
+  } catch(e) { statusEl.innerHTML = '<span style="color:var(--red)">编译出错：' + esc(e.message) + '</span>'; }
+}
+
+async function selectWikiPage(pageId) {
+  S.wikiSelectedId = pageId;
+  renderWikiPagesList();
+  var detail = document.getElementById('wikiDetail');
+  detail.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3)">加载中...</div>';
+  try {
+    var r = await api('GET', '/wiki/pages/' + pageId);
+    if (!r.ok || !r.data) { detail.innerHTML = '<div class="split-detail-empty">加载失败</div>'; return; }
+    renderWikiPageDetail(r.data);
+  } catch(e) { detail.innerHTML = '<div class="split-detail-empty">加载失败</div>'; }
+}
+
+// [point_id] 标注渲染为可点击引用（docs/impl/v1/page.md 步骤 3）。
+var WIKI_POINT_TAG_RE = /\[([a-zA-Z0-9_-]+)\]/g;
+function renderWikiContent(content) {
+  var withLinks = (content || '').replace(WIKI_POINT_TAG_RE, function(m, pid) {
+    return '[[' + pid + ']](point:' + pid + ')';
+  });
+  return renderMarkdown(withLinks).replace(/href="point:([^"]+)"/g, 'href="point:$1" onclick="event.preventDefault();showPointRefInWiki(\'$1\')"');
+}
+
+async function showPointRefInWiki(pointId) {
+  var host = document.getElementById('wikiPointRefPanel');
+  if (!host) return;
+  host.innerHTML = '<div class="ku-context">加载中...</div>';
+  try {
+    var r = await api('GET', '/points/' + pointId);
+    if (!r.ok || !r.data) { host.innerHTML = '<div class="ku-context">未找到该知识点</div>'; return; }
+    var p = r.data;
+    var uHtml = '';
+    if (p.unit_id) {
+      var ur = await api('GET', '/units/' + p.unit_id);
+      if (ur.ok && ur.data) uHtml = '<div style="margin-top:6px"><b>所属单元：</b>' + esc(ur.data.center||'') + ' (L' + ur.data.line_start + '-L' + ur.data.line_end + ')</div>';
+    }
+    host.innerHTML = '<div class="ku-context"><b>' + esc(pointId) + '</b><div style="margin-top:4px">' + esc(p.content||'') + '</div>' + uHtml + '</div>';
+  } catch(e) { host.innerHTML = '<div class="ku-context">加载失败</div>'; }
+}
+
+function renderWikiPageDetail(p) {
+  var detail = document.getElementById('wikiDetail');
+  var actionsHtml = '';
+  if (p.status === 'draft') actionsHtml = '<button class="btn btn-primary btn-sm" onclick="publishWikiPage(\'' + esc(p.page_id) + '\')">发布</button>';
+  else if (p.status === 'needs_recompile') actionsHtml = '<button class="btn btn-primary btn-sm" onclick="recompileWikiPage(\'' + esc(p.page_id) + '\')">重编译</button>';
+  else if (p.status === 'published') actionsHtml = '<button class="btn btn-sm" style="color:var(--red)" onclick="archiveWikiPage(\'' + esc(p.page_id) + '\')">归档</button>';
+  var revisions = p.revisions || [];
+  detail.innerHTML = '\
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">\
+      <h2 style="font-size:16px;font-weight:700">' + esc(p.title || '') + '</h2>\
+      <span class="badge">' + esc(p.status) + '</span>\
+    </div>\
+    <div style="margin-bottom:12px">' + actionsHtml + '</div>\
+    <div class="wiki-page-content ans-body">' + renderWikiContent(p.content) + '</div>\
+    <div id="wikiPointRefPanel"></div>\
+    <h3 style="margin-top:18px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">修订记录 (' + revisions.length + ')</h3>\
+    <div style="margin-top:8px">' + (revisions.length
+      ? revisions.map(function(rv) { return '<div class="timeline-event" style="cursor:pointer" onclick="viewWikiRevision(\'' + esc(p.page_id) + '\',\'' + esc(rv.revision_id) + '\')"><b>' + esc(rv.reason || '') + '</b> · ' + dateStr(rv.created_at) + '</div>'; }).join('')
+      : '<div style="font-size:12px;color:var(--text-3)">暂无历史修订</div>') + '</div>\
+    <div id="wikiRevisionContent"></div>';
+}
+
+async function viewWikiRevision(pageId, revId) {
+  var host = document.getElementById('wikiRevisionContent');
+  host.innerHTML = '<div class="ku-context">加载中...</div>';
+  try {
+    var r = await api('GET', '/wiki/pages/' + pageId + '/revisions/' + revId);
+    if (!r.ok || !r.data) { host.innerHTML = '<div class="ku-context">加载失败</div>'; return; }
+    host.innerHTML = '<div class="panel-section" style="margin-top:10px"><h3>历史版本正文</h3><div class="wiki-page-content ans-body">' + renderWikiContent(r.data.content) + '</div></div>';
+  } catch(e) { host.innerHTML = '<div class="ku-context">加载失败</div>'; }
+}
+
+async function publishWikiPage(pageId) {
+  try {
+    var r = await api('POST', '/wiki/pages/' + pageId + '/publish');
+    if (r.ok) { loadWikiPages(); selectWikiPage(pageId); }
+    else alert('发布失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+  } catch(e) { alert('发布出错：' + e.message); }
+}
+
+async function recompileWikiPage(pageId) {
+  if (!confirm('确认重新编译该页面？将生成新的修订版本。')) return;
+  try {
+    var r = await api('POST', '/wiki/pages/' + pageId + '/recompile', { reason: 'manual_recompile' });
+    if (r.ok) { loadWikiPages(); selectWikiPage(pageId); }
+    else alert('重编译失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+  } catch(e) { alert('重编译出错：' + e.message); }
+}
+
+async function archiveWikiPage(pageId) {
+  if (!confirm('确认归档该页面？归档后不可恢复发布。')) return;
+  try {
+    var r = await api('POST', '/wiki/pages/' + pageId + '/archive');
+    if (r.ok) { loadWikiPages(); selectWikiPage(pageId); }
+    else alert('归档失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+  } catch(e) { alert('归档出错：' + e.message); }
+}
+
+// ═══════════════════════════════════════════════════════
+// CONCEPT EVOLUTION VIEW (docs/impl/v1/concept-evolution.md 步骤 5)
+// ═══════════════════════════════════════════════════════
+function openConceptView() {
+  document.getElementById('conceptDrawer').classList.add('open');
+  document.getElementById('conceptOverlay').classList.remove('hidden');
+  loadConceptCandidates();
+}
+function closeConceptView() {
+  document.getElementById('conceptDrawer').classList.remove('open');
+  document.getElementById('conceptOverlay').classList.add('hidden');
+}
+
+function switchConceptStatus(status) {
+  S.conceptStatus = status;
+  document.querySelectorAll('#conceptStatusTabs .panel-tab').forEach(function(t) { t.classList.toggle('active', t.dataset.conceptStatus === status); });
+  loadConceptCandidates();
+}
+
+async function loadConceptCandidates() {
+  var list = document.getElementById('conceptCandidatesList');
+  list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>';
+  try {
+    var r = await api('GET', '/concepts/candidates?status=' + S.conceptStatus);
+    S.conceptCandidates = Array.isArray(r.data) ? r.data : [];
+    renderConceptCandidatesList();
+  } catch(e) { list.innerHTML = '<div style="color:var(--red);padding:20px;font-size:12px">加载失败</div>'; }
+}
+
+function renderConceptCandidatesList() {
+  var list = document.getElementById('conceptCandidatesList');
+  if (!S.conceptCandidates.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无候选</div>'; return; }
+  list.innerHTML = S.conceptCandidates.map(function(c) {
+    var title = c.kind === 'merge' ? (c.merge_from||[]).join(' + ') : (c.suggested_name || '(未命名)');
+    return '<div class="link-row' + (c.candidate_id === S.conceptSelectedId ? ' active' : '') + '" onclick="selectConceptCandidate(\'' + esc(c.candidate_id) + '\')">\
+      <div class="lr-terms"><span class="badge">' + (c.kind === 'merge' ? '合并' : '新增') + '</span> ' + esc(title) + '</div>\
+      <div style="font-size:12px;color:var(--text-2);margin-top:2px">' + (c.point_ids||[]).length + ' 个关联知识点</div>\
+      <div class="lr-meta"><span>最近信号 ' + dateStr(c.last_signal_at) + '</span></div>\
+    </div>';
+  }).join('');
+}
+
+async function selectConceptCandidate(candidateId) {
+  S.conceptSelectedId = candidateId;
+  renderConceptCandidatesList();
+  var c = S.conceptCandidates.find(function(x) { return x.candidate_id === candidateId; });
+  var detail = document.getElementById('conceptCandidateDetail');
+  if (!c) { detail.innerHTML = '<div class="split-detail-empty">未找到候选</div>'; return; }
+  renderConceptCandidateDetail(c);
+}
+
+function renderConceptCandidateDetail(c) {
+  var detail = document.getElementById('conceptCandidateDetail');
+  var evidence = c.evidence || {};
+  var evidenceHtml = Object.keys(evidence).map(function(k) {
+    var v = evidence[k];
+    return '<div class="detail-row"><span class="dl">' + esc(k) + '</span><span class="dv">' + esc(Array.isArray(v) ? v.join(', ') : String(v)) + '</span></div>';
+  }).join('');
+
+  var actionsHtml = '';
+  if (c.status === 'pending_confirm') {
+    if (c.kind === 'add') {
+      actionsHtml = '\
+        <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px">\
+          <label style="font-size:12px;color:var(--text-3)">概念名称<input id="conceptConfirmName" type="text" value="' + esc(c.suggested_name||'') + '" style="width:100%;margin-top:4px"></label>\
+          <label style="font-size:12px;color:var(--text-3)">领域 ID' + (c.domain_id ? '' : '（该候选无建议领域，必填）') + '<input id="conceptConfirmDomain" type="text" value="' + esc(c.domain_id||'') + '" placeholder="domain_id" style="width:100%;margin-top:4px"></label>\
+          <div class="modal-actions" style="margin-top:0;justify-content:flex-start">\
+            <button class="btn btn-primary btn-sm" onclick="confirmConceptCandidate(\'' + esc(c.candidate_id) + '\')">确认新增</button>\
+            <button class="btn btn-sm" style="color:var(--red)" onclick="rejectConceptCandidate(\'' + esc(c.candidate_id) + '\')">驳回</button>\
+          </div>\
+        </div>';
+    } else {
+      var options = (c.merge_from||[]).map(function(cid) { return '<option value="' + esc(cid) + '">' + esc(cid) + '</option>'; }).join('');
+      actionsHtml = '\
+        <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px">\
+          <label style="font-size:12px;color:var(--text-3)">并入目标概念<select id="conceptConfirmTarget" style="width:100%;margin-top:4px">' + options + '</select></label>\
+          <div class="modal-actions" style="margin-top:0;justify-content:flex-start">\
+            <button class="btn btn-primary btn-sm" onclick="confirmConceptCandidate(\'' + esc(c.candidate_id) + '\')">确认合并</button>\
+            <button class="btn btn-sm" style="color:var(--red)" onclick="rejectConceptCandidate(\'' + esc(c.candidate_id) + '\')">驳回</button>\
+          </div>\
+        </div>';
+    }
+  }
+
+  detail.innerHTML = '\
+    <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">' + (c.kind === 'merge' ? '合并候选：' + esc((c.merge_from||[]).join(' + ')) : '新增候选：' + esc(c.suggested_name||'(未命名)')) + '</h2>\
+    <div class="detail-row"><span class="dl">类型</span><span class="dv"><span class="badge">' + (c.kind === 'merge' ? '合并' : '新增') + '</span></span></div>\
+    <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="badge">' + esc(c.status) + '</span></span></div>\
+    <div class="detail-row"><span class="dl">关联 KP</span><span class="dv">' + (c.point_ids||[]).length + ' 个</span></div>\
+    <div class="detail-row"><span class="dl">支撑事件</span><span class="dv">' + (c.event_ids||[]).length + ' 条</span></div>\
+    <h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">依据 (Learning Reason)</h3>\
+    ' + evidenceHtml + actionsHtml;
+}
+
+async function confirmConceptCandidate(candidateId) {
+  var c = S.conceptCandidates.find(function(x) { return x.candidate_id === candidateId; });
+  if (!c) return;
+  if (!confirm('确认执行该概念候选？这会立即改变概念结构（' + (c.kind === 'merge' ? '合并概念、迁移知识点、标记相关 Wiki 页面重编译' : '创建新概念并迁移知识点') + '）。')) return;
+  var body = {};
+  if (c.kind === 'add') {
+    body.suggested_name = document.getElementById('conceptConfirmName').value;
+    body.domain_id = document.getElementById('conceptConfirmDomain').value;
+  } else {
+    body.target = document.getElementById('conceptConfirmTarget').value;
+  }
+  try {
+    var r = await api('POST', '/concepts/candidates/' + candidateId + '/confirm', body);
+    if (r.ok) { loadConceptCandidates(); pollConceptPendingCount(); }
+    else alert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+  } catch(e) { alert('操作出错：' + e.message); }
+}
+
+async function rejectConceptCandidate(candidateId) {
+  if (!confirm('确认驳回该概念候选？')) return;
+  try {
+    var r = await api('POST', '/concepts/candidates/' + candidateId + '/reject');
+    if (r.ok) { loadConceptCandidates(); pollConceptPendingCount(); }
+    else alert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+  } catch(e) { alert('操作出错：' + e.message); }
+}
+
+// 待确认徽标：pending_confirm 的概念候选数量，与其他徽标共用 30 秒轮询周期。
+async function pollConceptPendingCount() {
+  try {
+    var r = await api('GET', '/concepts/candidates?status=pending_confirm');
+    var n = Array.isArray(r.data) ? r.data.length : 0;
+    var badge = document.getElementById('conceptPendingBadge');
+    if (badge) { badge.textContent = n; badge.classList.toggle('hidden', n === 0); }
+  } catch(e) { /* ignore */ }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2008,6 +2823,9 @@ async function switchSession(sessionId) {
   renderSessionList();
   enterChatMode();
   document.getElementById('chatInner').innerHTML = '';
+  // 历史会话没有实时处理过程可看，直接隐藏整个处理过程面板，聊天区域占满宽度。
+  var pp = document.getElementById('processPanel');
+  if (pp) pp.classList.add('pp-hidden');
 
   try {
     var tr = await api('GET', '/sessions/' + sessionId + '/turns');
@@ -2076,7 +2894,7 @@ async function newConversation() {
   document.getElementById('chatInner').innerHTML = '';
   document.getElementById('panelContent').innerHTML = '<div class="panel-empty">提交问题后查看解释与证据</div>';
   var pp = document.getElementById('processPanel');
-  if (pp) pp.innerHTML = '<div class="pp-empty">提问后查看处理过程</div>';
+  if (pp) { pp.innerHTML = '<div class="pp-empty">提问后查看处理过程</div>'; pp.classList.remove('pp-hidden'); }
   enterWelcomeMode();
   loadSessions();
 }
@@ -2128,6 +2946,10 @@ loadSessions().then(function() {
 });
 checkHealth();
 setInterval(checkHealth, 30000);
+pollActivationPendingCount();
+setInterval(pollActivationPendingCount, 30000);
+pollConceptPendingCount();
+setInterval(pollConceptPendingCount, 30000);
 document.getElementById('welcomeInput').focus();
 </script>
 </body>

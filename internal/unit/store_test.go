@@ -160,11 +160,11 @@ func TestInsertAndGetRelations(t *testing.T) {
 		Direction:     "bidirectional",
 		PromptVersion: "v1",
 	}
-	if err := store.InsertRelation(rel); err != nil {
+	if _, err := store.InsertRelation(rel); err != nil {
 		t.Fatalf("insert relation: %v", err)
 	}
 
-	rels, err := store.GetRelationsByPointID(kp1.PointID)
+	rels, err := store.GetRelationsByPointID(kp1.PointID, "")
 	if err != nil {
 		t.Fatalf("get relations: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestInsertAndGetRelations(t *testing.T) {
 		t.Errorf("direction = %q, want bidirectional", rels[0].Direction)
 	}
 
-	rels2, err := store.GetRelationsByPointID(kp2.PointID)
+	rels2, err := store.GetRelationsByPointID(kp2.PointID, "")
 	if err != nil {
 		t.Fatalf("get relations for point2: %v", err)
 	}
@@ -253,6 +253,30 @@ func TestGetUnitsBySourceID(t *testing.T) {
 	}
 	if len(units) != 3 {
 		t.Errorf("got %d units, want 3", len(units))
+	}
+}
+
+// TestGetConceptsByDomainID_ExcludesMerged covers docs/impl/v1/concept-evolution.md
+// 步骤 4: a merged concept must not appear in unit_concept_match's candidate list.
+func TestGetConceptsByDomainID_ExcludesMerged(t *testing.T) {
+	store := setupTestStore(t)
+
+	if _, err := store.db.Exec(`INSERT INTO domains (domain_id, name) VALUES ('d1', 'Domain One')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO concepts (concept_id, domain_id, name) VALUES ('c-active', 'd1', 'Active')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO concepts (concept_id, domain_id, name, merged_into) VALUES ('c-merged', 'd1', 'Merged', 'c-active')`); err != nil {
+		t.Fatal(err)
+	}
+
+	concepts, err := store.GetConceptsByDomainID("d1")
+	if err != nil {
+		t.Fatalf("get concepts: %v", err)
+	}
+	if len(concepts) != 1 || concepts[0].ConceptID != "c-active" {
+		t.Errorf("expected only c-active, got %+v", concepts)
 	}
 }
 

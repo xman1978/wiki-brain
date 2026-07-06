@@ -20,6 +20,11 @@ const (
 	ResultApplied        = "applied"
 	ResultPendingConfirm = "pending_confirm"
 	ResultRejected       = "rejected"
+	// ResultExpired is concept evolution's addition to this status vocabulary
+	// (docs/impl/v1/concept-evolution.md 步骤 2 过期): a pending_confirm concept
+	// candidate that idled out mirrors its status onto the backing
+	// learning_results row via this value.
+	ResultExpired = "expired"
 )
 
 // learning_results.action
@@ -32,11 +37,25 @@ const (
 	ActionGapFlag         = "gap_flag"
 	ActionWikiCandidate   = "wiki_candidate"
 	ActionRecompileFlag   = "recompile_flag"
+	// Concept evolution actions (docs/impl/v1/concept-evolution.md 步骤 2/3),
+	// written through this package's Store since it owns learning_results.
+	ActionConceptAddCandidate   = "concept_add_candidate"
+	ActionConceptMergeCandidate = "concept_merge_candidate"
+	ActionConceptAdd            = "concept_add"
+	ActionConceptMerge          = "concept_merge"
 )
 
-// ObjectTypeActivationLink is the learning_results.object_type value used by
-// every action this module records.
-const ObjectTypeActivationLink = "activation_link"
+// learning_results.object_type — activation_link is written by this module;
+// knowledge_gap / wiki_page are Study's own audit objects (docs/impl/v1/study.md
+// 步骤 6), written through this package's Store.InsertLearningResult since it
+// owns the shared learning_results table. concept_candidate is concept
+// evolution's own audit object (docs/impl/v1/concept-evolution.md).
+const (
+	ObjectTypeActivationLink   = "activation_link"
+	ObjectTypeKnowledgeGap     = "knowledge_gap"
+	ObjectTypeWikiPage         = "wiki_page"
+	ObjectTypeConceptCandidate = "concept_candidate"
+)
 
 // legalTransitions is the only source of truth for which status moves are
 // allowed (docs/impl/v1/activation.md "合法迁移表"). deprecated is terminal.

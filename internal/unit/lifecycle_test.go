@@ -85,6 +85,81 @@ func TestSetUnitLifecycle_CascadesAndReindexes(t *testing.T) {
 	}
 }
 
+// TestSnapshotAndDeprecate_RestoreLifecycle_PreservesPriorSupersededState
+// covers 文件管理 恢复按钮's core correctness requirement: a source's units
+// may hold different lifecycle states at delete time (one still current,
+// one already superseded by an earlier reupload) — SnapshotAndDeprecate must
+// deprecate both, but RestoreLifecycle must only bring the current one back,
+// leaving the already-superseded one superseded rather than resurrecting it.
+func TestSnapshotAndDeprecate_RestoreLifecycle_PreservesPriorSupersededState(t *testing.T) {
+	svc, _, db := setupTestService(t)
+	tmpDir := t.TempDir()
+	mdPath := writeTestMarkdown(t, tmpDir)
+	insertSource(t, db, "src-1", mdPath)
+	insertOutlines(t, db, "src-1")
+
+	kuCurrent := &KnowledgeUnit{SourceID: "src-1", Center: "当前知识", LineStart: 1, LineEnd: 5, Status: "completed", PromptVersion: "v1"}
+	if err := svc.store.InsertUnit(kuCurrent); err != nil {
+		t.Fatalf("insert current unit: %v", err)
+	}
+	kuSuperseded := &KnowledgeUnit{SourceID: "src-1", Center: "旧知识", LineStart: 6, LineEnd: 10, Status: "completed", PromptVersion: "v1"}
+	if err := svc.store.InsertUnit(kuSuperseded); err != nil {
+		t.Fatalf("insert superseded unit: %v", err)
+	}
+	if err := svc.SetUnitLifecycle([]string{kuSuperseded.UnitID}, LifecycleSuperseded, "pre-existing reupload"); err != nil {
+		t.Fatalf("seed superseded state: %v", err)
+	}
+
+	unitIDs := []string{kuCurrent.UnitID, kuSuperseded.UnitID}
+	if err := svc.SnapshotAndDeprecate(unitIDs, "source deleted"); err != nil {
+		t.Fatalf("SnapshotAndDeprecate: %v", err)
+	}
+
+	gotCurrent, _ := svc.store.GetUnitByID(kuCurrent.UnitID)
+	gotSuperseded, _ := svc.store.GetUnitByID(kuSuperseded.UnitID)
+	if gotCurrent.Lifecycle != LifecycleDeprecated || gotSuperseded.Lifecycle != LifecycleDeprecated {
+		t.Fatalf("expected both deprecated after SnapshotAndDeprecate, got current=%q superseded=%q",
+			gotCurrent.Lifecycle, gotSuperseded.Lifecycle)
+	}
+
+	if err := svc.RestoreLifecycle(unitIDs, "source restored"); err != nil {
+		t.Fatalf("RestoreLifecycle: %v", err)
+	}
+
+	gotCurrent, err := svc.store.GetUnitByID(kuCurrent.UnitID)
+	if err != nil {
+		t.Fatalf("GetUnitByID current: %v", err)
+	}
+	if gotCurrent.Lifecycle != LifecycleCurrent {
+		t.Errorf("current unit's lifecycle after restore = %q, want current", gotCurrent.Lifecycle)
+	}
+
+	gotSuperseded, err = svc.store.GetUnitByID(kuSuperseded.UnitID)
+	if err != nil {
+		t.Fatalf("GetUnitByID superseded: %v", err)
+	}
+	if gotSuperseded.Lifecycle != LifecycleSuperseded {
+		t.Errorf("previously-superseded unit's lifecycle after restore = %q, want superseded (must not be resurrected to current)", gotSuperseded.Lifecycle)
+	}
+
+	// Snapshot column must be cleared so a later delete/restore cycle doesn't
+	// read a stale value.
+	groups, err := svc.store.GroupUnitIDsByLifecycleBeforeDelete(unitIDs)
+	if err != nil {
+		t.Fatalf("GroupUnitIDsByLifecycleBeforeDelete: %v", err)
+	}
+	if len(groups) != 0 {
+		t.Errorf("expected snapshot cleared after restore, got groups=%+v", groups)
+	}
+}
+
+func TestRestoreLifecycle_EmptyIDsNoop(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	if err := svc.RestoreLifecycle(nil, "test"); err != nil {
+		t.Fatalf("expected no-op, got error: %v", err)
+	}
+}
+
 func TestSetUnitLifecycle_RejectsInvalidState(t *testing.T) {
 	svc, _, _ := setupTestService(t)
 	err := svc.SetUnitLifecycle([]string{"u1"}, "bogus", "test")

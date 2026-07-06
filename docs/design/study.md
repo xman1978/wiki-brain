@@ -133,7 +133,8 @@ Study 主要做：
 根据 repeated_failure 标记路径风险；
 根据 knowledge_conflict 标记知识冲突；
 根据 user_correction 触发知识重新验证；
-根据 concept_boundary_signal 调整 Concept 边界；
+根据 concept_gap 聚类与 concept_boundary_signal 累积形成概念演化候选
+  （新增 / 合并 / 拆分，见 concept-evolution.md）；
 根据 wiki_update_candidate 触发 Wiki 重编译候选；
 根据 knowledge_gap 标记知识缺口；
 根据 repeated_success 与结构相似信号形成候选实践路径。
@@ -218,7 +219,7 @@ Learning Event 应保留与长期记忆相关的认知维度，供 Study 判断�
 场景；
 目标；
 认知视角；
-思维模式；
+推理形式；
 注意焦点；
 知识点相关性；
 系统结果信号（采用、失败、缺口、冲突等）；
@@ -250,7 +251,7 @@ Study 对其遵守与 ActivationLink 相同的谨慎原则：单次组装不建�
 
 ## 7. 实践路径：从 Working Model 到 Experience Path
 
-实践路径（Practice Path，在经验路径模式中调用）描述某类问题「如何组织思考」的可复用模板。它与 ActivationLink 不同：ActivationLink 回答「在特定条件下通过哪个概念激活哪些知识点」；实践路径回答「面对这类问题时，应按什么变量框架、步骤顺序和证据检查方式组织思考」。
+实践路径（Practice Path，作为深想路径内可复用的快路径被调用）描述某类问题「如何组织思考」的可复用模板。它与 ActivationLink 不同：ActivationLink 回答「在特定条件下通过哪个概念激活哪些知识点」；实践路径回答「面对这类问题时，应按什么变量框架、步骤顺序和证据检查方式组织思考」。
 
 Working Model 是一次性工作结构，不能被直接保存为长期记忆。但当某类问题的 Working Model 结构在多次 Learning Event 中被证明稳定有效时，Study 可以从事件中提炼结构模式，形成候选实践路径。
 
@@ -259,7 +260,7 @@ Working Model 是一次性工作结构，不能被直接保存为长期记忆。
 典型信号包括：
 
 ```text
-activation_success 反复出现，且问题处理走的是工作模型模式；
+activation_success 反复出现，且问题处理走的是深想路径；
 repeated_success 表明同类问题在相似场景下多次成功；
 多次事件的 scene / goal / pattern / focus 高度相似；
 Working Model 的核心变量组合与组织方式跨事件高度相似；
@@ -284,20 +285,20 @@ Working Model 的核心变量组合与组织方式跨事件高度相似；
 
 ### 验证与晋升
 
-候选实践路径必须经过独立验证，才能被经验路径模式可靠调用：
+候选实践路径必须经过独立验证，才能作为深想快路径被可靠调用：
 
 ```text
 在新问题中按模板组织思考，仍能产生有效回答；
 不依赖某次特定材料或偶然组合的偶然成功；
-适用边界清晰，失效时可回退到工作模型模式；
+适用边界清晰，失效时可回退到通用的 KPP + 推理模式重新组织；
 验证过程应记录为 Learning Event，而不是默认一次成功即晋升。
 ```
 
-验证通过后，实践路径成为长期记忆中的稳定模板。认知路由在识别到匹配的任务类型、场景和风险水平时，可优先选择经验路径模式并激活该路径，而不是每次都从零构建 Working Model。详见 `cognitive-routing.md` 与 `working-model.md`。
+验证通过后，实践路径成为长期记忆中的稳定模板。深想路径在识别到匹配的任务类型和场景时，可优先激活该路径，复用已验证的组织方式，而不是每次都从零构建 Working Model。详见 `cognitive-routing.md` 与 `working-model.md`。
 
 ### 与 Wiki 编译的关系
 
-实践路径偏向「怎么做」的过程模板；Wiki 页面偏向「是什么」的稳定表达。二者都可能来自多次 Learning Event，但沉淀层级不同。反复有效的实践路径可以进一步成为 Wiki 中方法类页面的编译输入，但不应把 Wiki 页面直接当作经验路径模式的执行模板。
+实践路径偏向「怎么做」的过程模板；Wiki 页面偏向「是什么」的稳定表达。二者都可能来自多次 Learning Event，但沉淀层级不同。反复有效的实践路径可以进一步成为 Wiki 中方法类页面的编译输入，但不应把 Wiki 页面直接当作深想快路径的执行模板。
 
 ## 8. ActivationLink 质量控制
 
@@ -342,7 +343,7 @@ weakened、conflicted、deprecated 都不应作为当前首选激活路径。
 
 Study 将 Learning Event 转化为长期记忆调整时，常见动作包括：
 
-**强化**：反复有效的 ActivationLink 在特定场景、目标、思维模式和注意焦点下变得更易被采用。
+**强化**：反复有效的 ActivationLink 在特定场景、目标、推理形式和注意焦点下变得更易被采用。
 
 **修正**：收窄链接或 Concept 的适用条件，或拆成更精确的激活路径。
 
@@ -352,9 +353,9 @@ Study 将 Learning Event 转化为长期记忆调整时，常见动作包括：
 
 **补充**：knowledge_gap 形成新的学习目标或候选结构。
 
-**重组**：Concept 拆分、合并，候选领域或概念晋升，激活路径按场景重组。
+**重组**：Concept 拆分、合并，候选领域或概念晋升，激活路径按场景重组。概念层面的候选形成、人工确认与迁移语义见 `concept-evolution.md`。
 
-候选 ActivationLink 是待验证的学习假设，不得参与正式召回。它应带上从 Learning Event 中观察到的场景、目标、思维模式、注意焦点和适用边界，而不是粗糙的「概念到知识点」连接。
+候选 ActivationLink 是待验证的学习假设，不得参与正式召回。它应带上从 Learning Event 中观察到的场景、目标、推理形式、注意焦点和适用边界，而不是粗糙的「概念到知识点」连接。
 
 ## 9. Learning Reason
 

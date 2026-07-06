@@ -19,6 +19,9 @@ type Config struct {
 	Source    SourceConfig    `yaml:"source"`
 	Retrieval RetrievalConfig `yaml:"retrieval"`
 	Study     StudyConfig     `yaml:"study"`
+	Evidence  EvidenceConfig  `yaml:"evidence"`
+	KPN       KPNConfig       `yaml:"kpn"`
+	Wiki      WikiConfig      `yaml:"wiki"`
 }
 
 type LLMConfig struct {
@@ -77,6 +80,30 @@ type RetrievalConfig struct {
 	ActivationMatchMin         float64 `yaml:"activation_match_min"`
 	ActivationMatchMinFallback float64 `yaml:"activation_match_min_fallback"`
 	ActivationMatchTop         int     `yaml:"activation_match_top"`
+	// —— V1 新增（docs/impl/v1/retrieval.md 配置项）——
+	FastPath         bool    `yaml:"fast_path"`
+	FastPathFallback bool    `yaml:"fast_path_fallback"`
+	WikiMinScore     float64 `yaml:"wiki_min_score"`
+}
+
+// EvidenceConfig — docs/impl/v1/evidence.md 配置项.
+type EvidenceConfig struct {
+	Enabled           bool `yaml:"enabled"`
+	BatchMaxChars     int  `yaml:"batch_max_chars"`
+	MaxFragmentsPerKU int  `yaml:"max_fragments_per_ku"`
+	MinFragmentChars  int  `yaml:"min_fragment_chars"`
+	Retry             int  `yaml:"retry"`
+}
+
+// KPNConfig — docs/impl/v1/kpn.md 配置项.
+type KPNConfig struct {
+	CrossMaxBatches int `yaml:"cross_max_batches"`
+}
+
+// WikiConfig — docs/impl/v1/wiki.md 配置项.
+type WikiConfig struct {
+	CompileMaxChars   int `yaml:"compile_max_chars"`
+	RecompileNewKPMin int `yaml:"recompile_new_kp_min"`
 }
 
 type StudyConfig struct {
@@ -89,6 +116,26 @@ type StudyConfig struct {
 	ScanBatchSize         int     `yaml:"scan_batch_size"`
 	ReportPeriodDays      int     `yaml:"report_period_days"`
 	ReportMaxKeep         int     `yaml:"report_max_keep"`
+	// —— V1 新增（docs/impl/v1/study.md 配置项）——
+	AutoPromote        bool    `yaml:"auto_promote"`
+	PromoteSuccessMin  int     `yaml:"promote_success_min"`
+	PromoteDistinctMin int     `yaml:"promote_distinct_min"`
+	WeakenFailureMin   int     `yaml:"weaken_failure_min"`
+	WeakenRatioMin     float64 `yaml:"weaken_ratio_min"`
+	ReverifySuccessMin int     `yaml:"reverify_success_min"`
+	EventWindowDays    int     `yaml:"event_window_days"`
+	CandidateIdleDays  int     `yaml:"candidate_idle_days"`
+	DeprecateIdleDays  int     `yaml:"deprecate_idle_days"`
+	CorrectionWeight   int     `yaml:"correction_weight"`
+	// —— 概念演化（V1 新增，docs/impl/v1/concept-evolution.md 配置项）——
+	ConceptNullRatioMin      float64 `yaml:"concept_null_ratio_min"`
+	ConceptAddEventMin       int     `yaml:"concept_add_event_min"`
+	ConceptAddDistinctMin    int     `yaml:"concept_add_distinct_min"`
+	ConceptAddOverlapMin     float64 `yaml:"concept_add_overlap_min"`
+	ConceptMergeCooccurMin   int     `yaml:"concept_merge_cooccur_min"`
+	ConceptMergeOverlapMin   float64 `yaml:"concept_merge_overlap_min"`
+	ConceptCandidateIdleDays int     `yaml:"concept_candidate_idle_days"`
+	ConceptEventWindowDays   int     `yaml:"concept_event_window_days"`
 }
 
 func (c *LLMConfig) TimeoutDuration() time.Duration {

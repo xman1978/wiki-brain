@@ -1,0 +1,633 @@
+package concept
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"sort"
+	"strings"
+
+	"github.com/google/uuid"
+	"github.com/jxman78/wiki-brain/internal/foundation/text"
+	"github.com/jxman78/wiki-brain/internal/wiki"
+)
+
+// Config mirrors config.yml's study 节 concept_* thresholds
+// (docs/impl/v1/concept-evolution.md 配置项). Trace only needs
+// concept_null_ratio_min (consumed there directly); the rest live here.
+type Config struct {
+	AddEventMin       int
+	AddDistinctMin    int
+	AddOverlapMin     float64
+	MergeCooccurMin   int
+	MergeOverlapMin   float64
+	CandidateIdleDays int
+	EventWindowDays   int
+}
+
+type Service struct {
+	store   *Store
+	cfg     Config
+	wikiSvc *wiki.Service // optional: nil-safe, needs_recompile flagging no-ops without it
+}
+
+func NewService(store *Store, cfg Config, wikiSvc *wiki.Service) *Service {
+	return &Service{store: store, cfg: cfg, wikiSvc: wikiSvc}
+}
+
+// Scan runs the two clustering subtasks plus idle expiry
+// (docs/impl/v1/concept-evolution.md 步骤 2), appended to Study's task chain
+// after its own step 6. Each subtask logs and continues on error, matching
+// study.md's "单步异常记录 error 日志，不中断本轮后续步骤".
+func (s *Service) Scan() ScanSummary {
+	var summary ScanSummary
+
+	if err := s.scanAddClusters(&summary); err != nil {
+		slog.Error("concept: scan add clusters failed", "error", err)
+	}
+	if err := s.scanMergeCandidates(&summary); err != nil {
+		slog.Error("concept: scan merge candidates failed", "error", err)
+	}
+	expired, err := s.store.ExpireIdleCandidates(s.cfg.CandidateIdleDays)
+	if err != nil {
+		slog.Error("concept: expire idle candidates failed", "error", err)
+	} else {
+		summary.Expired = len(expired)
+	}
+
+	return summary
+}
+
+// addCluster is a greedily-grown group of concept_gap events whose point-id
+// sets mutually overlap at least AddOverlapMin against the cluster's running
+// union (docs/impl/v1/concept-evolution.md 步骤 2 新增聚类).
+type addCluster struct {
+	events   []GapPointEvent
+	unionSet map[string]bool
+}
+
+func clusterGapEvents(events []GapPointEvent, overlapMin float64) []*addCluster {
+	var clusters []*addCluster
+	for _, e := range events {
+		eSet := toSet(e.PointIDs)
+		var target *addCluster
+		for _, c := range clusters {
+			if jaccard(eSet, c.unionSet) >= overlapMin {
+				target = c
+				break
+			}
+		}
+		if target == nil {
+			target = &addCluster{unionSet: map[string]bool{}}
+			clusters = append(clusters, target)
+		}
+		target.events = append(target.events, e)
+		for pid := range eSet {
+			target.unionSet[pid] = true
+		}
+	}
+	return clusters
+}
+
+// clusterOverlap reports the average member-vs-final-union Jaccard, purely
+// as reportable evidence — cluster membership itself already enforced
+// overlapMin at join time.
+func clusterOverlap(c *addCluster) float64 {
+	if len(c.events) == 0 {
+		return 0
+	}
+	total := 0.0
+	for _, e := range c.events {
+		total += jaccard(toSet(e.PointIDs), c.unionSet)
+	}
+	return total / float64(len(c.events))
+}
+
+func toSet(ids []string) map[string]bool {
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
+}
+
+func jaccard(a, b map[string]bool) float64 {
+	if len(a) == 0 && len(b) == 0 {
+		return 0
+	}
+	inter := 0
+	for k := range a {
+		if b[k] {
+			inter++
+		}
+	}
+	union := len(a) + len(b) - inter
+	if union == 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
+}
+
+func setToSortedSlice(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func dedupStrings(ss []string) []string {
+	seen := make(map[string]bool, len(ss))
+	var out []string
+	for _, v := range ss {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// scanAddClusters implements docs/impl/v1/concept-evolution.md 步骤 2 新增聚类.
+func (s *Service) scanAddClusters(summary *ScanSummary) error {
+	events, err := s.store.FetchConceptGapEvents(s.cfg.EventWindowDays)
+	if err != nil {
+		return err
+	}
+	summary.ConceptGapEventCount = len(events)
+	if len(events) == 0 {
+		return nil
+	}
+
+	seen, err := s.store.SeenAddEventIDs()
+	if err != nil {
+		return err
+	}
+
+	var fresh []GapPointEvent
+	for _, e := range events {
+		if seen[e.EventID] || len(e.PointIDs) == 0 {
+			continue
+		}
+		fresh = append(fresh, e)
+	}
+	if len(fresh) == 0 {
+		return nil
+	}
+
+	clusters := clusterGapEvents(fresh, s.cfg.AddOverlapMin)
+
+	pending, err := s.store.ListCandidatesByKindStatus(KindAdd, StatusPendingConfirm)
+	if err != nil {
+		return err
+	}
+
+	for _, c := range clusters {
+		distinctQ := make(map[string]bool)
+		var eventIDs []string
+		for _, e := range c.events {
+			eventIDs = append(eventIDs, e.EventID)
+			if e.QuestionHash != "" {
+				distinctQ[e.QuestionHash] = true
+			}
+		}
+		evidence := AddEvidence{EventCount: len(c.events), DistinctCount: len(distinctQ), Overlap: clusterOverlap(c)}
+
+		// A cluster overlapping an already-pending candidate is new signal
+		// for it, regardless of whether this cluster alone meets threshold
+		// (docs/impl/v1/concept-evolution.md 步骤 2: "同簇已有 pending_confirm
+		// 候选...更新...不重复建行").
+		matched := false
+		for _, p := range pending {
+			var existingPoints []string
+			if err := json.Unmarshal([]byte(p.PointIDs), &existingPoints); err != nil {
+				continue
+			}
+			if jaccard(toSet(existingPoints), c.unionSet) >= s.cfg.AddOverlapMin {
+				if err := s.store.UpdateCandidateSignal(p.CandidateID, evidence, eventIDs); err != nil {
+					return err
+				}
+				summary.AddUpdated++
+				matched = true
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+
+		if len(c.events) < s.cfg.AddEventMin || len(distinctQ) < s.cfg.AddDistinctMin {
+			continue
+		}
+
+		pointIDs := setToSortedSlice(c.unionSet)
+		domainID, name, err := s.deriveAddSuggestion(pointIDs)
+		if err != nil {
+			slog.Error("concept: derive add suggestion failed", "error", err)
+			continue
+		}
+
+		reason := fmt.Sprintf("概念缺口聚类：事件数=%d，不同问题数=%d，重叠度=%.2f", len(c.events), len(distinctQ), evidence.Overlap)
+		if _, err := s.store.InsertAddCandidate(domainID, name, pointIDs, eventIDs, evidence, reason); err != nil {
+			return err
+		}
+		summary.AddCreated++
+	}
+	return nil
+}
+
+// deriveAddSuggestion computes a cluster's suggested domain (majority vote
+// over the cluster KUs' source domain_id) and suggested name (high-frequency
+// terms from the KU centers), per docs/impl/v1/concept-evolution.md 步骤 2.
+func (s *Service) deriveAddSuggestion(pointIDs []string) (sql.NullString, string, error) {
+	kuInfos, err := s.store.KUInfoForPoints(pointIDs)
+	if err != nil {
+		return sql.NullString{}, "", err
+	}
+
+	seenUnit := make(map[string]bool)
+	var sourceIDs, centers []string
+	for _, info := range kuInfos {
+		if seenUnit[info.UnitID] {
+			continue
+		}
+		seenUnit[info.UnitID] = true
+		sourceIDs = append(sourceIDs, info.SourceID)
+		centers = append(centers, info.Center)
+	}
+
+	domains, err := s.store.SourceDomains(dedupStrings(sourceIDs))
+	if err != nil {
+		return sql.NullString{}, "", err
+	}
+
+	counts := make(map[string]int)
+	var order []string
+	for _, sid := range sourceIDs {
+		d := domains[sid]
+		if !d.Valid || d.String == "" {
+			continue
+		}
+		if counts[d.String] == 0 {
+			order = append(order, d.String)
+		}
+		counts[d.String]++
+	}
+	var domainID sql.NullString
+	best := 0
+	for _, k := range order {
+		if counts[k] > best {
+			best = counts[k]
+			domainID = sql.NullString{String: k, Valid: true}
+		}
+	}
+
+	return domainID, suggestName(centers), nil
+}
+
+// suggestName tokenizes every KU center, drops stop words, and joins the top
+// 3 terms by frequency — a program-computed suggestion, no LLM call
+// (docs/impl/v1/concept-evolution.md 步骤 2, human may rename at confirm time).
+func suggestName(centers []string) string {
+	freq := make(map[string]int)
+	var order []string
+	for _, c := range centers {
+		for _, tok := range text.Tokenize(text.Normalize(c)) {
+			if tok == "" || text.StopWords[tok] {
+				continue
+			}
+			if freq[tok] == 0 {
+				order = append(order, tok)
+			}
+			freq[tok]++
+		}
+	}
+	sort.SliceStable(order, func(i, j int) bool { return freq[order[i]] > freq[order[j]] })
+	if len(order) > 3 {
+		order = order[:3]
+	}
+	return strings.Join(order, "、")
+}
+
+// pairKey is an unordered concept_id pair, canonicalized A<B for map keys.
+type pairKey struct{ A, B string }
+
+type pairAgg struct {
+	cooccur int
+	pointsA map[string]bool
+	pointsB map[string]bool
+}
+
+// scanMergeCandidates implements docs/impl/v1/concept-evolution.md 步骤 2 合并统计.
+func (s *Service) scanMergeCandidates(summary *ScanSummary) error {
+	traces, err := s.store.TracesInWindow(s.cfg.EventWindowDays)
+	if err != nil {
+		return err
+	}
+	if len(traces) == 0 {
+		return nil
+	}
+
+	allPoints := make(map[string]bool)
+	for _, t := range traces {
+		for _, p := range t.PointIDs {
+			allPoints[p] = true
+		}
+	}
+	pointConcept, err := s.store.PointConceptMap(setToSortedSlice(allPoints))
+	if err != nil {
+		return err
+	}
+	if len(pointConcept) == 0 {
+		return nil
+	}
+
+	agg := make(map[pairKey]*pairAgg)
+	totalTraces := make(map[string]int) // concept_id -> # traces where it appears at all (any point)
+	for _, t := range traces {
+		conceptPoints := make(map[string]map[string]bool)
+		for _, p := range t.PointIDs {
+			cid, ok := pointConcept[p]
+			if !ok {
+				continue
+			}
+			if conceptPoints[cid] == nil {
+				conceptPoints[cid] = make(map[string]bool)
+			}
+			conceptPoints[cid][p] = true
+		}
+		for cid := range conceptPoints {
+			totalTraces[cid]++
+		}
+		if len(conceptPoints) < 2 {
+			continue
+		}
+
+		var concepts []string
+		for c := range conceptPoints {
+			concepts = append(concepts, c)
+		}
+		sort.Strings(concepts)
+
+		for i := 0; i < len(concepts); i++ {
+			for j := i + 1; j < len(concepts); j++ {
+				key := pairKey{A: concepts[i], B: concepts[j]}
+				a := agg[key]
+				if a == nil {
+					a = &pairAgg{pointsA: make(map[string]bool), pointsB: make(map[string]bool)}
+					agg[key] = a
+				}
+				a.cooccur++
+				for p := range conceptPoints[concepts[i]] {
+					a.pointsA[p] = true
+				}
+				for p := range conceptPoints[concepts[j]] {
+					a.pointsB[p] = true
+				}
+			}
+		}
+	}
+
+	pendingMerges, err := s.store.ListCandidatesByKindStatus(KindMerge, StatusPendingConfirm)
+	if err != nil {
+		return err
+	}
+
+	for key, a := range agg {
+		if a.cooccur < s.cfg.MergeCooccurMin {
+			continue
+		}
+		totalA, totalB := totalTraces[key.A], totalTraces[key.B]
+		union := totalA + totalB - a.cooccur
+		overlap := 0.0
+		if union > 0 {
+			overlap = float64(a.cooccur) / float64(union)
+		}
+		if overlap < s.cfg.MergeOverlapMin {
+			continue
+		}
+
+		mergeFrom := []string{key.A, key.B}
+		evidence := MergeEvidence{
+			CooccurCount: a.cooccur,
+			OverlapRatio: overlap,
+			TotalTracesA: totalA,
+			TotalTracesB: totalB,
+			PointIDsA:    setToSortedSlice(a.pointsA),
+			PointIDsB:    setToSortedSlice(a.pointsB),
+		}
+
+		var existing *CandidateRow
+		for i := range pendingMerges {
+			var mf []string
+			if err := json.Unmarshal([]byte(pendingMerges[i].MergeFrom), &mf); err != nil {
+				continue
+			}
+			if samePair(mf, mergeFrom) {
+				existing = &pendingMerges[i]
+				break
+			}
+		}
+
+		if existing != nil {
+			if err := s.store.UpdateMergeCandidateSignal(existing.CandidateID, evidence); err != nil {
+				return err
+			}
+			summary.MergeUpdated++
+			continue
+		}
+
+		pointIDs := dedupStrings(append(setToSortedSlice(a.pointsA), setToSortedSlice(a.pointsB)...))
+		reason := fmt.Sprintf("概念对共现：共同采用次数=%d，KP 重叠比例=%.2f", a.cooccur, overlap)
+		if _, err := s.store.InsertMergeCandidate(mergeFrom, pointIDs, evidence, reason); err != nil {
+			return err
+		}
+		summary.MergeCreated++
+	}
+	return nil
+}
+
+func samePair(a, b []string) bool {
+	if len(a) != 2 || len(b) != 2 {
+		return false
+	}
+	sa := append([]string{}, a...)
+	sb := append([]string{}, b...)
+	sort.Strings(sa)
+	sort.Strings(sb)
+	return sa[0] == sb[0] && sa[1] == sb[1]
+}
+
+// Confirm implements POST /concepts/candidates/:id/confirm
+// (docs/impl/v1/concept-evolution.md 步骤 3): dispatches to the kind-specific
+// execution, each running in its own single transaction. There is no auto
+// mode — every confirm here is a human action.
+func (s *Service) Confirm(candidateID string, addReq *ConfirmAddRequest, mergeReq *ConfirmMergeRequest) (*ConfirmResult, error) {
+	c, err := s.store.GetCandidate(candidateID)
+	if err != nil {
+		return nil, err
+	}
+	if c == nil {
+		return nil, fmt.Errorf("concept: candidate not found: %s", candidateID)
+	}
+	if c.Status != StatusPendingConfirm {
+		return nil, fmt.Errorf("concept: confirm only valid for pending_confirm candidates, %s is %s", candidateID, c.Status)
+	}
+
+	switch c.Kind {
+	case KindAdd:
+		return s.confirmAdd(c, addReq)
+	case KindMerge:
+		return s.confirmMerge(c, mergeReq)
+	default:
+		return nil, fmt.Errorf("concept: unknown candidate kind %q", c.Kind)
+	}
+}
+
+func (s *Service) confirmAdd(c *CandidateRow, req *ConfirmAddRequest) (*ConfirmResult, error) {
+	name := c.SuggestedName.String
+	domainID := ""
+	if c.DomainID.Valid {
+		domainID = c.DomainID.String
+	}
+	if req != nil {
+		if req.SuggestedName != "" {
+			name = req.SuggestedName
+		}
+		if req.DomainID != "" {
+			domainID = req.DomainID
+		}
+	}
+	if name == "" {
+		return nil, fmt.Errorf("concept: confirm add requires a suggested_name")
+	}
+	if domainID == "" {
+		return nil, fmt.Errorf("concept: confirm add requires domain_id (candidate has none)")
+	}
+
+	var pointIDs []string
+	if err := json.Unmarshal([]byte(c.PointIDs), &pointIDs); err != nil {
+		return nil, fmt.Errorf("concept: confirm add: unmarshal point_ids: %w", err)
+	}
+
+	conceptID := uuid.New().String()
+	reason := fmt.Sprintf("人工确认新增概念：%s（领域 %s）", name, domainID)
+	migrated, err := s.store.ConfirmAdd(c.CandidateID, conceptID, domainID, name, "", pointIDs, reason)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ConfirmResult{Candidate: *c, ConceptID: conceptID, MigratedKUs: migrated}, nil
+}
+
+func (s *Service) confirmMerge(c *CandidateRow, req *ConfirmMergeRequest) (*ConfirmResult, error) {
+	var mergeFrom []string
+	if err := json.Unmarshal([]byte(c.MergeFrom), &mergeFrom); err != nil {
+		return nil, fmt.Errorf("concept: confirm merge: unmarshal merge_from: %w", err)
+	}
+	if req == nil || req.Target == "" {
+		return nil, fmt.Errorf("concept: confirm merge requires target")
+	}
+	validTarget := false
+	for _, m := range mergeFrom {
+		if m == req.Target {
+			validTarget = true
+			break
+		}
+	}
+	if !validTarget {
+		return nil, fmt.Errorf("concept: target %q not in merge_from %v", req.Target, mergeFrom)
+	}
+
+	reason := fmt.Sprintf("人工确认合并概念：%v -> %s", mergeFrom, req.Target)
+	migrated, _, err := s.store.ConfirmMerge(c.CandidateID, mergeFrom, req.Target, reason)
+	if err != nil {
+		return nil, err
+	}
+
+	flagged := s.flagMergedConceptPages(mergeFrom, reason)
+
+	return &ConfirmResult{Candidate: *c, MigratedKUs: migrated, FlaggedPages: flagged}, nil
+}
+
+// flagMergedConceptPages marks needs_recompile on the active Wiki page for
+// every concept involved in the merge — both the target (its qualifying KP
+// set changed) and every concept merged away (no longer a valid entry point)
+// — via the Wiki module's own interface, post-commit
+// (docs/impl/v1/concept-evolution.md 步骤 3: "调 Wiki 模块接口标记
+// needs_recompile（不自动重编译）").
+func (s *Service) flagMergedConceptPages(mergeFrom []string, reason string) int {
+	if s.wikiSvc == nil {
+		return 0
+	}
+	flagged := 0
+	for _, cid := range mergeFrom {
+		page, err := s.wikiSvc.GetActivePageByConceptID(cid)
+		if err != nil {
+			slog.Error("concept: get active page by concept failed", "concept_id", cid, "error", err)
+			continue
+		}
+		if page == nil {
+			continue
+		}
+		if err := s.wikiSvc.MarkNeedsRecompile(page.PageID, reason); err != nil {
+			slog.Error("concept: mark needs_recompile failed", "page_id", page.PageID, "error", err)
+			continue
+		}
+		flagged++
+	}
+	return flagged
+}
+
+// Reject implements POST /concepts/candidates/:id/reject: no structural
+// change, candidate + learning_result both move to rejected.
+func (s *Service) Reject(candidateID string) error {
+	c, err := s.store.GetCandidate(candidateID)
+	if err != nil {
+		return err
+	}
+	if c == nil {
+		return fmt.Errorf("concept: candidate not found: %s", candidateID)
+	}
+	if c.Status != StatusPendingConfirm {
+		return fmt.Errorf("concept: reject only valid for pending_confirm candidates, %s is %s", candidateID, c.Status)
+	}
+	return s.store.Reject(candidateID)
+}
+
+func (s *Service) ListCandidates(status string) ([]CandidateRow, error) {
+	return s.store.ListCandidates(status)
+}
+
+func (s *Service) GetCandidate(candidateID string) (*CandidateRow, error) {
+	return s.store.GetCandidate(candidateID)
+}
+
+// ListCandidateViews is GET /concepts/candidates and the Study report's
+// concept_candidates section's data source (docs/impl/v1/concept-evolution.md
+// 步骤 3/5): CandidateRow with its JSON columns parsed for display.
+func (s *Service) ListCandidateViews(status string) ([]CandidateView, error) {
+	rows, err := s.store.ListCandidates(status)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]CandidateView, len(rows))
+	for i, r := range rows {
+		views[i] = toView(r)
+	}
+	return views, nil
+}
+
+func (s *Service) GetCandidateView(candidateID string) (*CandidateView, error) {
+	row, err := s.store.GetCandidate(candidateID)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, nil
+	}
+	v := toView(*row)
+	return &v, nil
+}

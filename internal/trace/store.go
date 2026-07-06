@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -22,6 +23,10 @@ func (s *Store) SaveTrace(t *Trace) error {
 	if err != nil {
 		return fmt.Errorf("trace store: marshal direct_point_ids: %w", err)
 	}
+	linkIDsJSON, err := json.Marshal(nonNilStrings(t.ActivationLinkIDs))
+	if err != nil {
+		return fmt.Errorf("trace store: marshal activation_link_ids: %w", err)
+	}
 
 	hasFeedback := 0
 	if t.HasFeedback {
@@ -29,10 +34,12 @@ func (s *Store) SaveTrace(t *Trace) error {
 	}
 
 	_, err = s.db.Exec(`INSERT INTO traces (trace_id, answer_id, question, question_hash, question_terms,
-		retrieval_quality, path, direct_point_ids, kpn_cited_count, cited_count, has_feedback, feedback_type, feedback_content)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		retrieval_quality, path, path_type, activation_link_ids, subject, intent, audience, constraint_text,
+		direct_point_ids, kpn_cited_count, cited_count, has_feedback, feedback_type, feedback_content)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.TraceID, t.AnswerID, t.Question, t.QuestionHash, t.QuestionTerms,
-		t.RetrievalQuality, t.Path, string(pointIDsJSON), t.KPNCitedCount, t.CitedCount, hasFeedback,
+		t.RetrievalQuality, t.Path, t.PathType, string(linkIDsJSON), t.Subject, t.Intent, t.Audience, t.ConstraintText,
+		string(pointIDsJSON), t.KPNCitedCount, t.CitedCount, hasFeedback,
 		nullString(t.FeedbackType), nullString(t.FeedbackContent),
 	)
 	if err != nil {
@@ -45,16 +52,19 @@ func (s *Store) GetTrace(traceID string) (*Trace, error) {
 	var (
 		t               Trace
 		pointIDsStr     string
+		linkIDsStr      string
 		hasFeedbackInt  int
 		feedbackType    sql.NullString
 		feedbackContent sql.NullString
 	)
 	err := s.db.QueryRow(`SELECT trace_id, answer_id, question, question_hash, question_terms,
-		retrieval_quality, path, direct_point_ids, kpn_cited_count, cited_count, has_feedback, feedback_type, feedback_content,
+		retrieval_quality, path, path_type, activation_link_ids, subject, intent, audience, constraint_text,
+		direct_point_ids, kpn_cited_count, cited_count, has_feedback, feedback_type, feedback_content,
 		created_at, updated_at
 		FROM traces WHERE trace_id = ?`, traceID).
 		Scan(&t.TraceID, &t.AnswerID, &t.Question, &t.QuestionHash, &t.QuestionTerms,
-			&t.RetrievalQuality, &t.Path, &pointIDsStr, &t.KPNCitedCount, &t.CitedCount, &hasFeedbackInt,
+			&t.RetrievalQuality, &t.Path, &t.PathType, &linkIDsStr, &t.Subject, &t.Intent, &t.Audience, &t.ConstraintText,
+			&pointIDsStr, &t.KPNCitedCount, &t.CitedCount, &hasFeedbackInt,
 			&feedbackType, &feedbackContent, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -66,14 +76,18 @@ func (s *Store) GetTrace(traceID string) (*Trace, error) {
 	if err := json.Unmarshal([]byte(pointIDsStr), &t.DirectPointIDs); err != nil {
 		return nil, fmt.Errorf("trace store: unmarshal direct_point_ids: %w", err)
 	}
+	if err := json.Unmarshal([]byte(linkIDsStr), &t.ActivationLinkIDs); err != nil {
+		return nil, fmt.Errorf("trace store: unmarshal activation_link_ids: %w", err)
+	}
 	t.HasFeedback = hasFeedbackInt == 1
 	t.FeedbackType = feedbackType.String
 	t.FeedbackContent = feedbackContent.String
 	return &t, nil
 }
 
-func (s *Store) ListTraces(quality, answerID string, limit, offset int) ([]Trace, error) {
-	query := `SELECT trace_id, answer_id, question, retrieval_quality, has_feedback, created_at FROM traces WHERE 1=1`
+func (s *Store) ListTraces(quality, answerID, pathType string, limit, offset int) ([]Trace, error) {
+	query := `SELECT trace_id, answer_id, question, retrieval_quality, path_type, activation_link_ids, has_feedback, created_at
+		FROM traces WHERE 1=1`
 	var args []interface{}
 
 	if quality != "" {
@@ -83,6 +97,10 @@ func (s *Store) ListTraces(quality, answerID string, limit, offset int) ([]Trace
 	if answerID != "" {
 		query += ` AND answer_id = ?`
 		args = append(args, answerID)
+	}
+	if pathType != "" {
+		query += ` AND path_type = ?`
+		args = append(args, pathType)
 	}
 	query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
@@ -96,9 +114,13 @@ func (s *Store) ListTraces(quality, answerID string, limit, offset int) ([]Trace
 	var traces []Trace
 	for rows.Next() {
 		var t Trace
+		var linkIDsStr string
 		var hasFeedbackInt int
-		if err := rows.Scan(&t.TraceID, &t.AnswerID, &t.Question, &t.RetrievalQuality, &hasFeedbackInt, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.TraceID, &t.AnswerID, &t.Question, &t.RetrievalQuality, &t.PathType, &linkIDsStr, &hasFeedbackInt, &t.CreatedAt); err != nil {
 			return nil, fmt.Errorf("trace store: scan: %w", err)
+		}
+		if err := json.Unmarshal([]byte(linkIDsStr), &t.ActivationLinkIDs); err != nil {
+			return nil, fmt.Errorf("trace store: unmarshal activation_link_ids: %w", err)
 		}
 		t.HasFeedback = hasFeedbackInt == 1
 		traces = append(traces, t)
@@ -173,6 +195,44 @@ func (s *Store) SaveLearningEvent(traceID, eventType, payload string) error {
 	return nil
 }
 
+// ConceptNullRatio computes, for a set of KnowledgePoint IDs, the share
+// without a current concept anchor — either the owning KnowledgeUnit has no
+// concept_id, or it does but that concept has been merged_into another one
+// (docs/impl/v1/concept-evolution.md activation_gap payload 扩展). One join,
+// no LLM call. Empty input reports ratio 0 (link_gap by construction, since
+// no threshold triggers on a zero ratio).
+func (s *Store) ConceptNullRatio(pointIDs []string) (float64, error) {
+	if len(pointIDs) == 0 {
+		return 0, nil
+	}
+
+	placeholders := make([]string, len(pointIDs))
+	args := make([]interface{}, len(pointIDs))
+	for i, pid := range pointIDs {
+		placeholders[i] = "?"
+		args[i] = pid
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			COUNT(*),
+			SUM(CASE WHEN ku.concept_id IS NULL OR c.merged_into IS NOT NULL THEN 1 ELSE 0 END)
+		FROM knowledge_points kp
+		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
+		LEFT JOIN concepts c ON ku.concept_id = c.concept_id
+		WHERE kp.point_id IN (%s)`, strings.Join(placeholders, ","))
+
+	var total int
+	var nullCount sql.NullInt64
+	if err := s.db.QueryRow(query, args...).Scan(&total, &nullCount); err != nil {
+		return 0, fmt.Errorf("trace store: concept null ratio: %w", err)
+	}
+	if total == 0 {
+		return 0, nil
+	}
+	return float64(nullCount.Int64) / float64(total), nil
+}
+
 func (s *Store) ListCooccurrence(pointID string, minConfidentCount, limit int) ([]Cooccurrence, error) {
 	query := `SELECT question_terms, point_id, hit_count, confident_count, last_seen_at
 		FROM question_kp_cooccurrence WHERE 1=1`
@@ -243,4 +303,11 @@ func nullString(s string) interface{} {
 		return nil
 	}
 	return s
+}
+
+func nonNilStrings(ss []string) []string {
+	if ss == nil {
+		return []string{}
+	}
+	return ss
 }

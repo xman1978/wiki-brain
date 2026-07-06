@@ -53,8 +53,16 @@ func LoadPresetData(db *sql.DB, filePath string) error {
 		}
 
 		for _, c := range d.Concepts {
+			// Real UPSERT (not INSERT OR IGNORE): re-running preset should
+			// refresh name/description, but must never clear merged_into or
+			// rewrite origin — a merged-away concept doesn't get revived by
+			// still existing in domains.json, and a human-confirmed evolved
+			// concept isn't reclassified back to preset just because preset
+			// happens to define the same concept_id
+			// (docs/impl/v1/concept-evolution.md 步骤 4).
 			_, err := tx.Exec(
-				"INSERT OR IGNORE INTO concepts (concept_id, domain_id, name, description) VALUES (?, ?, ?, ?)",
+				`INSERT INTO concepts (concept_id, domain_id, name, description) VALUES (?, ?, ?, ?)
+				 ON CONFLICT(concept_id) DO UPDATE SET name = excluded.name, description = excluded.description`,
 				c.ID, d.ID, c.Name, c.Description,
 			)
 			if err != nil {

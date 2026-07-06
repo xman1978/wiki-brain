@@ -70,11 +70,11 @@ func TestIntegrationTraceQuality(t *testing.T) {
 	rebuildIndexes(t, database, idxMgr, testdataDir)
 
 	retStore := retrieval.NewStore(database)
-	retSvc := retrieval.NewService(retStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg)
+	retSvc := retrieval.NewService(retStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, nil, nil, nil)
 
 	ansStore := answer.NewStore(database)
 	traceStore := NewStore(database)
-	traceSvc := NewService(traceStore)
+	traceSvc := NewService(traceStore, cfg.Study.ConceptNullRatioMin)
 
 	// Wire up queue so trace is processed synchronously with a wait signal
 	var traceWg sync.WaitGroup
@@ -156,7 +156,7 @@ func TestIntegrationTraceQuality(t *testing.T) {
 		elapsed := time.Since(start)
 
 		// Fetch trace record by answer_id
-		traces, err := traceStore.ListTraces("", ar.AnswerID, 10, 0)
+		traces, err := traceStore.ListTraces("", ar.AnswerID, "", 10, 0)
 		if err != nil || len(traces) == 0 {
 			logf("  ⚠ No trace found for answer_id=%s", ar.AnswerID)
 			results = append(results, traceResult{questionID: tq.ID, answerID: ar.AnswerID, elapsed: elapsed})
@@ -226,7 +226,7 @@ func TestIntegrationTraceQuality(t *testing.T) {
 		logf("  ERROR on repeat: %v", err)
 	} else {
 		traceWg.Wait()
-		traces2, _ := traceStore.ListTraces("", ar2.AnswerID, 10, 0)
+		traces2, _ := traceStore.ListTraces("", ar2.AnswerID, "", 10, 0)
 		if len(traces2) > 0 {
 			tr2, _ := traceStore.GetTrace(traces2[0].TraceID)
 			logf("  Repeat trace: id=%s quality=%s hash=%s",

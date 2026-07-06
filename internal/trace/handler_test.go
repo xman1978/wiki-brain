@@ -14,7 +14,7 @@ import (
 func setupHandler(t *testing.T) (*Handler, *Store, *sql.DB) {
 	db := foundation.NewTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store)
+	svc := NewService(store, 0.7)
 	handler := NewHandler(svc)
 	return handler, store, db
 }

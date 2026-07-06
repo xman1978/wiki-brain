@@ -11,11 +11,16 @@ import (
 )
 
 type Service struct {
-	store *Store
+	store               *Store
+	conceptNullRatioMin float64
 }
 
-func NewService(store *Store) *Service {
-	return &Service{store: store}
+// conceptNullRatioMin is docs/impl/v1/concept-evolution.md's
+// study.concept_null_ratio_min — trace only reads this one threshold to
+// classify activation_gap events, the rest of concept evolution's config
+// lives and is consumed in the study package.
+func NewService(store *Store, conceptNullRatioMin float64) *Service {
+	return &Service{store: store, conceptNullRatioMin: conceptNullRatioMin}
 }
 
 func (s *Service) ProcessTrace(r *answer.AnswerResult) {
@@ -58,17 +63,38 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 		directPointIDs = []string{}
 	}
 
+	pathType := retrieval.PathTypeFull
+	var activationLinkIDs []string
+	var intent, audience, constraintText string
+	if r.EvidenceSet != nil {
+		if r.EvidenceSet.PathType != "" {
+			pathType = r.EvidenceSet.PathType
+		}
+		for _, hit := range r.EvidenceSet.ActivationHits {
+			activationLinkIDs = append(activationLinkIDs, hit.LinkID)
+		}
+		intent = r.EvidenceSet.Intent
+		audience = r.EvidenceSet.Audience
+		constraintText = r.EvidenceSet.Constraint
+	}
+
 	t := &Trace{
-		TraceID:          uuid.New().String(),
-		AnswerID:         r.AnswerID,
-		Question:         r.Question,
-		QuestionHash:     hash,
-		QuestionTerms:    groupKey,
-		RetrievalQuality: grade.Quality,
-		Path:             r.Path,
-		DirectPointIDs:   directPointIDs,
-		KPNCitedCount:    grade.KPNCitedCount,
-		CitedCount:       grade.CitedCount,
+		TraceID:           uuid.New().String(),
+		AnswerID:          r.AnswerID,
+		Question:          r.Question,
+		QuestionHash:      hash,
+		QuestionTerms:     groupKey,
+		RetrievalQuality:  grade.Quality,
+		Path:              r.Path,
+		PathType:          pathType,
+		ActivationLinkIDs: activationLinkIDs,
+		Subject:           subject,
+		Intent:            intent,
+		Audience:          audience,
+		ConstraintText:    constraintText,
+		DirectPointIDs:    directPointIDs,
+		KPNCitedCount:     grade.KPNCitedCount,
+		CitedCount:        grade.CitedCount,
 	}
 
 	if err := s.store.SaveTrace(t); err != nil {
@@ -77,6 +103,7 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 	}
 	slog.Debug("trace: saved", "trace_id", t.TraceID, "answer_id", r.AnswerID)
 
+	s.generateActivationEvents(t, r, grade)
 	s.updateCooccurrence(t, r)
 	s.generateLearningEvents(t)
 
@@ -141,6 +168,112 @@ func supportingCitedPointIDs(es *retrieval.EvidenceSet, citations []string) []st
 	return result
 }
 
+// generateActivationEvents grades each activation-layer hit carried on the
+// AnswerResult into activation_success / activation_failure, or — when the
+// activation layer found nothing but the full path still landed a confident
+// answer — a single activation_gap event (docs/impl/v1/trace.md 步骤 3).
+// Runs after SaveTrace, before cooccurrence update; purely program logic,
+// no LLM calls.
+func (s *Service) generateActivationEvents(t *Trace, r *answer.AnswerResult, grade gradeResult) {
+	if t.PathType == retrieval.PathTypeWiki {
+		return
+	}
+
+	var hits []retrieval.ActivationHit
+	if r.EvidenceSet != nil {
+		hits = r.EvidenceSet.ActivationHits
+	}
+
+	if len(hits) == 0 {
+		if t.PathType == retrieval.PathTypeFull && t.RetrievalQuality == QualityConfident {
+			directPointIDs := nonNilStrings(t.DirectPointIDs)
+
+			nullRatio, err := s.store.ConceptNullRatio(directPointIDs)
+			if err != nil {
+				slog.Error("trace: concept null ratio lookup failed", "trace_id", t.TraceID, "error", err)
+			}
+			gapLevel := "link_gap"
+			if nullRatio >= s.conceptNullRatioMin {
+				gapLevel = "concept_gap"
+			}
+
+			payload, _ := json.Marshal(map[string]interface{}{
+				"question_terms":     t.QuestionTerms,
+				"direct_point_ids":   directPointIDs,
+				"gap_level":          gapLevel,
+				"null_concept_ratio": nullRatio,
+			})
+			slog.Debug("trace: generating activation_gap event", "trace_id", t.TraceID, "gap_level", gapLevel, "null_concept_ratio", nullRatio)
+			if err := s.store.SaveLearningEvent(t.TraceID, "activation_gap", string(payload)); err != nil {
+				slog.Error("trace: save activation_gap event failed", "trace_id", t.TraceID, "error", err)
+			}
+		}
+		return
+	}
+
+	directSet := make(map[string]bool, len(grade.DirectPointIDs))
+	for _, pid := range grade.DirectPointIDs {
+		directSet[pid] = true
+	}
+	factsByPoint := citedFactIDsByPoint(r.EvidenceSet, r.Citations)
+
+	for _, hit := range hits {
+		if directSet[hit.PointID] {
+			payload, _ := json.Marshal(map[string]interface{}{
+				"link_id":        hit.LinkID,
+				"point_id":       hit.PointID,
+				"question_terms": t.QuestionTerms,
+				"match_score":    hit.MatchScore,
+				"cited_fact_ids": nonNilStrings(factsByPoint[hit.PointID]),
+			})
+			slog.Debug("trace: generating activation_success event", "trace_id", t.TraceID, "link_id", hit.LinkID)
+			if err := s.store.SaveLearningEvent(t.TraceID, "activation_success", string(payload)); err != nil {
+				slog.Error("trace: save activation_success event failed", "trace_id", t.TraceID, "link_id", hit.LinkID, "error", err)
+			}
+			continue
+		}
+
+		reason := "not_cited"
+		switch {
+		case r.Path == "error":
+			reason = "answer_error"
+		case t.RetrievalQuality == QualityGap:
+			reason = "answer_gap"
+		}
+		payload, _ := json.Marshal(map[string]interface{}{
+			"link_id":        hit.LinkID,
+			"point_id":       hit.PointID,
+			"question_terms": t.QuestionTerms,
+			"match_score":    hit.MatchScore,
+			"reason":         reason,
+		})
+		slog.Debug("trace: generating activation_failure event", "trace_id", t.TraceID, "link_id", hit.LinkID, "reason", reason)
+		if err := s.store.SaveLearningEvent(t.TraceID, "activation_failure", string(payload)); err != nil {
+			slog.Error("trace: save activation_failure event failed", "trace_id", t.TraceID, "link_id", hit.LinkID, "error", err)
+		}
+	}
+}
+
+// citedFactIDsByPoint maps each direct-evidence point_id to the fact_ids
+// Answer actually cited for it — the activation_success payload's
+// cited_fact_ids (docs/impl/v1/trace.md payload 结构).
+func citedFactIDsByPoint(es *retrieval.EvidenceSet, citations []string) map[string][]string {
+	result := make(map[string][]string)
+	if es == nil {
+		return result
+	}
+	citedSet := make(map[string]bool, len(citations))
+	for _, fid := range citations {
+		citedSet[fid] = true
+	}
+	for _, e := range es.DirectEvidence {
+		if citedSet[e.FactID] {
+			result[e.PointID] = append(result[e.PointID], e.FactID)
+		}
+	}
+	return result
+}
+
 func (s *Service) generateLearningEvents(t *Trace) {
 	if t.RetrievalQuality == QualityGap {
 		slog.Debug("trace: generating knowledge_gap event", "trace_id", t.TraceID, "question", t.Question)
@@ -153,19 +286,28 @@ func (s *Service) generateLearningEvents(t *Trace) {
 	}
 }
 
-func (s *Service) SubmitFeedback(traceID string, req FeedbackRequest) error {
-	slog.Debug("trace: feedback received", "trace_id", traceID, "type", req.Type)
-	if err := s.store.UpdateFeedback(traceID, req.Type, req.Content); err != nil {
+// SubmitFeedback records user feedback on t and, for negative/correction
+// feedback on a fast-path trace, tags the resulting user_correction event
+// with the activation links that produced the answer — so Study can direct
+// the correction's weakening signal at those specific links instead of only
+// the global cooccurrence stats (docs/impl/v1/trace.md 步骤 4).
+func (s *Service) SubmitFeedback(t *Trace, req FeedbackRequest) error {
+	slog.Debug("trace: feedback received", "trace_id", t.TraceID, "type", req.Type)
+	if err := s.store.UpdateFeedback(t.TraceID, req.Type, req.Content); err != nil {
 		return err
 	}
 
 	if req.Type == "negative" || req.Type == "correction" {
-		payload, _ := json.Marshal(map[string]string{
+		fields := map[string]interface{}{
 			"feedback_content": req.Content,
 			"feedback_type":    req.Type,
-		})
-		if err := s.store.SaveLearningEvent(traceID, "user_correction", string(payload)); err != nil {
-			slog.Error("trace: save user_correction event failed", "trace_id", traceID, "error", err)
+		}
+		if len(t.ActivationLinkIDs) > 0 {
+			fields["link_ids"] = t.ActivationLinkIDs
+		}
+		payload, _ := json.Marshal(fields)
+		if err := s.store.SaveLearningEvent(t.TraceID, "user_correction", string(payload)); err != nil {
+			slog.Error("trace: save user_correction event failed", "trace_id", t.TraceID, "error", err)
 		}
 	}
 

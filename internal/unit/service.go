@@ -148,6 +148,15 @@ func (s *Service) Extract(ctx context.Context, sourceID string) error {
 	s.matchConcepts(ctx, sourceID, src.DomainID)
 	s.emit(sourceID, progress.Event{Step: progress.StepConceptMatch, Status: progress.StatusCompleted, ElapsedMs: time.Since(stepStart).Milliseconds()})
 
+	// Step 6 (docs/impl/v1/kpn.md): cross-Source KPN matching. Failure is
+	// isolated — it must never fail the Source's own completion status.
+	stepStart = time.Now()
+	s.emit(sourceID, progress.Event{Step: progress.StepKPNCrossMatch, Status: progress.StatusStarted, Message: "跨源 KPN 匹配"})
+	if _, err := s.CrossSourceKPN(ctx, sourceID); err != nil {
+		slog.Warn("unit: cross source kpn failed", "source_id", sourceID, "error", err)
+	}
+	s.emit(sourceID, progress.Event{Step: progress.StepKPNCrossMatch, Status: progress.StatusCompleted, ElapsedMs: time.Since(stepStart).Milliseconds()})
+
 	s.emit(sourceID, progress.Event{Step: "done", Status: progress.StatusCompleted, Message: "处理完成"})
 
 	return nil
@@ -522,8 +531,9 @@ func (s *Service) kpnBatch(ctx context.Context, points []KnowledgePoint, unitCen
 			RelationType:  rel.Type,
 			Direction:     "bidirectional",
 			PromptVersion: "v3",
+			Scope:         RelationScopeIntra,
 		}
-		if err := s.store.InsertRelation(r); err != nil {
+		if _, err := s.store.InsertRelation(r); err != nil {
 			slog.Error("unit: insert kpn relation failed", "error", err)
 		}
 	}
@@ -707,6 +717,45 @@ func (s *Service) SetUnitLifecycle(unitIDs []string, lifecycle, reason string) e
 		}
 	}
 
+	return nil
+}
+
+// SnapshotAndDeprecate implements the Source module's soft-delete lifecycle
+// step: before marking every one of a Source's KUs deprecated, it snapshots
+// each one's current lifecycle value so a later RestoreLifecycle call can
+// reverse the change precisely — resetting only the ones that were current
+// at delete time, not ones already superseded by an earlier reupload.
+func (s *Service) SnapshotAndDeprecate(unitIDs []string, reason string) error {
+	if len(unitIDs) == 0 {
+		return nil
+	}
+	if err := s.store.SnapshotLifecycleBeforeDelete(unitIDs); err != nil {
+		return fmt.Errorf("unit: snapshot and deprecate: %w", err)
+	}
+	return s.SetUnitLifecycle(unitIDs, LifecycleDeprecated, reason)
+}
+
+// RestoreLifecycle reverses a prior SnapshotAndDeprecate: each unit is set
+// back to its snapshotted pre-delete lifecycle value (grouped, since a
+// source's units may have held different lifecycle states at delete time),
+// then the snapshot is cleared. Units with no snapshot (never soft-deleted)
+// are left untouched.
+func (s *Service) RestoreLifecycle(unitIDs []string, reason string) error {
+	if len(unitIDs) == 0 {
+		return nil
+	}
+	groups, err := s.store.GroupUnitIDsByLifecycleBeforeDelete(unitIDs)
+	if err != nil {
+		return fmt.Errorf("unit: restore lifecycle: %w", err)
+	}
+	for lifecycle, ids := range groups {
+		if err := s.SetUnitLifecycle(ids, lifecycle, reason); err != nil {
+			return fmt.Errorf("unit: restore lifecycle: %w", err)
+		}
+	}
+	if err := s.store.ClearLifecycleBeforeDelete(unitIDs); err != nil {
+		return fmt.Errorf("unit: restore lifecycle: clear snapshot: %w", err)
+	}
 	return nil
 }
 

@@ -15,6 +15,8 @@ type fakeLifecycleSetter struct {
 		lifecycle string
 		reason    string
 	}
+	deprecateCalls [][]string
+	restoreCalls   [][]string
 }
 
 func (f *fakeLifecycleSetter) SetUnitLifecycle(unitIDs []string, lifecycle, reason string) error {
@@ -24,6 +26,16 @@ func (f *fakeLifecycleSetter) SetUnitLifecycle(unitIDs []string, lifecycle, reas
 		reason    string
 	}{unitIDs, lifecycle, reason})
 	return nil
+}
+
+func (f *fakeLifecycleSetter) SnapshotAndDeprecate(unitIDs []string, reason string) error {
+	f.deprecateCalls = append(f.deprecateCalls, unitIDs)
+	return f.SetUnitLifecycle(unitIDs, "deprecated", reason)
+}
+
+func (f *fakeLifecycleSetter) RestoreLifecycle(unitIDs []string, reason string) error {
+	f.restoreCalls = append(f.restoreCalls, unitIDs)
+	return f.SetUnitLifecycle(unitIDs, "current", reason)
 }
 
 func insertUnitForSource(t *testing.T, svc *Service, sourceID, unitID string) {
@@ -68,6 +80,65 @@ func TestSoftDelete_MarksUnitsDeprecatedAndStatus(t *testing.T) {
 	}
 	if got.Status != "deleted" {
 		t.Errorf("status = %q, want deleted", got.Status)
+	}
+
+	if len(lc.deprecateCalls) != 1 {
+		t.Errorf("expected 1 SnapshotAndDeprecate call, got %d", len(lc.deprecateCalls))
+	}
+}
+
+// TestRestore_FlipsStatusBackAndCallsLifecycleRestore covers 文件管理 恢复按钮:
+// Restore is SoftDelete's reverse — status flips back to completed and the
+// lifecycle restore path (not a blind SetUnitLifecycle) is invoked.
+func TestRestore_FlipsStatusBackAndCallsLifecycleRestore(t *testing.T) {
+	svc, _ := setupTestService(t)
+	lc := &fakeLifecycleSetter{}
+	svc.SetLifecycleSetter(lc)
+
+	svc.store.Create(&Source{
+		SourceID: "rs-1", Title: "Test", Format: "markdown", FileName: "rs.md",
+		OriginalPath: "o/rs.md", MarkdownPath: "m/rs.md", Status: "completed",
+	})
+	insertUnitForSource(t, svc, "rs-1", "u1")
+	insertUnitForSource(t, svc, "rs-1", "u2")
+
+	if _, err := svc.SoftDelete("rs-1"); err != nil {
+		t.Fatalf("SoftDelete: %v", err)
+	}
+
+	n, err := svc.Restore("rs-1")
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("restored count = %d, want 2", n)
+	}
+	if len(lc.restoreCalls) != 1 {
+		t.Fatalf("expected 1 RestoreLifecycle call, got %d", len(lc.restoreCalls))
+	}
+
+	got, err := svc.store.GetByID("rs-1")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Status != "completed" {
+		t.Errorf("status = %q, want completed", got.Status)
+	}
+}
+
+// TestRestore_RejectsNonDeletedSource covers the guard: only a soft-deleted
+// source has anything to restore.
+func TestRestore_RejectsNonDeletedSource(t *testing.T) {
+	svc, _ := setupTestService(t)
+	svc.SetLifecycleSetter(&fakeLifecycleSetter{})
+
+	svc.store.Create(&Source{
+		SourceID: "rs-2", Title: "Test", Format: "markdown", FileName: "rs2.md",
+		OriginalPath: "o/rs2.md", MarkdownPath: "m/rs2.md", Status: "completed",
+	})
+
+	if _, err := svc.Restore("rs-2"); err == nil {
+		t.Error("expected error restoring a non-deleted source")
 	}
 }
 

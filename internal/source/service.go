@@ -39,9 +39,15 @@ type Service struct {
 // on it only through this interface to avoid an import cycle (unit already
 // imports source). It is the sole path by which Source marks KU/KP as
 // superseded (reupload swap) or deprecated (soft delete) — see
-// docs/impl/v1/lifecycle.md 步骤 1-2.
+// docs/impl/v1/lifecycle.md 步骤 1-2. SnapshotAndDeprecate/RestoreLifecycle
+// back SoftDelete/Restore (文件管理 恢复按钮): a blind restore-to-current
+// would incorrectly resurrect units that were already superseded before the
+// delete, so the pre-delete lifecycle value is snapshotted and restored
+// precisely instead.
 type LifecycleSetter interface {
 	SetUnitLifecycle(unitIDs []string, lifecycle, reason string) error
+	SnapshotAndDeprecate(unitIDs []string, reason string) error
+	RestoreLifecycle(unitIDs []string, reason string) error
 }
 
 func NewService(store *Store, fv FileViewClient, lc llm.LLMClient, outlineIdx bleve.Index, q *queue.Queue, cfg *config.Config, baseDir string) *Service {
@@ -600,7 +606,7 @@ func (s *Service) SoftDelete(sourceID string) (int, error) {
 		return 0, fmt.Errorf("get unit ids: %w", err)
 	}
 	if len(unitIDs) > 0 && s.lifecycleSetter != nil {
-		if err := s.lifecycleSetter.SetUnitLifecycle(unitIDs, "deprecated", fmt.Sprintf("source %s deleted", sourceID)); err != nil {
+		if err := s.lifecycleSetter.SnapshotAndDeprecate(unitIDs, fmt.Sprintf("source %s deleted", sourceID)); err != nil {
 			return 0, fmt.Errorf("mark deprecated: %w", err)
 		}
 	}
@@ -622,6 +628,46 @@ func (s *Service) SoftDelete(sourceID string) (int, error) {
 	}
 
 	slog.Info("source soft-deleted", "source_id", sourceID, "title", src.Title, "deprecated_units", len(unitIDs))
+	return len(unitIDs), nil
+}
+
+// Restore reverses SoftDelete (文件管理 恢复按钮): the Source flips back to
+// completed, each KU/KP is set back to its pre-delete lifecycle value (not
+// blindly to current — see LifecycleSetter.RestoreLifecycle, which skips
+// units that were already superseded before the delete), and the Source's
+// outline nodes are re-added to the outline search index. Only valid for
+// soft-deleted sources — a hard-deleted (failed) source has no rows left to
+// restore. Returns the number of KUs whose lifecycle was restored.
+func (s *Service) Restore(sourceID string) (int, error) {
+	src, err := s.store.GetByID(sourceID)
+	if err != nil {
+		return 0, fmt.Errorf("source not found: %w", err)
+	}
+	if src.Status != "deleted" {
+		return 0, fmt.Errorf("source %s is not deleted (status=%s)", sourceID, src.Status)
+	}
+
+	unitIDs, err := s.store.GetUnitIDs(sourceID)
+	if err != nil {
+		return 0, fmt.Errorf("get unit ids: %w", err)
+	}
+	if len(unitIDs) > 0 && s.lifecycleSetter != nil {
+		if err := s.lifecycleSetter.RestoreLifecycle(unitIDs, fmt.Sprintf("source %s restored", sourceID)); err != nil {
+			return 0, fmt.Errorf("restore lifecycle: %w", err)
+		}
+	}
+
+	if outlines, err := s.store.GetOutlines(sourceID); err != nil {
+		slog.Warn("restore: get outlines failed", "error", err)
+	} else if len(outlines) > 0 {
+		s.indexOutlines(outlines)
+	}
+
+	if err := s.store.RestoreSource(sourceID); err != nil {
+		return 0, fmt.Errorf("restore source: %w", err)
+	}
+
+	slog.Info("source restored", "source_id", sourceID, "title", src.Title, "restored_units", len(unitIDs))
 	return len(unitIDs), nil
 }
 

@@ -15,6 +15,7 @@ type Manager struct {
 	Units    bleve.Index
 	Points   bleve.Index
 	Outlines bleve.Index
+	Wiki     bleve.Index
 	basePath string
 }
 
@@ -47,6 +48,14 @@ func NewManager(basePath string) (*Manager, error) {
 		return nil, fmt.Errorf("index: outlines: %w", err)
 	}
 
+	m.Wiki, err = openOrCreate(filepath.Join(basePath, "wiki"))
+	if err != nil {
+		m.Units.Close()
+		m.Points.Close()
+		m.Outlines.Close()
+		return nil, fmt.Errorf("index: wiki: %w", err)
+	}
+
 	return m, nil
 }
 
@@ -59,6 +68,9 @@ func (m *Manager) Close() error {
 		firstErr = err
 	}
 	if err := m.Outlines.Close(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if err := m.Wiki.Close(); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	return firstErr

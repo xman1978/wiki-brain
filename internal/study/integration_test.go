@@ -208,7 +208,7 @@ func TestIntegration_StudyReportFromSeedDB(t *testing.T) {
 	cfg.CandidateRatioMin = 0.5
 	cfg.WikiConfidentMin = 1
 	cfg.WikiKPMin = 2
-	svc := NewService(store, cfg)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0)
 
 	result, err := svc.Run()
 	if err != nil {

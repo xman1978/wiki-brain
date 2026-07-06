@@ -30,6 +30,7 @@ const (
 	StepUnitExtract       = "unit_extract"
 	StepKPNGenerate       = "kpn_generate"
 	StepConceptMatch      = "concept_match"
+	StepKPNCrossMatch     = "kpn_cross_match"
 )
 
 const listenerBufSize = 64

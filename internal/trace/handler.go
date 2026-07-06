@@ -27,10 +27,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 func (h *Handler) listTraces(w http.ResponseWriter, r *http.Request) {
 	quality := r.URL.Query().Get("quality")
 	answerID := r.URL.Query().Get("answer_id")
+	pathType := r.URL.Query().Get("path_type")
 	limit := queryInt(r, "limit", 20)
 	offset := queryInt(r, "offset", 0)
 
-	traces, err := h.svc.store.ListTraces(quality, answerID, limit, offset)
+	traces, err := h.svc.store.ListTraces(quality, answerID, pathType, limit, offset)
 	if err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -88,7 +89,7 @@ func (h *Handler) postFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.SubmitFeedback(id, req); err != nil {
+	if err := h.svc.SubmitFeedback(t, req); err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

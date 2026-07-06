@@ -25,6 +25,32 @@ func insertTestKP(t *testing.T, db *sql.DB, pointID string) {
 	}
 }
 
+// insertTestKPWithConcept creates a KP whose owning KU is anchored to
+// conceptID (in its own dedicated unit, so different point_ids can carry
+// different concept anchors within one test).
+func insertTestKPWithConcept(t *testing.T, db *sql.DB, pointID, unitID, conceptID string) {
+	t.Helper()
+	db.Exec(`INSERT OR IGNORE INTO sources (source_id, title, format, file_name, original_path, markdown_path, status) VALUES ('s-test', 'test', 'markdown', 'test.md', '/test.md', '/test.md', 'completed')`)
+	_, err := db.Exec(`INSERT OR IGNORE INTO knowledge_units (unit_id, source_id, concept_id, center, line_start, line_end, status, prompt_version) VALUES (?, 's-test', ?, 'test', 1, 10, 'completed', 'v1')`, unitID, conceptID)
+	if err != nil {
+		t.Fatalf("insert test unit with concept: %v", err)
+	}
+	_, err = db.Exec(`INSERT OR IGNORE INTO knowledge_points (point_id, unit_id, source_id, content, point_type) VALUES (?, ?, 's-test', 'test', 'fact')`, pointID, unitID)
+	if err != nil {
+		t.Fatalf("insert test kp with concept: %v", err)
+	}
+}
+
+func insertTestConcept(t *testing.T, db *sql.DB, conceptID string, mergedInto sql.NullString) {
+	t.Helper()
+	db.Exec(`INSERT OR IGNORE INTO domains (domain_id, name) VALUES ('d-test', 'test domain')`)
+	_, err := db.Exec(`INSERT OR IGNORE INTO concepts (concept_id, domain_id, name, merged_into) VALUES (?, 'd-test', ?, ?)`,
+		conceptID, conceptID, mergedInto)
+	if err != nil {
+		t.Fatalf("insert test concept: %v", err)
+	}
+}
+
 func TestStore_SaveAndGetTrace(t *testing.T) {
 	db := foundation.NewTestDB(t)
 	store := NewStore(db)
@@ -94,7 +120,7 @@ func TestStore_ListTraces(t *testing.T) {
 		})
 	}
 
-	all, err := store.ListTraces("", "", 20, 0)
+	all, err := store.ListTraces("", "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("ListTraces: %v", err)
 	}
@@ -102,7 +128,7 @@ func TestStore_ListTraces(t *testing.T) {
 		t.Errorf("expected 3, got %d", len(all))
 	}
 
-	confident, err := store.ListTraces(QualityConfident, "", 20, 0)
+	confident, err := store.ListTraces(QualityConfident, "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("ListTraces: %v", err)
 	}

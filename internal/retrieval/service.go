@@ -14,8 +14,12 @@ import (
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/search/query"
 	"github.com/google/uuid"
+	"github.com/jxman78/wiki-brain/internal/activation"
+	"github.com/jxman78/wiki-brain/internal/evidence"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/session"
+	"github.com/jxman78/wiki-brain/internal/wiki"
 )
 
 type Service struct {
@@ -25,9 +29,12 @@ type Service struct {
 	pointsIndex   bleve.Index
 	outlinesIndex bleve.Index
 	cfg           *config.Config
+	activationSvc *activation.Service
+	evidenceSvc   *evidence.Service
+	wikiSvc       *wiki.Service
 }
 
-func NewService(store *Store, llmClient llm.LLMClient, unitsIdx, pointsIdx, outlinesIdx bleve.Index, cfg *config.Config) *Service {
+func NewService(store *Store, llmClient llm.LLMClient, unitsIdx, pointsIdx, outlinesIdx bleve.Index, cfg *config.Config, activationSvc *activation.Service, evidenceSvc *evidence.Service, wikiSvc *wiki.Service) *Service {
 	return &Service{
 		store:         store,
 		llmClient:     llmClient,
@@ -35,14 +42,213 @@ func NewService(store *Store, llmClient llm.LLMClient, unitsIdx, pointsIdx, outl
 		pointsIndex:   pointsIdx,
 		outlinesIndex: outlinesIdx,
 		cfg:           cfg,
+		activationSvc: activationSvc,
+		evidenceSvc:   evidenceSvc,
+		wikiSvc:       wikiSvc,
 	}
+}
+
+// FastPathFallbackEnabled reports whether Answer should redo a failed
+// fast-path answer via the slow path (docs/impl/v1/retrieval.md 步骤 6b);
+// centralized here since Retrieval owns the retrieval.* config section.
+func (s *Service) FastPathFallbackEnabled() bool {
+	return s.cfg.Retrieval.FastPathFallback
 }
 
 func (s *Service) Retrieve(ctx context.Context, question string) (*EvidenceSet, error) {
 	return s.RetrieveWithProgress(ctx, QueryContext{Question: question}, nil)
 }
 
+// RetrieveWithProgress dispatches to the activation fast path
+// (docs/impl/v1/retrieval.md 步骤 2) unless ForceFull is set or fast_path is
+// disabled, falling back to the full MVP pipeline whenever the fast path
+// can't be built or Match finds nothing. When fast_path=false the match is
+// still performed and its activation_hits are merged into the slow-path
+// result — "记录命中日志后仍走慢路径" — so gated rollout can compare hit
+// quality without changing behavior.
 func (s *Service) RetrieveWithProgress(ctx context.Context, qc QueryContext, progress ProgressFunc) (*EvidenceSet, error) {
+	if !qc.ForceFull {
+		if wikiES, ok := s.tryWikiAnswer(ctx, qc); ok {
+			return wikiES, nil
+		}
+		fastES, hits, ok := s.tryFastPath(ctx, qc)
+		if ok {
+			return fastES, nil
+		}
+		if len(hits) > 0 {
+			slowES, err := s.retrieveSlowPath(ctx, qc, progress)
+			if err != nil {
+				return nil, err
+			}
+			slowES.ActivationHits = hits
+			return slowES, nil
+		}
+	}
+	return s.retrieveSlowPath(ctx, qc, progress)
+}
+
+// tryWikiAnswer implements docs/impl/v1/retrieval.md 第 0 层: query the Wiki
+// index before the activation fast path (不调 LLM 除非命中分达标), and if the
+// hit page can sufficiently answer the question, return a path_type=wiki
+// EvidenceSet without ever reaching the fast/slow path. wikiSvc is nil until
+// main.go wires it up, matching the doc's "未实现时第 0 层跳过".
+func (s *Service) tryWikiAnswer(ctx context.Context, qc QueryContext) (*EvidenceSet, bool) {
+	if s.wikiSvc == nil {
+		return nil, false
+	}
+	result, ok, err := s.wikiSvc.TryDirectAnswer(ctx, qc.Question, s.cfg.Retrieval.WikiMinScore)
+	if err != nil {
+		slog.Warn("wiki direct-answer failed, falling back", "error", err)
+		return nil, false
+	}
+	if !ok {
+		return nil, false
+	}
+	return &EvidenceSet{
+		Question:          qc.Question,
+		Subject:           qc.Subject,
+		Intent:            qc.Intent,
+		Audience:          qc.Audience,
+		Constraint:        qc.Constraint,
+		Path:              "direct",
+		PathType:          PathTypeWiki,
+		ActivationHits:    []ActivationHit{},
+		DirectEvidence:    []Evidence{},
+		Supporting:        []Evidence{},
+		WikiPageID:        result.PageID,
+		CitedPointIDs:     result.CitedPointIDs,
+		WikiAnswerContent: result.Content,
+	}, true
+}
+
+// RetrieveSlowPathWithProgress forces the full MVP pipeline, used by Answer's
+// step-6b fallback to redo retrieval after a fast-path answer fails
+// (docs/impl/v1/retrieval.md 步骤 6).
+func (s *Service) RetrieveSlowPathWithProgress(ctx context.Context, qc QueryContext, progress ProgressFunc) (*EvidenceSet, error) {
+	return s.retrieveSlowPath(ctx, qc, progress)
+}
+
+// tryFastPath implements docs/impl/v1/retrieval.md 步骤 2. It returns
+// (evidenceSet, activationHits, true) on a usable fast-path result; when the
+// fast path isn't viable it returns (nil, activationHits, false) — the
+// caller falls back to the slow path but keeps activationHits so they still
+// end up in the (path_type=full) EvidenceSet for Trace to grade as failures.
+func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSet, []ActivationHit, bool) {
+	if s.activationSvc == nil {
+		return nil, nil, false
+	}
+
+	matchCfg := activation.MatchConfig{
+		MatchMin:         s.cfg.Retrieval.ActivationMatchMin,
+		MatchMinFallback: s.cfg.Retrieval.ActivationMatchMinFallback,
+		MatchTop:         s.cfg.Retrieval.ActivationMatchTop,
+	}
+	expandedQuery := session.ExpandedQuery{
+		ExpandedQuestion: qc.Question,
+		Subject:          qc.Subject,
+		Intent:           qc.Intent,
+		Audience:         qc.Audience,
+		Constraint:       qc.Constraint,
+	}
+	matches, err := s.activationSvc.Match(expandedQuery, matchCfg)
+	if err != nil {
+		slog.Warn("retrieval: activation match failed, falling back to slow path", "error", err)
+		return nil, nil, false
+	}
+	if len(matches) == 0 {
+		return nil, nil, false
+	}
+
+	activationHits := make([]ActivationHit, len(matches))
+	linkIDs := make([]string, len(matches))
+	pointIDs := make([]string, len(matches))
+	for i, m := range matches {
+		activationHits[i] = ActivationHit{LinkID: m.Link.LinkID, PointID: m.Link.PointID, MatchScore: m.Score}
+		linkIDs[i] = m.Link.LinkID
+		pointIDs[i] = m.Link.PointID
+	}
+	slog.Info("retrieval: activation layer matched", "link_count", len(matches), "link_ids", linkIDs)
+
+	// Async, non-blocking — Retrieval's own failure/success handling doesn't
+	// depend on this having completed.
+	go func() {
+		if err := s.activationSvc.TouchLastUsed(linkIDs); err != nil {
+			slog.Warn("retrieval: touch last used failed", "error", err)
+		}
+	}()
+
+	if !s.cfg.Retrieval.FastPath {
+		return nil, activationHits, false
+	}
+
+	hits, err := s.store.GetCurrentUnitsByPointIDs(pointIDs)
+	if err != nil {
+		slog.Warn("retrieval: fast path unit lookup failed, falling back to slow path", "error", err)
+		return nil, activationHits, false
+	}
+	if len(hits) == 0 {
+		// Match already filters to verified+current, so this shouldn't happen;
+		// treat as a fallback rather than an error.
+		slog.Warn("retrieval: fast path found no current KU for matched links, falling back", "link_ids", linkIDs)
+		return nil, activationHits, false
+	}
+
+	seen := make(map[string]bool, len(hits))
+	var direct []candidate
+	for _, h := range hits {
+		if seen[h.UnitID] {
+			continue
+		}
+		seen[h.UnitID] = true
+		direct = append(direct, candidate{
+			unitID:      h.UnitID,
+			pointID:     h.PointID,
+			sourceID:    h.SourceID,
+			lineStart:   h.LineStart,
+			lineEnd:     h.LineEnd,
+			sourcePaths: []string{"direct"},
+		})
+	}
+
+	allCandidates, conflictCandidates, err := s.kpnExpand(direct)
+	if err != nil {
+		slog.Warn("retrieval: fast path kpn expand failed, falling back to slow path", "error", err)
+		return nil, activationHits, false
+	}
+
+	var directCands, supportingCands []candidate
+	for _, c := range allCandidates {
+		switch c.sourcePaths[0] {
+		case "direct":
+			directCands = append(directCands, c)
+		case "supporting":
+			supportingCands = append(supportingCands, c)
+		}
+	}
+
+	es, err := s.buildEvidenceSet(ctx, qc.Question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, "short", directCands, supportingCands, conflictCandidates)
+	if err != nil {
+		slog.Warn("retrieval: fast path build evidence set failed, falling back to slow path", "error", err)
+		return nil, activationHits, false
+	}
+
+	// "direct 候选挖掘后片段全部为空且整段回退也为空（KU 正文读取失败等异常）
+	// → 视为快路径失败": Evidence Mining always keeps at least a whole-segment
+	// item for a direct candidate (mined=false) unless its KU content couldn't
+	// even be read, so an empty DirectEvidence here means that read failed.
+	if len(es.DirectEvidence) == 0 {
+		slog.Warn("retrieval: fast path produced no direct evidence, falling back to slow path", "link_ids", linkIDs)
+		return nil, activationHits, false
+	}
+
+	es.PathType = PathTypeFast
+	es.ActivationHits = activationHits
+	slog.Info("retrieval: fast path evidence built",
+		"direct", len(es.DirectEvidence), "supporting", len(es.Supporting), "link_ids", linkIDs)
+	return es, activationHits, true
+}
+
+func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progress ProgressFunc) (*EvidenceSet, error) {
 	question := qc.Question
 	emit := func(phase, status, detail string, dur int64) {
 		if progress != nil {
@@ -109,6 +315,8 @@ func (s *Service) RetrieveWithProgress(ctx context.Context, qc QueryContext, pro
 			Audience:       qc.Audience,
 			Constraint:     qc.Constraint,
 			Path:           "deep",
+			PathType:       PathTypeFull,
+			ActivationHits: []ActivationHit{},
 			DirectEvidence: []Evidence{},
 			Supporting:     []Evidence{},
 			Conflicts:      nil,
@@ -149,7 +357,7 @@ func (s *Service) RetrieveWithProgress(ctx context.Context, qc QueryContext, pro
 	emit("rerank", "done", fmt.Sprintf("%d 直接 · %d 补充", len(direct), len(supporting)), time.Since(rerankStart).Milliseconds())
 
 	// Step 10: Build EvidenceSet
-	es, err := s.buildEvidenceSet(question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, path, direct, supporting, conflictCandidates)
+	es, err := s.buildEvidenceSet(ctx, question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, path, direct, supporting, conflictCandidates)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: build evidence set: %w", err)
 	}
@@ -482,7 +690,7 @@ func (s *Service) ftsRecall(question string, sourceIDs []string) ([]candidate, e
 	unitMap := make(map[string]*candidate)
 
 	// Search units index
-	uq := bleve.NewMatchQuery(question)
+	uq := lifecycleCurrentQuery(bleve.NewMatchQuery(question))
 	uReq := bleve.NewSearchRequest(uq)
 	uReq.Size = 100
 	uReq.Fields = []string{"unit_id", "source_id", "line_start", "line_end"}
@@ -518,7 +726,7 @@ func (s *Service) ftsRecall(question string, sourceIDs []string) ([]candidate, e
 	}
 
 	// Search points index
-	pq := bleve.NewMatchQuery(question)
+	pq := lifecycleCurrentQuery(bleve.NewMatchQuery(question))
 	pReq := bleve.NewSearchRequest(pq)
 	pReq.Size = 100
 	pReq.Fields = []string{"point_id", "unit_id", "source_id"}
@@ -659,6 +867,11 @@ func (s *Service) rrfMerge(outlineCandidates, ftsCandidates []candidate) []candi
 
 // Step 7: LLM Rerank
 func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []candidate) ([]candidate, error) {
+	// Re-check KU lifecycle right before content is sliced for the LLM — recall
+	// happened moments earlier via Bleve, which can lag a DB lifecycle change
+	// (docs/impl/v1/retrieval.md 步骤 5, "防扫描间隙状态变更").
+	candidates = s.filterCurrentUnits(candidates)
+
 	// Assign candidate_ids
 	for i := range candidates {
 		candidates[i].candidateID = fmt.Sprintf("c%d", i+1)
@@ -890,7 +1103,14 @@ func (s *Service) kpnExpand(candidates []candidate) ([]candidate, []candidate, e
 }
 
 // Step 10: Build EvidenceSet
-func (s *Service) buildEvidenceSet(question, subject, intent, audience, constraint, path string, direct, supporting, conflicts []candidate) (*EvidenceSet, error) {
+// buildEvidenceSet reads each candidate's KU text, runs it through the
+// Evidence Mining module (docs/impl/v1/evidence.md — fragment-level
+// EvidenceItems when mining succeeds, whole-segment passthrough with
+// mined=false when it doesn't), and assembles the resulting items into the
+// final EvidenceSet (docs/impl/v1/retrieval.md 步骤 3-4). Mining runs once
+// here for both the fast and slow paths, since both funnel through this
+// function.
+func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, intent, audience, constraint, path string, direct, supporting, conflicts []candidate) (*EvidenceSet, error) {
 	es := &EvidenceSet{
 		Question:       question,
 		Subject:        subject,
@@ -898,55 +1118,58 @@ func (s *Service) buildEvidenceSet(question, subject, intent, audience, constrai
 		Audience:       audience,
 		Constraint:     constraint,
 		Path:           path,
-		DirectEvidence: make([]Evidence, 0, len(direct)),
-		Supporting:     make([]Evidence, 0, len(supporting)),
+		PathType:       PathTypeFull,
+		ActivationHits: []ActivationHit{},
+		DirectEvidence: []Evidence{},
+		Supporting:     []Evidence{},
 	}
 
-	buildEvidence := func(c candidate, role string) (Evidence, error) {
-		content, err := s.readUnitContent(c.sourceID, c.lineStart, c.lineEnd)
-		if err != nil {
-			return Evidence{}, err
+	var items []evidence.EvidenceItem
+	appendItems := func(cands []candidate, role string) {
+		for _, c := range cands {
+			content, err := s.readUnitContent(c.sourceID, c.lineStart, c.lineEnd)
+			if err != nil {
+				slog.Warn("retrieval: read candidate content failed", "unit_id", c.unitID, "role", role, "error", err)
+				continue
+			}
+			origin := c.origin
+			if origin == "" {
+				origin = OriginRerank
+			}
+			items = append(items, evidence.EvidenceItem{
+				UnitID: c.unitID, PointID: c.pointID, SourceID: c.sourceID,
+				LineStart: c.lineStart, LineEnd: c.lineEnd,
+				Content: content, Role: role, Origin: origin,
+			})
 		}
+	}
+	appendItems(direct, evidence.RoleDirect)
+	appendItems(supporting, evidence.RoleSupporting)
 
-		ref := SourceRef{
-			SourceID:  c.sourceID,
-			LineStart: c.lineStart,
-			LineEnd:   c.lineEnd,
-		}
+	mined := items
+	if s.evidenceSvc != nil {
+		mined = s.evidenceSvc.Mine(ctx, question, subject, intent, items)
+	}
+
+	for _, item := range mined {
+		ref := SourceRef{SourceID: item.SourceID, LineStart: item.LineStart, LineEnd: item.LineEnd}
 		refJSON, _ := json.Marshal(ref)
-
-		origin := c.origin
-		if origin == "" {
-			origin = OriginRerank
-		}
-
-		return Evidence{
+		ev := Evidence{
 			FactID:    uuid.New().String(),
-			UnitID:    c.unitID,
-			PointID:   c.pointID,
-			Content:   content,
+			UnitID:    item.UnitID,
+			PointID:   item.PointID,
+			Content:   item.Content,
 			SourceRef: refJSON,
-			Role:      role,
-			Origin:    origin,
-		}, nil
-	}
-
-	for _, c := range direct {
-		ev, err := buildEvidence(c, "direct")
-		if err != nil {
-			slog.Warn("retrieval: build evidence failed", "unit_id", c.unitID, "error", err)
-			continue
+			Role:      item.Role,
+			Origin:    item.Origin,
+			Mined:     item.Mined,
 		}
-		es.DirectEvidence = append(es.DirectEvidence, ev)
-	}
-
-	for _, c := range supporting {
-		ev, err := buildEvidence(c, "supporting")
-		if err != nil {
-			slog.Warn("retrieval: build evidence failed", "unit_id", c.unitID, "error", err)
-			continue
+		switch item.Role {
+		case evidence.RoleDirect:
+			es.DirectEvidence = append(es.DirectEvidence, ev)
+		case evidence.RoleSupporting:
+			es.Supporting = append(es.Supporting, ev)
 		}
-		es.Supporting = append(es.Supporting, ev)
 	}
 
 	for _, c := range conflicts {
@@ -975,6 +1198,30 @@ func (s *Service) buildEvidenceSet(question, subject, intent, audience, constrai
 	}
 
 	return es, nil
+}
+
+// filterCurrentUnits drops candidates whose KU is no longer lifecycle=current.
+func (s *Service) filterCurrentUnits(candidates []candidate) []candidate {
+	kept := make([]candidate, 0, len(candidates))
+	checked := make(map[string]bool, len(candidates))
+	for _, c := range candidates {
+		current, ok := checked[c.unitID]
+		if !ok {
+			var err error
+			current, err = s.store.UnitLifecycleCurrent(c.unitID)
+			if err != nil {
+				slog.Warn("retrieval: rerank lifecycle re-check failed, keeping candidate", "unit_id", c.unitID, "error", err)
+				current = true
+			}
+			checked[c.unitID] = current
+		}
+		if current {
+			kept = append(kept, c)
+		} else {
+			slog.Info("retrieval: rerank dropped candidate (KU no longer current)", "unit_id", c.unitID)
+		}
+	}
+	return kept
 }
 
 func (s *Service) readUnitContent(sourceID string, lineStart, lineEnd int) (string, error) {
@@ -1068,6 +1315,15 @@ func containsAnyNoun(content string, nouns []string) bool {
 		}
 	}
 	return false
+}
+
+// lifecycleCurrentQuery conjoins base with a lifecycle=current TermQuery
+// (docs/impl/v1/retrieval.md 步骤 5) so superseded/deprecated KU/KP never
+// surface from the units/points Bleve indexes.
+func lifecycleCurrentQuery(base query.Query) query.Query {
+	lq := bleve.NewTermQuery("current")
+	lq.SetField("lifecycle")
+	return bleve.NewConjunctionQuery(base, lq)
 }
 
 // buildSourceIDQuery creates a Bleve boolean query to filter by source IDs.

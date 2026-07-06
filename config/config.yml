@@ -74,6 +74,26 @@ retrieval:
   activation_match_min:          0.7   # 步骤2 计分阈值（docs/impl/v1/activation.md）
   activation_match_min_fallback: 0.85  # 四元组缺失时的回退匹配阈值
   activation_match_top:          5     # 匹配结果保留条数
+  fast_path:              true   # false 时激活层只记录命中、不走快路径（灰度开关）
+  fast_path_fallback:     true   # 快路径回答失败时自动回落慢路径
+  wiki_min_score:         2.0    # Wiki 直答的 Bleve 最低分（Wiki 模块未实现前不生效）
+
+# Evidence 模块
+evidence:
+  enabled:              true
+  batch_max_chars:      6000   # 单次 LLM 调用携带的 KU 正文字符数上限（rune）
+  max_fragments_per_ku: 5      # 单 KU 最多保留片段数（超出按输出顺序截断）
+  min_fragment_chars:   8      # 短于该长度的片段丢弃（无信息量）
+  retry:                1      # 批次级 JSON/Schema 失败重试次数
+
+# 跨 Source KPN 模块
+kpn:
+  cross_max_batches: 20  # 单个 source 的跨源匹配批次总数上限，超出放弃剩余
+
+# Wiki 模块
+wiki:
+  compile_max_chars:    12000  # 单页编译输入合计上限（rune），超出按 confident_count 降序截取 KP
+  recompile_new_kp_min: 2      # 已发布页面依赖概念新增 qualifying KP 达到该数量触发重编译标记
 
 # Study 模块
 study:
@@ -86,3 +106,23 @@ study:
   scan_batch_size:         200
   report_period_days:      5
   report_max_keep:         10
+  # —— V1 新增 ——
+  auto_promote:            false  # true 时晋升不经人工确认
+  promote_success_min:     3      # 晋升所需窗口内 activation_success 事件数
+  promote_distinct_min:    2      # 且来自 ≥ N 个不同 question_hash（防单一问题刷信号）
+  weaken_failure_min:      3      # 降权所需窗口内 activation_failure 事件数
+  weaken_ratio_min:        0.5    # 且窗口内 failure / (success+failure) ≥ 该比值
+  reverify_success_min:    2      # weakened 重新验证所需窗口内 success 数
+  event_window_days:       30     # 上述累积判定的时间窗口
+  candidate_idle_days:     30     # candidate 无新信号自动淘汰
+  deprecate_idle_days:     60     # weakened 无有效使用自动淘汰
+  correction_weight:       2      # user_correction 关联链接时按 N 次 failure 计
+  # —— 概念演化（V1 新增）——
+  concept_null_ratio_min:      0.7   # concept_gap 判定：无概念归属 KP 占比下限
+  concept_add_event_min:       5     # 新增候选：簇内 concept_gap 事件数下限
+  concept_add_distinct_min:    3     # 且来自 ≥ N 个不同 question_hash
+  concept_add_overlap_min:     0.5   # 簇内事件 KP 集合两两 Jaccard 重叠下限
+  concept_merge_cooccur_min:   5     # 合并候选：概念对共同采用次数下限
+  concept_merge_overlap_min:   0.6   # 且共同采用中 KP 重叠比例下限
+  concept_candidate_idle_days: 60    # 候选无新信号自动过期
+  concept_event_window_days:   90    # 聚合统计的时间窗口（长于链接窗口）

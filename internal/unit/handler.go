@@ -18,6 +18,7 @@ func NewHandler(svc *Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /sources/{id}/units", h.triggerExtract)
 	mux.HandleFunc("GET /sources/{id}/units", h.listUnits)
+	mux.HandleFunc("POST /sources/{id}/kpn-cross", h.triggerCrossKPN)
 	mux.HandleFunc("GET /units/{id}", h.getUnit)
 	mux.HandleFunc("GET /units/{id}/points", h.listPoints)
 	mux.HandleFunc("GET /points/{id}", h.getPoint)
@@ -40,6 +41,26 @@ func (h *Handler) triggerExtract(w http.ResponseWriter, r *http.Request) {
 		"source_id":    sourceID,
 		"triggered_at": time.Now().Format(time.RFC3339),
 	})
+}
+
+// triggerCrossKPN implements POST /sources/:id/kpn-cross
+// (docs/impl/v1/kpn.md 步骤 7): manual backfill of cross-Source KPN matching
+// for an existing Source. Idempotent — re-running never creates duplicate
+// relations (idx_kp_relations_uniq).
+func (h *Handler) triggerCrossKPN(w http.ResponseWriter, r *http.Request) {
+	sourceID := r.PathValue("id")
+	if sourceID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "missing source id")
+		return
+	}
+
+	result, err := h.svc.CrossSourceKPN(r.Context(), sourceID)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) listUnits(w http.ResponseWriter, r *http.Request) {
@@ -253,7 +274,8 @@ func (h *Handler) listRelations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	relations, err := h.svc.store.GetRelationsByPointID(pointID)
+	scope := r.URL.Query().Get("scope")
+	relations, err := h.svc.store.GetRelationsByPointID(pointID, scope)
 	if err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -265,6 +287,7 @@ func (h *Handler) listRelations(w http.ResponseWriter, r *http.Request) {
 		RelatedPointContent string `json:"related_point_content,omitempty"`
 		RelationType        string `json:"relation_type"`
 		Direction           string `json:"direction"`
+		Scope               string `json:"scope"`
 		AsSource            bool   `json:"as_source"`
 	}
 
@@ -282,6 +305,7 @@ func (h *Handler) listRelations(w http.ResponseWriter, r *http.Request) {
 			RelatedPointID: relatedID,
 			RelationType:   rel.RelationType,
 			Direction:      rel.Direction,
+			Scope:          rel.Scope,
 			AsSource:       asSource,
 		}
 

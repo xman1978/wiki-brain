@@ -106,7 +106,7 @@ func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *Store) {
 		},
 	}
 
-	svc := NewService(store, fake, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg)
+	svc := NewService(store, fake, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, nil, nil, nil)
 	return svc, fake, store
 }
 
@@ -311,7 +311,7 @@ func TestBuildEvidenceSet(t *testing.T) {
 		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50},
 	}
 
-	es, err := svc.buildEvidenceSet("test question", "", "", "", "", "short", direct, supporting, nil)
+	es, err := svc.buildEvidenceSet(context.Background(), "test question", "", "", "", "", "short", direct, supporting, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -187,16 +187,16 @@ Wiki 重编译不能只因为有新内容，而应由 Learning Reason 说明 Stu
 
 Wiki 不需要记录每次回答过程。Wiki 页面只沉淀稳定知识、适用边界、冲突、待验证点和修订结果。Wiki 是长期表达层，不是完整思考过程存档。
 
-### 认知预算与 Wiki 使用
+### 路径与 Wiki 使用
 
 Wiki 是长期表达层，不是证据层，也不是 Working Model 的替代品。
 
-不同认知预算下，Wiki 的引用方式不同：
+不同路径下，Wiki 的引用方式不同：
 
 ```text
-low budget 问题可以直接引用稳定 Wiki 结论；
-medium budget 问题需要检查 Wiki 的适用边界；
-high budget 问题不能只依赖 Wiki，应回到证据、Learning Event 和 Working Model。
+找 / 浅想可以直接引用稳定 Wiki 结论，并带上页面回链的来源；
+深想不能只依赖 Wiki，应回到证据、Learning Event 和 Working Model，
+  Wiki 结论只作为槽位证据的候选之一，仍需回链校验。
 ```
 
 高风险、高冲突或高时效问题即使存在 Wiki 页面，也不应跳过证据回溯和查证。Wiki 结论必须能回到知识单元、来源和 ActivationLink；页面上的稳定结论不等于最终真理。

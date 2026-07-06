@@ -25,6 +25,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sources", h.listSources)
 	mux.HandleFunc("GET /sources/{id}", h.getSource)
 	mux.HandleFunc("DELETE /sources/{id}", h.deleteSource)
+	mux.HandleFunc("POST /sources/{id}/restore", h.restoreSource)
 	mux.HandleFunc("POST /sources/{id}/retry", h.retrySource)
 	mux.HandleFunc("POST /sources/{id}/reupload", h.reuploadSource)
 	mux.HandleFunc("POST /sources/{id}/reupload/retry", h.reuploadRetry)
@@ -249,6 +250,35 @@ func (h *Handler) deleteSource(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"source_id":        id,
 		"deprecated_units": deprecated,
+	})
+}
+
+// restoreSource implements POST /sources/:id/restore: only valid for
+// soft-deleted sources (文件管理 恢复按钮). Reverses SoftDelete precisely —
+// see Service.Restore.
+func (h *Handler) restoreSource(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	src, err := h.svc.Store().GetByID(id)
+	if err != nil {
+		foundation.WriteError(w, http.StatusNotFound, "source not found")
+		return
+	}
+	if src.Status != "deleted" {
+		foundation.WriteError(w, http.StatusBadRequest, "source is not deleted")
+		return
+	}
+
+	restored, err := h.svc.Restore(id)
+	if err != nil {
+		slog.Error("restore source failed", "error", err)
+		foundation.WriteError(w, http.StatusInternalServerError, "restore failed")
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"source_id":      id,
+		"restored_units": restored,
 	})
 }
 

@@ -267,6 +267,17 @@ func (s *Store) MarkDeleted(sourceID string) error {
 	return nil
 }
 
+// RestoreSource reverses MarkDeleted: status flips back to completed. Only
+// matches rows currently 'deleted' — callers (Service.Restore) check status
+// via GetByID first, so this is a defensive guard rather than the primary check.
+func (s *Store) RestoreSource(sourceID string) error {
+	_, err := s.db.Exec(`UPDATE sources SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE source_id = ? AND status = 'deleted'`, sourceID)
+	if err != nil {
+		return fmt.Errorf("source store: restore source: %w", err)
+	}
+	return nil
+}
+
 // SwapShadowIntoTarget re-parents a shadow's knowledge_units / knowledge_points /
 // source_outlines onto targetID and drops the now-empty shadow row, in one
 // transaction (docs/impl/v1/lifecycle.md 步骤 2, 换血事务 a + d). Metadata fields
