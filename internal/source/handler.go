@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -33,6 +34,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sources/{id}/markdown", h.getMarkdown)
 	mux.HandleFunc("GET /sources/{id}/preview", h.getPreview)
 	mux.HandleFunc("GET /sources/{id}/progress", h.streamProgress)
+	mux.HandleFunc("GET /sources/{id}/versions", h.listSourceVersions)
+	mux.HandleFunc("GET /sources/{id}/versions/{version}/download", h.downloadSourceVersion)
+	mux.HandleFunc("GET /sources/{id}/versions/{version}/preview", h.previewSourceVersion)
 }
 
 func (h *Handler) createSource(w http.ResponseWriter, r *http.Request) {
@@ -185,6 +189,7 @@ func (h *Handler) getSource(w http.ResponseWriter, r *http.Request) {
 		"title":      src.Title,
 		"format":     src.Format,
 		"status":     src.Status,
+		"version":    src.Version,
 		"created_at": src.CreatedAt.Format("2006-01-02T15:04:05Z"),
 	}
 	if src.OutlineType.Valid {
@@ -401,6 +406,79 @@ func (h *Handler) getPreview(w http.ResponseWriter, r *http.Request) {
 	html, err := h.svc.GetHTMLPreview(id)
 	if err != nil {
 		foundation.WriteError(w, http.StatusNotFound, "source not found")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	io.WriteString(w, html)
+}
+
+// listSourceVersions implements GET /sources/:id/versions: the historical
+// snapshots a reupload superseded (docs/impl/v1/lifecycle.md 步骤 2's archive
+// step, made queryable — see migration 017_source_version.sql). Internal
+// file paths are not exposed; use the download/preview endpoints for those.
+func (h *Handler) listSourceVersions(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	versions, err := h.svc.store.GetSourceVersions(id)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	type item struct {
+		Version    int    `json:"version"`
+		FileName   string `json:"file_name"`
+		ArchivedAt string `json:"archived_at"`
+	}
+	items := make([]item, 0, len(versions))
+	for _, v := range versions {
+		items = append(items, item{
+			Version:    v.Version,
+			FileName:   v.FileName,
+			ArchivedAt: v.ArchivedAt.Format("2006-01-02T15:04:05Z"),
+		})
+	}
+	foundation.WriteJSON(w, http.StatusOK, items)
+}
+
+func parseVersionPathValue(r *http.Request) (int, error) {
+	return strconv.Atoi(r.PathValue("version"))
+}
+
+func (h *Handler) downloadSourceVersion(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	version, err := parseVersionPathValue(r)
+	if err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid version")
+		return
+	}
+
+	fullPath, fileName, err := h.svc.GetVersionOriginalPath(id, version)
+	if err != nil {
+		foundation.WriteError(w, http.StatusNotFound, "version not found")
+		return
+	}
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		foundation.WriteError(w, http.StatusNotFound, "archived file not found")
+		return
+	}
+
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fileName))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Write(data)
+}
+
+func (h *Handler) previewSourceVersion(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	version, err := parseVersionPathValue(r)
+	if err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid version")
+		return
+	}
+
+	html, err := h.svc.GetVersionHTMLPreview(id, version)
+	if err != nil {
+		foundation.WriteError(w, http.StatusNotFound, "version not found")
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

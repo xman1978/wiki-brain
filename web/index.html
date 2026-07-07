@@ -1010,7 +1010,7 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
         if (evt === 'phase') {
           try {
             var p = JSON.parse(data);
-            if (p.phase === 'activation' || p.phase === 'outline' || p.phase === 'fts' || p.phase === 'rerank') {
+            if (p.phase === 'activation' || p.phase === 'outline' || p.phase === 'fts' || p.phase === 'rerank' || p.phase === 'evidence') {
               var stepId = p.phase;
               if (p.status === 'start') {
                 updateProcessStep(stepId, 'active', null, null, p.detail || '');
@@ -1029,7 +1029,7 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
                 updateProcessStep('activation', 'fail', null, p.duration_ms);
               }
             } else if (p.phase === 'answer' && p.status === 'no_evidence') {
-              ['activation','outline','fts','rerank'].forEach(function(id) { updateProcessStep(id, 'done', null, 0, '无证据'); });
+              ['activation','outline','fts','rerank','evidence'].forEach(function(id) { updateProcessStep(id, 'done', null, 0, '无证据'); });
               updateProcessStep('generation', 'done', '生成回答', 0, '无需生成');
             } else if (p.phase === 'generation') {
               if (p.status === 'start') {
@@ -1108,7 +1108,7 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
 // ═══════════════════════════════════════════════════════
 // PROCESS PANEL
 // ═══════════════════════════════════════════════════════
-var PP_STEPS = ['session','activation','outline','fts','rerank','generation','trace','total'];
+var PP_STEPS = ['session','activation','outline','fts','rerank','evidence','generation','trace','total'];
 var PP_STATE = {};
 
 function initProcessPanel(startTime) {
@@ -1121,6 +1121,7 @@ function initProcessPanel(startTime) {
   PP_STATE.outline.label = '目录结构检索';
   PP_STATE.fts.label = '全文检索';
   PP_STATE.rerank.label = '证据分类';
+  PP_STATE.evidence.label = '证据提取';
   PP_STATE.generation.label = '生成回答';
   PP_STATE.trace.label = '追踪记录';
   PP_STATE.total.label = '总计';
@@ -1944,7 +1945,7 @@ async function viewSource(sourceId) {
         <div class="detail-row"><span class="dl">source_id</span><span class="dv"><code style="font-size:11px">' + esc(d.source_id) + '</code> <button class="copy-btn" onclick="copy(\'' + esc(d.source_id) + '\',this)">复制</button></span></div>\
         <div class="detail-row"><span class="dl">标题</span><span class="dv">' + esc(d.title || '') + '</span></div>\
         <div class="detail-row"><span class="dl">格式</span><span class="dv">' + esc(d.format || '') + '</span></div>\
-        <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="status-chip status-' + (d.status||'') + '">' + statusLabel(d.status) + '</span></span></div>\
+        <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="status-chip status-' + (d.status||'') + '">' + statusLabel(d.status) + '</span> <span class="badge">v' + (d.version || 1) + '</span></span></div>\
         ' + (d.summary ? '<div class="detail-row"><span class="dl">摘要</span><span class="dv">' + esc(d.summary) + '</span></div>' : '') + '\
         ' + (d.word_count ? '<div class="detail-row"><span class="dl">字数</span><span class="dv">' + d.word_count + '</span></div>' : '') + '\
         ' + (d.error_msg ? '<div class="detail-row"><span class="dl">错误</span><span class="dv" style="color:var(--red)">' + esc(d.error_msg) + '</span></div>' : '') + '\
@@ -1952,6 +1953,7 @@ async function viewSource(sourceId) {
         <div class="modal-actions">\
           ' + (d.status==='completed' ? '<button class="btn btn-sm" onclick="window.open(S.baseUrl+\'/sources/' + esc(d.source_id) + '/preview\',\'_blank\')">预览</button>' : '') + '\
           ' + (d.status==='completed' ? '<button class="btn btn-sm" onclick="reuploadSource(\'' + esc(d.source_id) + '\')">重新上传</button>' : '') + '\
+          ' + (d.status==='completed' ? '<button class="btn btn-sm" onclick="verifyCoverage(\'' + esc(d.source_id) + '\')">验证</button>' : '') + '\
           ' + (d.status==='completed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteSource(\'' + esc(d.source_id) + '\',false);closeSourceDetail()">删除</button>' : '') + '\
           ' + (d.status==='failed' ? '<button class="btn btn-sm" onclick="retrySource(\'' + esc(d.source_id) + '\');closeSourceDetail()">重试</button>' : '') + '\
           ' + (d.status==='failed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteSource(\'' + esc(d.source_id) + '\',true);closeSourceDetail()">删除</button>' : '') + '\
@@ -1959,8 +1961,10 @@ async function viewSource(sourceId) {
           <button class="btn" onclick="closeSourceDetail()">关闭</button>\
         </div>\
         ' + (d.status==='completed' ? '<h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">知识单元</h3><div id="sourceKUList" style="margin-top:8px"><div style="font-size:12px;color:var(--text-3)">加载中...</div></div>' : '') + '\
+        ' + (d.status==='completed' ? '<div id="sourceCoverageResult"></div>' : '') + '\
+        ' + (d.status==='completed' ? '<h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">历史版本</h3><div id="sourceVersionsList" style="margin-top:8px"><div style="font-size:12px;color:var(--text-3)">加载中...</div></div>' : '') + '\
         <details style="margin-top:14px"><summary style="font-size:11px;cursor:pointer;color:var(--text-3)">原始 JSON</summary><div class="raw-json" style="margin-top:6px">' + esc(JSON.stringify(d,null,2)) + '</div></details>';
-      if (d.status === 'completed') loadSourceUnits(d.source_id);
+      if (d.status === 'completed') { loadSourceUnits(d.source_id); loadSourceVersions(d.source_id); }
     } else content.innerHTML = '<h2>来源详情</h2><div style="color:var(--red)">加载失败</div><div class="modal-actions"><button class="btn" onclick="closeSourceDetail()">关闭</button></div>';
   } catch(e) { content.innerHTML = '<h2>来源详情</h2><div style="color:var(--red)">' + esc(e.message) + '</div><div class="modal-actions"><button class="btn" onclick="closeSourceDetail()">关闭</button></div>'; }
 }
@@ -1977,7 +1981,7 @@ async function loadSourceUnits(sourceId) {
   var el = document.getElementById('sourceKUList');
   if (!el) return;
   try {
-    var r = await api('GET', '/sources/' + sourceId + '/units');
+    var r = await api('GET', '/sources/' + sourceId + '/units?lifecycle=current');
     var units = Array.isArray(r.data) ? r.data : [];
     if (!units.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text-3)">暂无知识单元</div>'; return; }
     el.innerHTML = units.map(function(u) {
@@ -1987,6 +1991,65 @@ async function loadSourceUnits(sourceId) {
       </div>';
     }).join('');
   } catch(e) { el.innerHTML = '<div style="font-size:12px;color:var(--red)">加载失败</div>'; }
+}
+
+// 历史版本（GET /sources/:id/versions）：每次重新上传被替换掉的旧文件快照，
+// 只能下载/预览原文件，不做回滚（不会改变检索用的知识单元）。
+async function loadSourceVersions(sourceId) {
+  var el = document.getElementById('sourceVersionsList');
+  if (!el) return;
+  try {
+    var r = await api('GET', '/sources/' + sourceId + '/versions');
+    var versions = Array.isArray(r.data) ? r.data : [];
+    if (!versions.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text-3)">暂无历史版本</div>'; return; }
+    el.innerHTML = versions.map(function(v) {
+      return '<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border-lt);font-size:12px">\
+        <span class="badge">v' + v.version + '</span>\
+        <span style="flex:1">' + esc(v.file_name || '') + ' <span style="color:var(--text-3)">' + dateStr(v.archived_at) + '</span></span>\
+        <button class="btn btn-sm" onclick="window.open(S.baseUrl+\'/sources/' + esc(sourceId) + '/versions/' + v.version + '/preview\',\'_blank\')">预览</button>\
+        <button class="btn btn-sm" onclick="window.open(S.baseUrl+\'/sources/' + esc(sourceId) + '/versions/' + v.version + '/download\',\'_blank\')">下载</button>\
+      </div>';
+    }).join('');
+  } catch(e) { el.innerHTML = '<div style="font-size:12px;color:var(--red)">加载失败</div>'; }
+}
+
+// 覆盖率校验（手动触发，GET /sources/:id/coverage）：按 segment 比对已提取
+// 知识单元的行范围，标出原文中没有被任何知识单元覆盖的行（见 internal/unit/coverage.go）。
+async function verifyCoverage(sourceId) {
+  var el = document.getElementById('sourceCoverageResult');
+  if (!el) return;
+  el.innerHTML = '<h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">覆盖率校验</h3><div style="margin-top:8px;font-size:12px;color:var(--text-3)">校验中...</div>';
+  try {
+    var r = await api('GET', '/sources/' + sourceId + '/coverage');
+    if (!r.ok) { el.innerHTML = '<h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">覆盖率校验</h3><div style="margin-top:8px;font-size:12px;color:var(--red)">校验失败</div>'; return; }
+    var d = r.data || {};
+    var total = d.total_lines || 0;
+    var covered = d.covered_lines || 0;
+    var ratio = total ? (100 * covered / total) : 100;
+    var ratioStyle = ratio >= 90 ? 'background:var(--green-lt);border-color:var(--green);color:var(--green)'
+      : (ratio >= 70 ? 'background:var(--yellow-lt);border-color:var(--yellow);color:var(--yellow)'
+      : 'background:var(--red-lt);border-color:var(--red);color:var(--red)');
+    var segs = Array.isArray(d.segments) ? d.segments : [];
+    var flagged = segs.filter(function(s) { return (s.gaps && s.gaps.length) || s.has_extraction_failed; });
+
+    var html = '<h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">覆盖率校验</h3>';
+    html += '<div style="margin-top:8px;font-size:12px;display:flex;align-items:center;gap:8px">总行数 ' + total + '，覆盖 ' + covered + ' 行 <span class="badge" style="' + ratioStyle + '">' + ratio.toFixed(1) + '%</span></div>';
+    html += '<div style="margin-top:12px;font-size:12px;font-weight:600;color:var(--text-2)">未覆盖内容</div>';
+    if (!flagged.length) {
+      html += '<div style="margin-top:6px;font-size:12px;color:var(--green)">未发现缺口</div>';
+    } else {
+      html += '<div style="margin-top:6px">' + flagged.map(function(s) {
+        var failedTag = s.has_extraction_failed ? '<span class="badge gap" style="margin-left:6px">提取失败</span>' : '';
+        var gapsHtml = (s.gaps || []).map(function(g) {
+          return '<div style="padding:2px 0 2px 10px;color:var(--text-3)">L' + g.line_start + '-L' + g.line_end + '：' + esc(g.preview || '') + '</div>';
+        }).join('');
+        return '<div style="padding:5px 0;border-bottom:1px solid var(--border-lt);font-size:12px">\
+          <span>' + esc(s.outline_title || '') + ' (L' + s.line_start + '-L' + s.line_end + ', ' + s.covered_lines + '/' + s.total_lines + ')</span>' + failedTag + gapsHtml + '\
+        </div>';
+      }).join('') + '</div>';
+    }
+    el.innerHTML = html;
+  } catch(e) { el.innerHTML = '<h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">覆盖率校验</h3><div style="margin-top:8px;font-size:12px;color:var(--red)">校验失败：' + esc(e.message) + '</div>'; }
 }
 
 async function retrySource(sourceId) {

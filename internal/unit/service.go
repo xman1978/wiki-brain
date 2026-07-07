@@ -106,6 +106,40 @@ func (s *Service) TriggerExtract(sourceID string) error {
 	return nil
 }
 
+// SourceCoverageReport recomputes the same segments Extract used
+// (outlines + markdown → BuildSegments) and diffs them against the units
+// already in SQLite — read-only, no LLM calls — to surface any segment
+// lines that ended up in no completed unit at all (docs/impl/mvp/unit.md
+// 完成标准 doesn't cover this yet; see ComputeCoverage for what counts).
+func (s *Service) SourceCoverageReport(sourceID string) ([]SegmentCoverage, error) {
+	src, err := s.sourceStore.GetByID(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("unit: get source: %w", err)
+	}
+
+	outlines, err := s.sourceStore.GetOutlines(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("unit: get outlines: %w", err)
+	}
+
+	mdBytes, err := os.ReadFile(src.MarkdownPath)
+	if err != nil {
+		return nil, fmt.Errorf("unit: read markdown: %w", err)
+	}
+	mdLines := strings.Split(string(mdBytes), "\n")
+
+	segments := BuildSegments(outlines, mdLines, s.cfg.Source.SegmentMaxChars, s.cfg.Source.MinSegmentChars)
+
+	// Only current-lifecycle units represent the document's present content;
+	// a reuploaded source's superseded units must not count toward coverage.
+	units, err := s.store.GetUnitsBySourceIDFiltered(sourceID, LifecycleCurrent)
+	if err != nil {
+		return nil, fmt.Errorf("unit: get units: %w", err)
+	}
+
+	return ComputeCoverage(segments, units, mdLines), nil
+}
+
 func (s *Service) Extract(ctx context.Context, sourceID string) error {
 	src, err := s.sourceStore.GetByID(sourceID)
 	if err != nil {
@@ -163,10 +197,10 @@ func (s *Service) Extract(ctx context.Context, sourceID string) error {
 }
 
 type llmUnit struct {
-	UnitID    string `json:"unit_id"`
-	Center    string `json:"center"`
-	LineStart int    `json:"line_start"`
-	LineEnd   int    `json:"line_end"`
+	UnitID          string `json:"unit_id"`
+	Center          string `json:"center"`
+	FirstLineAnchor string `json:"first_line_anchor"`
+	LastLineAnchor  string `json:"last_line_anchor"`
 }
 
 type llmPoint struct {
@@ -184,7 +218,7 @@ type extractOutput struct {
 func (s *Service) processSegment(ctx context.Context, sourceID, markdownPath string, seg Segment, mdLines []string) {
 	textContent := sliceLinesWithLineNumbers(mdLines, seg.LineStart, seg.LineEnd)
 
-	schemaJSON := `{"units":[{"unit_id":"1","center":"知识单元主题","line_start":1,"line_end":8}],"points":[{"point_id":"1","unit_id":"1","content":"可激活摘要内容","type":"definition|rule|method|case|question"}]}`
+	schemaJSON := `{"units":[{"unit_id":"1","center":"知识单元主题","first_line_anchor":"该单元第一行开头","last_line_anchor":"该单元最后一行结尾"}],"points":[{"point_id":"1","unit_id":"1","content":"可激活摘要内容","type":"definition|rule|method|case|question"}]}`
 
 	vars := map[string]string{
 		"outline_title":      seg.Title,
@@ -222,8 +256,13 @@ func (s *Service) processSegment(ctx context.Context, sourceID, markdownPath str
 		localToUUID[u.UnitID] = uuid.New().String()
 	}
 
+	cursor := seg.LineStart
 	for _, u := range output.Units {
-		if !s.validateUnit(u, output.Points) {
+		lineStart, lineEnd, nextCursor, locateOK := LocateUnitBounds(mdLines, seg, u.FirstLineAnchor, u.LastLineAnchor, cursor)
+		if locateOK {
+			cursor = nextCursor
+		}
+		if !locateOK || !s.validateUnit(u, output.Points) {
 			s.handleFailedUnit(ctx, sourceID, seg, u, mdLines, localToUUID)
 			continue
 		}
@@ -235,10 +274,10 @@ func (s *Service) processSegment(ctx context.Context, sourceID, markdownPath str
 			SourceID:      sourceID,
 			OutlineID:     seg.OutlineID,
 			Center:        u.Center,
-			LineStart:     u.LineStart,
-			LineEnd:       u.LineEnd,
+			LineStart:     lineStart,
+			LineEnd:       lineEnd,
 			Status:        "completed",
-			PromptVersion: "v3",
+			PromptVersion: "v4",
 		}
 		if err := s.store.InsertUnit(ku); err != nil {
 			slog.Error("unit: insert unit failed", "error", err)
@@ -271,9 +310,6 @@ func (s *Service) validateUnit(u llmUnit, points []llmPoint) bool {
 	if u.Center == "" {
 		return false
 	}
-	if u.LineStart > u.LineEnd {
-		return false
-	}
 	hasPoints := false
 	for _, p := range points {
 		if p.UnitID == u.UnitID {
@@ -287,7 +323,7 @@ func (s *Service) validateUnit(u llmUnit, points []llmPoint) bool {
 }
 
 func (s *Service) handleFailedUnit(ctx context.Context, sourceID string, seg Segment, u llmUnit, mdLines []string, localToUUID map[string]string) {
-	schemaJSON := `{"units":[{"unit_id":"1","center":"知识单元主题","line_start":1,"line_end":8}],"points":[{"point_id":"1","unit_id":"1","content":"可激活摘要内容","type":"definition|rule|method|case|question"}]}`
+	schemaJSON := `{"units":[{"unit_id":"1","center":"知识单元主题","first_line_anchor":"该单元第一行开头","last_line_anchor":"该单元最后一行结尾"}],"points":[{"point_id":"1","unit_id":"1","content":"可激活摘要内容","type":"definition|rule|method|case|question"}]}`
 
 	vars := map[string]string{
 		"segment_line_start": strconv.Itoa(seg.LineStart),
@@ -310,7 +346,8 @@ func (s *Service) handleFailedUnit(ctx context.Context, sourceID string, seg Seg
 	}
 
 	for _, ru := range output.Units {
-		if !s.validateUnit(ru, output.Points) {
+		lineStart, lineEnd, _, locateOK := LocateUnitBounds(mdLines, seg, ru.FirstLineAnchor, ru.LastLineAnchor, seg.LineStart)
+		if !locateOK || !s.validateUnit(ru, output.Points) {
 			continue
 		}
 		realUnitID := uuid.New().String()
@@ -320,10 +357,10 @@ func (s *Service) handleFailedUnit(ctx context.Context, sourceID string, seg Seg
 			SourceID:      sourceID,
 			OutlineID:     seg.OutlineID,
 			Center:        ru.Center,
-			LineStart:     ru.LineStart,
-			LineEnd:       ru.LineEnd,
+			LineStart:     lineStart,
+			LineEnd:       lineEnd,
 			Status:        "completed",
-			PromptVersion: "v3",
+			PromptVersion: "v4",
 		}
 		if err := s.store.InsertUnit(ku); err != nil {
 			slog.Error("unit: retry insert unit failed", "error", err)
@@ -352,23 +389,18 @@ func (s *Service) handleFailedUnit(ctx context.Context, sourceID string, seg Seg
 }
 
 func (s *Service) insertFailedUnit(sourceID string, seg Segment, u llmUnit, errMsg string) {
-	lineStart := seg.LineStart
-	lineEnd := seg.LineEnd
-	if u.LineStart > 0 && u.LineEnd > 0 {
-		lineStart = u.LineStart
-		lineEnd = u.LineEnd
-	}
-
+	// The model's anchor text couldn't be located (or wasn't given), so there's
+	// no derived line range to fall back to beyond the whole segment's bounds.
 	ku := &KnowledgeUnit{
 		UnitID:        uuid.New().String(),
 		SourceID:      sourceID,
 		OutlineID:     seg.OutlineID,
 		Center:        u.Center,
-		LineStart:     lineStart,
-		LineEnd:       lineEnd,
+		LineStart:     seg.LineStart,
+		LineEnd:       seg.LineEnd,
 		Status:        "extraction_failed",
 		ErrorMsg:      sql.NullString{String: errMsg, Valid: true},
-		PromptVersion: "v3",
+		PromptVersion: "v4",
 	}
 	if ku.Center == "" {
 		ku.Center = "(extraction failed)"

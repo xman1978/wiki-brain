@@ -150,7 +150,7 @@ source.md 的语义目录生成保证叶节点内容 ≤ segment_max_chars，此
 
 #### 2.1 提取 Prompt
 
-Prompt 文件：`config/prompts/unit_extract.md`
+Prompt 文件：`config/prompts/unit_extract.md`（`prompt_version: v4` 起生效，见 2.3 的设计决策）
 
 ```
 分析以下文本，识别其中可独立引用的知识面，每个知识面生成一个知识单元（unit）和对应知识点（points）。
@@ -167,7 +167,7 @@ Prompt 文件：`config/prompts/unit_extract.md`
 - question（问题）
 
 来源目录节点：{{outline_title}}
-文本（原文第 {{segment_line_start}} 行到第 {{segment_line_end}} 行，行号从 1 开始）：
+以下文本每行前标注了原文行号（仅供你判断单元边界参考，不要把行号抄进输出）：
 {{text_content}}
 
 按以下 JSON Schema 输出，不输出任何其他内容：
@@ -183,7 +183,7 @@ units 和 points 平铺为两个独立数组，通过 `unit_id` 关联，避免�
 ```json
 {
   "units": [
-    {"unit_id": "1", "center": "知识单元主题", "line_start": 1, "line_end": 8}
+    {"unit_id": "1", "center": "知识单元主题", "first_line_anchor": "该单元第一行开头，逐字，不超过30字", "last_line_anchor": "该单元最后一行结尾，逐字，不超过30字"}
   ],
   "points": [
     {"point_id": "1", "unit_id": "1", "content": "可激活摘要内容", "type": "definition|rule|method|case|question"}
@@ -191,19 +191,31 @@ units 和 points 平铺为两个独立数组，通过 `unit_id` 关联，避免�
 }
 ```
 
-程序将模型输出解析并整合后（行号转换、unit_id/point_id 本地编号→UUID、推断归属关系），用 `unit_extract.md` 内 `## Schema` 段的 JSON Schema 校验整合结果，检查：每个 unit 的 `line_start <= line_end`；每个 point 的 `unit_id` 存在于 units 中；每个 unit 至少有 1 个 point；`content` 非空。
+程序将模型输出解析并整合后（锚点定位算出绝对行号、unit_id/point_id 本地编号→UUID、推断归属关系），用 `unit_extract.md` 内 `## Schema` 段的 JSON Schema 校验整合结果，检查：每个 unit 的 `first_line_anchor`/`last_line_anchor` 非空；每个 point 的 `unit_id` 存在于 units 中；每个 unit 至少有 1 个 point；`content` 非空。
 
-#### 2.3 行号转换与字段映射
+#### 2.3 边界定位（不信任模型自报行号）
 
-LLM 输出的 `line_start`/`line_end` 是相对于传入分段首行的**相对行号**（1-based），写入数据库前转换为绝对行号（全局约定见 foundation.md）：
+**设计决策（`prompt_version: v2`~`v3` 曾让模型直接抄行号，`v4` 起改为程序定位，原因见下）**：早期版本把 segment 每行标好绝对行号（`[N] 内容`）喂给模型，直接让模型把它判断的起止行号 `N` 抄进 JSON 里，程序只校验 `line_start <= line_end`，不做任何位置校验。这在实践中出现过模型抄错/数错行号、导致一个单元的行范围大幅跨界、吞并大量无关内容的问题（例如把一个"配置 SSH 无密码登录通道"的单元错误标成跨 25 行，吞掉了中间十几个无关单元）。
+
+`v4` 改为让模型只给"该单元第一行/最后一行的原文锚点文本"（`first_line_anchor`/`last_line_anchor`，逐字复制、不超过 30 字），行号完全由程序在 segment 范围内逐行查找定位（`internal/unit/boundary.go` 的 `LocateUnitBounds`，复用证据挖掘模块 `docs/impl/v1/evidence.md` 同款"精确匹配→空白折叠模糊匹配→放弃"算法，见 `internal/foundation/textmatch`）：
 
 ```text
-unit.line_start（绝对行号）= segment.line_start - 1 + llm_output.line_start
-unit.line_end（绝对行号）  = segment.line_start - 1 + llm_output.line_end
+逐个 unit（按模型输出顺序）：
+  从 cursor（首个 unit 为 segment.line_start，之后取上一个 unit 定位到的 line_end+1）开始，
+    在 segment 范围内逐行找 first_line_anchor；找不到则从 segment.line_start 整段重新找一遍
+    （容忍模型未按文档顺序输出 units）；
+  从上一步定位到的行开始（含），在 segment 范围内逐行找 last_line_anchor；
+  两者都命中 → 绝对 line_start/line_end 就是命中的行号（单行单元时两个锚点会落在同一行）；
+  任一锚点在 segment 范围内完全找不到（含模糊匹配）→ 视为该 unit 定位失败，
+    走步骤 3 的单元重试/extraction_failed 路径，不写入行号。
 
-point.point_type       = llm_output.type
-point.unit_id          = 系统为对应 unit_id（本地编号）的 unit 分配的 UUID
+point.point_type = llm_output.type
+point.unit_id    = 系统为对应 unit_id（本地编号）的 unit 分配的 UUID
 ```
+
+cursor 只是"从哪里开始找"的提示、用于消解同一 segment 内重复出现的行内容（如反复出现的 `# su – oracle`），不是强制的单调不重叠约束——语料里存在"总览单元合理包住若干细分单元"的场景，不应被这个机制破坏。
+
+这个机制能保证的是：定位到的行号一定落在 segment 范围内、一定对应 segment 里真实存在的某一行文字，不会再出现模型凭空报错行号导致越界吞并无关内容的情况。它不能保证的是：模型选中的锚点文本即使真实存在，也可能选到了本单元语义边界之外、但仍在 segment 内的另一行（比如误把下一个无关小节的标题当作本单元的结尾）——这类"选错了但选的是真文字"的语义错误不在这个机制的覆盖范围内。
 
 #### 2.4 调用参数
 
@@ -224,13 +236,13 @@ LLM 输出先做 JSON 解析和 JSON Schema 整体校验；
   - 重试仍失败：记录该 segment 提取失败日志，不写入 KU/KP，继续处理后续 segment。
 
 Schema 校验通过后，逐条校验每个 KnowledgeUnit：
-  - line_start <= line_end；
   - center 非空；
+  - first_line_anchor/last_line_anchor 经 LocateUnitBounds（见 2.3）能在 segment 内定位到行号；
   - points 非空且每条 content 非空；
-校验通过的单元写入 SQLite，status 设为 completed；
-校验失败的单元若仍可从 LLM 输出中定位其本地 unit_id，则带原始文本段单独重试一次，使用重试 Prompt（见步骤 3.1）；
+校验通过的单元写入 SQLite（line_start/line_end 取定位结果），status 设为 completed；
+校验失败的单元（含定位失败）若仍可从 LLM 输出中定位其本地 unit_id，则带原始文本段单独重试一次，使用重试 Prompt（见步骤 3.1），重试的定位同样走 LocateUnitBounds（cursor 固定为 segment.line_start，因为单独重试不再有兄弟单元的顺序上下文）；
   - 重试成功：status 设为 completed，写入 SQLite；
-  - 重试仍失败：写入 extraction_failed 占位 KU（保留 source_id、outline_id、line_start/line_end、error_msg），不写入 KP；
+  - 重试仍失败（含重试结果的锚点依然定位不到）：写入 extraction_failed 占位 KU（line_start/line_end 退化为整个 segment 的 line_start/line_end，因为已经没有可信的定位依据；保留 source_id、outline_id、error_msg），不写入 KP；
 无法定位到具体 unit 的失败项：记录 warn，跳过该项，不阻塞其他单元入库；
 不重跑整份材料。
 ```
@@ -243,11 +255,11 @@ Prompt 文件：`config/prompts/unit_extract_retry.md`
 从以下文本提取知识单元和知识点，严格按 JSON Schema 输出。
 
 要求：
-1. 每个 unit 必须有 unit_id（如 "1"）、center（10~40字）、line_start <= line_end（相对行号，1-based）
+1. 每个 unit 必须有 unit_id（如 "1"）、center（10~40字）、first_line_anchor/last_line_anchor（该单元第一行/最后一行原文，逐字，不超过30字，单行单元两者相同）
 2. 每个 point 必须有 point_id（如 "1"）和 unit_id，且 unit_id 必须对应一个已存在的 unit unit_id
 3. content 不得为空
 
-文本（原文第 {{segment_line_start}} 行到第 {{segment_line_end}} 行，共 {{segment_line_count}} 行）：
+文本（原文第 {{segment_line_start}} 行到第 {{segment_line_end}} 行，共 {{segment_line_count}} 行，每行前标注了原文行号，仅供参考，不要抄进输出）：
 {{text_content}}
 
 按以下 JSON Schema 输出：
@@ -438,7 +450,7 @@ Prompt 文件：config/prompts/ 下，版本号在文件内 frontmatter 中管�
 ```text
 能对已完成的 Source 稳定触发 Unit 提取；
 提取结果（KU + KP）写入 SQLite 和 Bleve，可通过 API 查询；
-行号转换正确：unit.line_start / line_end 为规范化 Markdown 的绝对行号（1-based, inclusive）；
+锚点定位正确：unit.line_start / line_end 由 LocateUnitBounds 在 segment 范围内定位得出，为规范化 Markdown 的绝对行号（1-based, inclusive）；
 可通过 strings.Split(markdown, "\n")[line_start-1:line_end] 还原单元原文内容（`markdown_path` 来自 sources 表）；
 重试机制正常工作：整体 JSON 失败时 segment 级重试一次；可定位的单元业务校验失败时单元级重试一次，失败单元标记 extraction_failed 并记录 error_msg；
 KPN 生成在全 Source KP 提取完成后运行，关系写入 SQLite，可通过 API 按 point_id 查询；

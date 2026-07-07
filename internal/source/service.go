@@ -735,68 +735,123 @@ func (s *Service) CompleteShadowSwap(ctx context.Context, shadowSourceID string)
 		}
 	}
 
-	newOriginalPath, newHTMLPath, err := s.archiveAndSwapFiles(target, shadow)
+	// SwapShadowIntoTarget deletes the target's own pre-reupload outline rows
+	// from SQL (outlines have no lifecycle field, see the store method's
+	// comment); grab their IDs first so the matching Bleve documents — indexed
+	// under the target's old source_process run — can be removed too, the
+	// same way SoftDelete does for a deleted source.
+	oldOutlineIDs, err := s.store.GetOutlineIDs(targetID)
+	if err != nil {
+		return fmt.Errorf("get target outline ids: %w", err)
+	}
+
+	archived, newOriginalPath, newHTMLPath, err := s.archiveAndSwapFiles(target, shadow)
 	if err != nil {
 		return fmt.Errorf("archive files: %w", err)
+	}
+
+	// target.Version is still the pre-swap value here — SwapShadowIntoTarget
+	// below increments it — so this records the version being superseded.
+	if archived.MarkdownPath != "" {
+		if err := s.store.InsertSourceVersion(&SourceVersion{
+			SourceID:     targetID,
+			Version:      target.Version,
+			FileName:     target.FileName,
+			OriginalPath: archived.OriginalPath,
+			HTMLPath:     archived.HTMLPath,
+			MarkdownPath: archived.MarkdownPath,
+		}); err != nil {
+			slog.Warn("shadow swap: record source version snapshot failed", "error", err)
+		}
 	}
 
 	if err := s.store.SwapShadowIntoTarget(shadowSourceID, targetID, newOriginalPath, newHTMLPath); err != nil {
 		return fmt.Errorf("swap shadow into target: %w", err)
 	}
 
-	slog.Info("shadow swap completed", "target_id", targetID, "shadow_id", shadowSourceID, "superseded_units", len(oldUnitIDs))
+	if len(oldOutlineIDs) > 0 {
+		batch := s.outlineIdx.NewBatch()
+		for _, id := range oldOutlineIDs {
+			batch.Delete(id)
+		}
+		if err := s.outlineIdx.Batch(batch); err != nil {
+			slog.Warn("shadow swap: remove old outlines from index failed", "error", err)
+		}
+	}
+
+	slog.Info("shadow swap completed", "target_id", targetID, "shadow_id", shadowSourceID, "superseded_units", len(oldUnitIDs), "replaced_outlines", len(oldOutlineIDs))
 	return nil
+}
+
+// archivedFiles is target's pre-reupload files' new location under
+// data/sources/archived/, for recording a source_versions snapshot row.
+type archivedFiles struct {
+	OriginalPath string
+	MarkdownPath string
+	HTMLPath     sql.NullString
 }
 
 // archiveAndSwapFiles moves target's current original/markdown files to
 // data/sources/archived/<target_id>/<timestamp>/, then copies the shadow's
 // files into target's paths so target's file paths keep pointing at valid
-// content under target's own source_id. Returns the (possibly new, since
-// reupload may change format/extension) original_path and html_path target
-// should be updated to, for the caller to persist alongside the rest of the
-// swap transaction.
-func (s *Service) archiveAndSwapFiles(target, shadow *Source) (originalPath string, htmlPath sql.NullString, err error) {
+// content under target's own source_id. Returns the archived (old) file
+// locations for the caller to record as a source_versions snapshot, and the
+// (possibly new, since reupload may change format/extension) original_path
+// and html_path target should be updated to.
+func (s *Service) archiveAndSwapFiles(target, shadow *Source) (archived archivedFiles, originalPath string, htmlPath sql.NullString, err error) {
 	archiveRelDir := filepath.Join("data", "sources", "archived", target.SourceID, time.Now().UTC().Format("20060102T150405Z"))
 	archiveDir := filepath.Join(s.baseDir, archiveRelDir)
 	if err := os.MkdirAll(archiveDir, 0755); err != nil {
-		return "", sql.NullString{}, fmt.Errorf("create archive dir: %w", err)
+		return archivedFiles{}, "", sql.NullString{}, fmt.Errorf("create archive dir: %w", err)
 	}
 
-	archiveOne := func(relPath string) error {
+	// archiveOne returns the new relative path the file was moved to, or ""
+	// if there was nothing to archive (relPath empty or file already gone).
+	archiveOne := func(relPath string) (string, error) {
 		if relPath == "" {
-			return nil
+			return "", nil
 		}
 		oldFull := filepath.Join(s.baseDir, relPath)
 		if _, statErr := os.Stat(oldFull); statErr != nil {
 			if os.IsNotExist(statErr) {
-				return nil
+				return "", nil
 			}
-			return fmt.Errorf("stat old file %s: %w", oldFull, statErr)
+			return "", fmt.Errorf("stat old file %s: %w", oldFull, statErr)
 		}
-		newFull := filepath.Join(archiveDir, filepath.Base(relPath))
-		return os.Rename(oldFull, newFull)
+		newRel := filepath.Join(archiveRelDir, filepath.Base(relPath))
+		if err := os.Rename(oldFull, filepath.Join(s.baseDir, newRel)); err != nil {
+			return "", err
+		}
+		return newRel, nil
 	}
-	if err := archiveOne(target.OriginalPath); err != nil {
-		return "", sql.NullString{}, fmt.Errorf("archive original: %w", err)
+	archivedOriginal, err := archiveOne(target.OriginalPath)
+	if err != nil {
+		return archivedFiles{}, "", sql.NullString{}, fmt.Errorf("archive original: %w", err)
 	}
-	if err := archiveOne(target.MarkdownPath); err != nil {
-		return "", sql.NullString{}, fmt.Errorf("archive markdown: %w", err)
+	archivedMarkdown, err := archiveOne(target.MarkdownPath)
+	if err != nil {
+		return archivedFiles{}, "", sql.NullString{}, fmt.Errorf("archive markdown: %w", err)
 	}
+	var archivedHTML sql.NullString
 	if target.HTMLPath.Valid {
-		if err := archiveOne(target.HTMLPath.String); err != nil {
-			return "", sql.NullString{}, fmt.Errorf("archive html: %w", err)
+		p, err := archiveOne(target.HTMLPath.String)
+		if err != nil {
+			return archivedFiles{}, "", sql.NullString{}, fmt.Errorf("archive html: %w", err)
+		}
+		if p != "" {
+			archivedHTML = sql.NullString{String: p, Valid: true}
 		}
 	}
 
 	// Copy shadow's freshly processed content into target's identity.
 	newOriginalPath := filepath.Join("data", "sources", "original", target.SourceID+filepath.Ext(shadow.OriginalPath))
 	if copyErr := copyFile(filepath.Join(s.baseDir, shadow.OriginalPath), filepath.Join(s.baseDir, newOriginalPath)); copyErr != nil {
-		return "", sql.NullString{}, fmt.Errorf("copy shadow original: %w", copyErr)
+		return archivedFiles{}, "", sql.NullString{}, fmt.Errorf("copy shadow original: %w", copyErr)
 	}
 	os.Remove(filepath.Join(s.baseDir, shadow.OriginalPath))
 
 	if copyErr := copyFile(filepath.Join(s.baseDir, shadow.MarkdownPath), filepath.Join(s.baseDir, target.MarkdownPath)); copyErr != nil {
-		return "", sql.NullString{}, fmt.Errorf("copy shadow markdown: %w", copyErr)
+		return archivedFiles{}, "", sql.NullString{}, fmt.Errorf("copy shadow markdown: %w", copyErr)
 	}
 	os.Remove(filepath.Join(s.baseDir, shadow.MarkdownPath))
 
@@ -809,7 +864,8 @@ func (s *Service) archiveAndSwapFiles(target, shadow *Source) (originalPath stri
 		}
 	}
 
-	return newOriginalPath, newHTMLPath, nil
+	archived = archivedFiles{OriginalPath: archivedOriginal, MarkdownPath: archivedMarkdown, HTMLPath: archivedHTML}
+	return archived, newOriginalPath, newHTMLPath, nil
 }
 
 func copyFile(srcPath, dstPath string) error {
@@ -891,6 +947,40 @@ func (s *Service) GetHTMLPreview(sourceID string) (string, error) {
 		return "", err
 	}
 	escaped := strings.ReplaceAll(md, "<", "&lt;")
+	escaped = strings.ReplaceAll(escaped, ">", "&gt;")
+	return "<pre>" + escaped + "</pre>", nil
+}
+
+// GetVersionOriginalPath resolves an archived version's original file for
+// download (GET /sources/:id/versions/:version/download).
+func (s *Service) GetVersionOriginalPath(sourceID string, version int) (fullPath, fileName string, err error) {
+	v, err := s.store.GetSourceVersion(sourceID, version)
+	if err != nil {
+		return "", "", err
+	}
+	return filepath.Join(s.baseDir, v.OriginalPath), v.FileName, nil
+}
+
+// GetVersionHTMLPreview mirrors GetHTMLPreview but reads an archived
+// version's files instead of the source's current ones.
+func (s *Service) GetVersionHTMLPreview(sourceID string, version int) (string, error) {
+	v, err := s.store.GetSourceVersion(sourceID, version)
+	if err != nil {
+		return "", err
+	}
+
+	if v.HTMLPath.Valid {
+		data, err := os.ReadFile(filepath.Join(s.baseDir, v.HTMLPath.String))
+		if err == nil {
+			return string(data), nil
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join(s.baseDir, v.MarkdownPath))
+	if err != nil {
+		return "", fmt.Errorf("read archived markdown: %w", err)
+	}
+	escaped := strings.ReplaceAll(string(data), "<", "&lt;")
 	escaped = strings.ReplaceAll(escaped, ">", "&gt;")
 	return "<pre>" + escaped + "</pre>", nil
 }

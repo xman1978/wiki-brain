@@ -68,7 +68,7 @@ func TestRequestIDMiddleware(t *testing.T) {
 }
 
 func TestLoggingMiddleware(t *testing.T) {
-	handler := LoggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := LoggingMiddleware(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 	}))
 
@@ -87,7 +87,7 @@ func TestChain(t *testing.T) {
 			w.Write([]byte("ok"))
 		}),
 		RequestIDMiddleware,
-		LoggingMiddleware,
+		LoggingMiddleware(nil),
 	)
 
 	w := httptest.NewRecorder()

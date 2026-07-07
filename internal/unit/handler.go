@@ -18,6 +18,7 @@ func NewHandler(svc *Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /sources/{id}/units", h.triggerExtract)
 	mux.HandleFunc("GET /sources/{id}/units", h.listUnits)
+	mux.HandleFunc("GET /sources/{id}/coverage", h.getCoverage)
 	mux.HandleFunc("POST /sources/{id}/kpn-cross", h.triggerCrossKPN)
 	mux.HandleFunc("GET /units/{id}", h.getUnit)
 	mux.HandleFunc("GET /units/{id}/points", h.listPoints)
@@ -109,6 +110,37 @@ func (h *Handler) listUnits(w http.ResponseWriter, r *http.Request) {
 	}
 
 	foundation.WriteJSON(w, http.StatusOK, result)
+}
+
+// getCoverage implements GET /sources/:id/coverage — a read-only diagnostic
+// (no LLM calls, no writes) reporting which lines of the source's current
+// content ended up in no completed KnowledgeUnit at all. See
+// unit.ComputeCoverage for what counts as covered.
+func (h *Handler) getCoverage(w http.ResponseWriter, r *http.Request) {
+	sourceID := r.PathValue("id")
+	if sourceID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "missing source id")
+		return
+	}
+
+	report, err := h.svc.SourceCoverageReport(sourceID)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	totalLines, coveredLines := 0, 0
+	for _, seg := range report {
+		totalLines += seg.TotalLines
+		coveredLines += seg.CoveredLines
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"source_id":     sourceID,
+		"total_lines":   totalLines,
+		"covered_lines": coveredLines,
+		"segments":      report,
+	})
 }
 
 func (h *Handler) getUnit(w http.ResponseWriter, r *http.Request) {

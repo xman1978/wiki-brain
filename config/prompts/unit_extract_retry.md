@@ -1,5 +1,5 @@
 ---
-version: v3
+version: v4
 ---
 
 ## System
@@ -13,7 +13,8 @@ version: v3
 字段要求：
 - unit_id：本地编号（如 "1"）
 - center：核心主题，10~30 字
-- line_start ≤ line_end（绝对行号，与输入文本标注的行号一致）
+- first_line_anchor：该单元第一行原文的开头片段，逐字复制，不超过 30 字，不包含行号标记
+- last_line_anchor：该单元最后一行原文的结尾片段，逐字复制，不超过 30 字，不包含行号标记（单行单元时与 first_line_anchor 相同）
 
 ### 知识点（KP）
 
@@ -34,7 +35,7 @@ version: v3
 ```
 {
   "units": [
-    {"unit_id": "1", "center": "知识单元主题", "line_start": 1, "line_end": 8}
+    {"unit_id": "1", "center": "知识单元主题", "first_line_anchor": "该单元第一行开头", "last_line_anchor": "该单元最后一行结尾"}
   ],
   "points": [
     {"point_id": "1", "unit_id": "1", "content": "可激活摘要内容", "type": "rule"}
@@ -44,7 +45,7 @@ version: v3
 
 ## User
 
-以下文本每行前标注了原文行号，输出的 line_start / line_end 请使用这些行号：
+以下文本每行前标注了原文行号（仅供你判断单元边界参考，不要把行号抄进输出）：
 
 {{text_content}}
 
@@ -59,12 +60,12 @@ version: v3
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["unit_id", "center", "line_start", "line_end"],
+        "required": ["unit_id", "center", "first_line_anchor", "last_line_anchor"],
         "properties": {
-          "unit_id":    { "type": "string", "minLength": 1 },
-          "center":     { "type": "string", "minLength": 1 },
-          "line_start": { "type": "integer", "minimum": 1 },
-          "line_end":   { "type": "integer", "minimum": 1 }
+          "unit_id":           { "type": "string", "minLength": 1 },
+          "center":            { "type": "string", "minLength": 1 },
+          "first_line_anchor": { "type": "string", "minLength": 1 },
+          "last_line_anchor":  { "type": "string", "minLength": 1 }
         }
       }
     },

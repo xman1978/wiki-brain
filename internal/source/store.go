@@ -24,10 +24,26 @@ type Source struct {
 	DomainID            sql.NullString
 	WordCount           sql.NullInt64
 	ShadowOf            sql.NullString
+	Version             int
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 	ProcessingStartedAt sql.NullTime
 	CompletedAt         sql.NullTime
+}
+
+// SourceVersion is a snapshot of a source's files as they were the moment a
+// reupload superseded them (docs/impl/v1/lifecycle.md 步骤 2's archive step,
+// made queryable with a stable version number instead of only a timestamp
+// directory under data/sources/archived/<source_id>/).
+type SourceVersion struct {
+	VersionID    string
+	SourceID     string
+	Version      int
+	FileName     string
+	OriginalPath string
+	HTMLPath     sql.NullString
+	MarkdownPath string
+	ArchivedAt   time.Time
 }
 
 type Outline struct {
@@ -80,12 +96,12 @@ func (s *Store) Create(src *Source) error {
 
 func (s *Store) GetByID(sourceID string) (*Source, error) {
 	src := &Source{}
-	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, created_at, updated_at, processing_started_at, completed_at
+	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at
 		FROM sources WHERE source_id = ?`, sourceID).Scan(
 		&src.SourceID, &src.Title, &src.Format, &src.FileName,
 		&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status,
 		&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
-		&src.WordCount, &src.ShadowOf, &src.CreatedAt, &src.UpdatedAt,
+		&src.WordCount, &src.ShadowOf, &src.Version, &src.CreatedAt, &src.UpdatedAt,
 		&src.ProcessingStartedAt, &src.CompletedAt)
 	if err != nil {
 		return nil, fmt.Errorf("source store: get by id: %w", err)
@@ -98,7 +114,7 @@ func (s *Store) GetByID(sourceID string) (*Source, error) {
 func (s *Store) List(status, domainID string, limit, offset int) ([]Source, error) {
 	var rows *sql.Rows
 	var err error
-	base := `SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, created_at, updated_at, processing_started_at, completed_at FROM sources`
+	base := `SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at FROM sources`
 	where := []string{"shadow_of IS NULL"}
 	var args []any
 	if status != "" {
@@ -124,7 +140,7 @@ func (s *Store) List(status, domainID string, limit, offset int) ([]Source, erro
 		if err := rows.Scan(&src.SourceID, &src.Title, &src.Format, &src.FileName,
 			&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status,
 			&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
-			&src.WordCount, &src.ShadowOf, &src.CreatedAt, &src.UpdatedAt,
+			&src.WordCount, &src.ShadowOf, &src.Version, &src.CreatedAt, &src.UpdatedAt,
 			&src.ProcessingStartedAt, &src.CompletedAt); err != nil {
 			return nil, fmt.Errorf("source store: scan: %w", err)
 		}
@@ -302,6 +318,24 @@ func (s *Store) SwapShadowIntoTarget(shadowID, targetID, originalPath string, ht
 		return fmt.Errorf("source store: swap: get shadow: %w", err)
 	}
 
+	// Unlike units/points (kept under the old source_id and marked superseded
+	// by the caller before this transaction — see CompleteShadowSwap), outline
+	// nodes have no lifecycle field and are filtered purely by deletion
+	// (docs/impl/v1/lifecycle.md 步骤 3), so the target's own pre-reupload
+	// outline rows must be dropped before the shadow's take over the same
+	// source_id — otherwise both sets end up coexisting under one source_id.
+	// The old (now-superseded) units still reference those rows via the
+	// outline_id FK, so it must be cleared first, and this has to happen
+	// before shadow's own units are reparented in below (still cleanly
+	// distinguishable as "everything currently under targetID" only at this
+	// point) or it would also null out the shadow's still-valid outline_id.
+	if _, err := tx.Exec(`UPDATE knowledge_units SET outline_id = NULL WHERE source_id = ? AND outline_id IS NOT NULL`, targetID); err != nil {
+		return fmt.Errorf("source store: swap: clear superseded units' outline_id: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM source_outlines WHERE source_id = ?`, targetID); err != nil {
+		return fmt.Errorf("source store: swap: delete target outlines: %w", err)
+	}
+
 	if _, err := tx.Exec(`UPDATE knowledge_units SET source_id = ? WHERE source_id = ?`, targetID, shadowID); err != nil {
 		return fmt.Errorf("source store: swap: reparent units: %w", err)
 	}
@@ -311,7 +345,7 @@ func (s *Store) SwapShadowIntoTarget(shadowID, targetID, originalPath string, ht
 	if _, err := tx.Exec(`UPDATE source_outlines SET source_id = ? WHERE source_id = ?`, targetID, shadowID); err != nil {
 		return fmt.Errorf("source store: swap: reparent outlines: %w", err)
 	}
-	if _, err := tx.Exec(`UPDATE sources SET file_name = ?, format = ?, summary = ?, domain_id = ?, outline_type = ?, word_count = ?, original_path = ?, html_path = ?, updated_at = CURRENT_TIMESTAMP
+	if _, err := tx.Exec(`UPDATE sources SET file_name = ?, format = ?, summary = ?, domain_id = ?, outline_type = ?, word_count = ?, original_path = ?, html_path = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP
 		WHERE source_id = ?`,
 		shadow.FileName, shadow.Format, shadow.Summary, shadow.DomainID, shadow.OutlineType, shadow.WordCount, originalPath, htmlPath, targetID); err != nil {
 		return fmt.Errorf("source store: swap: update target metadata: %w", err)
@@ -321,6 +355,51 @@ func (s *Store) SwapShadowIntoTarget(shadowID, targetID, originalPath string, ht
 	}
 
 	return tx.Commit()
+}
+
+func (s *Store) InsertSourceVersion(v *SourceVersion) error {
+	if v.VersionID == "" {
+		v.VersionID = uuid.New().String()
+	}
+	_, err := s.db.Exec(`INSERT INTO source_versions (version_id, source_id, version, file_name, original_path, html_path, markdown_path)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		v.VersionID, v.SourceID, v.Version, v.FileName, v.OriginalPath, v.HTMLPath, v.MarkdownPath)
+	if err != nil {
+		return fmt.Errorf("source store: insert source version: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GetSourceVersions(sourceID string) ([]SourceVersion, error) {
+	rows, err := s.db.Query(`SELECT version_id, source_id, version, file_name, original_path, html_path, markdown_path, archived_at
+		FROM source_versions WHERE source_id = ? ORDER BY version DESC`, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("source store: get source versions: %w", err)
+	}
+	defer rows.Close()
+
+	var versions []SourceVersion
+	for rows.Next() {
+		var v SourceVersion
+		if err := rows.Scan(&v.VersionID, &v.SourceID, &v.Version, &v.FileName,
+			&v.OriginalPath, &v.HTMLPath, &v.MarkdownPath, &v.ArchivedAt); err != nil {
+			return nil, fmt.Errorf("source store: scan source version: %w", err)
+		}
+		versions = append(versions, v)
+	}
+	return versions, rows.Err()
+}
+
+func (s *Store) GetSourceVersion(sourceID string, version int) (*SourceVersion, error) {
+	v := &SourceVersion{}
+	err := s.db.QueryRow(`SELECT version_id, source_id, version, file_name, original_path, html_path, markdown_path, archived_at
+		FROM source_versions WHERE source_id = ? AND version = ?`, sourceID, version).Scan(
+		&v.VersionID, &v.SourceID, &v.Version, &v.FileName,
+		&v.OriginalPath, &v.HTMLPath, &v.MarkdownPath, &v.ArchivedAt)
+	if err != nil {
+		return nil, fmt.Errorf("source store: get source version: %w", err)
+	}
+	return v, nil
 }
 
 func (s *Store) UpdateWordCount(sourceID string, wordCount int) error {

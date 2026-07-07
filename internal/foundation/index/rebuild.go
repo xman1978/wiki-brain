@@ -39,7 +39,7 @@ func (m *Manager) Rebuild(db *sql.DB, readMarkdown func(sourceID string) ([]stri
 }
 
 func (m *Manager) rebuildUnits(db *sql.DB, readMarkdown func(sourceID string) ([]string, error)) (int, error) {
-	rows, err := db.Query(`SELECT ku.unit_id, ku.source_id, ku.center, ku.line_start, ku.line_end
+	rows, err := db.Query(`SELECT ku.unit_id, ku.source_id, ku.center, ku.line_start, ku.line_end, ku.lifecycle
 		FROM knowledge_units ku WHERE ku.status = 'completed'`)
 	if err != nil {
 		return 0, err
@@ -51,9 +51,9 @@ func (m *Manager) rebuildUnits(db *sql.DB, readMarkdown func(sourceID string) ([
 	mdCache := make(map[string][]string)
 
 	for rows.Next() {
-		var unitID, sourceID, center string
+		var unitID, sourceID, center, lifecycle string
 		var lineStart, lineEnd int
-		if err := rows.Scan(&unitID, &sourceID, &center, &lineStart, &lineEnd); err != nil {
+		if err := rows.Scan(&unitID, &sourceID, &center, &lineStart, &lineEnd, &lifecycle); err != nil {
 			slog.Warn("rebuild: scan unit failed", "error", err)
 			continue
 		}
@@ -77,6 +77,7 @@ func (m *Manager) rebuildUnits(db *sql.DB, readMarkdown func(sourceID string) ([
 			"line_start": lineStart,
 			"line_end":   lineEnd,
 			"content":    content,
+			"lifecycle":  lifecycle,
 		})
 		count++
 
@@ -98,7 +99,7 @@ func (m *Manager) rebuildUnits(db *sql.DB, readMarkdown func(sourceID string) ([
 }
 
 func (m *Manager) rebuildPoints(db *sql.DB) (int, error) {
-	rows, err := db.Query(`SELECT kp.point_id, kp.unit_id, kp.source_id, kp.content, kp.point_type
+	rows, err := db.Query(`SELECT kp.point_id, kp.unit_id, kp.source_id, kp.content, kp.point_type, kp.lifecycle
 		FROM knowledge_points kp
 		INNER JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
 		WHERE ku.status = 'completed'`)
@@ -111,8 +112,8 @@ func (m *Manager) rebuildPoints(db *sql.DB) (int, error) {
 	count := 0
 
 	for rows.Next() {
-		var pointID, unitID, sourceID, content, pointType string
-		if err := rows.Scan(&pointID, &unitID, &sourceID, &content, &pointType); err != nil {
+		var pointID, unitID, sourceID, content, pointType, lifecycle string
+		if err := rows.Scan(&pointID, &unitID, &sourceID, &content, &pointType, &lifecycle); err != nil {
 			slog.Warn("rebuild: scan point failed", "error", err)
 			continue
 		}
@@ -123,6 +124,7 @@ func (m *Manager) rebuildPoints(db *sql.DB) (int, error) {
 			"source_id":  sourceID,
 			"content":    content,
 			"point_type": pointType,
+			"lifecycle":  lifecycle,
 		})
 		count++
 

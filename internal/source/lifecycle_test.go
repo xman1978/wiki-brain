@@ -3,6 +3,8 @@ package source
 import (
 	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -350,5 +352,136 @@ func TestSwapShadowIntoTarget_ReparentsAndCopiesMetadata(t *testing.T) {
 	}
 	if reparented != "target-1" {
 		t.Errorf("shadow unit source_id = %q, want target-1", reparented)
+	}
+
+	if got.Version != 2 {
+		t.Errorf("version = %d, want 2 (incremented from the default 1)", got.Version)
+	}
+}
+
+// TestCompleteShadowSwap_RecordsVersionSnapshot exercises the full
+// CompleteShadowSwap (unlike the store-level test above) so
+// archiveAndSwapFiles actually moves files on disk, verifying: target's
+// version increments, and a source_versions row is recorded pointing at the
+// archived (pre-reupload) file with the version number it superseded.
+func TestCompleteShadowSwap_RecordsVersionSnapshot(t *testing.T) {
+	svc, _ := setupTestService(t)
+	ctx := context.Background()
+
+	writeFile := func(rel, content string) {
+		full := filepath.Join(svc.baseDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	writeFile("data/sources/original/target-1.md", "旧版原文")
+	writeFile("data/sources/markdown/target-1.md", "旧版原文")
+	svc.store.Create(&Source{
+		SourceID: "target-1", Title: "T", Format: "markdown", FileName: "old.md",
+		OriginalPath: "data/sources/original/target-1.md", MarkdownPath: "data/sources/markdown/target-1.md",
+		Status: "completed",
+	})
+
+	writeFile("data/sources/original/shadow-1.md", "新版原文")
+	writeFile("data/sources/markdown/shadow-1.md", "新版原文")
+	svc.store.Create(&Source{
+		SourceID: "shadow-1", Title: "T", Format: "markdown", FileName: "new.md",
+		OriginalPath: "data/sources/original/shadow-1.md", MarkdownPath: "data/sources/markdown/shadow-1.md",
+		Status: "completed", ShadowOf: sql.NullString{String: "target-1", Valid: true},
+	})
+
+	if err := svc.CompleteShadowSwap(ctx, "shadow-1"); err != nil {
+		t.Fatalf("CompleteShadowSwap: %v", err)
+	}
+
+	target, err := svc.store.GetByID("target-1")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if target.Version != 2 {
+		t.Errorf("version = %d, want 2", target.Version)
+	}
+
+	versions, err := svc.store.GetSourceVersions("target-1")
+	if err != nil {
+		t.Fatalf("GetSourceVersions: %v", err)
+	}
+	if len(versions) != 1 {
+		t.Fatalf("got %d versions, want 1", len(versions))
+	}
+	if versions[0].Version != 1 {
+		t.Errorf("archived version number = %d, want 1 (the superseded version)", versions[0].Version)
+	}
+	if versions[0].FileName != "old.md" {
+		t.Errorf("archived file_name = %q, want old.md", versions[0].FileName)
+	}
+
+	archivedContent, err := os.ReadFile(filepath.Join(svc.baseDir, versions[0].OriginalPath))
+	if err != nil {
+		t.Fatalf("read archived original: %v", err)
+	}
+	if string(archivedContent) != "旧版原文" {
+		t.Errorf("archived original content = %q, want 旧版原文", archivedContent)
+	}
+
+	newContent, err := os.ReadFile(filepath.Join(svc.baseDir, target.MarkdownPath))
+	if err != nil {
+		t.Fatalf("read current markdown: %v", err)
+	}
+	if string(newContent) != "新版原文" {
+		t.Errorf("current markdown = %q, want 新版原文 (swapped in from shadow)", newContent)
+	}
+}
+
+// TestSwapShadowIntoTarget_ReplacesOutlinesInsteadOfDuplicating is the
+// regression test for a real incident: outlines have no lifecycle field
+// (unlike units/points, filtered purely by deletion per
+// docs/impl/v1/lifecycle.md 步骤 3), so the swap must delete the target's own
+// pre-reupload outline rows before reparenting the shadow's — otherwise both
+// sets coexist under the same source_id (observed in production: one
+// reuploaded source ended up with 39 duplicate outline rows out of 104).
+func TestSwapShadowIntoTarget_ReplacesOutlinesInsteadOfDuplicating(t *testing.T) {
+	svc, _ := setupTestService(t)
+
+	svc.store.Create(&Source{
+		SourceID: "target-1", Title: "Target Title", Format: "markdown", FileName: "old.md",
+		OriginalPath: "o/target-1.md", MarkdownPath: "m/target-1.md", Status: "completed",
+	})
+	svc.store.Create(&Source{
+		SourceID: "shadow-1", Title: "Shadow Title", Format: "markdown", FileName: "new.md",
+		OriginalPath: "o/shadow-1.md", MarkdownPath: "m/shadow-1.md", Status: "completed",
+		ShadowOf: sql.NullString{String: "target-1", Valid: true},
+	})
+
+	if err := svc.store.InsertOutline(&Outline{
+		OutlineID: "old-outline-1", SourceID: "target-1", Level: 1,
+		Title: "旧版标题", LineStart: 1, LineEnd: 5, NodeType: "structural",
+	}); err != nil {
+		t.Fatalf("insert old outline: %v", err)
+	}
+	if err := svc.store.InsertOutline(&Outline{
+		OutlineID: "new-outline-1", SourceID: "shadow-1", Level: 1,
+		Title: "新版标题", LineStart: 1, LineEnd: 8, NodeType: "structural",
+	}); err != nil {
+		t.Fatalf("insert new outline: %v", err)
+	}
+
+	if err := svc.store.SwapShadowIntoTarget("shadow-1", "target-1", "o/target-1-new.md", sql.NullString{}); err != nil {
+		t.Fatalf("SwapShadowIntoTarget: %v", err)
+	}
+
+	outlines, err := svc.store.GetOutlines("target-1")
+	if err != nil {
+		t.Fatalf("GetOutlines: %v", err)
+	}
+	if len(outlines) != 1 {
+		t.Fatalf("got %d outlines under target-1 after swap, want 1 (old one replaced, not duplicated): %+v", len(outlines), outlines)
+	}
+	if outlines[0].OutlineID != "new-outline-1" || outlines[0].Title != "新版标题" {
+		t.Errorf("surviving outline = %+v, want the shadow's new-outline-1", outlines[0])
 	}
 }

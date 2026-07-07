@@ -481,6 +481,70 @@
           "status": "active"
         }
       ]
+    },
+    {
+      "id": "docker_container_operations",
+      "name": "Docker 容器维护",
+      "description": "用于理解 Docker 容器运行、镜像管理、网络配置、数据卷、日志监控和故障处理。",
+      "status": "active",
+      "concepts": [
+        {
+          "id": "container_lifecycle",
+          "name": "容器生命周期",
+          "aliases": ["容器启动", "容器停止", "容器状态"],
+          "description": "关注容器创建、启动、停止、重启、删除和状态检查。",
+          "boundary": "关注容器运行状态管理，不直接覆盖镜像构建过程。",
+          "status": "active"
+        },
+        {
+          "id": "image_management",
+          "name": "镜像管理",
+          "aliases": ["Docker 镜像", "镜像构建"],
+          "description": "关注镜像拉取、构建、标记、推送、清理和版本管理。",
+          "boundary": "关注镜像制品管理，不直接处理容器运行时故障。",
+          "status": "active"
+        },
+        {
+          "id": "container_networking",
+          "name": "容器网络",
+          "aliases": ["Docker 网络", "端口映射", "容器连通"],
+          "description": "关注容器网络模式、端口映射、DNS、网桥和容器间通信。",
+          "boundary": "关注容器网络层面，不直接覆盖宿主机完整网络架构。",
+          "status": "active"
+        },
+        {
+          "id": "volume_management",
+          "name": "数据卷管理",
+          "aliases": ["Docker Volume", "目录挂载", "持久化存储"],
+          "description": "关注数据卷、绑定挂载、持久化数据、权限和挂载路径管理。",
+          "boundary": "关注容器数据持久化，不直接等同于数据库备份恢复。",
+          "status": "active"
+        },
+        {
+          "id": "container_logs_monitoring",
+          "name": "容器日志与监控",
+          "aliases": ["容器日志", "运行监控", "资源监控"],
+          "description": "关注容器日志查看、资源占用、健康检查、告警和运行指标。",
+          "boundary": "关注容器运行观测，不直接覆盖应用业务日志分析全部内容。",
+          "status": "active"
+        },
+        {
+          "id": "container_fault_diagnosis",
+          "name": "容器故障诊断",
+          "aliases": ["容器故障", "容器排查", "启动失败"],
+          "description": "关注容器启动失败、异常退出、网络不通、挂载失败和资源不足等问题定位。",
+          "boundary": "关注容器层面的故障定位和处置，不直接覆盖应用代码缺陷修复。",
+          "status": "active"
+        },
+        {
+          "id": "compose_operations",
+          "name": "Compose 编排维护",
+          "aliases": ["Docker Compose", "compose 服务", "多容器编排"],
+          "description": "关注 compose 文件、服务依赖、环境变量、网络、数据卷和多容器启动维护。",
+          "boundary": "关注单机多容器编排，不直接等同于 Kubernetes 集群管理。",
+          "status": "active"
+        }
+      ]
     }
   ]
 }

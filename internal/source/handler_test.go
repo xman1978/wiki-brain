@@ -210,6 +210,87 @@ func TestHandlerGetMarkdown(t *testing.T) {
 	}
 }
 
+func TestHandlerSourceVersions(t *testing.T) {
+	svc, _ := setupTestService(t)
+	handler := NewHandler(svc)
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	sourceID := "ver-test"
+	svc.store.Create(&Source{
+		SourceID: sourceID, Title: "Test", Format: "markdown", FileName: "current.md",
+		OriginalPath: "data/sources/original/" + sourceID + ".md",
+		MarkdownPath: "data/sources/markdown/" + sourceID + ".md",
+		Status:       "completed",
+	})
+
+	archiveDir := filepath.Join(svc.baseDir, "data", "sources", "archived", sourceID, "20260101T000000Z")
+	os.MkdirAll(archiveDir, 0755)
+	archivedRel := filepath.Join("data", "sources", "archived", sourceID, "20260101T000000Z", "old.md")
+	os.WriteFile(filepath.Join(svc.baseDir, archivedRel), []byte("旧版内容"), 0644)
+
+	if err := svc.store.InsertSourceVersion(&SourceVersion{
+		SourceID: sourceID, Version: 1, FileName: "old.md",
+		OriginalPath: archivedRel, MarkdownPath: archivedRel,
+	}); err != nil {
+		t.Fatalf("InsertSourceVersion: %v", err)
+	}
+
+	t.Run("list", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/sources/"+sourceID+"/versions", nil)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rr.Code, rr.Body.String())
+		}
+		var items []map[string]interface{}
+		json.NewDecoder(rr.Body).Decode(&items)
+		if len(items) != 1 {
+			t.Fatalf("got %d items, want 1", len(items))
+		}
+		if items[0]["version"] != float64(1) || items[0]["file_name"] != "old.md" {
+			t.Errorf("item = %+v", items[0])
+		}
+	})
+
+	t.Run("download", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/sources/"+sourceID+"/versions/1/download", nil)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rr.Code, rr.Body.String())
+		}
+		if got := rr.Body.String(); got != "旧版内容" {
+			t.Errorf("body = %q", got)
+		}
+		if !bytes.Contains([]byte(rr.Header().Get("Content-Disposition")), []byte("old.md")) {
+			t.Errorf("Content-Disposition = %q, want filename old.md", rr.Header().Get("Content-Disposition"))
+		}
+	})
+
+	t.Run("preview", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/sources/"+sourceID+"/versions/1/preview", nil)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rr.Code, rr.Body.String())
+		}
+		if got := rr.Body.String(); got != "<pre>旧版内容</pre>" {
+			t.Errorf("body = %q", got)
+		}
+	})
+
+	t.Run("nonexistent version 404s", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/sources/"+sourceID+"/versions/99/download", nil)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", rr.Code)
+		}
+	})
+}
+
 func TestHandlerRetrySource(t *testing.T) {
 	svc, _ := setupTestService(t)
 	handler := NewHandler(svc)

@@ -46,8 +46,28 @@ func main() {
 
 	baseDir, _ := os.Getwd()
 
-	if _, err := foundation.InitLogger("logs", slog.LevelInfo); err != nil {
+	logOpts := foundation.LogOptions{
+		Level:      cfg.Logging.ParseLevel(),
+		Dir:        cfg.Logging.Dir,
+		Filename:   cfg.Logging.Filename,
+		Console:    cfg.Logging.Console,
+		File:       cfg.Logging.File,
+		MaxSizeMB:  cfg.Logging.MaxSizeMB,
+		MaxBackups: cfg.Logging.MaxBackups,
+		MaxAgeDays: cfg.Logging.MaxAgeDays,
+		Compress:   cfg.Logging.Compress,
+	}
+
+	if _, err := foundation.InitLogger(logOpts); err != nil {
 		fmt.Fprintf(os.Stderr, "初始化日志失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	accessLogOpts := logOpts
+	accessLogOpts.Console = cfg.Logging.AccessConsole
+	accessLogger, err := foundation.NewAccessLogger(accessLogOpts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "初始化访问日志失败: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -238,7 +258,7 @@ func main() {
 	handler := corsMiddleware(
 		foundation.Chain(rootHandler,
 			foundation.RequestIDMiddleware,
-			foundation.LoggingMiddleware,
+			foundation.LoggingMiddleware(accessLogger),
 		),
 	)
 

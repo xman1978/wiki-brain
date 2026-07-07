@@ -64,10 +64,12 @@ func setupReuploadTest(t *testing.T) (*source.Service, *Service, *llm.FakeClient
 }
 
 // setExtractResponse configures the fake unit_extract.md / kpn_extract.md
-// responses for the next call to unitSvc.Extract.
-func setExtractResponse(fake *llm.FakeClient, center, pointContent string) {
+// responses for the next call to unitSvc.Extract. firstLineAnchor/
+// lastLineAnchor must be verbatim text from the document's own first/last
+// line so LocateUnitBounds can resolve them.
+func setExtractResponse(fake *llm.FakeClient, center, pointContent, firstLineAnchor, lastLineAnchor string) {
 	extract := extractOutput{
-		Units:  []llmUnit{{UnitID: "1", Center: center, LineStart: 1, LineEnd: 3}},
+		Units:  []llmUnit{{UnitID: "1", Center: center, FirstLineAnchor: firstLineAnchor, LastLineAnchor: lastLineAnchor}},
 		Points: []llmPoint{{PointID: "1", UnitID: "1", Content: pointContent, Type: "definition"}},
 	}
 	extractJSON, _ := json.Marshal(extract)
@@ -116,7 +118,7 @@ func TestReuploadLifecycle_HappyPathSwap(t *testing.T) {
 		t.Fatalf("Import target: %v", err)
 	}
 	seedMarkdown(t, tmpDir, target)
-	setExtractResponse(fake, "旧版政策", "旧版规定内容")
+	setExtractResponse(fake, "旧版政策", "旧版规定内容", "# 政策", "旧版内容第一行。")
 	importProcessExtract(t, sourceSvc, unitSvc, target.SourceID)
 
 	oldUnits, err := unitSvc.store.GetUnitsBySourceID(target.SourceID)
@@ -152,7 +154,7 @@ func TestReuploadLifecycle_HappyPathSwap(t *testing.T) {
 		t.Errorf("old unit lifecycle mid-flight = %q, want current (untouched until swap)", midUnit.Lifecycle)
 	}
 
-	setExtractResponse(fake, "新版政策", "新版规定内容")
+	setExtractResponse(fake, "新版政策", "新版规定内容", "# 政策", "新版内容第一行。")
 	importProcessExtract(t, sourceSvc, unitSvc, shadow.SourceID)
 
 	if err := sourceSvc.CompleteShadowSwap(context.Background(), shadow.SourceID); err != nil {
@@ -241,6 +243,17 @@ func TestReuploadLifecycle_HappyPathSwap(t *testing.T) {
 	if !foundOldContent {
 		t.Error("archived snapshot should retain the old content for traceability")
 	}
+
+	if finalTarget.Version != 2 {
+		t.Errorf("version after one reupload = %d, want 2", finalTarget.Version)
+	}
+	versions, err := sourceSvc.Store().GetSourceVersions(target.SourceID)
+	if err != nil {
+		t.Fatalf("GetSourceVersions: %v", err)
+	}
+	if len(versions) != 1 || versions[0].Version != 1 {
+		t.Fatalf("versions = %+v, want exactly one entry for version 1", versions)
+	}
 }
 
 func TestReuploadLifecycle_ShadowProcessFailureLeavesTargetUntouched(t *testing.T) {
@@ -254,7 +267,7 @@ func TestReuploadLifecycle_ShadowProcessFailureLeavesTargetUntouched(t *testing.
 		t.Fatalf("Import: %v", err)
 	}
 	seedMarkdown(t, tmpDir, target)
-	setExtractResponse(fake, "A中心", "A的知识点")
+	setExtractResponse(fake, "A中心", "A的知识点", "# A", "内容一。")
 	importProcessExtract(t, sourceSvc, unitSvc, target.SourceID)
 
 	shadow, err := sourceSvc.ImportShadow(context.Background(), target.SourceID, "a-v2.md", strings.NewReader("# A\n\n新内容"))
@@ -292,7 +305,7 @@ func TestReuploadLifecycle_ShadowProcessFailureLeavesTargetUntouched(t *testing.
 	}
 
 	// Simulate the queue re-running the shadow's pipeline after retry.
-	setExtractResponse(fake, "A中心v2", "A的知识点v2")
+	setExtractResponse(fake, "A中心v2", "A的知识点v2", "# A", "新内容")
 	importProcessExtract(t, sourceSvc, unitSvc, shadow.SourceID)
 	if err := sourceSvc.CompleteShadowSwap(context.Background(), shadow.SourceID); err != nil {
 		t.Fatalf("CompleteShadowSwap after retry: %v", err)

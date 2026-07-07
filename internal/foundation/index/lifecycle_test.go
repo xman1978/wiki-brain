@@ -135,6 +135,69 @@ func TestLifecycle_IndexSearchCorruptRebuild(t *testing.T) {
 	}
 }
 
+// TestLifecycle_KeywordFieldSurvivesTermQuery is a regression test for the
+// bug where `lifecycle` fell under DefaultAnalyzer (gse tokenizer) instead of
+// a keyword mapping: TermQuery("current") searches the raw term without
+// running it through gse, so it never matched whatever gse had produced at
+// index time, and lifecycleCurrentQuery's conjunction always returned zero
+// hits — for every query, not just this project's specific test cases.
+func TestLifecycle_KeywordFieldSurvivesTermQuery(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	idxDir := filepath.Join(t.TempDir(), "idx")
+	mdDir := filepath.Join(t.TempDir(), "md")
+	os.MkdirAll(mdDir, 0755)
+
+	mdContent := "# 集群维护\n\n重启集群需要先停止再启动。\n"
+	mdPath := filepath.Join(mdDir, "s1.md")
+	os.WriteFile(mdPath, []byte(mdContent), 0644)
+
+	db.Exec(`INSERT INTO sources (source_id, title, format, file_name, original_path, markdown_path, status)
+		VALUES ('s1', '集群维护', 'md', 's1.md', ?, ?, 'completed')`, mdPath, mdPath)
+	db.Exec(`INSERT INTO knowledge_units (unit_id, source_id, center, line_start, line_end, status, prompt_version, lifecycle)
+		VALUES ('u1', 's1', '集群重启', 1, 3, 'completed', 'v1', 'current')`)
+	db.Exec(`INSERT INTO knowledge_points (point_id, unit_id, source_id, content, point_type, lifecycle)
+		VALUES ('p1', 'u1', 's1', '重启集群需要先停止再启动', 'method', 'current')`)
+
+	readMD := func(sourceID string) ([]string, error) {
+		data, err := os.ReadFile(filepath.Join(mdDir, sourceID+".md"))
+		if err != nil {
+			return nil, err
+		}
+		return strings.Split(string(data), "\n"), nil
+	}
+
+	mgr, err := NewManager(idxDir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer mgr.Close()
+
+	if _, err := mgr.Rebuild(db, readMD); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+
+	lifecycleOnly := bleve.NewTermQuery("current")
+	lifecycleOnly.SetField("lifecycle")
+	req := bleve.NewSearchRequest(lifecycleOnly)
+	res, err := mgr.Units.Search(req)
+	if err != nil {
+		t.Fatalf("lifecycle term query: %v", err)
+	}
+	if res.Total == 0 {
+		t.Fatal("TermQuery(lifecycle=current) matched 0 units — keyword field mapping regressed")
+	}
+
+	conj := bleve.NewConjunctionQuery(bleve.NewMatchQuery("重启"), lifecycleOnly)
+	req2 := bleve.NewSearchRequest(conj)
+	res2, err := mgr.Units.Search(req2)
+	if err != nil {
+		t.Fatalf("conjunction query: %v", err)
+	}
+	if res2.Total == 0 {
+		t.Fatal("MatchQuery(重启) AND TermQuery(lifecycle=current) matched 0 units — this is the exact retrieval.ftsRecall failure mode")
+	}
+}
+
 func assertSearch(t *testing.T, idx bleve.Index, query string, expectHit bool, label string) {
 	t.Helper()
 	q := bleve.NewMatchQuery(query)

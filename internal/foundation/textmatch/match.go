@@ -1,15 +1,22 @@
-package evidence
+// Package textmatch locates model-produced text anchors within original
+// source content: exact match first, then a whitespace-collapsed fuzzy match
+// that still resolves back to the verbatim original-text span. Shared by
+// evidence mining (docs/impl/v1/evidence.md 步骤 3.1-3.2) and unit boundary
+// resolution (internal/unit) — both need "the model gives text, the program
+// finds where it really is" instead of trusting a model-reported offset.
+package textmatch
 
 import (
 	"strings"
 	"unicode/utf8"
 )
 
-// matchFragment implements docs/impl/v1/evidence.md 步骤 3.1-3.2: exact match
-// first, then a whitespace-collapsed fuzzy match that still resolves back to
-// the verbatim original-text span (content is always taken from the
-// original, never from the model's own whitespace/indentation).
-func matchFragment(content, fragment string) (startByte, endByte int, matched string, ok bool) {
+// MatchFragment finds fragment within content, exact first, then with both
+// sides' whitespace runs collapsed to single spaces (tolerating a model's
+// reflow of newlines/indentation). The returned span and matched text always
+// refer to the original content, never the model's (possibly collapsed)
+// rendering.
+func MatchFragment(content, fragment string) (startByte, endByte int, matched string, ok bool) {
 	if idx := strings.Index(content, fragment); idx >= 0 {
 		return idx, idx + len(fragment), fragment, true
 	}
@@ -38,7 +45,7 @@ func matchFragment(content, fragment string) (startByte, endByte int, matched st
 // collapseWhitespace folds every run of space/tab/newline/CR into a single
 // space, and returns, per rune of the collapsed string, the [start,end) byte
 // range in the original string that rune's run came from — the mapping
-// matchFragment uses to translate a match in collapsed-space back to a
+// MatchFragment uses to translate a match in collapsed-space back to a
 // verbatim original-text span.
 func collapseWhitespace(s string) (collapsed string, starts, ends []int) {
 	runes := []rune(s)
@@ -76,11 +83,10 @@ func isSpaceRune(r rune) bool {
 	return r == ' ' || r == '\t' || r == '\n' || r == '\r'
 }
 
-// byteRangeToLines converts a [startByte,endByte) span within content into
-// 1-based, inclusive line numbers relative to content itself (the "KU 内相对
-// 行号" of docs/impl/v1/evidence.md 步骤 3.5 — the caller adds
-// KU.LineStart-1 to get absolute source-file line numbers).
-func byteRangeToLines(content string, startByte, endByte int) (lineStart, lineEnd int) {
+// ByteRangeToLines converts a [startByte,endByte) span within content into
+// 1-based, inclusive line numbers relative to content itself (the caller adds
+// its own offset to get absolute source-file line numbers).
+func ByteRangeToLines(content string, startByte, endByte int) (lineStart, lineEnd int) {
 	lineStart = 1 + strings.Count(content[:startByte], "\n")
 	end := endByte
 	if end > 0 && end <= len(content) && content[end-1] == '\n' {

@@ -10,7 +10,13 @@ import (
 func TestInitLogger(t *testing.T) {
 	dir := t.TempDir()
 
-	logger, err := InitLogger(dir, slog.LevelInfo)
+	logger, err := InitLogger(LogOptions{
+		Level:    slog.LevelInfo,
+		Dir:      dir,
+		Filename: "wiki-brain.log",
+		Console:  true,
+		File:     true,
+	})
 	if err != nil {
 		t.Fatalf("InitLogger: %v", err)
 	}

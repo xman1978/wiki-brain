@@ -42,6 +42,19 @@ server:
   write_timeout:   "60s"
   max_concurrency: 100                  # 最大并发请求数，0 表示不限制
 
+# 日志配置
+logging:
+  level:          "info"                # 日志级别：debug / info / warn / error
+  console:        true                  # 业务日志是否输出到控制台
+  file:           true                  # 是否输出到文件
+  dir:            "logs"                # 日志文件存放目录
+  filename:       "wiki-brain.log"      # 日志文件名
+  max_size_mb:    10                    # 单个日志文件大小上限（MB），超出后轮转
+  max_backups:    5                     # 保留的历史轮转文件数量，0 表示不限制
+  max_age_days:   0                     # 历史轮转文件保留天数，0 表示不按天数清理
+  compress:       false                 # 轮转后的历史文件是否压缩（gzip）
+  access_console: false                 # 访问日志（http request）是否额外打印到控制台
+
 # 数据库
 database:
   path: "data/wiki-brain.db"            # SQLite 文件路径，相对于工作目录

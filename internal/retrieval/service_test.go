@@ -148,6 +148,36 @@ func TestDomainPreFilterFallback(t *testing.T) {
 	}
 }
 
+// TestDomainPreFilterZeroMatchFallback covers the case where the LLM returns
+// well-formed, real domain_ids but none of them (nor a null domain_id) match
+// any source — e.g. the question is routed to a domain with no sources yet.
+// domainPreFilter must fall back to all sources instead of starving the rest
+// of the pipeline (all four degraded-input branches now behave the same way).
+func TestDomainPreFilterZeroMatchFallback(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	store := NewStore(db)
+
+	db.Exec(`INSERT INTO domains (domain_id, name, description) VALUES ('d1', 'Math', 'Mathematics')`)
+	db.Exec(`INSERT INTO domains (domain_id, name, description) VALUES ('d2', 'Physics', 'Physics')`)
+	db.Exec(`INSERT INTO sources (source_id, title, format, file_name, original_path, markdown_path, status, domain_id)
+		VALUES ('s1', 'Algebra', 'md', 'algebra.md', '/tmp/algebra.md', '/tmp/algebra.md', 'completed', 'd1')`)
+
+	fake := llm.NewFakeClient()
+	fake.SetResponse("question_domain_match.md", llm.FakeResponse{
+		Output: `{"domain_ids": ["d2"]}`,
+	})
+
+	svc := NewService(store, fake, nil, nil, nil, &config.Config{}, nil, nil, nil)
+
+	sources, err := svc.domainPreFilter(context.Background(), "something")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("expected fallback to all 1 source, got %d", len(sources))
+	}
+}
+
 func TestSourceSemanticFilter(t *testing.T) {
 	svc, fake, _ := setupTestService(t)
 
@@ -311,7 +341,7 @@ func TestBuildEvidenceSet(t *testing.T) {
 		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50},
 	}
 
-	es, err := svc.buildEvidenceSet(context.Background(), "test question", "", "", "", "", "short", direct, supporting, nil)
+	es, err := svc.buildEvidenceSet(context.Background(), "test question", "", "", "", "", "short", direct, supporting, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -68,19 +68,25 @@ func (w *statusWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }
 
-func LoggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(sw, r)
-		slog.Info("http request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", sw.status,
-			"duration_ms", time.Since(start).Milliseconds(),
-			"request_id", RequestID(r.Context()),
-		)
-	})
+// LoggingMiddleware 使用 logger 记录访问日志；logger 为 nil 时使用 slog 默认 logger。
+func LoggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(sw, r)
+			logger.Info("http request",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", sw.status,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"request_id", RequestID(r.Context()),
+			)
+		})
+	}
 }
 
 func NewRouter() *http.ServeMux {

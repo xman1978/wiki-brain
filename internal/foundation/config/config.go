@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 type Config struct {
 	LLM       LLMConfig       `yaml:"llm"`
 	Server    ServerConfig    `yaml:"server"`
+	Logging   LoggingConfig   `yaml:"logging"`
 	Database  DatabaseConfig  `yaml:"database"`
 	Index     IndexConfig     `yaml:"index"`
 	Queue     QueueConfig     `yaml:"queue"`
@@ -47,6 +49,34 @@ type ServerConfig struct {
 	ReadTimeout    string `yaml:"read_timeout"`
 	WriteTimeout   string `yaml:"write_timeout"`
 	MaxConcurrency int    `yaml:"max_concurrency"`
+}
+
+// LoggingConfig — 日志级别、输出目的地、轮转策略配置（docs/impl/mvp/foundation.md 步骤 7）。
+type LoggingConfig struct {
+	Level         string `yaml:"level"`          // debug / info / warn / error
+	Dir           string `yaml:"dir"`            // 日志文件存放目录
+	Filename      string `yaml:"filename"`       // 日志文件名
+	Console       bool   `yaml:"console"`        // 业务日志是否输出到控制台
+	File          bool   `yaml:"file"`           // 是否输出到文件
+	MaxSizeMB     int    `yaml:"max_size_mb"`    // 单个日志文件大小上限（MB），超出后轮转
+	MaxBackups    int    `yaml:"max_backups"`    // 保留的历史轮转文件数量，0 表示不限制
+	MaxAgeDays    int    `yaml:"max_age_days"`   // 历史轮转文件保留天数，0 表示不按天数清理
+	Compress      bool   `yaml:"compress"`       // 轮转后的历史文件是否压缩（gzip）
+	AccessConsole bool   `yaml:"access_console"` // 访问日志（http request）是否额外打印到控制台
+}
+
+// ParseLevel 将配置的字符串日志级别解析为 slog.Level，无法识别时回退为 info。
+func (c *LoggingConfig) ParseLevel() slog.Level {
+	switch strings.ToLower(c.Level) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 type DatabaseConfig struct {
@@ -180,9 +210,22 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 
+	applyLoggingDefaults(&cfg)
 	applyEnvOverrides(&cfg)
 
 	return &cfg, nil
+}
+
+func applyLoggingDefaults(cfg *Config) {
+	if cfg.Logging.Level == "" {
+		cfg.Logging.Level = "info"
+	}
+	if cfg.Logging.Dir == "" {
+		cfg.Logging.Dir = "logs"
+	}
+	if cfg.Logging.Filename == "" {
+		cfg.Logging.Filename = "wiki-brain.log"
+	}
 }
 
 func findConfigFile(explicit string) (string, error) {
@@ -225,6 +268,9 @@ func applyEnvOverrides(cfg *Config) {
 		"WB_SERVER_PATH_PREFIX":   &cfg.Server.PathPrefix,
 		"WB_SERVER_READ_TIMEOUT":  &cfg.Server.ReadTimeout,
 		"WB_SERVER_WRITE_TIMEOUT": &cfg.Server.WriteTimeout,
+		"WB_LOGGING_LEVEL":        &cfg.Logging.Level,
+		"WB_LOGGING_DIR":          &cfg.Logging.Dir,
+		"WB_LOGGING_FILENAME":     &cfg.Logging.Filename,
 	}
 
 	for env, ptr := range overrides {
@@ -240,6 +286,9 @@ func applyEnvOverrides(cfg *Config) {
 		"WB_LLM_MAX_RETRIES":        &cfg.LLM.MaxRetries,
 		"WB_QUEUE_BUFFER_SIZE":      &cfg.Queue.BufferSize,
 		"WB_QUEUE_WORKERS":          &cfg.Queue.Workers,
+		"WB_LOGGING_MAX_SIZE_MB":    &cfg.Logging.MaxSizeMB,
+		"WB_LOGGING_MAX_BACKUPS":    &cfg.Logging.MaxBackups,
+		"WB_LOGGING_MAX_AGE_DAYS":   &cfg.Logging.MaxAgeDays,
 	}
 
 	for env, ptr := range intOverrides {

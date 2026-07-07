@@ -226,7 +226,7 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 		}
 	}
 
-	es, err := s.buildEvidenceSet(ctx, qc.Question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, "short", directCands, supportingCands, conflictCandidates)
+	es, err := s.buildEvidenceSet(ctx, qc.Question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, "short", directCands, supportingCands, conflictCandidates, nil)
 	if err != nil {
 		slog.Warn("retrieval: fast path build evidence set failed, falling back to slow path", "error", err)
 		return nil, activationHits, false
@@ -357,7 +357,7 @@ func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progres
 	emit("rerank", "done", fmt.Sprintf("%d 直接 · %d 补充", len(direct), len(supporting)), time.Since(rerankStart).Milliseconds())
 
 	// Step 10: Build EvidenceSet
-	es, err := s.buildEvidenceSet(ctx, question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, path, direct, supporting, conflictCandidates)
+	es, err := s.buildEvidenceSet(ctx, question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, path, direct, supporting, conflictCandidates, progress)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: build evidence set: %w", err)
 	}
@@ -400,7 +400,15 @@ func (s *Service) domainPreFilter(ctx context.Context, question string) ([]Sourc
 		return s.store.ListAllSources()
 	}
 
-	return s.store.ListSourcesByDomainIDs(result.DomainIDs)
+	sources, err := s.store.ListSourcesByDomainIDs(result.DomainIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(sources) == 0 {
+		slog.Warn("retrieval: domain match matched zero sources, falling back to all sources", "domain_ids", result.DomainIDs)
+		return s.store.ListAllSources()
+	}
+	return sources, nil
 }
 
 // Step 3: Source semantic filter
@@ -1110,7 +1118,13 @@ func (s *Service) kpnExpand(candidates []candidate) ([]candidate, []candidate, e
 // final EvidenceSet (docs/impl/v1/retrieval.md 步骤 3-4). Mining runs once
 // here for both the fast and slow paths, since both funnel through this
 // function.
-func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, intent, audience, constraint, path string, direct, supporting, conflicts []candidate) (*EvidenceSet, error) {
+func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, intent, audience, constraint, path string, direct, supporting, conflicts []candidate, progress ProgressFunc) (*EvidenceSet, error) {
+	emit := func(phase, status, detail string, dur int64) {
+		if progress != nil {
+			progress(ProgressEvent{Phase: phase, Status: status, Detail: detail, Duration: dur})
+		}
+	}
+
 	es := &EvidenceSet{
 		Question:       question,
 		Subject:        subject,
@@ -1146,10 +1160,19 @@ func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, inten
 	appendItems(direct, evidence.RoleDirect)
 	appendItems(supporting, evidence.RoleSupporting)
 
+	emit("evidence", "start", fmt.Sprintf("%d 条候选", len(items)), 0)
+	evidenceStart := time.Now()
 	mined := items
 	if s.evidenceSvc != nil {
 		mined = s.evidenceSvc.Mine(ctx, question, subject, intent, items)
 	}
+	minedCount := 0
+	for _, item := range mined {
+		if item.Mined {
+			minedCount++
+		}
+	}
+	emit("evidence", "done", fmt.Sprintf("%d/%d 条片段化", minedCount, len(mined)), time.Since(evidenceStart).Milliseconds())
 
 	for _, item := range mined {
 		ref := SourceRef{SourceID: item.SourceID, LineStart: item.LineStart, LineEnd: item.LineEnd}

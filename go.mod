@@ -3,9 +3,19 @@ module github.com/jxman78/wiki-brain
 go 1.26.4
 
 require (
+	github.com/blevesearch/bleve/v2 v2.6.0
+	github.com/go-ego/gse v1.0.2
+	github.com/google/uuid v1.6.0
+	github.com/kaptinlin/jsonrepair v0.4.8
+	github.com/mattn/go-sqlite3 v1.14.47
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
+	gopkg.in/yaml.v3 v3.0.1
+)
+
+require (
 	github.com/RoaringBitmap/roaring/v2 v2.14.5 // indirect
 	github.com/bits-and-blooms/bitset v1.24.2 // indirect
-	github.com/blevesearch/bleve/v2 v2.6.0 // indirect
 	github.com/blevesearch/bleve_index_api v1.3.11 // indirect
 	github.com/blevesearch/geo v0.2.5 // indirect
 	github.com/blevesearch/go-faiss v1.1.0 // indirect
@@ -24,19 +34,13 @@ require (
 	github.com/blevesearch/zapx/v15 v15.4.3 // indirect
 	github.com/blevesearch/zapx/v16 v16.3.4 // indirect
 	github.com/blevesearch/zapx/v17 v17.1.2 // indirect
-	github.com/go-ego/gse v1.0.2 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260601182631-00ed12fed2a6 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/json-iterator/go v0.0.0-20171115153421-f7279a603ede // indirect
-	github.com/kaptinlin/jsonrepair v0.4.8 // indirect
-	github.com/mattn/go-sqlite3 v1.14.47 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/vcaesar/cedar v0.30.0 // indirect
 	go.etcd.io/bbolt v1.4.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

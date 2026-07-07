@@ -12,6 +12,7 @@ import (
 
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/foundation/textmatch"
 )
 
 type Service struct {
@@ -221,7 +222,7 @@ func (s *Service) mineCandidate(c EvidenceItem, fragments []string) (items []Evi
 			dropped++
 			continue
 		}
-		startByte, endByte, matched, ok := matchFragment(c.Content, frag)
+		startByte, endByte, matched, ok := textmatch.MatchFragment(c.Content, frag)
 		if !ok {
 			dropped++
 			preview := frag
@@ -232,7 +233,7 @@ func (s *Service) mineCandidate(c EvidenceItem, fragments []string) (items []Evi
 				"unit_id", c.UnitID, "fragment_preview", preview)
 			continue
 		}
-		relStart, relEnd := byteRangeToLines(c.Content, startByte, endByte)
+		relStart, relEnd := textmatch.ByteRangeToLines(c.Content, startByte, endByte)
 		spans = append(spans, fragmentSpan{
 			content:   matched,
 			lineStart: c.LineStart - 1 + relStart,
