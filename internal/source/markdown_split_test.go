@@ -10,7 +10,7 @@ func TestSplitWindowsByMarkdown_PreservesCodeBlock(t *testing.T) {
 	lines := strings.Split(content, "\n")
 
 	// Small maxRunes to force a split
-	windows := splitWindowsByMarkdown(lines, 60, 0.05)
+	windows := splitWindowsByMarkdown(lines, 60, 0.05, false)
 	if len(windows) < 2 {
 		t.Fatalf("expected multiple windows, got %d", len(windows))
 	}
@@ -36,7 +36,7 @@ func TestSplitWindowsByMarkdown_PreservesTable(t *testing.T) {
 	content := strings.Repeat("这是一段文本内容。\n", 10) + "\n| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n| 5 | 6 |\n\n## Next"
 	lines := strings.Split(content, "\n")
 
-	windows := splitWindowsByMarkdown(lines, 120, 0.05)
+	windows := splitWindowsByMarkdown(lines, 120, 0.05, false)
 	if len(windows) < 1 {
 		t.Fatal("expected at least 1 window")
 	}
@@ -71,7 +71,7 @@ func TestSplitWindowsByMarkdown_PrefersHeadingBoundary(t *testing.T) {
 		lines = append(lines, "More content.")
 	}
 
-	windows := splitWindowsByMarkdown(lines, 200, 0.05)
+	windows := splitWindowsByMarkdown(lines, 200, 0.05, false)
 	if len(windows) < 2 {
 		t.Fatalf("expected multiple windows, got %d", len(windows))
 	}
@@ -88,12 +88,83 @@ func TestSplitWindowsByMarkdown_SingleWindow(t *testing.T) {
 	content := "# Title\n\nShort content."
 	lines := strings.Split(content, "\n")
 
-	windows := splitWindowsByMarkdown(lines, 10000, 0.05)
+	windows := splitWindowsByMarkdown(lines, 10000, 0.05, false)
 	if len(windows) != 1 {
 		t.Errorf("expected 1 window, got %d", len(windows))
 	}
 	if windows[0].StartLine != 1 || windows[0].EndLine != len(lines) {
 		t.Errorf("window = %d-%d, want 1-%d", windows[0].StartLine, windows[0].EndLine, len(lines))
+	}
+}
+
+// TestSplitWindowsByMarkdown_AvoidCuttingIndivisible_OversizeTable covers the
+// splitOversizeLeaf use case: a table bigger than maxRunes must stay whole in
+// one (over-budget) window rather than being cut mid-table, when the caller
+// opts in via avoidCuttingIndivisible=true.
+func TestSplitWindowsByMarkdown_AvoidCuttingIndivisible_OversizeTable(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("intro line\n\n")
+	b.WriteString("| A | B |\n| --- | --- |\n")
+	for i := 0; i < 30; i++ {
+		b.WriteString("| row | value that is reasonably long to add up runes |\n")
+	}
+	b.WriteString("\nafter table\n")
+	lines := strings.Split(b.String(), "\n")
+
+	windows := splitWindowsByMarkdown(lines, 200, 0, true)
+	if len(windows) == 0 {
+		t.Fatal("expected at least one window")
+	}
+
+	// The table (starting at "| A | B |") must never be split mid-table: for
+	// every window, if it contains the table's start it must also contain
+	// its last row.
+	lastRowIdx := -1
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "| row") {
+			lastRowIdx = i
+		}
+	}
+	for _, w := range windows {
+		hasStart, hasLastRow := false, false
+		for i := w.StartLine; i <= w.EndLine; i++ {
+			if i-1 == lastRowIdx {
+				hasLastRow = true
+			}
+			if i-1 < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i-1]), "| A") {
+				hasStart = true
+			}
+		}
+		if hasStart && !hasLastRow {
+			t.Error("oversize table was split across windows despite avoidCuttingIndivisible=true")
+		}
+	}
+}
+
+// TestSplitWindowsByMarkdown_AvoidCuttingIndivisible_TilesFully verifies the
+// stronger guarantee splitOversizeLeaf relies on: with overlapPercent=0, the
+// resulting windows are contiguous and non-overlapping across the whole
+// input, regardless of avoidCuttingIndivisible forcing some windows over
+// budget.
+func TestSplitWindowsByMarkdown_AvoidCuttingIndivisible_TilesFully(t *testing.T) {
+	content := "一、条款一\n\n正文一。\n\n二、条款二\n\n正文二，这一行稍微长一些用于凑字数凑字数凑字数。\n\n三、条款三\n\n正文三。\n"
+	lines := strings.Split(content, "\n")
+
+	windows := splitWindowsByMarkdown(lines, 20, 0, true)
+	if len(windows) < 2 {
+		t.Fatalf("expected multiple windows, got %d", len(windows))
+	}
+	if windows[0].StartLine != 1 {
+		t.Errorf("first window StartLine = %d, want 1", windows[0].StartLine)
+	}
+	if windows[len(windows)-1].EndLine != len(lines) {
+		t.Errorf("last window EndLine = %d, want %d", windows[len(windows)-1].EndLine, len(lines))
+	}
+	for i := 1; i < len(windows); i++ {
+		if windows[i].StartLine != windows[i-1].EndLine+1 {
+			t.Errorf("window %d starts at %d, want %d (immediately after previous window's end)",
+				i, windows[i].StartLine, windows[i-1].EndLine+1)
+		}
 	}
 }
 

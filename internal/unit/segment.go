@@ -139,13 +139,22 @@ func mergeSmallSegments(segments []Segment, outlines []source.Outline, lines []s
 		return segments
 	}
 
-	// Forward pass: merge small segments into next neighbor
+	// Forward pass: merge small segments into next neighbor, but never across
+	// a different top-level structural ancestor (topAncestorAtLine) — a small
+	// trailing piece of one chapter must not get glued to the next, unrelated
+	// chapter just because both are short. curTop is captured once from the
+	// original (pre-merge) segment, before any absorption happens, so the
+	// whole merge run stays anchored to the section it actually started in.
 	var forward []Segment
 	for i := 0; i < len(segments); i++ {
 		cur := segments[i]
+		curTop := topAncestorAtLine(outlines, cur.LineStart)
 		merged := false
 		for i+1 < len(segments) && segmentCharCount(cur, lines) < minChars {
 			next := segments[i+1]
+			if topAncestorAtLine(outlines, next.LineStart) != curTop {
+				break
+			}
 			cur.LineEnd = next.LineEnd
 			if cur.Title == "" {
 				cur.Title = next.Title
@@ -159,11 +168,13 @@ func mergeSmallSegments(segments []Segment, outlines []source.Outline, lines []s
 		forward = append(forward, cur)
 	}
 
-	// Backward pass: if the last segment is still small, merge into previous
+	// Backward pass: if the last segment is still small, merge into previous —
+	// same top-level-ancestor guard applies.
 	if len(forward) >= 2 {
 		last := &forward[len(forward)-1]
-		if segmentCharCount(*last, lines) < minChars {
-			prev := &forward[len(forward)-2]
+		prev := &forward[len(forward)-2]
+		if segmentCharCount(*last, lines) < minChars &&
+			topAncestorAtLine(outlines, last.LineStart) == topAncestorAtLine(outlines, prev.LineStart) {
 			prev.LineEnd = last.LineEnd
 			prev.OutlineID = matchOutlineByLineRange(outlines, prev.LineStart, prev.LineEnd)
 			forward = forward[:len(forward)-1]
@@ -171,6 +182,42 @@ func mergeSmallSegments(segments []Segment, outlines []source.Outline, lines []s
 	}
 
 	return forward
+}
+
+// topAncestorAtLine finds the outline node that most tightly covers line
+// (the deepest node whose [LineStart,LineEnd] contains it) and walks its
+// ParentID chain up to the node with no parent, returning that root node's
+// OutlineID. mergeSmallSegments uses this to stop merging once two segments
+// belong to different top-level structural sections — e.g. a small trailing
+// semantic child of one chapter merging into an entirely different next
+// chapter (docs/impl/mvp/unit.md 步骤 1).
+func topAncestorAtLine(outlines []source.Outline, line int) string {
+	byID := make(map[string]source.Outline, len(outlines))
+	for _, o := range outlines {
+		byID[o.OutlineID] = o
+	}
+
+	var deepest *source.Outline
+	for i := range outlines {
+		o := &outlines[i]
+		if o.LineStart <= line && o.LineEnd >= line {
+			if deepest == nil || o.Level > deepest.Level {
+				deepest = o
+			}
+		}
+	}
+	if deepest == nil {
+		return ""
+	}
+
+	id := deepest.OutlineID
+	for {
+		o, ok := byID[id]
+		if !ok || !o.ParentID.Valid {
+			return id
+		}
+		id = o.ParentID.String
+	}
 }
 
 // matchOutlineByLineRange 在合并段后，按新的行范围重新匹配最深层（Level 最大）

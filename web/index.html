@@ -1775,6 +1775,23 @@ function showTimeline(title, phase, sourceData, uploadStart) {
       if (s.id === 'upload')   { state = 'done'; time = fmtTime(uploadStart); }
       if (s.id === 'register') { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
       if (s.id === 'convert')  { state = 'active'; }
+    } else if (phase === 'units_pending') {
+      // Source processing (convert) is done, but knowledge-unit extraction
+      // (units_status) is a separate async queue task that only gets
+      // enqueued after that — it is NOT implied by sources.status ===
+      // 'completed', so this phase waits for units_status to independently
+      // reach completed/failed instead of marking "units" done just because
+      // the source status flipped (see sources.units_status, written by
+      // unit.Service's queue handler).
+      if (s.id === 'upload')   { state = 'done'; time = fmtTime(uploadStart); }
+      if (s.id === 'register') { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
+      if (s.id === 'convert')  { state = 'done'; }
+      if (s.id === 'units')    { state = 'active'; }
+    } else if (phase === 'units_failed') {
+      if (s.id === 'upload')   { state = 'done'; time = fmtTime(uploadStart); }
+      if (s.id === 'register') { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
+      if (s.id === 'convert')  { state = 'done'; }
+      if (s.id === 'units')    { state = 'fail'; time = fmtTime(now); }
     } else if (phase === 'completed') {
       state = 'done';
       if (s.id === 'upload')   time = fmtTime(uploadStart);
@@ -1805,7 +1822,11 @@ function showTimelineForSource(sourceId) {
     var errHtml = d.error_msg ? '<div style="margin-top:8px;font-size:11px;color:var(--red);padding:6px 8px;background:var(--red-lt);border-radius:var(--radius-xs)">' + esc(d.error_msg) + '</div>' : '';
     panel.innerHTML = renderTimeline(d.title || d.source_id, steps, d) + errHtml;
 
-    if (d.status === 'processing' || d.status === 'pending') {
+    // Keep polling until BOTH source processing and knowledge-unit extraction
+    // are done — sources.status alone only covers the former (see
+    // buildStepsFromSource / sources.units_status).
+    var unitsSettled = d.units_status === 'completed' || d.units_status === 'failed';
+    if (d.status === 'processing' || d.status === 'pending' || (d.status === 'completed' && !unitsSettled)) {
       clearTimeout(S.pollTimers['tl-' + sourceId]);
       S.pollTimers['tl-' + sourceId] = setTimeout(function() { showTimelineForSource(sourceId); }, 3000);
     }
@@ -1826,10 +1847,13 @@ function buildStepsFromSource(d) {
       else if (d.status === 'processing') { state = 'active'; time = fmtTime(d.processing_started_at); }
       else { state = 'done'; time = fmtTime(d.processing_started_at); }
     } else if (s.id === 'units') {
-      if (d.status === 'completed') { state = 'done'; time = fmtTime(d.completed_at); }
-      else if (d.status === 'failed') { state = 'fail'; time = fmtTime(d.completed_at); }
-      else if (d.status === 'processing') { state = 'wait'; }
-      else { state = 'wait'; }
+      // units_status tracks knowledge-unit extraction independently of
+      // sources.status — that field only reflects source processing, and
+      // extraction is a separate async task enqueued after it completes.
+      if (d.status !== 'completed') { state = 'wait'; }
+      else if (d.units_status === 'completed') { state = 'done'; time = fmtTime(d.completed_at); }
+      else if (d.units_status === 'failed') { state = 'fail'; time = fmtTime(d.completed_at); }
+      else { state = 'active'; }
     }
     return { label: s.label, state: state, time: time };
   });
@@ -1864,14 +1888,39 @@ function fmtTime(t) {
   } catch(e) { return ''; }
 }
 
+// sources.status only reflects source processing (parse/outline) — knowledge
+// -unit extraction is a separate async queue task enqueued right after that,
+// tracked independently in sources.units_status (pending -> processing ->
+// completed/failed, written by unit.Service's queue handler). Both must have
+// reached a terminal state before this timeline shows the source as fully
+// done — otherwise "已完成"/"处理完毕" is shown while units are still (or
+// haven't even started) being extracted, which is the bug this guards against.
 async function pollSourceTimeline(sourceId, title, uploadStart) {
   clearTimeout(S.pollTimers[sourceId]);
   try {
     var r = await api('GET', '/sources/' + sourceId);
     var status = (r.data && r.data.status) || 'unknown';
-    if (status === 'completed') { showTimeline(title, 'completed', r.data, uploadStart); loadSources(); return; }
-    if (status === 'failed') { showTimeline(title, 'failed', r.data, uploadStart); loadSources(); return; }
-    showTimeline(title, 'processing', r.data, uploadStart);
+    var unitsStatus = (r.data && r.data.units_status) || 'pending';
+    if (status === 'failed') {
+      showTimeline(title, 'failed', r.data, uploadStart);
+      loadSources();
+      return;
+    }
+    if (status === 'completed') {
+      if (unitsStatus === 'completed') {
+        showTimeline(title, 'completed', r.data, uploadStart);
+        loadSources();
+        return;
+      }
+      if (unitsStatus === 'failed') {
+        showTimeline(title, 'units_failed', r.data, uploadStart);
+        loadSources();
+        return;
+      }
+      showTimeline(title, 'units_pending', r.data, uploadStart);
+    } else {
+      showTimeline(title, 'processing', r.data, uploadStart);
+    }
   } catch(e) { /* ignore */ }
   S.pollTimers[sourceId] = setTimeout(function() { pollSourceTimeline(sourceId, title, uploadStart); }, 3000);
 }
@@ -1914,7 +1963,7 @@ async function loadSources() {
     if (!src.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无来源</div>'; return; }
     list.innerHTML = src.map(function(s) {
       return '<div class="source-card" id="sc-' + esc(s.source_id) + '" onclick="showTimelineForSource(\'' + esc(s.source_id) + '\')"><div class="sc-title">' + esc(s.title || s.source_id) + '</div><div class="sc-meta">\
-        <span class="status-chip status-' + (s.status || 'unknown') + '">' + statusLabel(s.status) + '</span>\
+        <span class="status-chip status-' + (sourceDisplayStatus(s) || 'unknown') + '">' + statusLabel(sourceDisplayStatus(s)) + '</span>\
         <span class="badge">' + esc(s.format || '') + '</span>\
         ' + (s.domain_name ? '<span class="badge" style="background:var(--bg-3);color:var(--text-2)">' + esc(s.domain_name) + '</span>' : '') + '\
         <span style="font-size:10px;color:var(--text-3)">' + dateStr(s.created_at) + '</span>\
@@ -1945,7 +1994,7 @@ async function viewSource(sourceId) {
         <div class="detail-row"><span class="dl">source_id</span><span class="dv"><code style="font-size:11px">' + esc(d.source_id) + '</code> <button class="copy-btn" onclick="copy(\'' + esc(d.source_id) + '\',this)">复制</button></span></div>\
         <div class="detail-row"><span class="dl">标题</span><span class="dv">' + esc(d.title || '') + '</span></div>\
         <div class="detail-row"><span class="dl">格式</span><span class="dv">' + esc(d.format || '') + '</span></div>\
-        <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="status-chip status-' + (d.status||'') + '">' + statusLabel(d.status) + '</span> <span class="badge">v' + (d.version || 1) + '</span></span></div>\
+        <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="status-chip status-' + (sourceDisplayStatus(d)||'') + '">' + statusLabel(sourceDisplayStatus(d)) + '</span> <span class="badge">v' + (d.version || 1) + '</span></span></div>\
         ' + (d.summary ? '<div class="detail-row"><span class="dl">摘要</span><span class="dv">' + esc(d.summary) + '</span></div>' : '') + '\
         ' + (d.word_count ? '<div class="detail-row"><span class="dl">字数</span><span class="dv">' + d.word_count + '</span></div>' : '') + '\
         ' + (d.error_msg ? '<div class="detail-row"><span class="dl">错误</span><span class="dv" style="color:var(--red)">' + esc(d.error_msg) + '</span></div>' : '') + '\
@@ -2973,6 +3022,18 @@ function dateStr(s) { if (!s) return ''; try { return new Date(s).toLocaleString
 function qualityLabel(q) { return {confident:'置信',partial:'部分',gap:'缺口'}[q] || q || '未知'; }
 function pathLabel(p) { return {short:'简洁模式',deep:'深度推理',none:'无法回答',error:'出错'}[p] || p || '未知'; }
 function statusLabel(s) { return {pending:'等待中',processing:'处理中',completed:'已完成',failed:'失败',deleted:'已删除'}[s] || s || '未知'; }
+
+// sourceDisplayStatus folds units_status (knowledge-unit extraction, a
+// separate async step — see sources.units_status) into the status badge:
+// a source whose own processing finished (status === 'completed') still
+// shows as "处理中" until units_status also reaches completed, instead of
+// the badge claiming 已完成 while extraction hasn't even started yet.
+function sourceDisplayStatus(s) {
+  if (s.status === 'completed' && s.units_status && s.units_status !== 'completed') {
+    return 'processing';
+  }
+  return s.status;
+}
 function recLabel(r) { return {strong:'强推荐',candidate:'候选',ready:'可编译',needs_more_data:'数据不足'}[r] || r || '-'; }
 
 async function copy(text, el) {

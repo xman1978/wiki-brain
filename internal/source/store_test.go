@@ -66,6 +66,47 @@ func TestStoreUpdateStatus(t *testing.T) {
 	}
 }
 
+func TestStoreUpdateUnitsStatus(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	store := NewStore(db)
+
+	src := &Source{
+		Title: "Test", Format: "pdf", FileName: "test.pdf",
+		OriginalPath: "o/t.pdf", MarkdownPath: "m/t.md", Status: "completed",
+	}
+	store.Create(src)
+
+	got, _ := store.GetByID(src.SourceID)
+	if got.UnitsStatus != "pending" {
+		t.Errorf("initial units_status = %q, want pending (column default)", got.UnitsStatus)
+	}
+
+	if err := store.UpdateUnitsStatus(src.SourceID, "processing"); err != nil {
+		t.Fatalf("UpdateUnitsStatus: %v", err)
+	}
+	got, _ = store.GetByID(src.SourceID)
+	if got.UnitsStatus != "processing" {
+		t.Errorf("units_status = %q, want processing", got.UnitsStatus)
+	}
+
+	if err := store.UpdateUnitsStatus(src.SourceID, "completed"); err != nil {
+		t.Fatalf("UpdateUnitsStatus: %v", err)
+	}
+	got, _ = store.GetByID(src.SourceID)
+	if got.UnitsStatus != "completed" {
+		t.Errorf("units_status = %q, want completed", got.UnitsStatus)
+	}
+
+	// List must surface it too — it's a separate SELECT/scan from GetByID.
+	list, err := store.List("", "", 10, 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 || list[0].UnitsStatus != "completed" {
+		t.Errorf("List()[0].UnitsStatus = %+v, want completed", list)
+	}
+}
+
 func TestStoreList(t *testing.T) {
 	db := foundation.NewTestDB(t)
 	store := NewStore(db)

@@ -140,6 +140,19 @@ func (s *Store) UpdateUnitStatus(unitID, status string, errorMsg *string) error 
 	return nil
 }
 
+// UpdateUnitBounds widens a completed unit's line range to absorb a
+// neighboring coverage gap (see gapfill.go). Only line_start/line_end
+// change — center/points are untouched, since the gap's content wasn't
+// judged to warrant its own summary.
+func (s *Store) UpdateUnitBounds(unitID string, lineStart, lineEnd int) error {
+	_, err := s.db.Exec(`UPDATE knowledge_units SET line_start = ?, line_end = ?, updated_at = CURRENT_TIMESTAMP WHERE unit_id = ?`,
+		lineStart, lineEnd, unitID)
+	if err != nil {
+		return fmt.Errorf("unit store: update unit bounds: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) UpdateUnitConceptID(unitID string, conceptID *string) error {
 	var val sql.NullString
 	if conceptID != nil && *conceptID != "" {

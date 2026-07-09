@@ -2,48 +2,81 @@ package unit
 
 import "github.com/jxman78/wiki-brain/internal/foundation/textmatch"
 
-// LocateUnitBounds resolves a unit's absolute line_start/line_end by finding
-// firstAnchor/lastAnchor — verbatim text the model copied from the unit's
-// first and last line — within mdLines[seg.LineStart-1 : seg.LineEnd].
+// LocateUnitBounds resolves a unit's absolute line_start/line_end from the
+// model's reported line numbers (reportedStart/reportedEnd) plus the verbatim
+// anchor text it claims sits on those lines (firstAnchor/lastAnchor).
 //
-// This replaces trusting a model-reported line number (which requires the
-// model to correctly count/copy a bracketed index over a potentially long
-// segment, the likely cause of a KU boundary silently spanning far beyond its
-// actual content): the model only has to give back text, and the program
-// finds where it really is via textmatch.MatchFragment (exact, falling back
-// to whitespace-collapsed fuzzy match), the same "摘选不是改写，结果程序可
-// 校验" principle already used by evidence mining (docs/impl/v1/evidence.md).
+// Neither signal is trusted alone:
+//   - A reported line number alone (prompt_version v2/v3) let a miscounted
+//     index silently swallow a dozen unrelated lines — nothing checked it.
+//   - Anchor text alone, searched blind across the whole segment
+//     (prompt_version v4), can't tell the program which physical line the
+//     model actually meant: MatchFragment is applied one physical mdLines
+//     row at a time, so any anchor the model wrote by blending two adjacent
+//     rows (e.g. a heading on its own line immediately followed, after a
+//     blank line, by its body) can never match any single row and the unit
+//     is lost — even though the model's underlying extraction was correct.
 //
-// cursor hints where to start searching for firstAnchor (pass seg.LineStart
-// for the first unit in a segment, then each call's returned nextCursor for
-// the following one) to disambiguate repeated line content (e.g. "# su –
-// oracle" appearing many times in a segment) — it is only a search-order
+// v5 has the model report both: the claimed line number is first verified by
+// checking the anchor text actually appears on that specific mdLines row
+// (verifyReportedLine, reusing textmatch.MatchFragment's exact-then-fuzzy
+// match). A verified report is trusted directly — no scanning needed, and it
+// disambiguates duplicate line content the blind scan can't. Only when the
+// report fails verification (wrong number, or genuinely hallucinated/
+// cross-line text) does resolution fall back to the v4 line-by-line scan
+// below, so a bad report degrades to exactly today's behavior rather than
+// ever being trusted uncritically.
+//
+// cursor hints where the v4 fallback should start searching for firstAnchor
+// (pass seg.LineStart for the first unit in a segment, then each call's
+// returned nextCursor for the following one) to disambiguate repeated line
+// content when no verified report is available — it is only a search-order
 // hint, not an enforced non-overlap constraint, since some segments
 // legitimately have a broader "overview" unit whose span contains narrower
 // sibling units. If nothing matches from cursor onward, the search restarts
 // from seg.LineStart once, to tolerate the model not listing units in strict
 // document order.
 //
-// Both anchors, and every candidate line, are matched independently
-// line-by-line (never against the segment as one blob) so the resolved
-// boundary can only ever land on an actual line within the segment — the
-// exact failure mode that let one bad unit swallow a dozen unrelated ones is
-// structurally impossible here.
-func LocateUnitBounds(mdLines []string, seg Segment, firstAnchor, lastAnchor string, cursor int) (lineStart, lineEnd, nextCursor int, ok bool) {
-	lineStart, ok = findAnchorLine(mdLines, cursor, seg.LineEnd, firstAnchor)
-	if !ok && cursor != seg.LineStart {
-		lineStart, ok = findAnchorLine(mdLines, seg.LineStart, seg.LineEnd, firstAnchor)
+// Every candidate line is matched independently line-by-line (never against
+// the segment as one blob) so the resolved boundary can only ever land on an
+// actual line within the segment — the exact failure mode that let one bad
+// unit swallow a dozen unrelated ones is structurally impossible here.
+func LocateUnitBounds(mdLines []string, seg Segment, reportedStart int, firstAnchor string, reportedEnd int, lastAnchor string, cursor int) (lineStart, lineEnd, nextCursor int, ok bool) {
+	lineStart, ok = verifyReportedLine(mdLines, seg, reportedStart, firstAnchor)
+	if !ok {
+		lineStart, ok = findAnchorLine(mdLines, cursor, seg.LineEnd, firstAnchor)
+		if !ok && cursor != seg.LineStart {
+			lineStart, ok = findAnchorLine(mdLines, seg.LineStart, seg.LineEnd, firstAnchor)
+		}
 	}
 	if !ok {
 		return 0, 0, cursor, false
 	}
 
-	lineEnd, ok = findAnchorLine(mdLines, lineStart, seg.LineEnd, lastAnchor)
+	lineEnd, ok = verifyReportedLine(mdLines, seg, reportedEnd, lastAnchor)
+	if !ok || lineEnd < lineStart {
+		lineEnd, ok = findAnchorLine(mdLines, lineStart, seg.LineEnd, lastAnchor)
+	}
 	if !ok {
 		return 0, 0, cursor, false
 	}
 
 	return lineStart, lineEnd, lineEnd + 1, true
+}
+
+// verifyReportedLine checks the model's claimed line number is within the
+// segment and that the anchor text it gave actually appears on that specific
+// mdLines row. Returns ok=false for any unverifiable report (out of range,
+// out of the segment, or anchor not found there) so the caller falls back to
+// scanning instead of trusting an unverified number.
+func verifyReportedLine(mdLines []string, seg Segment, reported int, anchor string) (int, bool) {
+	if reported < seg.LineStart || reported > seg.LineEnd || reported < 1 || reported > len(mdLines) {
+		return 0, false
+	}
+	if _, _, _, ok := textmatch.MatchFragment(mdLines[reported-1], anchor); !ok {
+		return 0, false
+	}
+	return reported, true
 }
 
 // findAnchorLine scans mdLines[from-1 : to] (1-based, inclusive) and returns

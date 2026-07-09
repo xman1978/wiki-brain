@@ -137,11 +137,19 @@ Unit 提取按 outline 节点划定范围，每个范围作为一次 LLM 联合�
   - 叶子节点行范围内容字符数（rune）≤ segment_max_chars（默认 4000）：直接作为一段；
   - 叶子节点内容 > segment_max_chars 字符（rune）：按 Markdown 元素边界切行，每段字符数不超过 segment_max_chars，
     不可分割元素（表格、代码块等）整体保留，允许略超限；
-  - 相邻叶子节点内容合计字符数（rune）< source.min_segment_chars（默认 400）：合并为一段；
+  - 相邻叶子节点内容合计字符数（rune）< source.min_segment_chars（默认 400）：合并为一段，
+    但合并不会跨越不同的顶层（Level 1）结构祖先——即使两个叶子节点各自都很小，
+    只要分别属于不同的顶层章节，也不再合并进同一批次，宁可多几次很小的 LLM 调用，
+    也不允许一个提取批次里混入两个不相关章节的内容（`internal/unit/segment.go` 的
+    `topAncestorAtLine`：找到覆盖该行最深的 outline 节点，沿 ParentID 一路走到根节点，
+    比较两侧的根节点是否相同）；
 每段记录：outline_id（或 null）、绝对 line_start、绝对 line_end。
 
 segment_max_chars 与 source.md 中语义目录生成的 segment_max_chars 为同一配置项。
-source.md 的语义目录生成保证叶节点内容 ≤ segment_max_chars，此处切块仅作语义目录生成失败时的安全兜底，正常情况下不触发。
+source.md 的语义目录生成保证叶节点内容 ≤ segment_max_chars（见 source.md 6.5：叶节点超长细化改为
+程序按 Markdown 结构确定性切分、模型只打标题，不再可能产生重叠区间），此处切块仅作语义目录生成
+失败时的安全兜底，正常情况下不触发；不过目前 Unit 侧尚未真正实现这个兜底切分逻辑本身
+（`segmentMaxChars` 参数已预留但未使用），已知的既有缺口，不在本次改动范围内。
 ```
 
 切块策略影响提取粒度，通过评估集验证，不在运行时动态调整。
@@ -150,7 +158,7 @@ source.md 的语义目录生成保证叶节点内容 ≤ segment_max_chars，此
 
 #### 2.1 提取 Prompt
 
-Prompt 文件：`config/prompts/unit_extract.md`（`prompt_version: v4` 起生效，见 2.3 的设计决策）
+Prompt 文件：`config/prompts/unit_extract.md`（`prompt_version: v5` 起生效，见 2.3 的设计决策）
 
 ```
 分析以下文本，识别其中可独立引用的知识面，每个知识面生成一个知识单元（unit）和对应知识点（points）。
@@ -183,7 +191,7 @@ units 和 points 平铺为两个独立数组，通过 `unit_id` 关联，避免�
 ```json
 {
   "units": [
-    {"unit_id": "1", "center": "知识单元主题", "first_line_anchor": "该单元第一行开头，逐字，不超过30字", "last_line_anchor": "该单元最后一行结尾，逐字，不超过30字"}
+    {"unit_id": "1", "center": "知识单元主题", "line_start": 5, "first_line_anchor": "第5行本身的原文开头，逐字，不超过30字", "line_end": 8, "last_line_anchor": "第8行本身的原文结尾，逐字，不超过30字"}
   ],
   "points": [
     {"point_id": "1", "unit_id": "1", "content": "可激活摘要内容", "type": "definition|rule|method|case|question"}
@@ -191,31 +199,39 @@ units 和 points 平铺为两个独立数组，通过 `unit_id` 关联，避免�
 }
 ```
 
-程序将模型输出解析并整合后（锚点定位算出绝对行号、unit_id/point_id 本地编号→UUID、推断归属关系），用 `unit_extract.md` 内 `## Schema` 段的 JSON Schema 校验整合结果，检查：每个 unit 的 `first_line_anchor`/`last_line_anchor` 非空；每个 point 的 `unit_id` 存在于 units 中；每个 unit 至少有 1 个 point；`content` 非空。
+程序将模型输出解析并整合后（锚点定位算出绝对行号、unit_id/point_id 本地编号→UUID、推断归属关系），用 `unit_extract.md` 内 `## Schema` 段的 JSON Schema 校验整合结果，检查：每个 unit 的 `line_start`/`first_line_anchor`/`line_end`/`last_line_anchor` 非空；每个 point 的 `unit_id` 存在于 units 中；每个 unit 至少有 1 个 point；`content` 非空。
 
-#### 2.3 边界定位（不信任模型自报行号）
+#### 2.3 边界定位（不单独信任模型自报的行号，也不单独信任模型抄写的锚点文本）
 
-**设计决策（`prompt_version: v2`~`v3` 曾让模型直接抄行号，`v4` 起改为程序定位，原因见下）**：早期版本把 segment 每行标好绝对行号（`[N] 内容`）喂给模型，直接让模型把它判断的起止行号 `N` 抄进 JSON 里，程序只校验 `line_start <= line_end`，不做任何位置校验。这在实践中出现过模型抄错/数错行号、导致一个单元的行范围大幅跨界、吞并大量无关内容的问题（例如把一个"配置 SSH 无密码登录通道"的单元错误标成跨 25 行，吞掉了中间十几个无关单元）。
+**设计决策沿革**：
 
-`v4` 改为让模型只给"该单元第一行/最后一行的原文锚点文本"（`first_line_anchor`/`last_line_anchor`，逐字复制、不超过 30 字），行号完全由程序在 segment 范围内逐行查找定位（`internal/unit/boundary.go` 的 `LocateUnitBounds`，复用证据挖掘模块 `docs/impl/v1/evidence.md` 同款"精确匹配→空白折叠模糊匹配→放弃"算法，见 `internal/foundation/textmatch`）：
+- `prompt_version: v2`~`v3` 让模型直接抄行号 `N`，程序只校验 `line_start <= line_end`，不做任何位置校验。实践中出现过模型抄错/数错行号、导致一个单元的行范围大幅跨界、吞并大量无关内容的问题（例如把一个"配置 SSH 无密码登录通道"的单元错误标成跨 25 行，吞掉了中间十几个无关单元）。
+- `v4` 改为只让模型给"该单元第一行/最后一行的原文锚点文本"（`first_line_anchor`/`last_line_anchor`，逐字复制、不超过 30 字），行号完全由程序在 segment 范围内逐行查找定位。这避免了 v2/v3 的越界吞并问题，但引入了新的失败模式：`findAnchorLine` 是逐条物理行比对（`mdLines[i-1]` 与锚点整体比较，从不做多行拼接），而模型写锚点时依据的是语义连贯性而非 Markdown 转换产生的物理换行——当一个知识单元的起始句恰好被转换器的段落空行切成两条物理行（例如标题独占一行、隔一个空行后正文另起一行）时，模型自然会把标题和正文开头连成一句去描述"这个单元的开头"，这段锚点文本就不会完整落在任何一条物理行内，导致定位失败、进而被判定为"抽取失败"——即使模型对单元本身的语义切分是完全正确的。这类失败在标题与正文习惯性分行的文档（如"一、二、三…"式条款、每条标题单独成行）中会大量出现，是 V1 阶段发现的"部分文档 KU 覆盖率异常低"问题的根因。
+- `v5` 改为让模型把行号和该行内容一起报（`line_start`+`first_line_anchor`、`line_end`+`last_line_anchor`），程序先校验"模型报的行号"和"模型抄的内容"是否在 `mdLines[N-1]` 上互相印证，只有印证通过才直接采信该行号；印证不通过（模型数错行号，或者锚点文本本身跨越了物理行，本质上还是 v4 的失败场景）则退回 v4 的逐行扫描兜底，安全性下限与 v4 完全一致，不会重新引入 v2/v3 的越界吞并问题。同时，`first_line_anchor`/`last_line_anchor` 的措辞改为强调"必须是该行本身的原文，不得拼接下一行"，从源头减少模型写出跨物理行锚点的概率。
+
+`internal/unit/boundary.go` 的 `LocateUnitBounds` 实现（复用证据挖掘模块 `docs/impl/v1/evidence.md` 同款"精确匹配→空白折叠模糊匹配→放弃"算法，见 `internal/foundation/textmatch`）：
 
 ```text
 逐个 unit（按模型输出顺序）：
-  从 cursor（首个 unit 为 segment.line_start，之后取上一个 unit 定位到的 line_end+1）开始，
-    在 segment 范围内逐行找 first_line_anchor；找不到则从 segment.line_start 整段重新找一遍
-    （容忍模型未按文档顺序输出 units）；
-  从上一步定位到的行开始（含），在 segment 范围内逐行找 last_line_anchor；
+  先验证模型报的 line_start：line_start 必须落在 segment 范围内，且 mdLines[line_start-1]
+    能匹配 first_line_anchor（精确匹配→空白折叠模糊匹配）；验证通过则直接采信 line_start；
+  验证不通过（行号越界、或该行内容对不上锚点）→ 退回逐行扫描：
+    从 cursor（首个 unit 为 segment.line_start，之后取上一个 unit 定位到的 line_end+1）开始，
+      在 segment 范围内逐行找 first_line_anchor；找不到则从 segment.line_start 整段重新找一遍
+      （容忍模型未按文档顺序输出 units）；
+  line_end 同理：先验证模型报的 line_end 与 last_line_anchor 是否在 mdLines[line_end-1] 上互相印证，
+    验证通过直接采信；不通过则从上一步定位到的行开始（含），在 segment 范围内逐行找 last_line_anchor；
   两者都命中 → 绝对 line_start/line_end 就是命中的行号（单行单元时两个锚点会落在同一行）；
-  任一锚点在 segment 范围内完全找不到（含模糊匹配）→ 视为该 unit 定位失败，
+  任一锚点（含验证与兜底扫描）在 segment 范围内完全找不到 → 视为该 unit 定位失败，
     走步骤 3 的单元重试/extraction_failed 路径，不写入行号。
 
 point.point_type = llm_output.type
 point.unit_id    = 系统为对应 unit_id（本地编号）的 unit 分配的 UUID
 ```
 
-cursor 只是"从哪里开始找"的提示、用于消解同一 segment 内重复出现的行内容（如反复出现的 `# su – oracle`），不是强制的单调不重叠约束——语料里存在"总览单元合理包住若干细分单元"的场景，不应被这个机制破坏。
+cursor 只是"从哪里开始找"的提示、用于消解同一 segment 内重复出现的行内容（如反复出现的 `# su – oracle`），不是强制的单调不重叠约束——语料里存在"总览单元合理包住若干细分单元"的场景，不应被这个机制破坏。有了模型报的行号后，重复行内容优先靠行号本身消歧，cursor 只在行号验证不通过时才需要介入。
 
-这个机制能保证的是：定位到的行号一定落在 segment 范围内、一定对应 segment 里真实存在的某一行文字，不会再出现模型凭空报错行号导致越界吞并无关内容的情况。它不能保证的是：模型选中的锚点文本即使真实存在，也可能选到了本单元语义边界之外、但仍在 segment 内的另一行（比如误把下一个无关小节的标题当作本单元的结尾）——这类"选错了但选的是真文字"的语义错误不在这个机制的覆盖范围内。
+这个机制能保证的是：定位到的行号一定落在 segment 范围内、一定对应 segment 里真实存在的某一行文字，不会再出现模型凭空报错行号导致越界吞并无关内容的情况；模型报的行号只有在与其抄写的内容互相印证时才会被采信，单独报错行号或单独写错内容都不会被静默接受。它不能保证的是：模型选中的锚点文本即使真实存在，也可能选到了本单元语义边界之外、但仍在 segment 内的另一行（比如误把下一个无关小节的标题当作本单元的结尾）——这类"选错了但选的是真文字"的语义错误不在这个机制的覆盖范围内；也不能保证模型一定会把锚点收敛到单一物理行内——prompt 的措辞降低了这个概率，但概率模型仍可能出错，出错时会退回定位失败路径，而不是产出错误的行范围。
 
 #### 2.4 调用参数
 
@@ -237,7 +253,7 @@ LLM 输出先做 JSON 解析和 JSON Schema 整体校验；
 
 Schema 校验通过后，逐条校验每个 KnowledgeUnit：
   - center 非空；
-  - first_line_anchor/last_line_anchor 经 LocateUnitBounds（见 2.3）能在 segment 内定位到行号；
+  - line_start/first_line_anchor/line_end/last_line_anchor 经 LocateUnitBounds（见 2.3）能在 segment 内定位到行号；
   - points 非空且每条 content 非空；
 校验通过的单元写入 SQLite（line_start/line_end 取定位结果），status 设为 completed；
 校验失败的单元（含定位失败）若仍可从 LLM 输出中定位其本地 unit_id，则带原始文本段单独重试一次，使用重试 Prompt（见步骤 3.1），重试的定位同样走 LocateUnitBounds（cursor 固定为 segment.line_start，因为单独重试不再有兄弟单元的顺序上下文）；
@@ -255,7 +271,7 @@ Prompt 文件：`config/prompts/unit_extract_retry.md`
 从以下文本提取知识单元和知识点，严格按 JSON Schema 输出。
 
 要求：
-1. 每个 unit 必须有 unit_id（如 "1"）、center（10~40字）、first_line_anchor/last_line_anchor（该单元第一行/最后一行原文，逐字，不超过30字，单行单元两者相同）
+1. 每个 unit 必须有 unit_id（如 "1"）、center（10~40字）、line_start/first_line_anchor、line_end/last_line_anchor（line_start/line_end 抄自该行前的 [N] 标记；first_line_anchor/last_line_anchor 必须是该 N 行本身的原文，逐字，不超过30字，不得拼接相邻行，单行单元 line_start 等于 line_end、两个锚点相同）
 2. 每个 point 必须有 point_id（如 "1"）和 unit_id，且 unit_id 必须对应一个已存在的 unit unit_id
 3. content 不得为空
 
@@ -266,7 +282,53 @@ Prompt 文件：`config/prompts/unit_extract_retry.md`
 {{json_schema}}
 ```
 
-重试使用同一 prompt 的 `## Schema` 段校验，不换版本。
+重试使用同一 prompt 的 `## Schema` 段校验，与 `unit_extract.md` 同步升级到 `v5`（字段结构一致）。
+
+### 步骤 3.2：缺口回填（segment 内覆盖率兜底）
+
+步骤 3 的逐单元校验/重试解决的是"单个 unit 定位失败"；但完整通过校验的 units 集合本身，也可能没有覆盖 segment 的全部行——模型会把表格里的某几行、代码里的某个条件分支等整体跳过（既不是"不提取的内容"列举的类型，也没有尝试为它生成 unit，纯粹是抽取遗漏），这类内容此前完全没有兜底，是"部分文档 KU 覆盖率异常低"的另一个根因（与 2.3 记录的定位失败是不同的失败模式）。这一步在 segment 的所有 unit 处理完（含步骤 3 的单元重试）后运行一次，程序自动定位并处理这些遗漏：
+
+```text
+1. 用 segment 内本次实际写入（含单元重试写入）的所有 unit 的 line_start/line_end，
+   计算 segment 范围内未被任何 unit 覆盖的行区间（gap），算法与 ComputeCoverage
+   一致（见 coverage.go），只是直接用内存里刚解析出的行范围，不用重新查库；
+
+2. 每个 gap 按内容类型分两档处理（internal/unit/gapfill.go）：
+   - gap 全部由标题行（# 开头）、空行、分隔线（---/===）、表格分隔行（| --- | --- |）
+     组成 → 判定为纯排版噪声，不调用 LLM，直接走 3；
+   - gap 含实质内容 → 用 unit_extract.md 对 gap 发起一次抽取调用（outline_title
+     沿用父 segment 的标题）。text_content 不是只发 gap 自己的行：gap 有可能是连续
+     代码/正文中间被切出来的一段（比如缺口两侧本该同属一个 IF...END IF 分支，但
+     IF 那一行落在缺口外、已经被相邻 unit 吞掉了），只给模型看孤立的几行会让它要
+     么正确放弃、要么在没有上下文的情况下编出一个似是而非但脱离语境的 unit——两
+     者从返回结果上无法区分。因此 text_content 把 gap 所在整个 segment 的原文都带
+     上（segment 受 segment_max_chars 限制，成本很低），但用 `[以下第 X-Y 行是上
+     下文，仅供理解，不要在这些行上生成 unit]` / `[以下第 X-Y 行是本次需要处理的
+     目标行范围，只在这个范围内生成 unit]` 明确标出哪段是目标、哪段只是给它理解
+     用的上下文（internal/unit/gapfill.go 的 gapContextText）。
+     定位与校验仍复用与主流程完全相同的 LocateUnitBounds，且 segment 参数固定传
+     gapStart/gapEnd（而不是父 segment 的范围）：模型即使没听话在上下文范围里也
+     生成了 unit，其锚点找不到落在 gapStart..gapEnd 内的位置，会被直接判定定位失
+     败、丢弃，不会把上下文区域的内容当成新 unit 重复插入——这一层不依赖模型是否
+     遵守文字指示。
+       - 返回非空且校验通过的 unit(s) → 按正常流程写入新的 completed KU/KP
+         （prompt_version 仍记 v5，这是同一份 unit_extract.md 的调用，不是新 prompt）；
+       - 返回空 units 数组（模型判断这段内容本身不构成独立单元，与"不提取的内容"
+         分支同一语义）、返回的 unit 全部因锚点落在上下文区域而定位失败、或调用
+         失败 → 走 3；
+
+3. 合并：将 gap 的行区间并入 segment 内与它行距最近的 unit（可能是本次抽取出的、
+   也可能是步骤 3 之前就写入的），只扩大该 unit 的 line_start/line_end，不改写它的
+   center/points；若与多个 unit 距离相等（典型场景：gap 恰好夹在两个相邻 unit 中间，
+   到两侧的行距必然都是 1），固定并入行号更靠前的一侧。持久化后对该 unit 重新调用
+   indexUnit 刷新 bleve 索引内容，使证据挖掘（docs/impl/v1/evidence.md）在这个 unit
+   的正文范围内也能看到被合并进来的原文。
+
+一个 segment 若整体提取失败（无任何 unit 写入，见步骤 3 的 extraction_failed 路径），
+没有可并入的邻居，这一步不处理，维持现状。
+```
+
+这一步不改变步骤 2.3 的边界定位算法本身，只是在其之上加一层"整段抽取完之后、查漏补缺"的收尾。合并进邻居的 gap 只是扩大了该 unit 的证据行范围，并不会为其生成新的知识点——它能否被检索到仍然取决于该 unit 现有知识点的语义匹配；只有走 2 里"独立抽取"分支的 gap 才会产出真正可检索的新 KP。
 
 ### 步骤 4：KPN 关系生成
 

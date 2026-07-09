@@ -18,6 +18,7 @@ type FakeResponse struct {
 type FakeClient struct {
 	mu        sync.Mutex
 	responses map[string]FakeResponse
+	sequences map[string][]FakeResponse
 	calls     []FakeCall
 }
 
@@ -37,6 +38,33 @@ func (f *FakeClient) SetResponse(promptFile string, resp FakeResponse) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.responses[promptFile] = resp
+}
+
+// SetResponseSequence queues distinct responses for successive calls to the
+// same promptFile — needed when a test must tell a segment's initial
+// extraction call apart from a later gap-fill re-extraction call, since both
+// hit the same prompt file. Once the queue is drained, calls fall back to
+// whatever SetResponse has configured for that file (or the "no response
+// configured" error if nothing was set).
+func (f *FakeClient) SetResponseSequence(promptFile string, resps []FakeResponse) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sequences == nil {
+		f.sequences = make(map[string][]FakeResponse)
+	}
+	f.sequences[promptFile] = append([]FakeResponse(nil), resps...)
+}
+
+func (f *FakeClient) nextResponse(promptFile string) (FakeResponse, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if seq, ok := f.sequences[promptFile]; ok && len(seq) > 0 {
+		resp := seq[0]
+		f.sequences[promptFile] = seq[1:]
+		return resp, true
+	}
+	resp, ok := f.responses[promptFile]
+	return resp, ok
 }
 
 func (f *FakeClient) Calls() []FakeCall {
@@ -60,9 +88,7 @@ func (f *FakeClient) recordCall(promptFile, model string, vars map[string]string
 func (f *FakeClient) Complete(_ context.Context, promptFile string, vars map[string]string, model string) (string, error) {
 	f.recordCall(promptFile, model, vars)
 
-	f.mu.Lock()
-	resp, ok := f.responses[promptFile]
-	f.mu.Unlock()
+	resp, ok := f.nextResponse(promptFile)
 
 	if !ok {
 		return "", fmt.Errorf("fake: no response configured for %q", promptFile)
@@ -73,9 +99,7 @@ func (f *FakeClient) Complete(_ context.Context, promptFile string, vars map[str
 func (f *FakeClient) CompleteJSON(_ context.Context, promptFile string, vars map[string]string, model string) ([]byte, error) {
 	f.recordCall(promptFile, model, vars)
 
-	f.mu.Lock()
-	resp, ok := f.responses[promptFile]
-	f.mu.Unlock()
+	resp, ok := f.nextResponse(promptFile)
 
 	if !ok {
 		return nil, fmt.Errorf("fake: no response configured for %q", promptFile)
@@ -94,9 +118,7 @@ func (f *FakeClient) CompleteJSON(_ context.Context, promptFile string, vars map
 func (f *FakeClient) CompleteStream(_ context.Context, promptFile string, vars map[string]string, model string) (<-chan StreamChunk, error) {
 	f.recordCall(promptFile, model, vars)
 
-	f.mu.Lock()
-	resp, ok := f.responses[promptFile]
-	f.mu.Unlock()
+	resp, ok := f.nextResponse(promptFile)
 
 	ch := make(chan StreamChunk, 8)
 	if !ok {

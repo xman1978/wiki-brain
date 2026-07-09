@@ -1,0 +1,39 @@
+## Oracle RAC 开启归档
+
+# 1. 关闭数据库实例
+srvctl stop database -d orcl
+验证
+srvctl status database -d orcl
+# 2. 启动数据库实例到 mount 模式
+srvctl start database -d orcl -o mount
+# 3. 开启数据库归档
+sqlplus / as sysdba
+alter database archivelog;
+# 4. 启动数据库实例
+srvctl stop database -d orcl
+srvctl start database -d orcl
+# 5. 验证归档
+sqlplus / as sysdba
+archive log list
+Oracle RAC 关闭归档
+# 1. 关闭数据库实例
+srvctl stop database -d orcl
+验证
+srvctl status database -d orcl
+# 2. 启动数据库实例到 mount 模式
+srvctl start database -d orcl -o mount
+# 3. 关闭数据库归档
+sqlplus / as sysdba
+alter database noarchivelog;
+# 4. 启动数据库实例
+srvctl stop database -d orcl
+srvctl start database -d orcl
+# 5. 验证归档
+sqlplus / as sysdba
+archive log list
+Oracle RAC 删除归档文件
+rman target /
+删除所有归档日志
+delete archivelog all;
+删除 7 前的归档日志
+delete archivelog until time ‘sysdate-7’;

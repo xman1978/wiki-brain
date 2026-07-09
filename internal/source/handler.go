@@ -117,6 +117,7 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 		Title               string  `json:"title"`
 		Format              string  `json:"format"`
 		Status              string  `json:"status"`
+		UnitsStatus         string  `json:"units_status"`
 		OutlineType         *string `json:"outline_type"`
 		DomainID            *string `json:"domain_id,omitempty"`
 		DomainName          *string `json:"domain_name,omitempty"`
@@ -128,11 +129,12 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 	var items []item
 	for _, s := range sources {
 		it := item{
-			SourceID:  s.SourceID,
-			Title:     s.Title,
-			Format:    s.Format,
-			Status:    s.Status,
-			CreatedAt: s.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			SourceID:    s.SourceID,
+			Title:       s.Title,
+			Format:      s.Format,
+			Status:      s.Status,
+			UnitsStatus: s.UnitsStatus,
+			CreatedAt:   s.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		}
 		if s.OutlineType.Valid {
 			it.OutlineType = &s.OutlineType.String
@@ -185,12 +187,13 @@ func (h *Handler) getSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]interface{}{
-		"source_id":  src.SourceID,
-		"title":      src.Title,
-		"format":     src.Format,
-		"status":     src.Status,
-		"version":    src.Version,
-		"created_at": src.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		"source_id":    src.SourceID,
+		"title":        src.Title,
+		"format":       src.Format,
+		"status":       src.Status,
+		"units_status": src.UnitsStatus,
+		"version":      src.Version,
+		"created_at":   src.CreatedAt.Format("2006-01-02T15:04:05Z"),
 	}
 	if src.OutlineType.Valid {
 		resp["outline_type"] = src.OutlineType.String

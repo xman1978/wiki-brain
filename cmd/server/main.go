@@ -177,13 +177,32 @@ func main() {
 
 	q.RegisterHandler(queue.TaskTypeUnitExtract, func(payload interface{}) {
 		task := payload.(queue.UnitTask)
+
+		// units_status tracks knowledge-unit extraction independently of
+		// sources.status (which only reflects source processing) so the file
+		// management page can tell "source parsed" apart from "knowledge
+		// units actually finished extracting" instead of showing 已完成 the
+		// moment this task is merely enqueued.
+		if err := sourceStore.UpdateUnitsStatus(task.SourceID, "processing"); err != nil {
+			slog.Error("update units_status to processing failed", "source_id", task.SourceID, "error", err)
+		}
+
+		unitsStatus := "completed"
 		if err := unitSvc.Extract(context.Background(), task.SourceID); err != nil {
 			slog.Error("unit extract failed", "source_id", task.SourceID, "error", err)
+			unitsStatus = "failed"
 		} else if err := sourceSvc.CompleteShadowSwap(context.Background(), task.SourceID); err != nil {
 			// No-op when task.SourceID isn't a shadow; a real failure here means
 			// task.SourceID *is* a shadow but the swap itself failed.
 			slog.Error("shadow swap failed", "source_id", task.SourceID, "error", err)
 		}
+		// If task.SourceID was a shadow that swapped successfully, this row is
+		// already deleted by CompleteShadowSwap (which sets the target's own
+		// units_status directly) — updating it here just affects zero rows.
+		if err := sourceStore.UpdateUnitsStatus(task.SourceID, unitsStatus); err != nil {
+			slog.Error("update units_status failed", "source_id", task.SourceID, "units_status", unitsStatus, "error", err)
+		}
+
 		broadcaster.Close(task.SourceID)
 	})
 

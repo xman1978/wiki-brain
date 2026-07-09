@@ -1,5 +1,5 @@
 ---
-version: v4
+version: v5
 ---
 
 ## System
@@ -13,8 +13,10 @@ version: v4
 字段要求：
 - unit_id：本地编号（如 "1"）
 - center：核心主题，10~30 字
-- first_line_anchor：该单元第一行原文的开头片段，逐字复制，不超过 30 字，不包含行号标记
-- last_line_anchor：该单元最后一行原文的结尾片段，逐字复制，不超过 30 字，不包含行号标记（单行单元时与 first_line_anchor 相同）
+- line_start：该单元开始的原文行号，抄自该行前的 `[N]` 标记（一个整数）
+- first_line_anchor：**第 line_start 行本身**的原文内容，逐字复制该行文字，不超过 30 字，不包含行号标记——不要把下一行的内容接到这里，哪怕语义上读起来是连续的一句话
+- line_end：该单元结束的原文行号，抄自该行前的 `[N]` 标记（一个整数）
+- last_line_anchor：**第 line_end 行本身**的原文内容，逐字复制该行文字，不超过 30 字，不包含行号标记（单行单元时 line_start 等于 line_end，两个锚点相同）
 
 ### 知识点（KP）
 
@@ -35,7 +37,7 @@ version: v4
 ```
 {
   "units": [
-    {"unit_id": "1", "center": "知识单元主题", "first_line_anchor": "该单元第一行开头", "last_line_anchor": "该单元最后一行结尾"}
+    {"unit_id": "1", "center": "知识单元主题", "line_start": 5, "first_line_anchor": "第5行本身的原文", "line_end": 8, "last_line_anchor": "第8行本身的原文"}
   ],
   "points": [
     {"point_id": "1", "unit_id": "1", "content": "可激活摘要内容", "type": "rule"}
@@ -60,11 +62,13 @@ version: v4
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["unit_id", "center", "first_line_anchor", "last_line_anchor"],
+        "required": ["unit_id", "center", "line_start", "first_line_anchor", "line_end", "last_line_anchor"],
         "properties": {
           "unit_id":           { "type": "string", "minLength": 1 },
           "center":            { "type": "string", "minLength": 1 },
+          "line_start":        { "type": "integer" },
           "first_line_anchor": { "type": "string", "minLength": 1 },
+          "line_end":          { "type": "integer" },
           "last_line_anchor":  { "type": "string", "minLength": 1 }
         }
       }

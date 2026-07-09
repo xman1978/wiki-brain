@@ -81,8 +81,8 @@ func TestExtract_HappyPath(t *testing.T) {
 
 	extractResp := extractOutput{
 		Units: []llmUnit{
-			{UnitID: "1", Center: "知识管理概述", FirstLineAnchor: "# 第一章", LastLineAnchor: "有效的知识管理需要技术平台和文化支持。"},
-			{UnitID: "2", Center: "知识管理系统", FirstLineAnchor: "知识分为显性知识和隐性知识。", LastLineAnchor: "它通常包括文档管理、搜索引擎和协作工具。"},
+			{UnitID: "1", Center: "知识管理概述", LineStart: 1, FirstLineAnchor: "# 第一章", LineEnd: 6, LastLineAnchor: "有效的知识管理需要技术平台和文化支持。"},
+			{UnitID: "2", Center: "知识管理系统", LineStart: 7, FirstLineAnchor: "知识分为显性知识和隐性知识。", LineEnd: 10, LastLineAnchor: "它通常包括文档管理、搜索引擎和协作工具。"},
 		},
 		Points: []llmPoint{
 			{PointID: "1", UnitID: "1", Content: "知识管理是组织和个人对知识进行系统管理的过程", Type: "definition"},
@@ -245,7 +245,7 @@ func TestLocateUnitBounds_KnownLimitation_WrongButExistingAnchor(t *testing.T) {
 	seg := Segment{LineStart: 1, LineEnd: 4}
 
 	lineStart, lineEnd, _, ok := LocateUnitBounds(mdLines, seg,
-		"# 配置 SSH 无密码登录通道", "# 启动停止 RAC 集群", seg.LineStart)
+		unverified, "# 配置 SSH 无密码登录通道", unverified, "# 启动停止 RAC 集群", seg.LineStart)
 	if !ok {
 		t.Fatal("expected the (wrong-scope but real) anchor to resolve")
 	}

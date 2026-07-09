@@ -298,39 +298,45 @@ line_start 和 line_end 使用骨架中标注的原文行号（1-based, inclusiv
 
 #### 6.4 两遍处理 — 第二遍：节点细化
 
-对第一遍中行范围内容字符数（rune）超过 `segment_max_chars` 的节点，逐一细化：
+对第一遍中行范围内容字符数（rune）超过 `segment_max_chars` 的节点，处理方式与条件 E 触发的叶节点超长细化是同一套机制（见 6.5），不再单独实现。
+
+#### 6.5 叶节点超长细化（条件 E，及 6.4 场景共用）
+
+**设计决策沿革**：早期版本（`outline_semantic_chunk.md` v2 及之前）直接让模型给出子章节的 `line_start`/`line_end`/`level`，本质上是要求模型自己维持"相邻章节不重叠、合计覆盖全文"这个不变量——模型是概率模型，做不到稳定遵守。`repairSections` 曾试图在事后裁剪重叠，但它只在两个相邻小节 `level` 相同时才裁剪（level 不同时默认是有意的父子嵌套，不该被当重叠裁掉），而调用方又会在裁剪判断**之后**把所有返回的子节点 `level` 强制拍平成同一个值——模型如果给出了有意义的嵌套结构，裁剪被跳过，随后又被拍平成表面平级、实际互相重叠的区间，没有任何环节再处理。这是 V1 阶段发现"部分文档 KU 覆盖率异常低"（子章节互相重叠、下游 Unit 模块的 `mergeSmallSegments` 又对重叠输入没有防御，把无关章节错误合并）的根因。
+
+`outline_semantic_chunk.md` v3 起改为：**不再让模型决定边界，边界完全由程序按 Markdown 结构确定性切分；模型只负责给每个已经切好的区块起标题**。程序侧实现（`internal/source/semantic.go` 的 `splitOversizeLeaf`）：
 
 ```text
-取该节点的原文内容（按 line_start / line_end 切片行）；
-若内容字符数（rune）> source.single_pass_threshold，再次切块（每块行数使内容 ≤ single_pass_threshold，相邻块 overlap 10 行）；
-对每块调用 LLM，生成子章节（level = 父节点 level + 1，最多到 level 3）；
-合并各块输出，去除重叠边界处的重复节点；
-将子节点挂载到父节点下。
+用 splitWindowsByMarkdown（internal/source/markdown_split.go，avoidCuttingIndivisible=true）
+  把叶节点内容切成若干区间：
+    零重叠、首尾相接、合计覆盖叶节点全部行范围；
+    不可分割元素（表格、代码块）整体保留在同一区间内，即使因此超过 segment_max_chars 也不切分；
+按 mc.MaxInputTokens 把切好的区块分批（同 outline_summary.go 的 GenerateOutlineSummaries 分批方式），
+  每批调用一次 outline_semantic_chunk.md，只问模型要"每个编号区块的标题"，不问行号/level；
+某批调用失败或某区块没拿到标题：用该区块首行内容截断生成兜底标题，不丢区块；
+生成 semantic 子节点挂在原叶节点下（level = 父节点 level + 1）；summary 留空，
+  交给 6.6 之后统一运行的 GenerateOutlineSummaries 补全。
 ```
 
-**Prompt 文件**：`config/prompts/outline_semantic_chunk.md`
+这套机制不需要递归：`splitWindowsByMarkdown` 切出的每个区块本身已经 ≤ `segment_max_chars`（唯一例外是单个超限的不可分割元素，按需求它就是最终结果，不再进一步拆分）。条件 E（仅叶节点过长，`RefineLeafNodes`）和两遍处理里节点仍超长的清理（`GenerateSemanticOutlines` 第三阶段，`refineOversizeLeaves`）都调用这同一个 `splitOversizeLeaf`，行为完全一致。此情况下 `source.outline_type` 设为 `mixed`。
+
+**Prompt 文件**：`config/prompts/outline_semantic_chunk.md`（v3 起生效）
 
 ```text
-以下是文档片段（原文第 {{chunk_line_start}} 行到第 {{chunk_line_end}} 行），将其细分为 level {{target_level}} 的子章节（父章节："{{parent_title}}"）。
-
-line_start 和 line_end 是整篇文档中的行号（1-based, inclusive），不是片段内行号。每个子章节至少 5 行。summary 为 3~6 个关键词（空格分隔）。若内容是连贯整体，返回空列表。
-
-内容：
-{{chunk_content}}
+以下是若干文本区块，每块前用 [N] 标出编号：
+{{blocks}}
 
 按以下 JSON Schema 输出：
 {{json_schema}}
 ```
 
-#### 6.5 叶节点超长细化（条件 E）
-
-对已有结构 outline 中的超长叶节点，单独运行细化（使用 `outline_semantic_chunk.md`），生成 semantic 子节点挂在结构叶节点下。此情况下 `source.outline_type` 设为 `mixed`。
+输出格式：`{"titles":[{"index":1,"title":"..."}]}`，`index` 对应输入的区块编号，`title` 10~30 字。
 
 #### 6.6 写入结果
 
 ```text
 语义生成的节点写入 source_outlines 表，node_type = semantic；
-混合情况（条件 E）：结构节点保留，新增子节点；
+混合情况（条件 E / 6.4）：结构或语义父节点保留，新增子节点；
 source.outline_type 更新为：
   - structural：无语义补全
   - semantic：全部由 LLM 生成
@@ -338,7 +344,7 @@ source.outline_type 更新为：
 生成失败时不阻塞，保留已有结构 outline，记录 warn 日志。
 ```
 
-**LLM 输出格式**（三个 prompt 共用）：
+**`outline_semantic_full.md` / `outline_local_sketch.md` / `outline_global_merge.md` 的 LLM 输出格式**（这三个 prompt 仍是模型自己决定章节边界，共用同一契约；`outline_semantic_chunk.md` 已改为 6.5 描述的独立契约，不再共用）：
 
 注入 prompt 的 `{{json_schema}}` 是示例 JSON，不是 JSON Schema DSL。示例只展示字段名和示例值，不含校验约束：
 
@@ -350,7 +356,7 @@ source.outline_type 更新为：
 }
 ```
 
-程序将模型输出解析并整合后，用对应 prompt 文件（`outline_semantic_full.md` / `outline_semantic_skeleton.md` / `outline_semantic_chunk.md`）内 `## Schema` 段的 JSON Schema 校验整合结果，检查：`line_start < line_end`、`level` 在 1~3 范围内、相邻 section 不重叠、所有行号在文档范围内。整合过程包括：推断父子关系、补全 position 字段。Source 语义 outline 的 LLM 输出统一使用整篇规范化 Markdown 的绝对行号，不做相对行号转换。
+程序将模型输出解析并整合后，用对应 prompt 文件内 `## Schema` 段的 JSON Schema 校验整合结果，检查：`line_start < line_end`、`level` 在 1~3 范围内、相邻 section 不重叠、所有行号在文档范围内。整合过程包括：推断父子关系、补全 position 字段。Source 语义 outline 的 LLM 输出统一使用整篇规范化 Markdown 的绝对行号，不做相对行号转换。
 
 **父子关系推断**：模型输出 `level` 字段，不输出 `children` 或 `parent_id`。写入 `source_outlines` 前，程序按以下规则从平铺列表推断父子关系：
 

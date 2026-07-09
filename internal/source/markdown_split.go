@@ -81,7 +81,20 @@ type mdWindow struct {
 	EndLine   int // 1-based, inclusive
 }
 
-func splitWindowsByMarkdown(lines []string, maxRunes int, overlapPercent float64) []mdWindow {
+// splitWindowsByMarkdown splits lines into windows of ≤ maxRunes, breaking at
+// the best available Markdown boundary (heading > blank line > plain line),
+// never inside a code block or table.
+//
+// avoidCuttingIndivisible controls what happens when the only line to cut at
+// still falls inside a code block/table (i.e. no acceptable break exists
+// nearby): existing callers (extractLocalSketches, which reconciles its own
+// windows afterward via starts_mid_section/ends_mid_section) pass false and
+// keep today's behavior — cut at the size limit regardless. Callers that
+// treat the split as final, uncorrected truth (splitOversizeLeaf) pass true:
+// the boundary is pushed forward past the end of the indivisible run instead,
+// letting that one window exceed maxRunes rather than ever slicing through a
+// table/code block.
+func splitWindowsByMarkdown(lines []string, maxRunes int, overlapPercent float64, avoidCuttingIndivisible bool) []mdWindow {
 	totalLines := len(lines)
 	if totalLines == 0 {
 		return nil
@@ -124,6 +137,15 @@ func splitWindowsByMarkdown(lines []string, maxRunes int, overlapPercent float64
 			bestBreak = start + 1
 		}
 
+		// 切点本身仍落在不可分割元素内部（findBestBreak 找不到更好的点、
+		// 只能退化到 hardEnd 的情况）：把切点推到该元素结束处，让当前窗口
+		// 整体吞下这个元素、允许超过 maxRunes，而不是从中间切开。
+		if avoidCuttingIndivisible {
+			for bestBreak < totalLines && priorities[bestBreak] == 0 {
+				bestBreak++
+			}
+		}
+
 		windows = append(windows, mdWindow{
 			StartLine: start + 1,
 			EndLine:   bestBreak,
@@ -133,17 +155,24 @@ func splitWindowsByMarkdown(lines []string, maxRunes int, overlapPercent float64
 			break
 		}
 
-		// overlap
-		windowLines := bestBreak - start
-		overlap := int(float64(windowLines) * overlapPercent)
-		if overlap < 5 && windowLines > 10 {
-			overlap = 5
-		} else if windowLines <= 10 {
-			overlap = 0
-		}
-		nextStart := bestBreak - overlap
-		if nextStart <= start {
-			nextStart = bestBreak // 确保推进
+		// overlap — avoidCuttingIndivisible callers treat the split as final,
+		// authoritative tiling (splitOversizeLeaf needs zero overlap to
+		// guarantee non-overlapping full coverage), so they skip the forced
+		// minimum-5-line overlap below entirely rather than just passing
+		// overlapPercent=0 (which this minimum would otherwise override).
+		nextStart := bestBreak
+		if !avoidCuttingIndivisible {
+			windowLines := bestBreak - start
+			overlap := int(float64(windowLines) * overlapPercent)
+			if overlap < 5 && windowLines > 10 {
+				overlap = 5
+			} else if windowLines <= 10 {
+				overlap = 0
+			}
+			nextStart = bestBreak - overlap
+			if nextStart <= start {
+				nextStart = bestBreak // 确保推进
+			}
 		}
 		start = nextStart
 	}

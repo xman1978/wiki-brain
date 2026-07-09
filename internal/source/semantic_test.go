@@ -2,6 +2,8 @@ package source
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -101,44 +103,99 @@ func TestParseSectionsToOutlines_ParentChild(t *testing.T) {
 	}
 }
 
-func TestRefineLeafNodes(t *testing.T) {
+// TestRefineLeafNodes_ProducesNonOverlappingFullCoverage is the regression
+// test for the 差旅费报销制度 incident: the model used to be asked for
+// line_start/line_end/level directly and would return overlapping sections
+// (e.g. a broad section wholly containing several narrower ones), which
+// internal/unit's mergeSmallSegments had no defense against — it merged
+// unrelated later chapters into one mislabeled extraction batch, and those
+// chapters ended up with zero knowledge units. RefineLeafNodes now delegates
+// to splitOversizeLeaf, which decides boundaries deterministically and only
+// asks the model for a title per already-fixed block, so overlap is
+// structurally impossible regardless of what the model returns.
+func TestRefineLeafNodes_ProducesNonOverlappingFullCoverage(t *testing.T) {
 	fake := llm.NewFakeClient()
-	fake.SetResponse("outline_semantic_chunk.md", llm.FakeResponse{
-		Output: `{"sections":[
-			{"title":"Sub A","summary":"sub a keys","line_start":1,"line_end":5,"level":2},
-			{"title":"Sub B","summary":"sub b keys","line_start":6,"line_end":10,"level":2}
-		]}`,
-	})
+	var titles strings.Builder
+	titles.WriteString(`{"titles":[`)
+	for i := 1; i <= 20; i++ {
+		if i > 1 {
+			titles.WriteString(",")
+		}
+		fmt.Fprintf(&titles, `{"index":%d,"title":"标题%d"}`, i, i)
+	}
+	titles.WriteString(`]}`)
+	fake.SetResponse("outline_semantic_chunk.md", llm.FakeResponse{Output: titles.String()})
 
-	longContent := strings.Repeat("这是一段很长的中文内容用于测试。\n", 600)
-	content := "# Heading\n" + longContent
+	var b strings.Builder
+	b.WriteString("# Heading\n\n")
+	for i := 1; i <= 8; i++ {
+		fmt.Fprintf(&b, "条款%d：这是条款正文内容，重复凑字数重复凑字数重复凑字数重复凑字数。\n\n", i)
+	}
+	b.WriteString("| A | B |\n| --- | --- |\n")
+	for i := 0; i < 20; i++ {
+		b.WriteString("| row | value that is reasonably long to add up characters |\n")
+	}
+	content := b.String()
 
 	existingOutlines := ExtractStructuralOutlines("src-1", content)
-	newOutlines, err := RefineLeafNodes(context.Background(), fake, "src-1", content, existingOutlines, testExtractionMC(100000), 100)
+	leaves := findLeafNodes(existingOutlines)
+	if len(leaves) != 1 {
+		t.Fatalf("expected exactly 1 structural leaf to set up the test, got %d", len(leaves))
+	}
+	leaf := leaves[0]
+
+	newOutlines, err := RefineLeafNodes(context.Background(), fake, "src-1", content, existingOutlines, testExtractionMC(100000), 150)
 	if err != nil {
 		t.Fatalf("RefineLeafNodes: %v", err)
 	}
-	if len(newOutlines) == 0 {
-		t.Error("expected refined leaf nodes")
+	if len(newOutlines) < 2 {
+		t.Fatalf("expected multiple refined children, got %d", len(newOutlines))
 	}
+
+	sort.Slice(newOutlines, func(i, j int) bool { return newOutlines[i].LineStart < newOutlines[j].LineStart })
+
+	if newOutlines[0].LineStart != leaf.LineStart {
+		t.Errorf("first child LineStart = %d, want %d (leaf's own start)", newOutlines[0].LineStart, leaf.LineStart)
+	}
+	if newOutlines[len(newOutlines)-1].LineEnd != leaf.LineEnd {
+		t.Errorf("last child LineEnd = %d, want %d (leaf's own end)", newOutlines[len(newOutlines)-1].LineEnd, leaf.LineEnd)
+	}
+	for i := 1; i < len(newOutlines); i++ {
+		if newOutlines[i].LineStart != newOutlines[i-1].LineEnd+1 {
+			t.Errorf("child %d (starts %d) is not immediately after child %d (ends %d) — gap or overlap",
+				i, newOutlines[i].LineStart, i-1, newOutlines[i-1].LineEnd)
+		}
+	}
+
+	lines := strings.Split(content, "\n")
+	tableStartLine, tableLastLine := -1, -1
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "| A") {
+			tableStartLine = i + 1
+		}
+		if strings.HasPrefix(strings.TrimSpace(l), "| row") {
+			tableLastLine = i + 1
+		}
+	}
+	foundTableChild := false
+	for _, o := range newOutlines {
+		if o.LineStart <= tableStartLine && o.LineEnd >= tableStartLine {
+			if o.LineEnd < tableLastLine {
+				t.Error("table was split across children despite avoidCuttingIndivisible")
+			}
+			foundTableChild = true
+		}
+	}
+	if !foundTableChild {
+		t.Fatal("no child covers the table's start line")
+	}
+
 	for _, o := range newOutlines {
 		if o.NodeType != "semantic" {
 			t.Errorf("refined node type = %q, want semantic", o.NodeType)
 		}
-	}
-}
-
-func TestDeduplicateOverlap(t *testing.T) {
-	outlines := []Outline{
-		{OutlineID: "a", Title: "Intro", LineStart: 1, LineEnd: 10},
-		{OutlineID: "b", Title: "Intro", LineStart: 5, LineEnd: 12},
-		{OutlineID: "c", Title: "Body", LineStart: 13, LineEnd: 20},
-	}
-	result := deduplicateOverlap(outlines)
-	if len(result) != 2 {
-		t.Fatalf("got %d, want 2", len(result))
-	}
-	if result[0].LineEnd != 12 {
-		t.Errorf("merged LineEnd = %d, want 12", result[0].LineEnd)
+		if strings.TrimSpace(o.Title) == "" {
+			t.Error("child has empty title")
+		}
 	}
 }

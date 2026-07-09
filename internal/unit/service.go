@@ -78,18 +78,6 @@ func (s *Service) emit(sourceID string, evt progress.Event) {
 	}
 }
 
-func (s *Service) RegisterHandler() {
-	s.queue.RegisterHandler(queue.TaskTypeUnitExtract, func(payload interface{}) {
-		task := payload.(queue.UnitTask)
-		if err := s.Extract(context.Background(), task.SourceID); err != nil {
-			slog.Error("unit extract failed", "source_id", task.SourceID, "error", err)
-		}
-		if s.broadcaster != nil {
-			s.broadcaster.Close(task.SourceID)
-		}
-	})
-}
-
 func (s *Service) TriggerExtract(sourceID string) error {
 	src, err := s.sourceStore.GetByID(sourceID)
 	if err != nil {
@@ -199,7 +187,9 @@ func (s *Service) Extract(ctx context.Context, sourceID string) error {
 type llmUnit struct {
 	UnitID          string `json:"unit_id"`
 	Center          string `json:"center"`
+	LineStart       int    `json:"line_start"`
 	FirstLineAnchor string `json:"first_line_anchor"`
+	LineEnd         int    `json:"line_end"`
 	LastLineAnchor  string `json:"last_line_anchor"`
 }
 
@@ -218,7 +208,7 @@ type extractOutput struct {
 func (s *Service) processSegment(ctx context.Context, sourceID, markdownPath string, seg Segment, mdLines []string) {
 	textContent := sliceLinesWithLineNumbers(mdLines, seg.LineStart, seg.LineEnd)
 
-	schemaJSON := `{"units":[{"unit_id":"1","center":"知识单元主题","first_line_anchor":"该单元第一行开头","last_line_anchor":"该单元最后一行结尾"}],"points":[{"point_id":"1","unit_id":"1","content":"可激活摘要内容","type":"definition|rule|method|case|question"}]}`
+	schemaJSON := `{"units":[{"unit_id":"1","center":"知识单元主题","line_start":5,"first_line_anchor":"第5行本身的原文","line_end":8,"last_line_anchor":"第8行本身的原文"}],"points":[{"point_id":"1","unit_id":"1","content":"可激活摘要内容","type":"definition|rule|method|case|question"}]}`
 
 	vars := map[string]string{
 		"outline_title":      seg.Title,
@@ -256,14 +246,17 @@ func (s *Service) processSegment(ctx context.Context, sourceID, markdownPath str
 		localToUUID[u.UnitID] = uuid.New().String()
 	}
 
+	var resolved []resolvedUnit
 	cursor := seg.LineStart
 	for _, u := range output.Units {
-		lineStart, lineEnd, nextCursor, locateOK := LocateUnitBounds(mdLines, seg, u.FirstLineAnchor, u.LastLineAnchor, cursor)
+		lineStart, lineEnd, nextCursor, locateOK := LocateUnitBounds(mdLines, seg, u.LineStart, u.FirstLineAnchor, u.LineEnd, u.LastLineAnchor, cursor)
 		if locateOK {
 			cursor = nextCursor
 		}
 		if !locateOK || !s.validateUnit(u, output.Points) {
-			s.handleFailedUnit(ctx, sourceID, seg, u, mdLines, localToUUID)
+			if ru, ok := s.handleFailedUnit(ctx, sourceID, seg, u, mdLines, localToUUID); ok {
+				resolved = append(resolved, ru)
+			}
 			continue
 		}
 
@@ -277,7 +270,7 @@ func (s *Service) processSegment(ctx context.Context, sourceID, markdownPath str
 			LineStart:     lineStart,
 			LineEnd:       lineEnd,
 			Status:        "completed",
-			PromptVersion: "v4",
+			PromptVersion: "v5",
 		}
 		if err := s.store.InsertUnit(ku); err != nil {
 			slog.Error("unit: insert unit failed", "error", err)
@@ -303,7 +296,10 @@ func (s *Service) processSegment(ctx context.Context, sourceID, markdownPath str
 		}
 
 		s.indexUnit(ku, mdLines)
+		resolved = append(resolved, resolvedUnit{unitID: realUnitID, lineStart: lineStart, lineEnd: lineEnd})
 	}
+
+	s.fillGaps(ctx, sourceID, seg, mdLines, resolved)
 }
 
 func (s *Service) validateUnit(u llmUnit, points []llmPoint) bool {
@@ -322,8 +318,8 @@ func (s *Service) validateUnit(u llmUnit, points []llmPoint) bool {
 	return hasPoints
 }
 
-func (s *Service) handleFailedUnit(ctx context.Context, sourceID string, seg Segment, u llmUnit, mdLines []string, localToUUID map[string]string) {
-	schemaJSON := `{"units":[{"unit_id":"1","center":"知识单元主题","first_line_anchor":"该单元第一行开头","last_line_anchor":"该单元最后一行结尾"}],"points":[{"point_id":"1","unit_id":"1","content":"可激活摘要内容","type":"definition|rule|method|case|question"}]}`
+func (s *Service) handleFailedUnit(ctx context.Context, sourceID string, seg Segment, u llmUnit, mdLines []string, localToUUID map[string]string) (resolvedUnit, bool) {
+	schemaJSON := `{"units":[{"unit_id":"1","center":"知识单元主题","line_start":5,"first_line_anchor":"第5行本身的原文","line_end":8,"last_line_anchor":"第8行本身的原文"}],"points":[{"point_id":"1","unit_id":"1","content":"可激活摘要内容","type":"definition|rule|method|case|question"}]}`
 
 	vars := map[string]string{
 		"segment_line_start": strconv.Itoa(seg.LineStart),
@@ -336,17 +332,17 @@ func (s *Service) handleFailedUnit(ctx context.Context, sourceID string, seg Seg
 	data, err := s.llmClient.CompleteJSON(ctx, "unit_extract_retry.md", vars, "extraction")
 	if err != nil {
 		s.insertFailedUnit(sourceID, seg, u, "retry LLM call failed: "+err.Error())
-		return
+		return resolvedUnit{}, false
 	}
 
 	var output extractOutput
 	if err := json.Unmarshal(data, &output); err != nil {
 		s.insertFailedUnit(sourceID, seg, u, "retry JSON parse failed: "+err.Error())
-		return
+		return resolvedUnit{}, false
 	}
 
 	for _, ru := range output.Units {
-		lineStart, lineEnd, _, locateOK := LocateUnitBounds(mdLines, seg, ru.FirstLineAnchor, ru.LastLineAnchor, seg.LineStart)
+		lineStart, lineEnd, _, locateOK := LocateUnitBounds(mdLines, seg, ru.LineStart, ru.FirstLineAnchor, ru.LineEnd, ru.LastLineAnchor, seg.LineStart)
 		if !locateOK || !s.validateUnit(ru, output.Points) {
 			continue
 		}
@@ -360,7 +356,7 @@ func (s *Service) handleFailedUnit(ctx context.Context, sourceID string, seg Seg
 			LineStart:     lineStart,
 			LineEnd:       lineEnd,
 			Status:        "completed",
-			PromptVersion: "v4",
+			PromptVersion: "v5",
 		}
 		if err := s.store.InsertUnit(ku); err != nil {
 			slog.Error("unit: retry insert unit failed", "error", err)
@@ -382,10 +378,11 @@ func (s *Service) handleFailedUnit(ctx context.Context, sourceID string, seg Seg
 			s.indexPoint(kp)
 		}
 		s.indexUnit(ku, mdLines)
-		return
+		return resolvedUnit{unitID: realUnitID, lineStart: lineStart, lineEnd: lineEnd}, true
 	}
 
 	s.insertFailedUnit(sourceID, seg, u, "retry validation still failed")
+	return resolvedUnit{}, false
 }
 
 func (s *Service) insertFailedUnit(sourceID string, seg Segment, u llmUnit, errMsg string) {
@@ -400,7 +397,7 @@ func (s *Service) insertFailedUnit(sourceID string, seg Segment, u llmUnit, errM
 		LineEnd:       seg.LineEnd,
 		Status:        "extraction_failed",
 		ErrorMsg:      sql.NullString{String: errMsg, Valid: true},
-		PromptVersion: "v4",
+		PromptVersion: "v5",
 	}
 	if ku.Center == "" {
 		ku.Center = "(extraction failed)"
