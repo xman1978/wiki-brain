@@ -6,16 +6,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/rerank"
 )
 
 func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *Store) {
@@ -23,6 +25,9 @@ func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *Store) {
 	db := foundation.NewTestDB(t)
 	store := NewStore(db)
 	seedTestData(t, store)
+	for _, unitID := range []string{"u1", "u2", "u3", "u4"} {
+		insertRerankSemantic(t, store, unitID, rerank.ExtractPromptVersion)
+	}
 
 	// Create markdown files for sources
 	tmpDir := foundation.NewTestDir(t)
@@ -249,7 +254,7 @@ func TestRRFMerge(t *testing.T) {
 	}
 }
 
-func TestRerank(t *testing.T) {
+func TestRerankPreservesCandidateOrderAndFiltersIrrelevant(t *testing.T) {
 	svc, fake, _ := setupTestService(t)
 
 	candidates := []candidate{
@@ -257,9 +262,6 @@ func TestRerank(t *testing.T) {
 		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50, score: 0.5},
 	}
 
-	fake.SetResponse("rerank_extract.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "c1", "source_theme": "linear equation", "content_theme": "linear equation definition", "intent": "说明定义", "object": "linear equation", "scope": "通用", "key_facts": ["linear equation is an equation that forms a straight line"]}, {"candidate_id": "c2", "source_theme": "unrelated", "content_theme": "unrelated note", "intent": "背景", "object": "other", "scope": "通用", "key_facts": ["unrelated"]}]}`,
-	})
 	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
 		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据说明线性方程定义，可直接回答"}, {"candidate_id": "c2", "role": "irrelevant", "analysis": "证据主题与问题不匹配"}]}`,
 	})
@@ -279,109 +281,243 @@ func TestRerank(t *testing.T) {
 	}
 }
 
-func TestRerankBatchesByCandidateContentLengthAndRunsTwoWayConcurrent(t *testing.T) {
+func TestRerankUsesPersistedSemanticsAndRunsJudgeBatchesConcurrently(t *testing.T) {
+	svc, tracker, candidates := setupPersistedSemanticRerank(t, 1, 2)
+
+	got, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tracker.Count("rerank_extract.md") != 0 || tracker.Count("unit_semantics_extract.md") != 0 {
+		t.Fatal("online rerank called extraction")
+	}
+	if tracker.Count("rerank_judge.md") != 2 {
+		t.Fatalf("judge calls = %d, want 2", tracker.Count("rerank_judge.md"))
+	}
+	if tracker.MaxConcurrent() < 2 {
+		t.Fatalf("max concurrency = %d, want >= 2", tracker.MaxConcurrent())
+	}
+	if len(got) != 2 {
+		t.Fatalf("kept = %d, want 2", len(got))
+	}
+}
+
+func TestRerankJudgeBatchBudgetCountsCompactJSONRunesAndDelimiters(t *testing.T) {
+	svc, tracker, candidates := setupPersistedSemanticRerank(t, 4000, 2)
+	insertRerankSemantic(t, svc.store, "u3", rerank.ExtractPromptVersion)
+	candidates = append(candidates, candidate{
+		unitID: "u3", pointID: "p3", sourceID: "s2", lineStart: 1, lineEnd: 30, score: 0.25,
+	})
+
+	semantics, err := svc.store.GetUnitRerankSemantics([]string{"u1", "u2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := buildRerankJudgeCandidate("c1", "Algebra", semantics["u1"])
+	second := buildRerankJudgeCandidate("c2", "Algebra", semantics["u2"])
+	firstJSON, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondJSON, err := json.Marshal(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two brackets plus the comma between two compact JSON objects.
+	svc.cfg.Retrieval.RerankJudgeBatchMaxChars = 2 + utf8.RuneCount(firstJSON) + 1 + utf8.RuneCount(secondJSON)
+
+	if _, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, candidates); err != nil {
+		t.Fatal(err)
+	}
+	if got := tracker.BatchSizes(); !equalInts(got, []int{2, 1}) {
+		t.Fatalf("judge batch sizes = %v, want [2 1]", got)
+	}
+	for _, payload := range tracker.Payloads() {
+		var decoded []rerankJudgeCandidate
+		if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+			t.Fatalf("judge payload is not JSON: %v", err)
+		}
+		compact, err := json.Marshal(decoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if payload != string(compact) {
+			t.Fatalf("judge payload is not compact JSON: %q", payload)
+		}
+	}
+}
+
+func TestRerankRejectsMissingSemanticsListsAllUnitIDs(t *testing.T) {
+	svc, tracker, candidates := setupPersistedSemanticRerank(t, 4000, 4)
+	if _, err := svc.store.db.Exec(`DELETE FROM unit_rerank_semantics WHERE unit_id IN ('u1', 'u2')`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, reverseCandidates(candidates))
+	assertRerankIntegrityError(t, err,
+		"retrieval: rerank semantics integrity: missing unit_ids: u1, u2")
+	if tracker.Count("rerank_judge.md") != 0 {
+		t.Fatalf("judge calls = %d, want 0", tracker.Count("rerank_judge.md"))
+	}
+}
+
+func TestRerankRejectsStaleSemanticsListsAllUnitIDs(t *testing.T) {
+	svc, tracker, candidates := setupPersistedSemanticRerank(t, 4000, 4)
+	if _, err := svc.store.db.Exec(`UPDATE unit_rerank_semantics SET prompt_version = 'v0' WHERE unit_id IN ('u1', 'u2')`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, reverseCandidates(candidates))
+	assertRerankIntegrityError(t, err,
+		"retrieval: rerank semantics integrity: stale unit_ids: u1, u2")
+	if tracker.Count("rerank_judge.md") != 0 {
+		t.Fatalf("judge calls = %d, want 0", tracker.Count("rerank_judge.md"))
+	}
+}
+
+func setupPersistedSemanticRerank(t *testing.T, maxChars, concurrency int) (*Service, *rerankJudgeTrackingLLM, []candidate) {
+	t.Helper()
 	svc, _, _ := setupTestService(t)
-	tracker := &rerankBatchTrackingLLM{}
+	tracker := &rerankJudgeTrackingLLM{}
 	svc.llmClient = tracker
-	svc.cfg.Retrieval.RerankBatchMaxChars = 1
-	svc.cfg.Retrieval.RerankConcurrency = 2
+	svc.cfg.Retrieval.RerankJudgeBatchMaxChars = maxChars
+	svc.cfg.Retrieval.RerankJudgeConcurrency = concurrency
 
 	candidates := []candidate{
 		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25, score: 1.0},
 		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50, score: 0.5},
 	}
+	return svc, tracker, candidates
+}
 
-	kept, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates)
+func insertRerankSemantic(t *testing.T, store *Store, unitID, promptVersion string) {
+	t.Helper()
+	_, err := store.db.Exec(`INSERT OR REPLACE INTO unit_rerank_semantics
+		(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
+		VALUES (?, '差旅制度', '住宿报销', '说明限额', '出差员工', '境内差旅', '["住宿限额为500元", "超额需审批"]', ?)`,
+		unitID, promptVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(kept) != 2 {
-		t.Fatalf("expected both candidates kept, got %d", len(kept))
+}
+
+func reverseCandidates(candidates []candidate) []candidate {
+	reversed := append([]candidate(nil), candidates...)
+	for left, right := 0, len(reversed)-1; left < right; left, right = left+1, right-1 {
+		reversed[left], reversed[right] = reversed[right], reversed[left]
 	}
-	if tracker.extractCalls != 2 {
-		t.Fatalf("expected 2 extract batches, got %d", tracker.extractCalls)
+	return reversed
+}
+
+func assertRerankIntegrityError(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("rerank returned nil error")
 	}
-	if tracker.maxExtractConcurrent < 2 {
-		t.Fatalf("expected 2-way concurrent extract calls, max concurrent was %d", tracker.maxExtractConcurrent)
-	}
-	if len(tracker.extractBatchSizes) != 2 || tracker.extractBatchSizes[0] != 1 || tracker.extractBatchSizes[1] != 1 {
-		t.Fatalf("expected two one-candidate extract batches, got %v", tracker.extractBatchSizes)
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err, want)
 	}
 }
 
-type rerankBatchTrackingLLM struct {
-	mu                   sync.Mutex
-	extractCalls         int
-	extractInFlight      int
-	maxExtractConcurrent int
-	extractBatchSizes    []int
+func equalInts(left, right []int) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
-func (f *rerankBatchTrackingLLM) Complete(_ context.Context, promptFile string, vars map[string]string, model string) (string, error) {
+type rerankJudgeTrackingLLM struct {
+	mu            sync.Mutex
+	calls         map[string]int
+	inFlight      int
+	maxConcurrent int
+	batchSizes    []int
+	payloads      []string
+}
+
+func (f *rerankJudgeTrackingLLM) Complete(_ context.Context, promptFile string, vars map[string]string, model string) (string, error) {
 	return "", fmt.Errorf("unexpected Complete call: %s", promptFile)
 }
 
-func (f *rerankBatchTrackingLLM) CompleteStream(_ context.Context, promptFile string, vars map[string]string, model string) (<-chan llm.StreamChunk, error) {
+func (f *rerankJudgeTrackingLLM) CompleteStream(_ context.Context, promptFile string, vars map[string]string, model string) (<-chan llm.StreamChunk, error) {
 	return nil, fmt.Errorf("unexpected CompleteStream call: %s", promptFile)
 }
 
-func (f *rerankBatchTrackingLLM) CompleteJSON(ctx context.Context, promptFile string, vars map[string]string, model string) ([]byte, error) {
-	ids := candidateIDsFromPrompt(vars["candidates"])
-	switch promptFile {
-	case "rerank_extract.md":
-		f.beginExtract(len(ids))
-		defer f.endExtract()
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(40 * time.Millisecond):
-		}
-		return []byte(rerankExtractJSON(ids)), nil
-	case "rerank_judge.md":
-		return []byte(rerankJudgeJSON(ids)), nil
-	default:
+func (f *rerankJudgeTrackingLLM) CompleteJSON(ctx context.Context, promptFile string, vars map[string]string, model string) ([]byte, error) {
+	f.mu.Lock()
+	if f.calls == nil {
+		f.calls = make(map[string]int)
+	}
+	f.calls[promptFile]++
+	f.mu.Unlock()
+	if promptFile != "rerank_judge.md" {
 		return nil, fmt.Errorf("unexpected prompt: %s", promptFile)
 	}
+
+	var candidates []rerankJudgeCandidate
+	if err := json.Unmarshal([]byte(vars["candidates"]), &candidates); err != nil {
+		return nil, fmt.Errorf("decode judge candidates: %w", err)
+	}
+	f.beginJudge(len(candidates), vars["candidates"])
+	defer f.endJudge()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(40 * time.Millisecond):
+	}
+	ids := make([]string, len(candidates))
+	for i := range candidates {
+		ids[i] = candidates[i].CandidateID
+	}
+	return []byte(rerankJudgeJSON(ids)), nil
 }
 
-func (f *rerankBatchTrackingLLM) beginExtract(batchSize int) {
+func (f *rerankJudgeTrackingLLM) beginJudge(batchSize int, payload string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.extractCalls++
-	f.extractInFlight++
-	if f.extractInFlight > f.maxExtractConcurrent {
-		f.maxExtractConcurrent = f.extractInFlight
+	f.inFlight++
+	if f.inFlight > f.maxConcurrent {
+		f.maxConcurrent = f.inFlight
 	}
-	f.extractBatchSizes = append(f.extractBatchSizes, batchSize)
+	f.batchSizes = append(f.batchSizes, batchSize)
+	f.payloads = append(f.payloads, payload)
 }
 
-func (f *rerankBatchTrackingLLM) endExtract() {
+func (f *rerankJudgeTrackingLLM) endJudge() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.extractInFlight--
+	f.inFlight--
 }
 
-var bracketCandidateIDPattern = regexp.MustCompile(`\[c\d+\]`)
-var jsonCandidateIDPattern = regexp.MustCompile(`"candidate_id"\s*:\s*"(c\d+)"`)
-
-func candidateIDsFromPrompt(s string) []string {
-	matches := bracketCandidateIDPattern.FindAllString(s, -1)
-	ids := make([]string, 0, len(matches))
-	for _, match := range matches {
-		ids = append(ids, match[1:len(match)-1])
-	}
-	for _, match := range jsonCandidateIDPattern.FindAllStringSubmatch(s, -1) {
-		ids = append(ids, match[1])
-	}
-	return ids
+func (f *rerankJudgeTrackingLLM) Count(promptFile string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[promptFile]
 }
 
-func rerankExtractJSON(ids []string) string {
-	results := make([]string, 0, len(ids))
-	for _, id := range ids {
-		results = append(results, fmt.Sprintf(`{"candidate_id": %q, "source_theme": "theme", "content_theme": "content", "intent": "说明", "object": "object", "scope": "通用", "key_facts": ["fact"]}`, id))
-	}
-	return fmt.Sprintf(`{"results": [%s]}`, strings.Join(results, ","))
+func (f *rerankJudgeTrackingLLM) MaxConcurrent() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.maxConcurrent
+}
+
+func (f *rerankJudgeTrackingLLM) BatchSizes() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	got := append([]int(nil), f.batchSizes...)
+	sort.Slice(got, func(i, j int) bool { return got[i] > got[j] })
+	return got
+}
+
+func (f *rerankJudgeTrackingLLM) Payloads() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.payloads...)
 }
 
 func rerankJudgeJSON(ids []string) string {
@@ -522,9 +658,6 @@ func TestRetrieveEndToEnd(t *testing.T) {
 		Output: `{"outline_ids": ["o2"]}`,
 	})
 	// Rerank — accept all as direct for simplicity
-	fake.SetResponse("rerank_extract.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "c1", "source_theme": "linear equations", "content_theme": "linear equations definition", "intent": "说明定义", "object": "linear equations", "scope": "通用", "key_facts": ["linear equations definition"]}]}`,
-	})
 	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
 		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据说明线性方程定义，可直接回答"}]}`,
 	})

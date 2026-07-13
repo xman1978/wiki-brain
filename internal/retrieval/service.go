@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/search/query"
@@ -18,6 +19,7 @@ import (
 	"github.com/jxman78/wiki-brain/internal/evidence"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/rerank"
 	"github.com/jxman78/wiki-brain/internal/session"
 	"github.com/jxman78/wiki-brain/internal/wiki"
 )
@@ -35,8 +37,8 @@ type Service struct {
 }
 
 const (
-	defaultRerankBatchMaxChars = 8000
-	defaultRerankConcurrency   = 2
+	defaultRerankJudgeBatchMaxChars = 4000
+	defaultRerankJudgeConcurrency   = 4
 )
 
 func NewService(store *Store, llmClient llm.LLMClient, unitsIdx, pointsIdx, outlinesIdx bleve.Index, cfg *config.Config, activationSvc *activation.Service, evidenceSvc *evidence.Service, wikiSvc *wiki.Service) *Service {
@@ -880,7 +882,7 @@ func (s *Service) rrfMerge(outlineCandidates, ftsCandidates []candidate) []candi
 
 // Step 7: LLM Rerank
 func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []candidate) ([]candidate, error) {
-	// Re-check KU lifecycle right before content is sliced for the LLM — recall
+	// Re-check KU lifecycle right before reranking — recall
 	// happened moments earlier via Bleve, which can lag a DB lifecycle change
 	// (docs/impl/v1/retrieval.md 步骤 5, "防扫描间隙状态变更").
 	candidates = s.filterCurrentUnits(candidates)
@@ -888,6 +890,38 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 	// Assign candidate_ids
 	for i := range candidates {
 		candidates[i].candidateID = fmt.Sprintf("c%d", i+1)
+	}
+
+	unitIDs := make([]string, len(candidates))
+	for i := range candidates {
+		unitIDs[i] = candidates[i].unitID
+	}
+	semanticsByUnit, err := s.store.GetUnitRerankSemantics(unitIDs)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval: rerank get semantics: %w", err)
+	}
+
+	missingSet := make(map[string]struct{})
+	staleSet := make(map[string]struct{})
+	for _, c := range candidates {
+		semantic, ok := semanticsByUnit[c.unitID]
+		if !ok {
+			missingSet[c.unitID] = struct{}{}
+			continue
+		}
+		if semantic.PromptVersion != rerank.ExtractPromptVersion {
+			staleSet[c.unitID] = struct{}{}
+		}
+	}
+	if len(missingSet) > 0 || len(staleSet) > 0 {
+		issues := make([]string, 0, 2)
+		if len(missingSet) > 0 {
+			issues = append(issues, "missing unit_ids: "+strings.Join(sortedUnitIDs(missingSet), ", "))
+		}
+		if len(staleSet) > 0 {
+			issues = append(issues, "stale unit_ids: "+strings.Join(sortedUnitIDs(staleSet), ", "))
+		}
+		return nil, fmt.Errorf("retrieval: rerank semantics integrity: %s", strings.Join(issues, "; "))
 	}
 
 	titleCache := make(map[string]string)
@@ -902,17 +936,56 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 		}
 	}
 
-	prepared := make([]rerankCandidateContent, 0, len(candidates))
+	judgeCandidates := make([]rerankJudgeCandidate, 0, len(candidates))
 	for _, c := range candidates {
-		content, err := s.readUnitContent(c.sourceID, c.lineStart, c.lineEnd)
-		if err != nil {
-			slog.Warn("retrieval: rerank read content failed", "unit_id", c.unitID, "error", err)
+		judgeCandidates = append(judgeCandidates, buildRerankJudgeCandidate(
+			c.candidateID, titleCache[c.sourceID], semanticsByUnit[c.unitID]))
+	}
+
+	roles, err := s.judgeRerankBatches(ctx, qc, judgeCandidates)
+	if err != nil {
+		return nil, err
+	}
+
+	var kept []candidate
+	for _, c := range candidates {
+		role, ok := roles[c.candidateID]
+		if !ok || role == "irrelevant" {
 			continue
 		}
-		prepared = append(prepared, rerankCandidateContent{candidate: c, content: content})
+		c.sourcePaths = []string{role}
+		kept = append(kept, c)
 	}
-	batches := splitRerankBatches(prepared, s.rerankBatchMaxChars())
+	return kept, nil
+}
 
+func sortedUnitIDs(ids map[string]struct{}) []string {
+	sorted := make([]string, 0, len(ids))
+	for id := range ids {
+		sorted = append(sorted, id)
+	}
+	sort.Strings(sorted)
+	return sorted
+}
+
+func buildRerankJudgeCandidate(candidateID, sourceTitle string, semantic rerank.Semantics) rerankJudgeCandidate {
+	return rerankJudgeCandidate{
+		CandidateID:  candidateID,
+		SourceTitle:  sourceTitle,
+		SourceTheme:  semantic.SourceTheme,
+		ContentTheme: semantic.ContentTheme,
+		Intent:       semantic.Intent,
+		Object:       semantic.Object,
+		Scope:        semantic.Scope,
+		KeyFacts:     semantic.KeyFacts,
+	}
+}
+
+func (s *Service) judgeRerankBatches(ctx context.Context, qc QueryContext, candidates []rerankJudgeCandidate) (map[string]string, error) {
+	batches := splitRerankJudgeBatches(candidates, s.rerankJudgeBatchMaxChars())
+	if len(batches) == 0 {
+		return nil, nil
+	}
 	subject := qc.Subject
 	if subject == "" {
 		subject = "（未提取）"
@@ -930,32 +1003,10 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 		constraint = "（无）"
 	}
 
-	roles, err := s.rerankBatches(ctx, qc, subject, intent, audience, constraint, titleCache, batches)
-	if err != nil {
-		return nil, err
-	}
-
-	var kept []candidate
-	for _, c := range candidates {
-		role, ok := roles[c.candidateID]
-		if !ok || role == "irrelevant" {
-			continue
-		}
-		c.sourcePaths = []string{role}
-		kept = append(kept, c)
-	}
-	return kept, nil
-}
-
-func (s *Service) rerankBatches(ctx context.Context, qc QueryContext, subject, intent, audience, constraint string, titleCache map[string]string, batches [][]rerankCandidateContent) (map[string]string, error) {
-	if len(batches) == 0 {
-		return nil, nil
-	}
-
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	concurrency := s.rerankConcurrency()
+	concurrency := s.rerankJudgeConcurrency()
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -963,14 +1014,19 @@ func (s *Service) rerankBatches(ctx context.Context, qc QueryContext, subject, i
 	var firstErr error
 	var errOnce sync.Once
 
+launchBatches:
 	for _, batch := range batches {
 		batch := batch
-		sem <- struct{}{}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break launchBatches
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			batchRoles, err := s.rerankBatch(ctx, qc, subject, intent, audience, constraint, titleCache, batch)
+			batchRoles, err := s.judgeExtractedEvidence(ctx, qc, subject, intent, audience, constraint, batch)
 			if err != nil {
 				errOnce.Do(func() {
 					firstErr = err
@@ -989,69 +1045,14 @@ func (s *Service) rerankBatches(ctx context.Context, qc QueryContext, subject, i
 	if firstErr != nil {
 		return nil, firstErr
 	}
-	return roles, nil
-}
-
-func (s *Service) rerankBatch(ctx context.Context, qc QueryContext, subject, intent, audience, constraint string, titleCache map[string]string, batch []rerankCandidateContent) (map[string]string, error) {
-	candidatesText := formatRerankCandidates(batch, titleCache)
-	resp, err := s.llmClient.CompleteJSON(ctx, "rerank_extract.md", map[string]string{
-		"question":   qc.Question,
-		"subject":    subject,
-		"intent":     intent,
-		"audience":   audience,
-		"constraint": constraint,
-		"candidates": candidatesText,
-	}, "classification")
-	if err != nil {
-		return nil, fmt.Errorf("retrieval: rerank llm: %w", err)
-	}
-
-	var extraction rerankExtractionResult
-	if err := json.Unmarshal(resp, &extraction); err != nil {
-		return nil, fmt.Errorf("retrieval: rerank parse: %w", err)
-	}
-
-	// Validate
-	cidSet := make(map[string]bool, len(batch))
-	for _, item := range batch {
-		cidSet[item.candidateID] = true
-	}
-	extractedByID := make(map[string]rerankExtractedEvidence, len(extraction.Results))
-	for _, item := range extraction.Results {
-		if !cidSet[item.CandidateID] {
-			return nil, fmt.Errorf("retrieval: rerank returned unknown candidate_id: %s", item.CandidateID)
-		}
-		extractedByID[item.CandidateID] = item
-	}
-
-	judgeInputs := make([]rerankJudgeCandidate, 0, len(batch))
-	for _, item := range batch {
-		extracted, ok := extractedByID[item.candidateID]
-		if !ok {
-			continue
-		}
-		judgeInputs = append(judgeInputs, rerankJudgeCandidate{
-			CandidateID:  item.candidateID,
-			SourceTitle:  titleCache[item.sourceID],
-			SourceTheme:  extracted.SourceTheme,
-			ContentTheme: extracted.ContentTheme,
-			Intent:       extracted.Intent,
-			Object:       extracted.Object,
-			Scope:        extracted.Scope,
-			KeyFacts:     extracted.KeyFacts,
-		})
-	}
-
-	roles, err := s.judgeExtractedEvidence(ctx, qc, subject, intent, audience, constraint, judgeInputs)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
 	return roles, nil
 }
 
 func (s *Service) judgeExtractedEvidence(ctx context.Context, qc QueryContext, subject, intent, audience, constraint string, candidates []rerankJudgeCandidate) (map[string]string, error) {
-	payload, err := json.MarshalIndent(candidates, "", "  ")
+	payload, err := json.Marshal(candidates)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: rerank judge payload: %w", err)
 	}
@@ -1089,90 +1090,51 @@ func (s *Service) judgeExtractedEvidence(ctx context.Context, qc QueryContext, s
 	return roles, nil
 }
 
-type rerankCandidateContent struct {
-	candidate
-	content string
-}
-
-func (s *Service) rerankBatchMaxChars() int {
-	if s.cfg != nil && s.cfg.Retrieval.RerankBatchMaxChars > 0 {
-		return s.cfg.Retrieval.RerankBatchMaxChars
+func (s *Service) rerankJudgeBatchMaxChars() int {
+	if s.cfg != nil && s.cfg.Retrieval.RerankJudgeBatchMaxChars > 0 {
+		return s.cfg.Retrieval.RerankJudgeBatchMaxChars
 	}
-	return defaultRerankBatchMaxChars
+	return defaultRerankJudgeBatchMaxChars
 }
 
-func (s *Service) rerankConcurrency() int {
-	if s.cfg != nil && s.cfg.Retrieval.RerankConcurrency > 0 {
-		return s.cfg.Retrieval.RerankConcurrency
+func (s *Service) rerankJudgeConcurrency() int {
+	if s.cfg != nil && s.cfg.Retrieval.RerankJudgeConcurrency > 0 {
+		return s.cfg.Retrieval.RerankJudgeConcurrency
 	}
-	return defaultRerankConcurrency
+	return defaultRerankJudgeConcurrency
 }
 
-func splitRerankBatches(candidates []rerankCandidateContent, maxChars int) [][]rerankCandidateContent {
+func splitRerankJudgeBatches(candidates []rerankJudgeCandidate, maxChars int) [][]rerankJudgeCandidate {
 	if len(candidates) == 0 {
 		return nil
 	}
 	if maxChars <= 0 {
-		maxChars = defaultRerankBatchMaxChars
+		maxChars = defaultRerankJudgeBatchMaxChars
 	}
 
-	var batches [][]rerankCandidateContent
-	var current []rerankCandidateContent
-	currentChars := 0
+	var batches [][]rerankJudgeCandidate
+	var current []rerankJudgeCandidate
+	currentChars := 2 // JSON array brackets.
 	for _, c := range candidates {
-		itemChars := len(c.content)
-		if len(current) > 0 && currentChars+itemChars > maxChars {
+		itemJSON, _ := json.Marshal(c)
+		itemChars := utf8.RuneCount(itemJSON)
+		separatorChars := 0
+		if len(current) > 0 {
+			separatorChars = 1
+		}
+		if len(current) > 0 && currentChars+separatorChars+itemChars > maxChars {
 			batches = append(batches, current)
 			current = nil
-			currentChars = 0
+			currentChars = 2
+			separatorChars = 0
 		}
 		current = append(current, c)
-		currentChars += itemChars
+		currentChars += separatorChars + itemChars
 	}
 	if len(current) > 0 {
 		batches = append(batches, current)
 	}
 	return batches
-}
-
-func formatRerankCandidates(candidates []rerankCandidateContent, titleCache map[string]string) string {
-	// Group each batch by source document, so the LLM can see which
-	// policy/document each piece belongs to without receiving every candidate.
-	var sourceOrder []string
-	bySource := make(map[string][]rerankCandidateContent)
-	for _, c := range candidates {
-		if _, ok := bySource[c.sourceID]; !ok {
-			sourceOrder = append(sourceOrder, c.sourceID)
-		}
-		bySource[c.sourceID] = append(bySource[c.sourceID], c)
-	}
-
-	var out strings.Builder
-	for _, sourceID := range sourceOrder {
-		title := titleCache[sourceID]
-		if title == "" {
-			title = sourceID
-		}
-		fmt.Fprintf(&out, "【来源文档：%s】\n", title)
-		for _, c := range bySource[sourceID] {
-			fmt.Fprintf(&out, "[%s] %s\n\n", c.candidateID, c.content)
-		}
-	}
-	return out.String()
-}
-
-type rerankExtractionResult struct {
-	Results []rerankExtractedEvidence `json:"results"`
-}
-
-type rerankExtractedEvidence struct {
-	CandidateID  string   `json:"candidate_id"`
-	SourceTheme  string   `json:"source_theme"`
-	ContentTheme string   `json:"content_theme"`
-	Intent       string   `json:"intent"`
-	Object       string   `json:"object"`
-	Scope        string   `json:"scope"`
-	KeyFacts     []string `json:"key_facts"`
 }
 
 type rerankJudgeCandidate struct {
