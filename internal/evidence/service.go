@@ -120,7 +120,6 @@ func (s *Service) mineBatch(ctx context.Context, question, subject, intent strin
 		"intent":        placeholderIfEmpty(intent),
 		"candidates":    candidatesText.String(),
 		"max_fragments": strconv.Itoa(s.cfg.MaxFragmentsPerKU),
-		"json_schema":   `{"results": [{"candidate_id": "c1", "fragments": ["逐字摘出的原文片段一", "片段二"]}]}`,
 	}
 
 	attempts := s.cfg.Retry + 1
@@ -210,11 +209,13 @@ type fragmentSpan struct {
 
 // mineCandidate implements docs/impl/v1/evidence.md 步骤 3: validate each
 // fragment against c.Content (exact then whitespace-fuzzy match), drop
-// fragments that don't survive, resolve line numbers, sort by original
-// appearance order, dedupe exact-overlapping ranges, and cap at
-// max_fragments_per_ku.
+// fragments that don't survive, resolve line numbers, widen any fragment
+// that lands inside a markdown table to the table's full contiguous range
+// (see expandToTableBlock), sort by original appearance order, dedupe
+// exact-overlapping ranges, and cap at max_fragments_per_ku.
 func (s *Service) mineCandidate(c EvidenceItem, fragments []string) (items []EvidenceItem, dropped int) {
 	minChars := s.cfg.MinFragmentChars
+	contentLines := strings.Split(c.Content, "\n")
 
 	var spans []fragmentSpan
 	for _, frag := range fragments {
@@ -234,10 +235,19 @@ func (s *Service) mineCandidate(c EvidenceItem, fragments []string) (items []Evi
 			continue
 		}
 		relStart, relEnd := textmatch.ByteRangeToLines(c.Content, startByte, endByte)
+
+		content := matched
+		widenedStart, widenedEnd := expandToTableBlock(contentLines, relStart, relEnd)
+		if widenedStart != relStart || widenedEnd != relEnd {
+			content = strings.Join(contentLines[widenedStart-1:widenedEnd], "\n")
+			slog.Debug("evidence: fragment widened to cover its whole markdown table",
+				"unit_id", c.UnitID, "original_lines", []int{relStart, relEnd}, "widened_lines", []int{widenedStart, widenedEnd})
+		}
+
 		spans = append(spans, fragmentSpan{
-			content:   matched,
-			lineStart: c.LineStart - 1 + relStart,
-			lineEnd:   c.LineStart - 1 + relEnd,
+			content:   content,
+			lineStart: c.LineStart - 1 + widenedStart,
+			lineEnd:   c.LineStart - 1 + widenedEnd,
 			byteStart: startByte,
 		})
 	}
@@ -271,6 +281,49 @@ func (s *Service) mineCandidate(c EvidenceItem, fragments []string) (items []Evi
 		}
 	}
 	return items, dropped
+}
+
+// isMarkdownTableRow matches a GFM table row (header, separator, or data
+// row alike — they're syntactically identical: a line bounded by "|" on
+// both ends). Distinguishing header/separator/data isn't needed here; only
+// "is this line part of some table" is.
+func isMarkdownTableRow(line string) bool {
+	t := strings.TrimSpace(line)
+	return len(t) > 1 && strings.HasPrefix(t, "|") && strings.HasSuffix(t, "|")
+}
+
+// expandToTableBlock widens [relStart, relEnd] (1-based line numbers within
+// contentLines) to the full contiguous run of markdown table rows it
+// touches, if any — a markdown table is only meaningful as a whole. This is
+// the fix for the motivating bug: a mined fragment that was just the data
+// row "全体员工 | 350元 | 280元 | 220元 | 200元" with no header row led an
+// answer to guess the wrong column for a "福州属于C类城市" question, because
+// a bare data row from a category-as-columns table doesn't say which number
+// belongs to which category. Rather than only prepending the header row,
+// the whole contiguous table (header, separator, and every data row it
+// touches or borders) is folded into the fragment, so partial-row mining
+// can never again lose the column/row labels that give the numbers meaning.
+func expandToTableBlock(contentLines []string, relStart, relEnd int) (int, int) {
+	inTable := false
+	for i := relStart; i <= relEnd && i >= 1 && i <= len(contentLines); i++ {
+		if isMarkdownTableRow(contentLines[i-1]) {
+			inTable = true
+			break
+		}
+	}
+	if !inTable {
+		return relStart, relEnd
+	}
+
+	start := relStart
+	for start > 1 && isMarkdownTableRow(contentLines[start-2]) {
+		start--
+	}
+	end := relEnd
+	for end < len(contentLines) && isMarkdownTableRow(contentLines[end]) {
+		end++
+	}
+	return start, end
 }
 
 func wholeSegmentFallback(batch []EvidenceItem) []EvidenceItem {

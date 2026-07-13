@@ -194,12 +194,14 @@ units 和 points 平铺为两个独立数组，通过 `unit_id` 关联，避免�
     {"unit_id": "1", "center": "知识单元主题", "line_start": 5, "first_line_anchor": "第5行本身的原文开头，逐字，不超过30字", "line_end": 8, "last_line_anchor": "第8行本身的原文结尾，逐字，不超过30字"}
   ],
   "points": [
-    {"point_id": "1", "unit_id": "1", "content": "可激活摘要内容", "type": "definition|rule|method|case|question"}
+    {"point_id": "1", "unit_id": "1", "content": "可激活摘要内容", "type": "definition|rule|method|case|question", "line_start": 6, "first_line_anchor": "第6行本身的原文，逐字，不超过30字", "line_end": 6, "last_line_anchor": "第6行本身的原文，逐字，不超过30字"}
   ]
 }
 ```
 
-程序将模型输出解析并整合后（锚点定位算出绝对行号、unit_id/point_id 本地编号→UUID、推断归属关系），用 `unit_extract.md` 内 `## Schema` 段的 JSON Schema 校验整合结果，检查：每个 unit 的 `line_start`/`first_line_anchor`/`line_end`/`last_line_anchor` 非空；每个 point 的 `unit_id` 存在于 units 中；每个 unit 至少有 1 个 point；`content` 非空。
+point 的 `line_start`/`first_line_anchor`/`line_end`/`last_line_anchor` 取值方式与 unit 级别完全一样（抄自 `[N]` 标记、逐字复制该行本身），但含义不同：这是**这一条 point 自己**取材于原文的行范围，不是它所属 unit 的整体范围，两者用途见 2.3 的 v6 决策说明。
+
+程序将模型输出解析并整合后（锚点定位算出绝对行号、unit_id/point_id 本地编号→UUID、推断归属关系），用 `unit_extract.md` 内 `## Schema` 段的 JSON Schema 校验整合结果，检查：每个 unit 的 `line_start`/`first_line_anchor`/`line_end`/`last_line_anchor` 非空；每个 point 的 `unit_id` 存在于 units 中、且同样有非空的 `line_start`/`first_line_anchor`/`line_end`/`last_line_anchor`；每个 unit 至少有 1 个 point；`content` 非空。
 
 #### 2.3 边界定位（不单独信任模型自报的行号，也不单独信任模型抄写的锚点文本）
 
@@ -208,6 +210,7 @@ units 和 points 平铺为两个独立数组，通过 `unit_id` 关联，避免�
 - `prompt_version: v2`~`v3` 让模型直接抄行号 `N`，程序只校验 `line_start <= line_end`，不做任何位置校验。实践中出现过模型抄错/数错行号、导致一个单元的行范围大幅跨界、吞并大量无关内容的问题（例如把一个"配置 SSH 无密码登录通道"的单元错误标成跨 25 行，吞掉了中间十几个无关单元）。
 - `v4` 改为只让模型给"该单元第一行/最后一行的原文锚点文本"（`first_line_anchor`/`last_line_anchor`，逐字复制、不超过 30 字），行号完全由程序在 segment 范围内逐行查找定位。这避免了 v2/v3 的越界吞并问题，但引入了新的失败模式：`findAnchorLine` 是逐条物理行比对（`mdLines[i-1]` 与锚点整体比较，从不做多行拼接），而模型写锚点时依据的是语义连贯性而非 Markdown 转换产生的物理换行——当一个知识单元的起始句恰好被转换器的段落空行切成两条物理行（例如标题独占一行、隔一个空行后正文另起一行）时，模型自然会把标题和正文开头连成一句去描述"这个单元的开头"，这段锚点文本就不会完整落在任何一条物理行内，导致定位失败、进而被判定为"抽取失败"——即使模型对单元本身的语义切分是完全正确的。这类失败在标题与正文习惯性分行的文档（如"一、二、三…"式条款、每条标题单独成行）中会大量出现，是 V1 阶段发现的"部分文档 KU 覆盖率异常低"问题的根因。
 - `v5` 改为让模型把行号和该行内容一起报（`line_start`+`first_line_anchor`、`line_end`+`last_line_anchor`），程序先校验"模型报的行号"和"模型抄的内容"是否在 `mdLines[N-1]` 上互相印证，只有印证通过才直接采信该行号；印证不通过（模型数错行号，或者锚点文本本身跨越了物理行，本质上还是 v4 的失败场景）则退回 v4 的逐行扫描兜底，安全性下限与 v4 完全一致，不会重新引入 v2/v3 的越界吞并问题。同时，`first_line_anchor`/`last_line_anchor` 的措辞改为强调"必须是该行本身的原文，不得拼接下一行"，从源头减少模型写出跨物理行锚点的概率。
+- `v6` 解决的是 v5 也没解决的另一类问题："选对了但选窄了"——unit 的 `points` 是模型综合理解一段内容后自由归纳的摘要，取材范围可能跨好几行；而 `line_start`/`line_end` 是模型另一次独立的"抄写起止行"判断。这两件事之间没有任何机制强制对齐：实测里反复出现 unit 把 `line_end` 报在一张参数表的表头行，而它自己的 `points` 却综合了表头下面好几行数据的情况——`LocateUnitBounds` 对这种"锚点真实存在、只是选窄了"的语义错误无能为力（2.3 末段已经说明这不在这套机制的覆盖范围内）。v6 让**每条 point 也报一遍自己的 `line_start`/`first_line_anchor`/`line_end`/`last_line_anchor`**（取值方式与 unit 级别完全一样），程序用 `WidenBoundsFromPoints`（`internal/unit/boundary.go`）对 unit 下所有能定位成功的 point 取行范围并集，写库的最终 `line_start`/`line_end` 是"unit 自报范围 ∪ 所有 point 定位到的范围"，不再单独信任 unit 级别那一次判断。定位不到锚点的 point（`first_line_anchor`/`last_line_anchor` 为空，例如仍在用 v5 输出的 `unit_extract_retry.md`；或锚点确实找不到）不参与并集计算，但知识点本身照常保留——这一步只影响行范围计算，不影响知识点取舍。
 
 `internal/unit/boundary.go` 的 `LocateUnitBounds` 实现（复用证据挖掘模块 `docs/impl/v1/evidence.md` 同款"精确匹配→空白折叠模糊匹配→放弃"算法，见 `internal/foundation/textmatch`）：
 
@@ -329,6 +332,54 @@ Prompt 文件：`config/prompts/unit_extract_retry.md`
 ```
 
 这一步不改变步骤 2.3 的边界定位算法本身，只是在其之上加一层"整段抽取完之后、查漏补缺"的收尾。合并进邻居的 gap 只是扩大了该 unit 的证据行范围，并不会为其生成新的知识点——它能否被检索到仍然取决于该 unit 现有知识点的语义匹配；只有走 2 里"独立抽取"分支的 gap 才会产出真正可检索的新 KP。
+
+### 步骤 3.3：重复合并（segment 内去重兜底）
+
+步骤 3.2 解决的是"漏了"，这一步解决相反的问题——"同一个事实被重复提取成了两个 unit"：模型有时会把一段内容的标题单独提成一个 unit、紧跟着的正文内容又提成另一个 unit；或者一张参数表/一段简短命令块被换一种措辞重复讲了两三遍，各自成了独立的 unit（真实案例：`docs/impl/mvp/unit.md` 编写期间在"更新达梦数据库统计信息"这类表格/短命令相邻的段落上观察到过一个事实被提取 2~3 次的情况）。`unit_extract.md` 的"不重复提取"要求（见步骤 2.1）能从源头减少这类情况，但和步骤 3.2 的"覆盖完整性"要求存在张力（越强调不遗漏，模型就越可能因为拿不准而重复生成），不能只靠 prompt 兜底，需要程序在结果层面再检查一遍。这一步在步骤 3.2（缺口回填）之后运行一次：
+
+```text
+1. 将 segment 内当前的 units 按 line_start（相同则按 line_end）排序，只检查排序后相邻的
+   两个 unit 是否行范围相邻/重叠/间隔不超过 dedupMaxGapLines（3 行，internal/unit/dedup.go）
+   ——不做 O(n²) 全量两两比较，因为 3.2 跑完后 segment 内的 units 基本已经首尾相接，
+   真正重复的一对必然相邻或隔着几行无实质内容的间隔（比如一个空行、一个已被 3.2 判定
+   为琐碎跳过的标题行）；间隔阈值不是 0——实测发现真正的重复经常隔着 1~3 行才出现
+   （标题和它的正文之间隔一个空行、同一参数在表格附近被换一种说法讲了第二遍中间隔着
+   别的表格行），严格零间隔会漏掉这些；
+
+2. 相邻/重叠/间隔不超过阈值的一对，按三级裁决处理（internal/unit/dedup.go 的 judgePair，
+   由入库前的 resolveCandidateDuplicate 调用）：
+
+   a. 确定性合并（不调 LLM）：行范围完全相同 且 规范化后（去空白/标点/括号补充）的
+      center 完全相同——这是"同一个 span 被提取了两次、只是标题措辞略有出入"的形状
+      （典型来源：一次抽取失败重试产生的孪生 unit），不需要模型判断。程序直接合并：
+      center 取两者中更长的一个，points 按规范化文本去重取并集（等价的保留更完整的
+      那条，独有的都保留）。
+
+   b. 关系分类（unit_dedup_classify.md，只判断、不合并）：输出四分类之一——
+        - duplicate：同一事实/规则/参数，只是措辞详略不同 → 进入 c；
+        - parent_child：一个是总览、另一个是可独立存在的细节 → 两个都保留；
+        - parallel：同一上级主题下的不同参数/步骤/分支 → 两个都保留；
+        - distinct：不同内容 → 两个都保留。
+      判断和合并分成两次调用，是因为一次调用同时要求"判断+生成合并结果"会使模型为了
+      完成合并输出而倾向于确认重复；不确定时分类提示词要求宁判 parallel/distinct。
+      不要求模型输出置信度小数（中小模型的数值不具备稳定校准意义）。
+
+   c. 合并生成（unit_dedup_merge.md，仅 duplicate 时调用）：返回合并后的 center +
+      1~5 条去重后的 points，两边独有的内容都必须保留。
+
+   历史注：v1 版本用单个 unit_dedup.md 一次完成判断+合并，已被上述两段式取代，
+   模板保留一个版本周期后删除。
+
+3. 判定重复：把两个 unit 合并为一个——保留其中一个 unit 的 unit_id，center 和
+   line_start/line_end（取两者并集）都改写为合并结果，原有 points 全部删除、替换成
+   模型返回的去重后 points；另一个 unit 连同它的 points 一起硬删除（不是 lifecycle
+   软删除——这一步发生在 KPN 生成、概念匹配等下游步骤之前，此时还没有任何东西引用过
+   这两个 unit 的行，硬删除是安全的），并从 bleve 索引里移除。删除/合并后从头重新排序
+   再扫一遍，直到一整轮没有发生任何合并为止（应对同一事实被重复 3 次以上的情况：先
+   合并出一个新 unit，它可能又和第三个重复项相邻，需要继续检查）。
+```
+
+这一步和步骤 3.2 使用同一套"程序检测触发时机、LLM 判断语义、程序落盘"分工：程序只负责"这两个 unit 挨得够近，值得问一下"，真正判断"是不是同一件事"完全交给模型——这类语义判断（拆分是否正确、是否只是同一事实的不同措辞）本来就不是行号匹配能解决的，见步骤 2.3 末尾对"选错了但选的是真文字"这类语义错误不在定位机制覆盖范围内的说明。
 
 ### 步骤 4：KPN 关系生成
 

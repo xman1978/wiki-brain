@@ -19,12 +19,6 @@ const (
 	promptOverheadTokens = 300
 )
 
-const outlineSummarySchemaExample = `{
-  "summaries": [
-    {"id": "outline-id-1", "summary": "关键词1,关键词2,关键词3"}
-  ]
-}`
-
 type outlineSummaryOutput struct {
 	Summaries []struct {
 		ID      string `json:"id"`
@@ -107,8 +101,7 @@ func GenerateOutlineSummaries(ctx context.Context, client llm.LLMClient, outline
 		}
 
 		data, err := client.CompleteJSON(ctx, "outline_summary.md", map[string]string{
-			"sections":    sb.String(),
-			"json_schema": outlineSummarySchemaExample,
+			"sections": sb.String(),
 		}, "extraction")
 		if err != nil {
 			slog.Warn("outline summary batch failed", "batch", i+1, "error", err)

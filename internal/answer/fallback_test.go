@@ -22,7 +22,7 @@ import (
 // be exercised end-to-end: a verified ActivationLink matches the question,
 // producing a fast-path EvidenceSet; the slow path deliberately finds no FTS
 // candidates (Chinese question vs. no seeded content match) so it resolves
-// via the "merged==0" early return without needing a rerank.md fake
+// via the "merged==0" early return without needing a rerank_extract.md fake
 // response — enough to prove the persistence/path_type/hits mechanics
 // without needing the regenerated answer to be substantively different.
 func setupFallbackTestService(t *testing.T, fastPathFallback bool) (*Service, *sql.DB, string) {

@@ -48,6 +48,11 @@ type LifecycleSetter interface {
 	SetUnitLifecycle(unitIDs []string, lifecycle, reason string) error
 	SnapshotAndDeprecate(unitIDs []string, reason string) error
 	RestoreLifecycle(unitIDs []string, reason string) error
+	// ReindexSource rewrites a source's KU/KP Bleve documents from their
+	// current DB rows — CompleteShadowSwap must call it after the 换血事务
+	// reparents the shadow's rows, or the documents keep the (now-deleted)
+	// shadow source_id and Retrieval's source filter drops every hit.
+	ReindexSource(sourceID string) error
 }
 
 func NewService(store *Store, fv FileViewClient, lc llm.LLMClient, outlineIdx bleve.Index, q *queue.Queue, cfg *config.Config, baseDir string) *Service {
@@ -779,7 +784,38 @@ func (s *Service) CompleteShadowSwap(ctx context.Context, shadowSourceID string)
 		}
 	}
 
+	// The shadow's own pipeline indexed its units/points/outlines under the
+	// shadow source_id; the swap above only rewrote SQLite. Rewrite the Bleve
+	// documents under the target id too, or Retrieval's source filters drop
+	// every hit from this source forever (the shadow row no longer exists).
+	// The swap itself is committed, so index failures degrade search but must
+	// not fail the reupload — cmd/reindex can repair them offline.
+	if s.lifecycleSetter != nil {
+		if err := s.lifecycleSetter.ReindexSource(targetID); err != nil {
+			slog.Warn("shadow swap: reindex units/points failed", "target_id", targetID, "error", err)
+		}
+	}
+	if err := s.ReindexOutlines(targetID); err != nil {
+		slog.Warn("shadow swap: reindex outlines failed", "target_id", targetID, "error", err)
+	}
+
 	slog.Info("shadow swap completed", "target_id", targetID, "shadow_id", shadowSourceID, "superseded_units", len(oldUnitIDs), "replaced_outlines", len(oldOutlineIDs))
+	return nil
+}
+
+// ReindexOutlines rewrites a source's outline Bleve documents from their
+// current DB rows (document IDs are outline_ids, so stale documents — e.g.
+// ones still carrying a swapped-away shadow source_id — are replaced in
+// place). Used by CompleteShadowSwap and cmd/reindex.
+func (s *Service) ReindexOutlines(sourceID string) error {
+	outlines, err := s.store.GetOutlines(sourceID)
+	if err != nil {
+		return fmt.Errorf("reindex outlines: %w", err)
+	}
+	if len(outlines) == 0 {
+		return nil
+	}
+	s.indexOutlines(outlines)
 	return nil
 }
 

@@ -6,29 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 )
-
-const jsonSchemaExample = `{
-  "sections": [
-    {"title": "章节标题", "summary": "关键词1,关键词2,关键词3", "line_start": 1, "line_end": 42, "level": 1}
-  ]
-}`
-
-const localSketchSchemaExample = `{
-  "outline_units": [
-    {"title": "章节标题", "summary": "关键词1,关键词2,关键词3", "line_start": 1, "line_end": 42}
-  ],
-  "starts_mid_section": false,
-  "ends_mid_section": true,
-  "start_topic": null,
-  "end_topic": "下一章节主题"
-}`
 
 type llmSection struct {
 	Title     string `json:"title"`
@@ -123,12 +109,6 @@ func refineOversizeLeaves(ctx context.Context, client llm.LLMClient, sourceID st
 	return result
 }
 
-const outlineLeafTitlesSchemaExample = `{
-  "titles": [
-    {"index": 1, "title": "章节标题"}
-  ]
-}`
-
 type leafTitleResult struct {
 	Index int    `json:"index"`
 	Title string `json:"title"`
@@ -138,18 +118,186 @@ type leafTitlesOutput struct {
 	Titles []leafTitleResult `json:"titles"`
 }
 
-// splitOversizeLeaf deterministically partitions an oversized leaf's content
-// into windows that jointly tile [leaf.LineStart, leaf.LineEnd] with zero
-// overlap (splitWindowsByMarkdown with avoidCuttingIndivisible=true
-// guarantees this — see markdown_split.go), then asks the model only for a
-// title per window. The model never reports a line range here, so it cannot
-// violate the non-overlap/full-coverage invariant the old design asked it to
-// maintain on its own (docs/impl/mvp/source.md 6.5).
+// splitOversizeLeaf partitions an oversized leaf's content into semantic
+// child nodes that jointly tile [leaf.LineStart, leaf.LineEnd] with zero
+// overlap.
 //
-// Returns nil if the leaf can't be usefully split further (a single window
-// covering the whole range — e.g. one giant indivisible table), so the
-// caller keeps the original leaf as-is.
+// Primary path (proposeSemanticSplit): one outline_semantic_split.md call
+// has the model copy each topic section's "[N] 原文" lines plus a title —
+// the grounding contract unit_boundary_extract.md has proven in practice.
+// The program takes only each section's smallest copied line number as its
+// cut point and derives every range as [cut_i, cut_{i+1}-1] itself, so full
+// coverage and non-overlap hold by construction; the pre-v3 failure mode of
+// model-reported ranges (docs/impl/mvp/source.md 6.5 设计决策沿革) cannot
+// recur. A proposed section still exceeding segmentMaxChars is length-split
+// as a guard.
+//
+// Fallback path (proposal call fails or yields no usable split): the
+// deterministic behavior — splitWindowsByMarkdown windows, titled per block
+// via outline_semantic_chunk.md. Length-based windows are blind to topics
+// that aren't markdown headings (e.g. plain-text "第X条" clauses), which is
+// why they are no longer the primary path.
+//
+// Returns nil if the leaf can't be usefully split by either path (e.g. one
+// giant indivisible table), so the caller keeps the original leaf as-is.
 func splitOversizeLeaf(ctx context.Context, client llm.LLMClient, sourceID string, lines []string, leaf *Outline, segmentMaxChars int, mc config.ModelConfig) []Outline {
+	children := proposeSemanticSplit(ctx, client, sourceID, lines, leaf, segmentMaxChars)
+	if len(children) == 0 {
+		children = lengthSplitLeaf(ctx, client, sourceID, lines, leaf, segmentMaxChars, mc)
+	}
+	if len(children) == 0 {
+		return nil
+	}
+
+	for i := range children {
+		children[i].Position = i
+	}
+
+	slog.Info("split oversize leaf", "title", leaf.Title, "parts", len(children),
+		"range", fmt.Sprintf("%d-%d", leaf.LineStart, leaf.LineEnd))
+	return children
+}
+
+type semanticSplitSection struct {
+	Title   string   `json:"title"`
+	Content []string `json:"content"`
+}
+
+type semanticSplitOutput struct {
+	Sections []semanticSplitSection `json:"sections"`
+}
+
+// splitBracketLineRE parses the "[N] 原文" lines the split model copies back
+// — the same format unit_boundary_extract.md has proven in practice to keep
+// the model grounded on real lines (it must look at every line to copy it),
+// which is why the proposal contract is "copy each section's lines" rather
+// than "name a start_line number".
+var splitBracketLineRE = regexp.MustCompile(`^\[(\d+)\]`)
+
+type splitCut struct {
+	startLine int
+	title     string
+}
+
+// proposeSemanticSplit asks the model to copy each topic section's lines
+// (unit_boundary_extract.md-style contract) and tiles the leaf's range from
+// the validated cut points — each section's cut point is the smallest valid
+// line number it copied; the copied text itself is never trusted, the
+// program owns the canonical content. Sections whose copied lines are all
+// out of range (or duplicate another section's start) are dropped; the first
+// section is always anchored to the leaf's own start line. Returns nil when
+// the call fails or fewer than 2 valid sections remain, signaling the caller
+// to fall back to the deterministic length split.
+func proposeSemanticSplit(ctx context.Context, client llm.LLMClient, sourceID string, lines []string, leaf *Outline, segmentMaxChars int) []Outline {
+	data, err := client.CompleteJSON(ctx, "outline_semantic_split.md", map[string]string{
+		"leaf_title":        leaf.Title,
+		"leaf_line_start":   fmt.Sprintf("%d", leaf.LineStart),
+		"leaf_line_end":     fmt.Sprintf("%d", leaf.LineEnd),
+		"segment_max_chars": fmt.Sprintf("%d", segmentMaxChars),
+		"leaf_content":      bracketNumberedLineRange(lines, leaf.LineStart, leaf.LineEnd),
+	}, "extraction")
+	if err != nil {
+		slog.Warn("semantic split proposal failed, falling back to length split",
+			"source_id", sourceID, "title", leaf.Title, "error", err)
+		return nil
+	}
+
+	var out semanticSplitOutput
+	if err := json.Unmarshal(data, &out); err != nil {
+		slog.Warn("semantic split proposal parse failed, falling back to length split",
+			"source_id", sourceID, "title", leaf.Title, "error", err)
+		return nil
+	}
+
+	seen := make(map[int]bool)
+	var cuts []splitCut
+	for _, s := range out.Sections {
+		start := 0
+		for _, raw := range s.Content {
+			m := splitBracketLineRE.FindStringSubmatch(strings.TrimSpace(raw))
+			if m == nil {
+				continue
+			}
+			n, convErr := strconv.Atoi(m[1])
+			if convErr != nil || n < leaf.LineStart || n > leaf.LineEnd {
+				continue
+			}
+			if start == 0 || n < start {
+				start = n
+			}
+		}
+		if start == 0 || seen[start] {
+			continue
+		}
+		seen[start] = true
+		cuts = append(cuts, splitCut{startLine: start, title: strings.TrimSpace(s.Title)})
+	}
+	if len(cuts) < 2 {
+		return nil
+	}
+	sort.Slice(cuts, func(i, j int) bool { return cuts[i].startLine < cuts[j].startLine })
+	// 第一个小节必须覆盖到叶节点自身的起始行，模型没从头切时向前扩展。
+	cuts[0].startLine = leaf.LineStart
+
+	var children []Outline
+	for i, c := range cuts {
+		end := leaf.LineEnd
+		if i+1 < len(cuts) {
+			end = cuts[i+1].startLine - 1
+		}
+		title := c.title
+
+		// 模型给出的小节仍超长：在该小节内部用长度切分兜底，标题只保留在
+		// 第一个子块上，其余子块用首行兜底标题。
+		if RuneCount(extractLineRange(lines, c.startLine, end)) > segmentMaxChars {
+			subWindows := splitWindowsByMarkdown(lines[c.startLine-1:end], segmentMaxChars, 0, true)
+			for j, w := range subWindows {
+				childStart := c.startLine + w.StartLine - 1
+				childTitle := title
+				if j > 0 || childTitle == "" {
+					childTitle = fallbackTitle(lines, childStart)
+				}
+				children = append(children, Outline{
+					OutlineID: uuid.New().String(),
+					SourceID:  sourceID,
+					Level:     leaf.Level + 1,
+					Title:     childTitle,
+					LineStart: childStart,
+					LineEnd:   c.startLine + w.EndLine - 1,
+					NodeType:  "semantic",
+				})
+			}
+			continue
+		}
+
+		if title == "" {
+			title = fallbackTitle(lines, c.startLine)
+		}
+		children = append(children, Outline{
+			OutlineID: uuid.New().String(),
+			SourceID:  sourceID,
+			Level:     leaf.Level + 1,
+			Title:     title,
+			LineStart: c.startLine,
+			LineEnd:   end,
+			NodeType:  "semantic",
+		})
+	}
+	if len(children) < 2 {
+		return nil
+	}
+	return children
+}
+
+// lengthSplitLeaf is the deterministic fallback: windows tiled purely by
+// length and markdown structure (splitWindowsByMarkdown with
+// avoidCuttingIndivisible=true guarantees zero overlap and full coverage —
+// see markdown_split.go), then one outline_semantic_chunk.md call per batch
+// asks the model only for a title per window.
+//
+// Returns nil if the content yields a single window (e.g. one giant
+// indivisible table).
+func lengthSplitLeaf(ctx context.Context, client llm.LLMClient, sourceID string, lines []string, leaf *Outline, segmentMaxChars int, mc config.ModelConfig) []Outline {
 	nodeLines := lines[leaf.LineStart-1 : leaf.LineEnd]
 	windows := splitWindowsByMarkdown(nodeLines, segmentMaxChars, 0, true)
 	if len(windows) <= 1 {
@@ -169,13 +317,6 @@ func splitOversizeLeaf(ctx context.Context, client llm.LLMClient, sourceID strin
 	}
 
 	assignLeafTitles(ctx, client, sourceID, lines, children, mc)
-
-	for i := range children {
-		children[i].Position = i
-	}
-
-	slog.Info("split oversize leaf", "title", leaf.Title, "parts", len(children),
-		"range", fmt.Sprintf("%d-%d", leaf.LineStart, leaf.LineEnd))
 	return children
 }
 
@@ -224,8 +365,7 @@ func assignLeafTitles(ctx context.Context, client llm.LLMClient, sourceID string
 		}
 
 		data, err := client.CompleteJSON(ctx, "outline_semantic_chunk.md", map[string]string{
-			"blocks":      sb.String(),
-			"json_schema": outlineLeafTitlesSchemaExample,
+			"blocks": sb.String(),
 		}, "extraction")
 		if err != nil {
 			slog.Warn("leaf title batch failed", "source_id", sourceID, "error", err)
@@ -252,6 +392,24 @@ func assignLeafTitles(ctx context.Context, client llm.LLMClient, sourceID string
 			children[i].Title = fallbackTitle(lines, children[i].LineStart)
 		}
 	}
+}
+
+// bracketNumberedLineRange formats lines as "[N] 原文" — the same input
+// format unit_boundary_extract.md uses, so the split model copies lines back
+// verbatim and splitBracketLineRE parses the [N] prefixes. (numberedLineRange
+// 的 "N: " 格式服务于只报行号、不复制行的 prompt，两者不要混用。)
+func bracketNumberedLineRange(lines []string, lineStart, lineEnd int) string {
+	if lineStart < 1 {
+		lineStart = 1
+	}
+	if lineEnd > len(lines) {
+		lineEnd = len(lines)
+	}
+	var sb strings.Builder
+	for i := lineStart - 1; i < lineEnd; i++ {
+		fmt.Fprintf(&sb, "[%d] %s\n", i+1, lines[i])
+	}
+	return sb.String()
 }
 
 // fallbackTitle derives a short title from a block's own first non-blank
@@ -310,7 +468,6 @@ func extractLocalSketches(ctx context.Context, client llm.LLMClient, lines []str
 			"window_line_end":   fmt.Sprintf("%d", w.EndLine),
 			"total_lines":       fmt.Sprintf("%d", totalLines),
 			"window_content":    content,
-			"json_schema":       localSketchSchemaExample,
 		}, "extraction")
 		if err != nil {
 			slog.Warn("local sketch extraction failed", "window", i+1, "error", err)
@@ -378,7 +535,6 @@ func mergeSketchesToOutline(ctx context.Context, client llm.LLMClient, sourceID 
 	data, err := client.CompleteJSON(ctx, "outline_global_merge.md", map[string]string{
 		"total_lines":    fmt.Sprintf("%d", totalLines),
 		"local_sketches": sketchText,
-		"json_schema":    jsonSchemaExample,
 	}, "extraction")
 	if err != nil {
 		slog.Warn("LLM global merge failed, falling back to rule-based merge", "error", err)
@@ -431,7 +587,6 @@ func singlePassOutline(ctx context.Context, client llm.LLMClient, sourceID, cont
 	numbered := numberedLineRange(lines, 1, len(lines))
 
 	data, err := client.CompleteJSON(ctx, "outline_semantic_full.md", map[string]string{
-		"json_schema":      jsonSchemaExample,
 		"total_lines":      totalLines,
 		"document_content": numbered,
 	}, "extraction")

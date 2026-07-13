@@ -90,8 +90,7 @@ func TestExtract_HappyPath(t *testing.T) {
 			{PointID: "3", UnitID: "2", Content: "知识管理系统包括文档管理、搜索引擎和协作工具", Type: "method"},
 		},
 	}
-	extractJSON, _ := json.Marshal(extractResp)
-	fake.SetResponse("unit_extract.md", llm.FakeResponse{Output: string(extractJSON)})
+	setSplitExtractFakes(t, fake, extractResp)
 
 	kpnResp := kpnOutput{Relations: []kpnRelation{}}
 	kpnJSON, _ := json.Marshal(kpnResp)
@@ -131,70 +130,63 @@ func TestExtract_HappyPath(t *testing.T) {
 	}
 }
 
-func TestExtract_SegmentRetry(t *testing.T) {
-	svc, fake, db := setupTestService(t)
-	tmpDir := t.TempDir()
+// TestCollectSegmentCandidates_WidensUnitBoundsFromPointAnchors is the
+// regression test for the real anchor-width bug (docs/impl/mvp/unit.md 2.4):
+// a unit declares a narrow line range (just its table's header row here)
+// while its own knowledge point draws from a row further down, and
+// WidenBoundsFromPoints must widen the candidate to the union. The split
+// boundary pipeline derives unit bounds programmatically, so per-point
+// anchors only arrive via the legacy-shaped outputs that
+// unit_extract_retry.md and unit_gap_extract.md still produce —
+// collectSegmentCandidates is the shared entry point they all funnel
+// through, so it is exercised directly here.
+func TestCollectSegmentCandidates_WidensUnitBoundsFromPointAnchors(t *testing.T) {
+	svc, _, db := setupTestService(t)
+	insertSource(t, db, "src-1", "/tmp/unused.md")
 
-	mdPath := writeTestMarkdown(t, tmpDir)
-	insertSource(t, db, "src-1", mdPath)
-	insertOutlines(t, db, "src-1")
+	mdLines := []string{"# 标题", "参数A建议值说明", "参数B建议值说明"}
+	seg := Segment{LineStart: 1, LineEnd: 3}
 
-	fake.SetResponse("unit_extract.md", llm.FakeResponse{Err: llm.ErrTimeout})
-
-	retryResp := extractOutput{
-		Units:  []llmUnit{{UnitID: "1", Center: "重试成功", FirstLineAnchor: "# 第一章", LastLineAnchor: "知识管理的核心目标是提高组织的创新能力和竞争力。"}},
-		Points: []llmPoint{{PointID: "1", UnitID: "1", Content: "重试得到的知识点", Type: "definition"}},
+	output := extractOutput{
+		Units: []llmUnit{
+			{UnitID: "1", Center: "参数配置说明", LineStart: 1, FirstLineAnchor: "# 标题", LineEnd: 1, LastLineAnchor: "# 标题"},
+		},
+		Points: []llmPoint{
+			{PointID: "1", UnitID: "1", Content: "参数A的建议值说明", Type: "rule", LineStart: 2, FirstLineAnchor: "参数A建议值说明", LineEnd: 2, LastLineAnchor: "参数A建议值说明"},
+			{PointID: "2", UnitID: "1", Content: "参数B的建议值说明", Type: "rule", LineStart: 3, FirstLineAnchor: "参数B建议值说明", LineEnd: 3, LastLineAnchor: "参数B建议值说明"},
+		},
 	}
-	retryJSON, _ := json.Marshal(retryResp)
-	fake.SetResponse("unit_extract_retry.md", llm.FakeResponse{Output: string(retryJSON)})
 
-	kpnResp := kpnOutput{Relations: []kpnRelation{}}
-	kpnJSON, _ := json.Marshal(kpnResp)
-	fake.SetResponse("kpn_extract.md", llm.FakeResponse{Output: string(kpnJSON)})
-
-	err := svc.Extract(t.Context(), "src-1")
-	if err != nil {
-		t.Fatalf("extract: %v", err)
+	candidates := svc.collectSegmentCandidates(t.Context(), "src-1", seg, 0, mdLines, output, promptVersionExtractRetry)
+	if len(candidates) != 1 {
+		t.Fatalf("got %d candidates, want 1", len(candidates))
 	}
-
-	units, _ := svc.store.GetUnitsBySourceID("src-1")
-	if len(units) != 1 {
-		t.Fatalf("got %d units, want 1 (from retry)", len(units))
-	}
-	if units[0].Center != "重试成功" {
-		t.Errorf("center = %q, want 重试成功", units[0].Center)
+	if candidates[0].lineStart != 1 || candidates[0].lineEnd != 3 {
+		t.Errorf("candidate range = %d-%d, want 1-3 (widened by its points' own anchors, not left at the unit-level 1-1)", candidates[0].lineStart, candidates[0].lineEnd)
 	}
 }
 
-// writeSSHRacMarkdown reproduces the shape of the real a100c7a5 incident: a
-// short "SSH config" section immediately followed by a "RAC start/stop"
-// section, so a wrong last_line_anchor can plausibly reach into the wrong
-// section.
-func writeSSHRacMarkdown(t *testing.T, dir string) string {
-	t.Helper()
-	mdPath := filepath.Join(dir, "test.md")
-	content := "# 配置 SSH 无密码登录通道\n生成 RSA 密钥对并交换公钥\n# 启动停止 RAC 集群\n停止数据库需执行 srvctl stop database"
-	if err := os.WriteFile(mdPath, []byte(content), 0644); err != nil {
-		t.Fatalf("write markdown: %v", err)
-	}
-	return mdPath
-}
-
-// TestExtract_HallucinatedAnchorFallsBackToExtractionFailed is the
-// regression test for the a100c7a5 incident's structural guarantee: an
-// anchor that doesn't exist anywhere in the segment can never silently
+// TestCollectSegmentCandidates_HallucinatedAnchorFallsBackToExtractionFailed
+// is the regression test for the a100c7a5 incident's structural guarantee:
+// an anchor that doesn't exist anywhere in the segment can never silently
 // become a line range. It must fail validation and (after the retry prompt
 // also can't produce a locatable anchor) land as an extraction_failed
-// placeholder — never written as if it were a normal completed unit.
-func TestExtract_HallucinatedAnchorFallsBackToExtractionFailed(t *testing.T) {
+// placeholder — never pooled as if it were a normal candidate. The
+// legacy-shaped anchors now only enter through unit_extract_retry.md's
+// output, whose locate/validate handling lives in collectSegmentCandidates.
+func TestCollectSegmentCandidates_HallucinatedAnchorFallsBackToExtractionFailed(t *testing.T) {
 	svc, fake, db := setupTestService(t)
-	tmpDir := t.TempDir()
+	insertSource(t, db, "src-1", "/tmp/unused.md")
 
-	mdPath := writeSSHRacMarkdown(t, tmpDir)
-	insertSource(t, db, "src-1", mdPath)
-	insertOutlines(t, db, "src-1")
+	mdLines := []string{
+		"# 配置 SSH 无密码登录通道",
+		"生成 RSA 密钥对并交换公钥",
+		"# 启动停止 RAC 集群",
+		"停止数据库需执行 srvctl stop database",
+	}
+	seg := Segment{LineStart: 1, LineEnd: 4}
 
-	extractResp := extractOutput{
+	output := extractOutput{
 		Units: []llmUnit{
 			{UnitID: "1", Center: "配置 SSH 无密码登录通道",
 				FirstLineAnchor: "# 配置 SSH 无密码登录通道",
@@ -202,17 +194,13 @@ func TestExtract_HallucinatedAnchorFallsBackToExtractionFailed(t *testing.T) {
 		},
 		Points: []llmPoint{{PointID: "1", UnitID: "1", Content: "生成密钥并交换公钥", Type: "method"}},
 	}
-	extractJSON, _ := json.Marshal(extractResp)
-	fake.SetResponse("unit_extract.md", llm.FakeResponse{Output: string(extractJSON)})
+	extractJSON, _ := json.Marshal(output)
 	// Retry attempt also can't locate a real anchor — same hallucination.
 	fake.SetResponse("unit_extract_retry.md", llm.FakeResponse{Output: string(extractJSON)})
 
-	kpnResp := kpnOutput{Relations: []kpnRelation{}}
-	kpnJSON, _ := json.Marshal(kpnResp)
-	fake.SetResponse("kpn_extract.md", llm.FakeResponse{Output: string(kpnJSON)})
-
-	if err := svc.Extract(t.Context(), "src-1"); err != nil {
-		t.Fatalf("extract: %v", err)
+	candidates := svc.collectSegmentCandidates(t.Context(), "src-1", seg, 0, mdLines, output, promptVersionExtractRetry)
+	if len(candidates) != 0 {
+		t.Fatalf("got %d candidates, want 0 (hallucinated anchor must never become a pooled candidate)", len(candidates))
 	}
 
 	units, err := svc.store.GetUnitsBySourceID("src-1")
@@ -262,8 +250,7 @@ func TestExtract_AllFailed(t *testing.T) {
 	insertSource(t, db, "src-1", mdPath)
 	insertOutlines(t, db, "src-1")
 
-	fake.SetResponse("unit_extract.md", llm.FakeResponse{Err: llm.ErrTimeout})
-	fake.SetResponse("unit_extract_retry.md", llm.FakeResponse{Err: llm.ErrTimeout})
+	fake.SetResponse("unit_boundary_extract.md", llm.FakeResponse{Err: llm.ErrTimeout})
 
 	err := svc.Extract(t.Context(), "src-1")
 	if err != nil {
@@ -286,16 +273,15 @@ func TestExtract_KPNGeneration(t *testing.T) {
 
 	extractResp := extractOutput{
 		Units: []llmUnit{
-			{UnitID: "1", Center: "单元A", FirstLineAnchor: "# 第一章", LastLineAnchor: "知识管理的核心目标是提高组织的创新能力和竞争力。"},
-			{UnitID: "2", Center: "单元B", FirstLineAnchor: "有效的知识管理需要技术平台和文化支持。", LastLineAnchor: "它通常包括文档管理、搜索引擎和协作工具。"},
+			{UnitID: "1", Center: "单元A", LineStart: 1, FirstLineAnchor: "# 第一章", LineEnd: 5, LastLineAnchor: "知识管理的核心目标是提高组织的创新能力和竞争力。"},
+			{UnitID: "2", Center: "单元B", LineStart: 6, FirstLineAnchor: "有效的知识管理需要技术平台和文化支持。", LineEnd: 10, LastLineAnchor: "它通常包括文档管理、搜索引擎和协作工具。"},
 		},
 		Points: []llmPoint{
 			{PointID: "1", UnitID: "1", Content: "点A", Type: "definition"},
 			{PointID: "2", UnitID: "2", Content: "点B", Type: "rule"},
 		},
 	}
-	extractJSON, _ := json.Marshal(extractResp)
-	fake.SetResponse("unit_extract.md", llm.FakeResponse{Output: string(extractJSON)})
+	setSplitExtractFakes(t, fake, extractResp)
 
 	// KPN response uses actual point_ids - but we need to use a callback pattern
 	// Since the fake client doesn't support dynamic responses, we'll set up a response
@@ -335,11 +321,10 @@ func TestExtract_ConceptMatch(t *testing.T) {
 	db.Exec(`INSERT INTO concepts (concept_id, domain_id, name, description) VALUES ('c-1', 'd-1', '知识管理', '知识管理领域')`)
 
 	extractResp := extractOutput{
-		Units:  []llmUnit{{UnitID: "1", Center: "知识管理概述", FirstLineAnchor: "# 第一章", LastLineAnchor: "知识管理的核心目标是提高组织的创新能力和竞争力。"}},
+		Units:  []llmUnit{{UnitID: "1", Center: "知识管理概述", LineStart: 1, FirstLineAnchor: "# 第一章", LineEnd: 10, LastLineAnchor: "知识管理的核心目标是提高组织的创新能力和竞争力。"}},
 		Points: []llmPoint{{PointID: "1", UnitID: "1", Content: "知识管理定义", Type: "definition"}},
 	}
-	extractJSON, _ := json.Marshal(extractResp)
-	fake.SetResponse("unit_extract.md", llm.FakeResponse{Output: string(extractJSON)})
+	setSplitExtractFakes(t, fake, extractResp)
 
 	kpnResp := kpnOutput{Relations: []kpnRelation{}}
 	kpnJSON, _ := json.Marshal(kpnResp)
@@ -378,11 +363,10 @@ func TestExtract_KPNFailureDoesNotBlock(t *testing.T) {
 	insertOutlines(t, db, "src-1")
 
 	extractResp := extractOutput{
-		Units:  []llmUnit{{UnitID: "1", Center: "主题", FirstLineAnchor: "# 第一章", LastLineAnchor: "知识管理的核心目标是提高组织的创新能力和竞争力。"}},
+		Units:  []llmUnit{{UnitID: "1", Center: "主题", LineStart: 1, FirstLineAnchor: "# 第一章", LineEnd: 10, LastLineAnchor: "知识管理的核心目标是提高组织的创新能力和竞争力。"}},
 		Points: []llmPoint{{PointID: "1", UnitID: "1", Content: "内容", Type: "definition"}},
 	}
-	extractJSON, _ := json.Marshal(extractResp)
-	fake.SetResponse("unit_extract.md", llm.FakeResponse{Output: string(extractJSON)})
+	setSplitExtractFakes(t, fake, extractResp)
 
 	fake.SetResponse("kpn_extract.md", llm.FakeResponse{Err: llm.ErrTimeout})
 

@@ -264,6 +264,84 @@ func TestMine_MinFragmentChars_DropsShortFragments(t *testing.T) {
 	}
 }
 
+// TestMine_TableDataRowFragment_WidensToWholeTable is the regression test
+// for the real-world bug this was written to fix: mining picked only the
+// data row "全体员工 | 350元 | 280元 | 220元 | 200元" out of a category-as-
+// columns table, with no header row saying which number is A/B/C/D class —
+// downstream, an answer about a C类城市 guessed 350 (the first column)
+// instead of the correct 220. The fragment must be widened to the table's
+// full contiguous range (header + separator + every data row it touches).
+func TestMine_TableDataRowFragment_WidensToWholeTable(t *testing.T) {
+	fake := llm.NewFakeClient()
+	svc := NewService(fake, testConfig())
+
+	content := "住宿限额标准如下：\n" +
+		"| 分类 | A 类城市 | B 类城市 | C 类城市 | D 类城市 |\n" +
+		"| --- | --- | --- | --- | --- |\n" +
+		"| 全体员工 | 350元 | 280元 | 220元 | 200元 |\n" +
+		"超出部分自理。"
+	fake.SetResponse("evidence_mine.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "fragments": ["全体员工 | 350元 | 280元 | 220元 | 200元"]}]}`,
+	})
+
+	in := []EvidenceItem{
+		{UnitID: "u1", PointID: "p1", SourceID: "s1", LineStart: 67, LineEnd: 71, Content: content, Role: RoleDirect},
+	}
+	out := svc.Mine(context.Background(), "福州属于哪一类城市，报销标准是多少？", "出差报销", "查询报销标准", in)
+
+	if len(out) != 1 {
+		t.Fatalf("expected 1 widened fragment, got %d: %+v", len(out), out)
+	}
+	frag := out[0]
+	wantContent := "| 分类 | A 类城市 | B 类城市 | C 类城市 | D 类城市 |\n" +
+		"| --- | --- | --- | --- | --- |\n" +
+		"| 全体员工 | 350元 | 280元 | 220元 | 200元 |"
+	if frag.Content != wantContent {
+		t.Errorf("content = %q, want header+separator+data row all included:\n%q", frag.Content, wantContent)
+	}
+	// content line 1 is non-table ("住宿限额标准如下："), so the table (and
+	// thus the widened fragment) starts at relative line 2 -> absolute 68.
+	if frag.LineStart != 68 || frag.LineEnd != 70 {
+		t.Errorf("line_start/line_end = %d/%d, want 68/70 (widened to the whole table, not the trailing prose line)", frag.LineStart, frag.LineEnd)
+	}
+}
+
+func TestExpandToTableBlock(t *testing.T) {
+	lines := []string{
+		"介绍文字",          // 1
+		"| a | b |",     // 2
+		"| --- | --- |", // 3
+		"| 1 | 2 |",     // 4
+		"| 3 | 4 |",     // 5
+		"表格之后的说明文字",     // 6
+	}
+
+	t.Run("widens a lone data row to the whole table", func(t *testing.T) {
+		start, end := expandToTableBlock(lines, 5, 5)
+		if start != 2 || end != 5 {
+			t.Errorf("got %d-%d, want 2-5", start, end)
+		}
+	})
+
+	t.Run("non-table fragment is left untouched", func(t *testing.T) {
+		start, end := expandToTableBlock(lines, 1, 1)
+		if start != 1 || end != 1 {
+			t.Errorf("got %d-%d, want unchanged 1-1", start, end)
+		}
+		start, end = expandToTableBlock(lines, 6, 6)
+		if start != 6 || end != 6 {
+			t.Errorf("got %d-%d, want unchanged 6-6", start, end)
+		}
+	})
+
+	t.Run("fragment already spanning the whole table is unchanged", func(t *testing.T) {
+		start, end := expandToTableBlock(lines, 2, 5)
+		if start != 2 || end != 5 {
+			t.Errorf("got %d-%d, want unchanged 2-5", start, end)
+		}
+	})
+}
+
 func TestBatchCandidates_SplitsBySize(t *testing.T) {
 	candidates := []EvidenceItem{
 		{UnitID: "u1", Content: "1234567890"}, // 10 chars

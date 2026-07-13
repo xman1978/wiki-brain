@@ -47,6 +47,7 @@ func ParsePrompt(content string, vars map[string]string) (*Prompt, error) {
 
 	for k, v := range vars {
 		placeholder := "{{" + k + "}}"
+		p.System = strings.ReplaceAll(p.System, placeholder, v)
 		p.User = strings.ReplaceAll(p.User, placeholder, v)
 	}
 

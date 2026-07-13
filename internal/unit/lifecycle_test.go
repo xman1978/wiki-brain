@@ -85,6 +85,55 @@ func TestSetUnitLifecycle_CascadesAndReindexes(t *testing.T) {
 	}
 }
 
+// TestReindexSource_RewritesStaleSourceID covers the shadow-swap repair path:
+// documents indexed while a KU/KP still belonged to a shadow source keep the
+// shadow's source_id in Bleve after the 换血事务 rewrites SQLite. ReindexSource
+// must replace them (same doc ids) with the DB rows' actual source_id and
+// preserve each row's own lifecycle value.
+func TestReindexSource_RewritesStaleSourceID(t *testing.T) {
+	svc, _, db := setupTestService(t)
+	tmpDir := t.TempDir()
+	mdPath := writeTestMarkdown(t, tmpDir)
+	insertSource(t, db, "src-1", mdPath)
+	insertOutlines(t, db, "src-1")
+
+	ku := &KnowledgeUnit{SourceID: "src-1", Center: "知识管理", LineStart: 1, LineEnd: 5, Status: "completed", PromptVersion: "v1"}
+	if err := svc.store.InsertUnit(ku); err != nil {
+		t.Fatalf("insert unit: %v", err)
+	}
+	if err := svc.store.UpdateUnitsLifecycle([]string{ku.UnitID}, LifecycleSuperseded); err != nil {
+		t.Fatalf("seed unit lifecycle: %v", err)
+	}
+	kp := &KnowledgePoint{UnitID: ku.UnitID, SourceID: "src-1", Content: "知识管理的定义", PointType: "definition"}
+	if err := svc.store.InsertPoint(kp); err != nil {
+		t.Fatalf("insert point: %v", err)
+	}
+
+	// Seed Bleve the way the shadow pipeline would have: same doc ids, but
+	// source_id still pointing at the (since-deleted) shadow source.
+	staleKU := *ku
+	staleKU.SourceID = "shadow-1"
+	staleKU.Lifecycle = LifecycleCurrent
+	svc.indexUnit(&staleKU, []string{"line1", "line2", "line3", "line4", "line5"})
+	staleKP := *kp
+	staleKP.SourceID = "shadow-1"
+	svc.indexPoint(&staleKP)
+
+	if err := svc.ReindexSource("src-1"); err != nil {
+		t.Fatalf("ReindexSource: %v", err)
+	}
+
+	if sid, ok := bleveField(t, svc.unitsIndex, ku.UnitID, "source_id"); !ok || sid != "src-1" {
+		t.Errorf("bleve unit source_id = %q (found=%v), want src-1", sid, ok)
+	}
+	if lc, ok := bleveField(t, svc.unitsIndex, ku.UnitID, "lifecycle"); !ok || lc != LifecycleSuperseded {
+		t.Errorf("bleve unit lifecycle = %q (found=%v), want %q (must keep the row's own value)", lc, ok, LifecycleSuperseded)
+	}
+	if sid, ok := bleveField(t, svc.pointsIndex, kp.PointID, "source_id"); !ok || sid != "src-1" {
+		t.Errorf("bleve point source_id = %q (found=%v), want src-1", sid, ok)
+	}
+}
+
 // TestSnapshotAndDeprecate_RestoreLifecycle_PreservesPriorSupersededState
 // covers 文件管理 恢复按钮's core correctness requirement: a source's units
 // may hold different lifecycle states at delete time (one still current,

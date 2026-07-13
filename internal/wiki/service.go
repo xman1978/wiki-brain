@@ -191,7 +191,6 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 		"materials":           materials,
 		"gaps":                gapsText,
 		"page_type_hint":      pageTypeHint,
-		"json_schema":         `{"title": "页面标题", "content": "Markdown 正文", "cited_point_ids": ["..."]}`,
 	}
 
 	var lastErr error
@@ -583,10 +582,9 @@ func (s *Service) TryDirectAnswer(ctx context.Context, question string, minScore
 	}
 
 	vars := map[string]string{
-		"question":    question,
-		"title":       page.Title,
-		"content":     page.Content,
-		"json_schema": `{"content": "...", "citations": ["point_id..."], "sufficient": true}`,
+		"question": question,
+		"title":    page.Title,
+		"content":  page.Content,
 	}
 	raw, err := s.llmClient.CompleteJSON(ctx, "answer_wiki.md", vars, "default")
 	if err != nil {

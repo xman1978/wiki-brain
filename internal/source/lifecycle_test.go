@@ -19,6 +19,7 @@ type fakeLifecycleSetter struct {
 	}
 	deprecateCalls [][]string
 	restoreCalls   [][]string
+	reindexCalls   []string
 }
 
 func (f *fakeLifecycleSetter) SetUnitLifecycle(unitIDs []string, lifecycle, reason string) error {
@@ -38,6 +39,11 @@ func (f *fakeLifecycleSetter) SnapshotAndDeprecate(unitIDs []string, reason stri
 func (f *fakeLifecycleSetter) RestoreLifecycle(unitIDs []string, reason string) error {
 	f.restoreCalls = append(f.restoreCalls, unitIDs)
 	return f.SetUnitLifecycle(unitIDs, "current", reason)
+}
+
+func (f *fakeLifecycleSetter) ReindexSource(sourceID string) error {
+	f.reindexCalls = append(f.reindexCalls, sourceID)
+	return nil
 }
 
 func insertUnitForSource(t *testing.T, svc *Service, sourceID, unitID string) {

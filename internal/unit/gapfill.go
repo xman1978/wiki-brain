@@ -1,24 +1,9 @@
 package unit
 
 import (
-	"context"
-	"encoding/json"
-	"log/slog"
 	"strconv"
 	"strings"
-
-	"github.com/google/uuid"
 )
-
-// resolvedUnit is the subset of a just-inserted KnowledgeUnit that gap
-// filling needs: which lines it ended up covering, so a later gap can find
-// its nearest neighbor and so the segment's overall coverage can be
-// recomputed without a DB round-trip.
-type resolvedUnit struct {
-	unitID    string
-	lineStart int
-	lineEnd   int
-}
 
 // gapRanges returns the contiguous line ranges within [segStart, segEnd] not
 // covered by any of the given (lineStart, lineEnd) unit ranges — the same
@@ -122,180 +107,22 @@ func gapContextText(mdLines []string, seg Segment, gapStart, gapEnd int) string 
 	return sb.String()
 }
 
-// fillGaps runs once per segment after all its units have been resolved and
-// inserted (see processSegment). Lines the model's units didn't cover are
-// either given their own unit — if extractGap finds the content substantive
-// enough on its own — or merged into the nearest neighboring unit's bounds.
-// A segment with zero resolved units is a whole-segment extraction failure
-// already handled by the caller's retry path; there is no neighbor to merge
-// into, so it's left alone here.
-func (s *Service) fillGaps(ctx context.Context, sourceID string, seg Segment, mdLines []string, resolved []resolvedUnit) {
-	if len(resolved) == 0 {
-		return
-	}
-
-	ranges := make([][2]int, len(resolved))
-	for i, r := range resolved {
-		ranges[i] = [2]int{r.lineStart, r.lineEnd}
-	}
-
-	for _, gap := range gapRanges(seg.LineStart, seg.LineEnd, ranges) {
-		gapStart, gapEnd := gap[0], gap[1]
-
-		if !isTrivialGap(mdLines, gapStart, gapEnd) {
-			if extra := s.extractGap(ctx, sourceID, seg, mdLines, gapStart, gapEnd); len(extra) > 0 {
-				resolved = append(resolved, extra...)
-				continue
-			}
-		}
-		resolved = s.mergeGapIntoNeighbor(mdLines, resolved, gapStart, gapEnd)
-	}
+// gapExtractOutput is unit_gap_extract.md's response: an explicit placement
+// decision for the uncovered lines, plus units/points only when the decision
+// is standalone.
+type gapExtractOutput struct {
+	Action string     `json:"action"`
+	Units  []llmUnit  `json:"units"`
+	Points []llmPoint `json:"points"`
 }
 
-// extractGap runs a scoped re-extraction pass over [gapStart, gapEnd],
-// reusing unit_extract.md exactly as processSegment does for a full segment.
-// An empty units array is a valid, meaningful response — it means the model
-// judges this content not worth its own unit — in which case the caller
-// falls back to merging the gap into a neighbor.
-//
-// The gap's own lines are framed inside the rest of the parent segment as
-// read-only context rather than sent in isolation: a gap that's really a
-// truncated slice out of the middle of continuous code or prose (e.g. a few
-// assignments from inside an IF branch whose header sits outside the gap,
-// already absorbed into a neighboring unit) is unintelligible on its own —
-// the model either can't judge it and hallucinates a plausible-sounding but
-// decontextualized unit, or correctly gives up in a way indistinguishable
-// from "this really is standalone noise". Showing the whole segment lets it
-// tell those apart. LocateUnitBounds is still constrained to gapSeg
-// (gapStart..gapEnd, see below), so any unit the model anchors inside the
-// context region — despite being told not to — simply fails to locate and
-// is dropped, the same as any other hallucinated anchor.
-func (s *Service) extractGap(ctx context.Context, sourceID string, seg Segment, mdLines []string, gapStart, gapEnd int) []resolvedUnit {
-	textContent := gapContextText(mdLines, seg, gapStart, gapEnd)
-	schemaJSON := `{"units":[{"unit_id":"1","center":"知识单元主题","line_start":5,"first_line_anchor":"第5行本身的原文","line_end":8,"last_line_anchor":"第8行本身的原文"}],"points":[{"point_id":"1","unit_id":"1","content":"可激活摘要内容","type":"definition|rule|method|case|question"}]}`
-
-	vars := map[string]string{
-		"outline_title":      seg.Title,
-		"segment_line_start": strconv.Itoa(gapStart),
-		"segment_line_end":   strconv.Itoa(gapEnd),
-		"text_content":       textContent,
-		"json_schema":        schemaJSON,
-	}
-
-	data, err := s.llmClient.CompleteJSON(ctx, "unit_extract.md", vars, "extraction")
-	if err != nil {
-		slog.Warn("unit: gap extraction call failed", "source_id", sourceID, "line_start", gapStart, "line_end", gapEnd, "error", err)
-		return nil
-	}
-
-	var output extractOutput
-	if err := json.Unmarshal(data, &output); err != nil {
-		slog.Warn("unit: gap extraction JSON parse failed", "source_id", sourceID, "line_start", gapStart, "line_end", gapEnd, "error", err)
-		return nil
-	}
-
-	gapSeg := Segment{OutlineID: seg.OutlineID, Title: seg.Title, LineStart: gapStart, LineEnd: gapEnd}
-
-	var out []resolvedUnit
-	cursor := gapSeg.LineStart
-	for _, u := range output.Units {
-		lineStart, lineEnd, nextCursor, locateOK := LocateUnitBounds(mdLines, gapSeg, u.LineStart, u.FirstLineAnchor, u.LineEnd, u.LastLineAnchor, cursor)
-		if locateOK {
-			cursor = nextCursor
-		}
-		if !locateOK || !s.validateUnit(u, output.Points) {
-			continue
-		}
-
-		unitID := uuid.New().String()
-		ku := &KnowledgeUnit{
-			UnitID:        unitID,
-			SourceID:      sourceID,
-			OutlineID:     seg.OutlineID,
-			Center:        u.Center,
-			LineStart:     lineStart,
-			LineEnd:       lineEnd,
-			Status:        "completed",
-			PromptVersion: "v5",
-		}
-		if err := s.store.InsertUnit(ku); err != nil {
-			slog.Error("unit: gap fill insert unit failed", "error", err)
-			continue
-		}
-
-		for _, p := range output.Points {
-			if p.UnitID != u.UnitID {
-				continue
-			}
-			kp := &KnowledgePoint{
-				PointID:   uuid.New().String(),
-				UnitID:    unitID,
-				SourceID:  sourceID,
-				Content:   p.Content,
-				PointType: p.Type,
-			}
-			if err := s.store.InsertPoint(kp); err != nil {
-				slog.Error("unit: gap fill insert point failed", "error", err)
-				continue
-			}
-			s.indexPoint(kp)
-		}
-
-		s.indexUnit(ku, mdLines)
-		out = append(out, resolvedUnit{unitID: unitID, lineStart: lineStart, lineEnd: lineEnd})
-	}
-
-	return out
-}
-
-// mergeGapIntoNeighbor absorbs [gapStart, gapEnd] into whichever resolved
-// unit sits closest to it (by line distance), widening that unit's
-// line_start/line_end and persisting the new bounds. Returns resolved with
-// the merged-into entry updated in place, so later gaps in the same segment
-// see the widened neighbor when computing their own nearest match.
-func (s *Service) mergeGapIntoNeighbor(mdLines []string, resolved []resolvedUnit, gapStart, gapEnd int) []resolvedUnit {
-	best := -1
-	bestDist := 0
-	for i, r := range resolved {
-		var dist int
-		switch {
-		case gapStart > r.lineEnd:
-			dist = gapStart - r.lineEnd
-		case gapEnd < r.lineStart:
-			dist = r.lineStart - gapEnd
-		default:
-			continue // already overlaps — shouldn't happen, skip
-		}
-		if best == -1 || dist < bestDist {
-			best = i
-			bestDist = dist
-		}
-	}
-	if best == -1 {
-		return resolved
-	}
-
-	target := resolved[best]
-	newStart, newEnd := target.lineStart, target.lineEnd
-	if gapStart < newStart {
-		newStart = gapStart
-	}
-	if gapEnd > newEnd {
-		newEnd = gapEnd
-	}
-	if newStart == target.lineStart && newEnd == target.lineEnd {
-		return resolved
-	}
-
-	if err := s.store.UpdateUnitBounds(target.unitID, newStart, newEnd); err != nil {
-		slog.Error("unit: merge gap into neighbor failed", "unit_id", target.unitID, "error", err)
-		return resolved
-	}
-	resolved[best].lineStart = newStart
-	resolved[best].lineEnd = newEnd
-
-	if ku, err := s.store.GetUnitByID(target.unitID); err == nil {
-		s.indexUnit(ku, mdLines)
-	}
-	return resolved
-}
+// Actions unit_gap_extract.md can return. absorb_left/right direct the gap
+// into a specific neighbor; standalone means the gap deserves its own
+// unit(s); skip marks metadata/decoration (still absorbed into the nearest
+// neighbor by the program, purely to keep line coverage tiled).
+const (
+	gapActionAbsorbLeft  = "absorb_left"
+	gapActionAbsorbRight = "absorb_right"
+	gapActionStandalone  = "standalone"
+	gapActionSkip        = "skip"
+)

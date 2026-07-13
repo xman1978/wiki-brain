@@ -201,3 +201,52 @@ func TestLocateUnitBounds_ReportedLineContentMismatchFallsBack(t *testing.T) {
 		t.Error("expected a genuinely cross-physical-line anchor to still fail to locate — the Go-side fix cannot invent a line that isn't there; this case is fixed by the prompt asking the model to quote a single physical line, not by boundary.go")
 	}
 }
+
+// TestWidenBoundsFromPoints_ExtendsToCoverPointAnchors is the regression
+// test for the real bug this was written to fix: a unit declared only a
+// table's header row (line 1) as its line_start/line_end, but its own
+// knowledge points drew from the data rows beneath it. Prompt version v6
+// has each point report its own line anchor for exactly this reason — the
+// union of every locatable point's range must widen the unit's bounds to
+// where its content actually lives.
+func TestWidenBoundsFromPoints_ExtendsToCoverPointAnchors(t *testing.T) {
+	mdLines := []string{
+		"| 参数 | 建议值 | 说明 |",               // 1
+		"| --- | --- | --- |",             // 2
+		"| WORKER_THREADS | 8 | 工作线程个数 |", // 3
+		"| TASK_THREADS | 8 | 任务线程个数 |",   // 4
+	}
+	seg := Segment{LineStart: 1, LineEnd: 4}
+
+	points := []llmPoint{
+		{Content: "WORKER_THREADS 建议设为 8", LineStart: 3, FirstLineAnchor: "| WORKER_THREADS | 8 | 工作线程个数 |", LineEnd: 3, LastLineAnchor: "| WORKER_THREADS | 8 | 工作线程个数 |"},
+		{Content: "TASK_THREADS 建议设为 8", LineStart: 4, FirstLineAnchor: "| TASK_THREADS | 8 | 任务线程个数 |", LineEnd: 4, LastLineAnchor: "| TASK_THREADS | 8 | 任务线程个数 |"},
+	}
+
+	lineStart, lineEnd := WidenBoundsFromPoints(mdLines, seg, 1, 1, points)
+	if lineStart != 1 || lineEnd != 4 {
+		t.Errorf("got %d-%d, want 1-4 (widened to cover both points' rows)", lineStart, lineEnd)
+	}
+}
+
+// TestWidenBoundsFromPoints_UnlocatablePointsContributeNothing covers the
+// two cases that must NOT widen the bounds: an empty anchor (prompt
+// versions that don't ask for per-point anchors, e.g. the unmodified
+// unit_extract_retry.md, leave these fields zero-valued) and an anchor that
+// simply can't be found anywhere in the segment. Neither should error or
+// panic — they're silently skipped, same as any other unverifiable input
+// this package already tolerates.
+func TestWidenBoundsFromPoints_UnlocatablePointsContributeNothing(t *testing.T) {
+	mdLines := []string{"第一行内容", "第二行内容", "第三行内容"}
+	seg := Segment{LineStart: 1, LineEnd: 3}
+
+	points := []llmPoint{
+		{Content: "无锚点的知识点（比如来自 retry prompt）"},
+		{Content: "锚点定位不到的知识点", LineStart: 2, FirstLineAnchor: "根本不存在的文字", LineEnd: 2, LastLineAnchor: "根本不存在的文字"},
+	}
+
+	lineStart, lineEnd := WidenBoundsFromPoints(mdLines, seg, 1, 1, points)
+	if lineStart != 1 || lineEnd != 1 {
+		t.Errorf("got %d-%d, want unchanged 1-1 (neither point should widen the range)", lineStart, lineEnd)
+	}
+}

@@ -220,7 +220,7 @@ MVP 测试控制台（`web/index.html`），用于端到端验证核心闭环，
 
 ### Prompt 文件格式
 
-每个 prompt 为独立的 Markdown 文件（`.md`），文件名为调用用途（如 `rerank.md`），版本号在文件内 frontmatter 中维护。文件包含三个固定段：
+每个 prompt 为独立的 Markdown 文件（`.md`），文件名为调用用途（如 `rerank_extract.md`），版本号在文件内 frontmatter 中维护。文件包含三个固定段：
 
 ~~~markdown
 ---
@@ -343,7 +343,7 @@ wiki-brain/
 │       ├── unit_concept_match.md
 │       ├── question_domain_match.md
 │       ├── source_filter.md
-│       ├── rerank.md
+│       ├── rerank_extract.md
 │       ├── answer_short.md
 │       └── answer_deep.md
 ├── preset/

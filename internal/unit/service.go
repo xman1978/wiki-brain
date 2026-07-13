@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/blevesearch/bleve/v2"
@@ -31,7 +33,18 @@ type Service struct {
 	broadcaster        *progress.Broadcaster
 	wikiNotifier       WikiNotifier
 	activationNotifier ActivationNotifier
+
+	// extracting guards against two Extract runs on the same source at once
+	// (double-triggered queue tasks, a retry racing the original) — the second
+	// run would re-insert the whole document's units next to the first's.
+	extractMu  sync.Mutex
+	extracting map[string]bool
 }
+
+// ErrExtractionInProgress is returned by Extract when the same source
+// already has an extraction running. The queue handler treats it as "leave
+// units_status alone" — the in-flight run owns that status.
+var ErrExtractionInProgress = errors.New("unit: extraction already in progress")
 
 // WikiNotifier lets the (not yet implemented) Wiki module learn about
 // lifecycle changes so it can mark dependent pages needs_recompile
@@ -65,7 +78,55 @@ func NewService(store *Store, sourceStore *source.Store, llmClient llm.LLMClient
 		pointsIndex: pointsIdx,
 		queue:       q,
 		cfg:         cfg,
+		extracting:  make(map[string]bool),
 	}
+}
+
+// beginExtract marks sourceID as having an extraction in flight; false means
+// one is already running and the caller must bail with ErrExtractionInProgress.
+func (s *Service) beginExtract(sourceID string) bool {
+	s.extractMu.Lock()
+	defer s.extractMu.Unlock()
+	if s.extracting[sourceID] {
+		return false
+	}
+	s.extracting[sourceID] = true
+	return true
+}
+
+func (s *Service) endExtract(sourceID string) {
+	s.extractMu.Lock()
+	delete(s.extracting, sourceID)
+	s.extractMu.Unlock()
+}
+
+// supersedePreviousUnits marks every still-current unit of sourceID
+// superseded right before a re-extraction's results are inserted — so a
+// re-triggered Extract replaces the previous generation instead of doubling
+// it, while a run that dies before reaching this point leaves the old
+// generation untouched and current. Reuses SetUnitLifecycle, the same
+// mechanism the reupload shadow swap uses, so KPs cascade and indexes are
+// cleaned consistently. First-time extraction finds nothing and no-ops.
+func (s *Service) supersedePreviousUnits(sourceID string) {
+	units, err := s.store.GetUnitsBySourceID(sourceID)
+	if err != nil {
+		slog.Error("unit: supersede previous units: list failed", "source_id", sourceID, "error", err)
+		return
+	}
+	var ids []string
+	for _, u := range units {
+		if u.Lifecycle == LifecycleCurrent {
+			ids = append(ids, u.UnitID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	if err := s.SetUnitLifecycle(ids, LifecycleSuperseded, "superseded by re-extraction"); err != nil {
+		slog.Error("unit: supersede previous units failed", "source_id", sourceID, "error", err)
+		return
+	}
+	slog.Info("unit: previous generation superseded before re-extraction insert", "source_id", sourceID, "units", len(ids))
 }
 
 func (s *Service) SetBroadcaster(b *progress.Broadcaster) {
@@ -129,6 +190,11 @@ func (s *Service) SourceCoverageReport(sourceID string) ([]SegmentCoverage, erro
 }
 
 func (s *Service) Extract(ctx context.Context, sourceID string) error {
+	if !s.beginExtract(sourceID) {
+		return fmt.Errorf("%w: source %s", ErrExtractionInProgress, sourceID)
+	}
+	defer s.endExtract(sourceID)
+
 	src, err := s.sourceStore.GetByID(sourceID)
 	if err != nil {
 		return fmt.Errorf("unit: get source: %w", err)
@@ -153,12 +219,13 @@ func (s *Service) Extract(ctx context.Context, sourceID string) error {
 
 	s.emit(sourceID, progress.Event{Step: progress.StepUnitSegment, Status: progress.StatusCompleted, Message: fmt.Sprintf("切分为 %d 段", len(segments)), Total: len(segments)})
 
-	for i, seg := range segments {
-		stepStart := time.Now()
-		s.emit(sourceID, progress.Event{Step: progress.StepUnitExtract, Status: progress.StatusStarted, Message: fmt.Sprintf("提取知识单元 (%d/%d)", i+1, len(segments)), Current: i + 1, Total: len(segments)})
-		s.processSegment(ctx, sourceID, src.MarkdownPath, seg, mdLines)
-		s.emit(sourceID, progress.Event{Step: progress.StepUnitExtract, Status: progress.StatusCompleted, Current: i + 1, Total: len(segments), ElapsedMs: time.Since(stepStart).Milliseconds()})
-	}
+	extractStart := time.Now()
+	s.emit(sourceID, progress.Event{Step: progress.StepUnitExtract, Status: progress.StatusStarted, Message: fmt.Sprintf("并发提取知识单元 (0/%d)", len(segments)), Current: 0, Total: len(segments)})
+	done := 0
+	s.extractSegmentsPreInsertDedup(ctx, sourceID, segments, mdLines, func() {
+		done++
+		s.emit(sourceID, progress.Event{Step: progress.StepUnitExtract, Status: progress.StatusCompleted, Message: fmt.Sprintf("提取知识单元 (%d/%d)", done, len(segments)), Current: done, Total: len(segments), ElapsedMs: time.Since(extractStart).Milliseconds()})
+	})
 
 	stepStart := time.Now()
 	s.emit(sourceID, progress.Event{Step: progress.StepKPNGenerate, Status: progress.StatusStarted, Message: "KPN 关系生成"})
@@ -184,6 +251,19 @@ func (s *Service) Extract(ctx context.Context, sourceID string) error {
 	return nil
 }
 
+// Prompt versions recorded on knowledge_units.prompt_version. These MUST
+// match the `version:` frontmatter of the corresponding config/prompts/*.md
+// template — TestPromptVersionConstantsMatchTemplates enforces it, because
+// the two drifted once (retry template moved to v6 while the code kept
+// stamping "v5") and the stale stamps made real duplicate twins look like
+// they came from different extraction generations.
+const (
+	promptVersionExtractRetry = "v7" // unit_extract_retry.md
+	promptVersionGapExtract   = "v1" // unit_gap_extract.md
+	promptVersionKPNExtract   = "v2" // kpn_extract.md
+	promptVersionKPNCross     = "v1" // kpn_cross_match.md
+)
+
 type llmUnit struct {
 	UnitID          string `json:"unit_id"`
 	Center          string `json:"center"`
@@ -194,112 +274,19 @@ type llmUnit struct {
 }
 
 type llmPoint struct {
-	PointID string `json:"point_id"`
-	UnitID  string `json:"unit_id"`
-	Content string `json:"content"`
-	Type    string `json:"type"`
+	PointID         string `json:"point_id"`
+	UnitID          string `json:"unit_id"`
+	Content         string `json:"content"`
+	Type            string `json:"type"`
+	LineStart       int    `json:"line_start"`
+	FirstLineAnchor string `json:"first_line_anchor"`
+	LineEnd         int    `json:"line_end"`
+	LastLineAnchor  string `json:"last_line_anchor"`
 }
 
 type extractOutput struct {
 	Units  []llmUnit  `json:"units"`
 	Points []llmPoint `json:"points"`
-}
-
-func (s *Service) processSegment(ctx context.Context, sourceID, markdownPath string, seg Segment, mdLines []string) {
-	textContent := sliceLinesWithLineNumbers(mdLines, seg.LineStart, seg.LineEnd)
-
-	schemaJSON := `{"units":[{"unit_id":"1","center":"知识单元主题","line_start":5,"first_line_anchor":"第5行本身的原文","line_end":8,"last_line_anchor":"第8行本身的原文"}],"points":[{"point_id":"1","unit_id":"1","content":"可激活摘要内容","type":"definition|rule|method|case|question"}]}`
-
-	vars := map[string]string{
-		"outline_title":      seg.Title,
-		"segment_line_start": strconv.Itoa(seg.LineStart),
-		"segment_line_end":   strconv.Itoa(seg.LineEnd),
-		"text_content":       textContent,
-		"json_schema":        schemaJSON,
-	}
-
-	data, err := s.llmClient.CompleteJSON(ctx, "unit_extract.md", vars, "extraction")
-	if err != nil {
-		data, err = s.retrySegment(ctx, seg, textContent, schemaJSON)
-		if err != nil {
-			slog.Error("unit: segment extraction failed after retry", "source_id", sourceID,
-				"line_start", seg.LineStart, "line_end", seg.LineEnd, "error", err)
-			return
-		}
-	}
-
-	var output extractOutput
-	if err := json.Unmarshal(data, &output); err != nil {
-		data, err = s.retrySegment(ctx, seg, textContent, schemaJSON)
-		if err != nil {
-			slog.Error("unit: segment JSON parse failed after retry", "source_id", sourceID, "error", err)
-			return
-		}
-		if err := json.Unmarshal(data, &output); err != nil {
-			slog.Error("unit: retry JSON parse still failed", "source_id", sourceID, "error", err)
-			return
-		}
-	}
-
-	localToUUID := make(map[string]string)
-	for _, u := range output.Units {
-		localToUUID[u.UnitID] = uuid.New().String()
-	}
-
-	var resolved []resolvedUnit
-	cursor := seg.LineStart
-	for _, u := range output.Units {
-		lineStart, lineEnd, nextCursor, locateOK := LocateUnitBounds(mdLines, seg, u.LineStart, u.FirstLineAnchor, u.LineEnd, u.LastLineAnchor, cursor)
-		if locateOK {
-			cursor = nextCursor
-		}
-		if !locateOK || !s.validateUnit(u, output.Points) {
-			if ru, ok := s.handleFailedUnit(ctx, sourceID, seg, u, mdLines, localToUUID); ok {
-				resolved = append(resolved, ru)
-			}
-			continue
-		}
-
-		realUnitID := localToUUID[u.UnitID]
-
-		ku := &KnowledgeUnit{
-			UnitID:        realUnitID,
-			SourceID:      sourceID,
-			OutlineID:     seg.OutlineID,
-			Center:        u.Center,
-			LineStart:     lineStart,
-			LineEnd:       lineEnd,
-			Status:        "completed",
-			PromptVersion: "v5",
-		}
-		if err := s.store.InsertUnit(ku); err != nil {
-			slog.Error("unit: insert unit failed", "error", err)
-			continue
-		}
-
-		for _, p := range output.Points {
-			if p.UnitID != u.UnitID {
-				continue
-			}
-			kp := &KnowledgePoint{
-				PointID:   uuid.New().String(),
-				UnitID:    realUnitID,
-				SourceID:  sourceID,
-				Content:   p.Content,
-				PointType: p.Type,
-			}
-			if err := s.store.InsertPoint(kp); err != nil {
-				slog.Error("unit: insert point failed", "error", err)
-			}
-
-			s.indexPoint(kp)
-		}
-
-		s.indexUnit(ku, mdLines)
-		resolved = append(resolved, resolvedUnit{unitID: realUnitID, lineStart: lineStart, lineEnd: lineEnd})
-	}
-
-	s.fillGaps(ctx, sourceID, seg, mdLines, resolved)
 }
 
 func (s *Service) validateUnit(u llmUnit, points []llmPoint) bool {
@@ -318,27 +305,31 @@ func (s *Service) validateUnit(u llmUnit, points []llmPoint) bool {
 	return hasPoints
 }
 
-func (s *Service) handleFailedUnit(ctx context.Context, sourceID string, seg Segment, u llmUnit, mdLines []string, localToUUID map[string]string) (resolvedUnit, bool) {
-	schemaJSON := `{"units":[{"unit_id":"1","center":"知识单元主题","line_start":5,"first_line_anchor":"第5行本身的原文","line_end":8,"last_line_anchor":"第8行本身的原文"}],"points":[{"point_id":"1","unit_id":"1","content":"可激活摘要内容","type":"definition|rule|method|case|question"}]}`
-
+// retryFailedUnit re-runs a failed unit's whole segment through
+// unit_extract_retry.md and returns the first locatable, valid unit as an
+// in-memory candidate — no store writes, so the pre-insert pipeline can pool
+// it with everything else instead of it bypassing dedup (the old
+// direct-insert here was the path that put v5/v6 duplicate twins in the
+// database). A failed retry inserts only the extraction_failed marker row
+// (insertFailedUnit), which is not a retrievable unit.
+func (s *Service) retryFailedUnit(ctx context.Context, sourceID string, seg Segment, segIndex int, u llmUnit, mdLines []string) (unitCandidate, bool) {
 	vars := map[string]string{
 		"segment_line_start": strconv.Itoa(seg.LineStart),
 		"segment_line_end":   strconv.Itoa(seg.LineEnd),
 		"segment_line_count": strconv.Itoa(seg.LineEnd - seg.LineStart + 1),
 		"text_content":       sliceLinesWithLineNumbers(mdLines, seg.LineStart, seg.LineEnd),
-		"json_schema":        schemaJSON,
 	}
 
 	data, err := s.llmClient.CompleteJSON(ctx, "unit_extract_retry.md", vars, "extraction")
 	if err != nil {
 		s.insertFailedUnit(sourceID, seg, u, "retry LLM call failed: "+err.Error())
-		return resolvedUnit{}, false
+		return unitCandidate{}, false
 	}
 
 	var output extractOutput
 	if err := json.Unmarshal(data, &output); err != nil {
 		s.insertFailedUnit(sourceID, seg, u, "retry JSON parse failed: "+err.Error())
-		return resolvedUnit{}, false
+		return unitCandidate{}, false
 	}
 
 	for _, ru := range output.Units {
@@ -346,43 +337,29 @@ func (s *Service) handleFailedUnit(ctx context.Context, sourceID string, seg Seg
 		if !locateOK || !s.validateUnit(ru, output.Points) {
 			continue
 		}
-		realUnitID := uuid.New().String()
 
-		ku := &KnowledgeUnit{
-			UnitID:        realUnitID,
-			SourceID:      sourceID,
-			OutlineID:     seg.OutlineID,
-			Center:        ru.Center,
-			LineStart:     lineStart,
-			LineEnd:       lineEnd,
-			Status:        "completed",
-			PromptVersion: "v5",
-		}
-		if err := s.store.InsertUnit(ku); err != nil {
-			slog.Error("unit: retry insert unit failed", "error", err)
-			continue
-		}
-
+		var unitPoints []llmPoint
 		for _, p := range output.Points {
-			if p.UnitID != ru.UnitID {
-				continue
+			if p.UnitID == ru.UnitID {
+				unitPoints = append(unitPoints, p)
 			}
-			kp := &KnowledgePoint{
-				PointID:   uuid.New().String(),
-				UnitID:    realUnitID,
-				SourceID:  sourceID,
-				Content:   p.Content,
-				PointType: p.Type,
-			}
-			s.store.InsertPoint(kp)
-			s.indexPoint(kp)
 		}
-		s.indexUnit(ku, mdLines)
-		return resolvedUnit{unitID: realUnitID, lineStart: lineStart, lineEnd: lineEnd}, true
+		lineStart, lineEnd = WidenBoundsFromPoints(mdLines, seg, lineStart, lineEnd, unitPoints)
+
+		return unitCandidate{
+			id:            uuid.New().String(),
+			llm:           ru,
+			points:        unitPoints,
+			lineStart:     lineStart,
+			lineEnd:       lineEnd,
+			seg:           seg,
+			segIndex:      segIndex,
+			promptVersion: promptVersionExtractRetry,
+		}, true
 	}
 
 	s.insertFailedUnit(sourceID, seg, u, "retry validation still failed")
-	return resolvedUnit{}, false
+	return unitCandidate{}, false
 }
 
 func (s *Service) insertFailedUnit(sourceID string, seg Segment, u llmUnit, errMsg string) {
@@ -397,7 +374,7 @@ func (s *Service) insertFailedUnit(sourceID string, seg Segment, u llmUnit, errM
 		LineEnd:       seg.LineEnd,
 		Status:        "extraction_failed",
 		ErrorMsg:      sql.NullString{String: errMsg, Valid: true},
-		PromptVersion: "v5",
+		PromptVersion: promptVersionExtractRetry,
 	}
 	if ku.Center == "" {
 		ku.Center = "(extraction failed)"
@@ -405,17 +382,6 @@ func (s *Service) insertFailedUnit(sourceID string, seg Segment, u llmUnit, errM
 	if err := s.store.InsertUnit(ku); err != nil {
 		slog.Error("unit: insert failed unit", "error", err)
 	}
-}
-
-func (s *Service) retrySegment(ctx context.Context, seg Segment, textContent, schemaJSON string) ([]byte, error) {
-	vars := map[string]string{
-		"segment_line_start": strconv.Itoa(seg.LineStart),
-		"segment_line_end":   strconv.Itoa(seg.LineEnd),
-		"segment_line_count": strconv.Itoa(seg.LineEnd - seg.LineStart + 1),
-		"text_content":       textContent,
-		"json_schema":        schemaJSON,
-	}
-	return s.llmClient.CompleteJSON(ctx, "unit_extract_retry.md", vars, "extraction")
 }
 
 type kpnRelation struct {
@@ -523,11 +489,8 @@ func (s *Service) kpnBatch(ctx context.Context, points []KnowledgePoint, unitCen
 		pointIDs[p.PointID] = true
 	}
 
-	schemaJSON := `{"relations":[{"from":"point_id","to":"point_id","type":"related|contradicts"}]}`
-
 	vars := map[string]string{
 		"knowledge_points": sb.String(),
-		"json_schema":      schemaJSON,
 	}
 
 	data, err := s.llmClient.CompleteJSON(ctx, "kpn_extract.md", vars, "extraction")
@@ -559,7 +522,7 @@ func (s *Service) kpnBatch(ctx context.Context, points []KnowledgePoint, unitCen
 			TargetPointID: rel.To,
 			RelationType:  rel.Type,
 			Direction:     "bidirectional",
-			PromptVersion: "v3",
+			PromptVersion: promptVersionKPNExtract,
 			Scope:         RelationScopeIntra,
 		}
 		if _, err := s.store.InsertRelation(r); err != nil {
@@ -578,8 +541,19 @@ type conceptMatchOutput struct {
 }
 
 func (s *Service) matchConcepts(ctx context.Context, sourceID string, domainID sql.NullString) {
-	units, err := s.store.GetCompletedUnitsBySourceID(sourceID)
-	if err != nil || len(units) == 0 {
+	allUnits, err := s.store.GetCompletedUnitsBySourceID(sourceID)
+	if err != nil {
+		return
+	}
+	// Only the current generation gets concept matching — after a
+	// re-extraction, the source still carries its superseded predecessors.
+	var units []KnowledgeUnit
+	for _, u := range allUnits {
+		if u.Lifecycle == LifecycleCurrent {
+			units = append(units, u)
+		}
+	}
+	if len(units) == 0 {
 		return
 	}
 
@@ -618,12 +592,9 @@ func (s *Service) matchConceptBatch(ctx context.Context, units []KnowledgeUnit, 
 		unitIDSet[u.UnitID] = true
 	}
 
-	schemaJSON := `{"matches":[{"unit_id":"unit_uuid_xxx","concept_id":"xxx"}]}`
-
 	vars := map[string]string{
 		"units_list":   unitsList.String(),
 		"concept_list": conceptList,
-		"json_schema":  schemaJSON,
 	}
 
 	data, err := s.llmClient.CompleteJSON(ctx, "unit_concept_match.md", vars, "extraction")
@@ -792,6 +763,46 @@ func (s *Service) RestoreLifecycle(unitIDs []string, reason string) error {
 // lifecycle value. Bleve documents are replaced wholesale (no partial update),
 // so unit content is re-sliced from the owning source's markdown file.
 func (s *Service) reindexLifecycle(units []KnowledgeUnit, points []KnowledgePoint, lifecycle string) {
+	for i := range units {
+		units[i].Lifecycle = lifecycle
+	}
+	for i := range points {
+		points[i].Lifecycle = lifecycle
+	}
+	s.reindexUnitsAndPoints(units, points)
+}
+
+// ReindexSource rewrites every one of a source's KU/KP Bleve documents from
+// their current DB rows. CompleteShadowSwap calls this (via LifecycleSetter)
+// after the 换血事务 reparents the shadow's rows onto the target source_id
+// (docs/impl/v1/lifecycle.md 步骤 2): the swap only updates SQLite, while the
+// Bleve documents written during the shadow's own pipeline still carry the
+// shadow source_id — a value Retrieval's source filter can never match once
+// the shadow row is deleted. Document IDs are unit_id/point_id, so indexing
+// replaces those stale documents in place.
+func (s *Service) ReindexSource(sourceID string) error {
+	units, err := s.store.GetUnitsBySourceID(sourceID)
+	if err != nil {
+		return fmt.Errorf("unit: reindex source: get units: %w", err)
+	}
+	unitIDs := make([]string, len(units))
+	for i, u := range units {
+		unitIDs[i] = u.UnitID
+	}
+	// GetPointsByUnitIDs rather than GetPointsBySourceID: the latter filters
+	// to current-lifecycle rows, but every document must be rewritten here —
+	// superseded ones included — since they all still carry the stale source_id.
+	points, err := s.store.GetPointsByUnitIDs(unitIDs)
+	if err != nil {
+		return fmt.Errorf("unit: reindex source: get points: %w", err)
+	}
+	s.reindexUnitsAndPoints(units, points)
+	return nil
+}
+
+// reindexUnitsAndPoints writes the given units/points into Bleve with the
+// lifecycle values they carry.
+func (s *Service) reindexUnitsAndPoints(units []KnowledgeUnit, points []KnowledgePoint) {
 	mdCache := make(map[string][]string)
 	pointsByUnit := make(map[string][]KnowledgePoint)
 	for _, p := range points {
@@ -800,15 +811,14 @@ func (s *Service) reindexLifecycle(units []KnowledgeUnit, points []KnowledgePoin
 
 	for _, ku := range units {
 		ku := ku
-		ku.Lifecycle = lifecycle
 
 		mdLines, cached := mdCache[ku.SourceID]
 		if !cached {
 			src, err := s.sourceStore.GetByID(ku.SourceID)
 			if err != nil {
-				slog.Warn("unit: reindex lifecycle: get source failed", "source_id", ku.SourceID, "error", err)
+				slog.Warn("unit: reindex: get source failed", "source_id", ku.SourceID, "error", err)
 			} else if data, err := os.ReadFile(src.MarkdownPath); err != nil {
-				slog.Warn("unit: reindex lifecycle: read markdown failed", "source_id", ku.SourceID, "error", err)
+				slog.Warn("unit: reindex: read markdown failed", "source_id", ku.SourceID, "error", err)
 			} else {
 				mdLines = strings.Split(string(data), "\n")
 			}
@@ -818,7 +828,6 @@ func (s *Service) reindexLifecycle(units []KnowledgeUnit, points []KnowledgePoin
 
 		for _, kp := range pointsByUnit[ku.UnitID] {
 			kp := kp
-			kp.Lifecycle = lifecycle
 			s.indexPoint(&kp)
 		}
 	}

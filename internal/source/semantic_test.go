@@ -199,3 +199,161 @@ func TestRefineLeafNodes_ProducesNonOverlappingFullCoverage(t *testing.T) {
 		}
 	}
 }
+
+// buildClauseDoc builds a document that mimics the 差旅费报销制度 shape: one
+// markdown heading, then several plain-text "第X条" clauses that are NOT
+// markdown headings — invisible to length-based splitting, visible only to
+// the semantic proposal.
+func buildClauseDoc(t *testing.T) (content string, leaf Outline, clauseStarts []int) {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("# 第三章 费用规定\n\n")
+	for i := 1; i <= 3; i++ {
+		clauseStarts = append(clauseStarts, strings.Count(b.String(), "\n")+1)
+		fmt.Fprintf(&b, "第%d条 主题%d\n\n", i, i)
+		for j := 0; j < 3; j++ {
+			fmt.Fprintf(&b, "(%d)条款正文内容，重复凑字数重复凑字数重复凑字数重复凑字数。\n\n", j+1)
+		}
+	}
+	content = b.String()
+	totalLines := len(strings.Split(content, "\n"))
+	leaf = Outline{
+		OutlineID: "leaf-1", SourceID: "src-1", Level: 1,
+		Title: "第三章 费用规定", LineStart: 1, LineEnd: totalLines,
+		NodeType: "structural",
+	}
+	return content, leaf, clauseStarts
+}
+
+// TestSplitOversizeLeaf_SemanticProposal verifies the primary path: the
+// model proposes topic start lines, the program tiles the ranges. This is
+// the fix for the 差旅费报销制度 reupload incident where the length-based
+// split lumped 住宿费/交通费/伙食补贴 into one 1980-rune window and orphaned a
+// 3-line remainder with a hallucinated title.
+func TestSplitOversizeLeaf_SemanticProposal(t *testing.T) {
+	content, leaf, clauseStarts := buildClauseDoc(t)
+	lines := strings.Split(content, "\n")
+
+	fake := llm.NewFakeClient()
+	// boundary-style contract: each section copies its "[N] 原文" lines; the
+	// program uses only the smallest line number per section. Copied text is
+	// deliberately NOT the real line content — the program must not trust it.
+	fake.SetResponse("outline_semantic_split.md", llm.FakeResponse{
+		Output: fmt.Sprintf(`{"sections":[
+			{"title":"主题一规定","content":["[%d] 第1条 主题1","[%d] 正文"]},
+			{"title":"主题二规定","content":["[%d] 第2条 主题2","[%d] 正文"]},
+			{"title":"主题三规定","content":["[%d] 第3条 主题3","[%d] 正文"]}
+		]}`, clauseStarts[0], clauseStarts[0]+2,
+			clauseStarts[1], clauseStarts[1]+2,
+			clauseStarts[2], clauseStarts[2]+2),
+	})
+
+	children := splitOversizeLeaf(context.Background(), fake, "src-1", lines, &leaf, 10000, testExtractionMC(100000))
+	if len(children) != 3 {
+		t.Fatalf("got %d children, want 3", len(children))
+	}
+	// first section anchored to leaf start even though the model's first cut
+	// was the clause line below the heading
+	if children[0].LineStart != leaf.LineStart {
+		t.Errorf("first child LineStart = %d, want %d", children[0].LineStart, leaf.LineStart)
+	}
+	if children[len(children)-1].LineEnd != leaf.LineEnd {
+		t.Errorf("last child LineEnd = %d, want %d", children[len(children)-1].LineEnd, leaf.LineEnd)
+	}
+	for i := 1; i < len(children); i++ {
+		if children[i].LineStart != children[i-1].LineEnd+1 {
+			t.Errorf("child %d starts at %d, child %d ends at %d — gap or overlap",
+				i, children[i].LineStart, i-1, children[i-1].LineEnd)
+		}
+		if children[i].LineStart != clauseStarts[i] {
+			t.Errorf("child %d starts at %d, want clause start %d", i, children[i].LineStart, clauseStarts[i])
+		}
+	}
+	wantTitles := []string{"主题一规定", "主题二规定", "主题三规定"}
+	for i, c := range children {
+		if c.Title != wantTitles[i] {
+			t.Errorf("child %d title = %q, want %q", i, c.Title, wantTitles[i])
+		}
+		if c.NodeType != "semantic" || c.Level != leaf.Level+1 || c.Position != i {
+			t.Errorf("child %d meta = (%s, level %d, pos %d)", i, c.NodeType, c.Level, c.Position)
+		}
+	}
+}
+
+// TestSplitOversizeLeaf_InvalidProposalFallsBack verifies that a proposal
+// whose cut points are all unusable (out of range / too few) degrades to the
+// deterministic length split + per-block titling instead of losing the leaf.
+func TestSplitOversizeLeaf_InvalidProposalFallsBack(t *testing.T) {
+	content, leaf, _ := buildClauseDoc(t)
+	lines := strings.Split(content, "\n")
+
+	fake := llm.NewFakeClient()
+	fake.SetResponse("outline_semantic_split.md", llm.FakeResponse{
+		Output: fmt.Sprintf(`{"sections":[
+			{"title":"越界","content":["[%d] x"]},
+			{"title":"也越界","content":["[%d] x","没有行号前缀的行"]}
+		]}`, leaf.LineEnd+100, leaf.LineEnd+200),
+	})
+	fake.SetResponse("outline_semantic_chunk.md", llm.FakeResponse{
+		Output: `{"titles":[{"index":1,"title":"兜底标题一"},{"index":2,"title":"兜底标题二"},{"index":3,"title":"兜底标题三"},{"index":4,"title":"兜底标题四"}]}`,
+	})
+
+	children := splitOversizeLeaf(context.Background(), fake, "src-1", lines, &leaf, 150, testExtractionMC(100000))
+	if len(children) < 2 {
+		t.Fatalf("fallback produced %d children, want >= 2", len(children))
+	}
+	if children[0].LineStart != leaf.LineStart || children[len(children)-1].LineEnd != leaf.LineEnd {
+		t.Errorf("fallback children do not tile leaf range: %d-%d vs %d-%d",
+			children[0].LineStart, children[len(children)-1].LineEnd, leaf.LineStart, leaf.LineEnd)
+	}
+	for i := 1; i < len(children); i++ {
+		if children[i].LineStart != children[i-1].LineEnd+1 {
+			t.Errorf("fallback child %d not contiguous", i)
+		}
+	}
+}
+
+// TestSplitOversizeLeaf_OversizeSectionGuard verifies that a proposed
+// section still exceeding segmentMaxChars is length-split internally while
+// coverage and non-overlap are preserved.
+func TestSplitOversizeLeaf_OversizeSectionGuard(t *testing.T) {
+	content, leaf, clauseStarts := buildClauseDoc(t)
+	lines := strings.Split(content, "\n")
+
+	fake := llm.NewFakeClient()
+	// Model merges 主题1+主题2 into one section that will exceed the limit.
+	fake.SetResponse("outline_semantic_split.md", llm.FakeResponse{
+		Output: fmt.Sprintf(`{"sections":[
+			{"title":"前两个主题","content":["[%d] 第1条 主题1"]},
+			{"title":"主题三规定","content":["[%d] 第3条 主题3"]}
+		]}`, clauseStarts[0], clauseStarts[2]),
+	})
+
+	children := splitOversizeLeaf(context.Background(), fake, "src-1", lines, &leaf, 150, testExtractionMC(100000))
+	if len(children) < 3 {
+		t.Fatalf("got %d children, want >= 3 (oversize section must be sub-split)", len(children))
+	}
+	if children[0].LineStart != leaf.LineStart || children[len(children)-1].LineEnd != leaf.LineEnd {
+		t.Errorf("children do not tile leaf range")
+	}
+	for i := 1; i < len(children); i++ {
+		if children[i].LineStart != children[i-1].LineEnd+1 {
+			t.Errorf("child %d not contiguous with previous", i)
+		}
+	}
+	if children[0].Title != "前两个主题" {
+		t.Errorf("first sub-block should keep the section title, got %q", children[0].Title)
+	}
+	last := children[len(children)-1]
+	if last.Title != "主题三规定" {
+		t.Errorf("last child title = %q, want 主题三规定", last.Title)
+	}
+	if last.LineStart != clauseStarts[2] {
+		t.Errorf("last child starts at %d, want %d", last.LineStart, clauseStarts[2])
+	}
+	for _, c := range children {
+		if strings.TrimSpace(c.Title) == "" {
+			t.Error("child has empty title")
+		}
+	}
+}

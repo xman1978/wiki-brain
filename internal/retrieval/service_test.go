@@ -3,9 +3,14 @@ package retrieval
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
@@ -252,8 +257,11 @@ func TestRerank(t *testing.T) {
 		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50, score: 0.5},
 	}
 
-	fake.SetResponse("rerank.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "c1", "role": "direct"}, {"candidate_id": "c2", "role": "irrelevant"}]}`,
+	fake.SetResponse("rerank_extract.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "source_theme": "linear equation", "content_theme": "linear equation definition", "intent": "说明定义", "object": "linear equation", "scope": "通用", "key_facts": ["linear equation is an equation that forms a straight line"]}, {"candidate_id": "c2", "source_theme": "unrelated", "content_theme": "unrelated note", "intent": "背景", "object": "other", "scope": "通用", "key_facts": ["unrelated"]}]}`,
+	})
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据说明线性方程定义，可直接回答"}, {"candidate_id": "c2", "role": "irrelevant", "analysis": "证据主题与问题不匹配"}]}`,
 	})
 
 	kept, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates)
@@ -269,6 +277,119 @@ func TestRerank(t *testing.T) {
 	if kept[0].sourcePaths[0] != "direct" {
 		t.Errorf("expected role=direct, got %s", kept[0].sourcePaths[0])
 	}
+}
+
+func TestRerankBatchesByCandidateContentLengthAndRunsTwoWayConcurrent(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	tracker := &rerankBatchTrackingLLM{}
+	svc.llmClient = tracker
+	svc.cfg.Retrieval.RerankBatchMaxChars = 1
+	svc.cfg.Retrieval.RerankConcurrency = 2
+
+	candidates := []candidate{
+		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25, score: 1.0},
+		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50, score: 0.5},
+	}
+
+	kept, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 2 {
+		t.Fatalf("expected both candidates kept, got %d", len(kept))
+	}
+	if tracker.extractCalls != 2 {
+		t.Fatalf("expected 2 extract batches, got %d", tracker.extractCalls)
+	}
+	if tracker.maxExtractConcurrent < 2 {
+		t.Fatalf("expected 2-way concurrent extract calls, max concurrent was %d", tracker.maxExtractConcurrent)
+	}
+	if len(tracker.extractBatchSizes) != 2 || tracker.extractBatchSizes[0] != 1 || tracker.extractBatchSizes[1] != 1 {
+		t.Fatalf("expected two one-candidate extract batches, got %v", tracker.extractBatchSizes)
+	}
+}
+
+type rerankBatchTrackingLLM struct {
+	mu                   sync.Mutex
+	extractCalls         int
+	extractInFlight      int
+	maxExtractConcurrent int
+	extractBatchSizes    []int
+}
+
+func (f *rerankBatchTrackingLLM) Complete(_ context.Context, promptFile string, vars map[string]string, model string) (string, error) {
+	return "", fmt.Errorf("unexpected Complete call: %s", promptFile)
+}
+
+func (f *rerankBatchTrackingLLM) CompleteStream(_ context.Context, promptFile string, vars map[string]string, model string) (<-chan llm.StreamChunk, error) {
+	return nil, fmt.Errorf("unexpected CompleteStream call: %s", promptFile)
+}
+
+func (f *rerankBatchTrackingLLM) CompleteJSON(ctx context.Context, promptFile string, vars map[string]string, model string) ([]byte, error) {
+	ids := candidateIDsFromPrompt(vars["candidates"])
+	switch promptFile {
+	case "rerank_extract.md":
+		f.beginExtract(len(ids))
+		defer f.endExtract()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(40 * time.Millisecond):
+		}
+		return []byte(rerankExtractJSON(ids)), nil
+	case "rerank_judge.md":
+		return []byte(rerankJudgeJSON(ids)), nil
+	default:
+		return nil, fmt.Errorf("unexpected prompt: %s", promptFile)
+	}
+}
+
+func (f *rerankBatchTrackingLLM) beginExtract(batchSize int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.extractCalls++
+	f.extractInFlight++
+	if f.extractInFlight > f.maxExtractConcurrent {
+		f.maxExtractConcurrent = f.extractInFlight
+	}
+	f.extractBatchSizes = append(f.extractBatchSizes, batchSize)
+}
+
+func (f *rerankBatchTrackingLLM) endExtract() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.extractInFlight--
+}
+
+var bracketCandidateIDPattern = regexp.MustCompile(`\[c\d+\]`)
+var jsonCandidateIDPattern = regexp.MustCompile(`"candidate_id"\s*:\s*"(c\d+)"`)
+
+func candidateIDsFromPrompt(s string) []string {
+	matches := bracketCandidateIDPattern.FindAllString(s, -1)
+	ids := make([]string, 0, len(matches))
+	for _, match := range matches {
+		ids = append(ids, match[1:len(match)-1])
+	}
+	for _, match := range jsonCandidateIDPattern.FindAllStringSubmatch(s, -1) {
+		ids = append(ids, match[1])
+	}
+	return ids
+}
+
+func rerankExtractJSON(ids []string) string {
+	results := make([]string, 0, len(ids))
+	for _, id := range ids {
+		results = append(results, fmt.Sprintf(`{"candidate_id": %q, "source_theme": "theme", "content_theme": "content", "intent": "说明", "object": "object", "scope": "通用", "key_facts": ["fact"]}`, id))
+	}
+	return fmt.Sprintf(`{"results": [%s]}`, strings.Join(results, ","))
+}
+
+func rerankJudgeJSON(ids []string) string {
+	results := make([]string, 0, len(ids))
+	for _, id := range ids {
+		results = append(results, fmt.Sprintf(`{"candidate_id": %q, "role": "direct", "analysis": "matches"}`, id))
+	}
+	return fmt.Sprintf(`{"results": [%s]}`, strings.Join(results, ","))
 }
 
 func TestKPNExpand(t *testing.T) {
@@ -401,8 +522,11 @@ func TestRetrieveEndToEnd(t *testing.T) {
 		Output: `{"outline_ids": ["o2"]}`,
 	})
 	// Rerank — accept all as direct for simplicity
-	fake.SetResponse("rerank.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "c1", "role": "direct"}]}`,
+	fake.SetResponse("rerank_extract.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "source_theme": "linear equations", "content_theme": "linear equations definition", "intent": "说明定义", "object": "linear equations", "scope": "通用", "key_facts": ["linear equations definition"]}]}`,
+	})
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据说明线性方程定义，可直接回答"}]}`,
 	})
 
 	es, err := svc.Retrieve(context.Background(), "linear equations")

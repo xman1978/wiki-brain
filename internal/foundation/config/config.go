@@ -102,11 +102,33 @@ type SourceConfig struct {
 	UploadDir       string `yaml:"upload_dir"`
 	SegmentMaxChars int    `yaml:"segment_max_chars"`
 	MinSegmentChars int    `yaml:"min_segment_chars"`
+	// Unit extraction always runs the pre-insert dedup path: segments are
+	// extracted concurrently, then candidates are gap-filled and deduplicated
+	// in memory before any store/index writes happen.
+	// PreInsertDedupMinOverlap is the minimum token containment coefficient (0-1)
+	// between two candidate units' text for the pair to be worth an
+	// unit_dedup.md call; below it they're skipped as clearly unrelated.
+	// Defaults to 0.15 when unset (<=0).
+	PreInsertDedupMinOverlap float64 `yaml:"pre_insert_dedup_min_overlap"`
+	// PreInsertDedupConcurrency is how many segments have their extraction
+	// call in flight at once under the bypass. Defaults to 2 when unset (<=0).
+	PreInsertDedupConcurrency int `yaml:"pre_insert_dedup_concurrency"`
+	// PreInsertDedupShortTokenMax: a candidate pair where either side's text
+	// has at most this many unique tokens always gets an unit_dedup.md call,
+	// skipping the overlap gate entirely. A short lead-in (a heading or a
+	// code comment) can share zero literal vocabulary with the content it
+	// introduces — e.g. a Chinese comment above an English/SQL command has
+	// no token overlap with it under any set-similarity formula — so the
+	// overlap gate is unreliable exactly where short-vs-long pairs matter
+	// most. Defaults to 4 when unset (<=0).
+	PreInsertDedupShortTokenMax int `yaml:"pre_insert_dedup_short_token_max"`
 }
 
 type RetrievalConfig struct {
 	OutlineFTSMinScore         float64 `yaml:"outline_fts_min_score"`
 	RerankTopN                 int     `yaml:"rerank_top_n"`
+	RerankBatchMaxChars        int     `yaml:"rerank_batch_max_chars"`
+	RerankConcurrency          int     `yaml:"rerank_concurrency"`
 	ActivationMatchMin         float64 `yaml:"activation_match_min"`
 	ActivationMatchMinFallback float64 `yaml:"activation_match_min_fallback"`
 	ActivationMatchTop         int     `yaml:"activation_match_top"`

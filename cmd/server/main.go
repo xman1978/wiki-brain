@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -188,7 +189,13 @@ func main() {
 		}
 
 		unitsStatus := "completed"
-		if err := unitSvc.Extract(context.Background(), task.SourceID); err != nil {
+		if err := unitSvc.Extract(context.Background(), task.SourceID); errors.Is(err, unit.ErrExtractionInProgress) {
+			// A concurrent run already owns this source's extraction and its
+			// units_status — this duplicate task must not touch either.
+			slog.Warn("unit extract skipped, already in progress", "source_id", task.SourceID)
+			broadcaster.Close(task.SourceID)
+			return
+		} else if err != nil {
 			slog.Error("unit extract failed", "source_id", task.SourceID, "error", err)
 			unitsStatus = "failed"
 		} else if err := sourceSvc.CompleteShadowSwap(context.Background(), task.SourceID); err != nil {

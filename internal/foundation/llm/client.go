@@ -37,12 +37,17 @@ type chatMessage struct {
 }
 
 type chatRequest struct {
-	Model          string        `json:"model"`
-	Messages       []chatMessage `json:"messages"`
-	Temperature    *float64      `json:"temperature,omitempty"`
-	MaxTokens      int           `json:"max_tokens,omitempty"`
-	EnableThinking *bool         `json:"enable_thinking,omitempty"`
-	Stream         bool          `json:"stream,omitempty"`
+	Model          string          `json:"model"`
+	Messages       []chatMessage   `json:"messages"`
+	Temperature    *float64        `json:"temperature,omitempty"`
+	MaxTokens      int             `json:"max_tokens,omitempty"`
+	EnableThinking *bool           `json:"enable_thinking,omitempty"`
+	ResponseFormat *responseFormat `json:"response_format,omitempty"`
+	Stream         bool            `json:"stream,omitempty"`
+}
+
+type responseFormat struct {
+	Type string `json:"type"`
 }
 
 type chatResponse struct {
@@ -65,18 +70,23 @@ func (c *OpenAIClient) Complete(ctx context.Context, promptFile string, vars map
 	}
 
 	mc := c.cfg.ModelForPurpose(purpose)
-	return c.call(ctx, prompt, mc)
+	return c.call(ctx, prompt, mc, false)
 }
 
 func (c *OpenAIClient) CompleteJSON(ctx context.Context, promptFile string, vars map[string]string, model string) ([]byte, error) {
-	raw, err := c.Complete(ctx, promptFile, vars, model)
+	prompt, err := c.loadPrompt(promptFile, vars)
 	if err != nil {
 		return nil, err
 	}
 
+	mc := c.cfg.ModelForPurpose(model)
+	raw, err := c.call(ctx, prompt, mc, true)
+	if err != nil {
+		return nil, err
+	}
 	jsonStr := c.extractAndRepairJSON(raw, promptFile)
 
-	prompt, err := c.loadPrompt(promptFile, nil)
+	prompt, err = c.loadPrompt(promptFile, nil)
 	if err != nil || prompt.Schema == "" {
 		return []byte(jsonStr), nil
 	}
@@ -90,7 +100,6 @@ func (c *OpenAIClient) CompleteJSON(ctx context.Context, promptFile string, vars
 	slog.Info("llm: schema validation failed, attempting field repair",
 		"promptFile", promptFile, "error", validationErr)
 
-	mc := c.cfg.ModelForPurpose(model)
 	repaired, err := c.repairFields(ctx, jsonStr, validationErr.Error(), prompt.Schema, mc)
 	if err != nil {
 		slog.Warn("llm: field repair failed, returning original validation error",
@@ -152,7 +161,7 @@ JSON Schema 要求：
 请修复上述错误，只改动有问题的字段，输出修复后的完整 JSON。`, originalJSON, validationError, schema),
 	}
 
-	result, err := c.call(ctx, repairPrompt, mc)
+	result, err := c.call(ctx, repairPrompt, mc, true)
 	if err != nil {
 		return "", fmt.Errorf("repair call failed: %w", err)
 	}
@@ -170,7 +179,7 @@ func (c *OpenAIClient) loadPrompt(promptFile string, vars map[string]string) (*P
 	return LoadPrompt(path, vars)
 }
 
-func (c *OpenAIClient) call(ctx context.Context, prompt *Prompt, mc config.ModelConfig) (string, error) {
+func (c *OpenAIClient) call(ctx context.Context, prompt *Prompt, mc config.ModelConfig, jsonObject bool) (string, error) {
 	var messages []chatMessage
 	if prompt.System != "" {
 		messages = append(messages, chatMessage{Role: "system", Content: prompt.System})
@@ -188,6 +197,9 @@ func (c *OpenAIClient) call(ctx context.Context, prompt *Prompt, mc config.Model
 	}
 	thinking := mc.Thinking
 	reqBody.EnableThinking = &thinking
+	if jsonObject {
+		reqBody.ResponseFormat = &responseFormat{Type: "json_object"}
+	}
 
 	var lastErr error
 	maxAttempts := c.cfg.MaxRetries + 1

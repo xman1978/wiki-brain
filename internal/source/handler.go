@@ -124,6 +124,7 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 		CreatedAt           string  `json:"created_at"`
 		ProcessingStartedAt *string `json:"processing_started_at,omitempty"`
 		CompletedAt         *string `json:"completed_at,omitempty"`
+		UnitsCompletedAt    *string `json:"units_completed_at,omitempty"`
 	}
 
 	var items []item
@@ -152,6 +153,10 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 		if s.CompletedAt.Valid {
 			t := s.CompletedAt.Time.Format("2006-01-02T15:04:05Z")
 			it.CompletedAt = &t
+		}
+		if s.UnitsCompletedAt.Valid {
+			t := s.UnitsCompletedAt.Time.Format("2006-01-02T15:04:05Z")
+			it.UnitsCompletedAt = &t
 		}
 		items = append(items, it)
 	}
@@ -215,6 +220,9 @@ func (h *Handler) getSource(w http.ResponseWriter, r *http.Request) {
 	}
 	if src.CompletedAt.Valid {
 		resp["completed_at"] = src.CompletedAt.Time.Format("2006-01-02T15:04:05Z")
+	}
+	if src.UnitsCompletedAt.Valid {
+		resp["units_completed_at"] = src.UnitsCompletedAt.Time.Format("2006-01-02T15:04:05Z")
 	}
 
 	foundation.WriteJSON(w, http.StatusOK, resp)

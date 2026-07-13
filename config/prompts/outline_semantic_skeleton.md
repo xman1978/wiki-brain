@@ -8,8 +8,8 @@ version: v1
 
 line_start 和 line_end 使用骨架中标注的原文行号（1-based, inclusive），相邻章节不重叠，合计覆盖全文。summary 为 3~6 个关键词（逗号分隔）。
 
-按以下 JSON 格式输出：
-{{json_schema}}
+按以下 json 格式输出，不输出任何其他内容：
+{"sections": [{"title": "章节标题", "summary": "关键词1,关键词2,关键词3", "line_start": 1, "line_end": 42, "level": 1}]}
 
 ## User
 

@@ -7,6 +7,7 @@ version: v2
 你是文档结构分析助手。你的任务是从当前窗口中提取顶层章节结构。
 
 严格要求：
+
 1. 只提取当前窗口内的顶层章节（最粗粒度），不要拆分子条目
 2. 例如"第三章 管理细则"下有"第七条"、"第八条"等，只输出"第三章 管理细则"，不要输出各条
 3. 每个窗口最多 6 个顶层节点
@@ -14,7 +15,10 @@ version: v2
 5. 内容每行以 "行号: " 开头，line_start 和 line_end 直接取该行号（绝对行号，1-based, inclusive）
 6. summary 为 3~6 个关键词（逗号分隔）
 7. 判断窗口开头/结尾是否处于某个章节中间（用于跨窗口合并）
-8. 只输出 JSON，不输出任何其他文字
+8. 只输出 JSON 格式数据，不输出任何其他文字
+
+按以下 json 格式输出：
+{"outline_units": [{"title": "章节标题", "summary": "关键词1,关键词2,关键词3", "line_start": 1, "line_end": 42}], "starts_mid_section": false, "ends_mid_section": true, "start_topic": null, "end_topic": "下一章节主题"}
 
 ## User
 
@@ -24,9 +28,6 @@ version: v2
 
 内容：
 {{window_content}}
-
-按以下 JSON 格式输出：
-{{json_schema}}
 
 ## Schema
 

@@ -30,6 +30,7 @@ type Source struct {
 	UpdatedAt           time.Time
 	ProcessingStartedAt sql.NullTime
 	CompletedAt         sql.NullTime
+	UnitsCompletedAt    sql.NullTime
 }
 
 // SourceVersion is a snapshot of a source's files as they were the moment a
@@ -97,13 +98,13 @@ func (s *Store) Create(src *Source) error {
 
 func (s *Store) GetByID(sourceID string) (*Source, error) {
 	src := &Source{}
-	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at
+	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at
 		FROM sources WHERE source_id = ?`, sourceID).Scan(
 		&src.SourceID, &src.Title, &src.Format, &src.FileName,
 		&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status, &src.UnitsStatus,
 		&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
 		&src.WordCount, &src.ShadowOf, &src.Version, &src.CreatedAt, &src.UpdatedAt,
-		&src.ProcessingStartedAt, &src.CompletedAt)
+		&src.ProcessingStartedAt, &src.CompletedAt, &src.UnitsCompletedAt)
 	if err != nil {
 		return nil, fmt.Errorf("source store: get by id: %w", err)
 	}
@@ -115,7 +116,7 @@ func (s *Store) GetByID(sourceID string) (*Source, error) {
 func (s *Store) List(status, domainID string, limit, offset int) ([]Source, error) {
 	var rows *sql.Rows
 	var err error
-	base := `SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at FROM sources`
+	base := `SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at FROM sources`
 	where := []string{"shadow_of IS NULL"}
 	var args []any
 	if status != "" {
@@ -142,7 +143,7 @@ func (s *Store) List(status, domainID string, limit, offset int) ([]Source, erro
 			&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status, &src.UnitsStatus,
 			&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
 			&src.WordCount, &src.ShadowOf, &src.Version, &src.CreatedAt, &src.UpdatedAt,
-			&src.ProcessingStartedAt, &src.CompletedAt); err != nil {
+			&src.ProcessingStartedAt, &src.CompletedAt, &src.UnitsCompletedAt); err != nil {
 			return nil, fmt.Errorf("source store: scan: %w", err)
 		}
 		sources = append(sources, src)
@@ -185,10 +186,19 @@ func (s *Store) UpdateStatus(sourceID, status string, errorMsg *string) error {
 // (file management page) can tell "source parsed" apart from "knowledge
 // units actually finished extracting" instead of conflating the two.
 func (s *Store) UpdateUnitsStatus(sourceID, unitsStatus string) error {
-	_, err := s.db.Exec(`UPDATE sources SET units_status = ?, updated_at = CURRENT_TIMESTAMP WHERE source_id = ?`,
-		unitsStatus, sourceID)
-	if err != nil {
-		return fmt.Errorf("source store: update units status: %w", err)
+	switch unitsStatus {
+	case "completed", "failed":
+		_, err := s.db.Exec(`UPDATE sources SET units_status = ?, units_completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE source_id = ?`,
+			unitsStatus, sourceID)
+		if err != nil {
+			return fmt.Errorf("source store: update units status: %w", err)
+		}
+	default:
+		_, err := s.db.Exec(`UPDATE sources SET units_status = ?, updated_at = CURRENT_TIMESTAMP WHERE source_id = ?`,
+			unitsStatus, sourceID)
+		if err != nil {
+			return fmt.Errorf("source store: update units status: %w", err)
+		}
 	}
 	return nil
 }
@@ -366,7 +376,7 @@ func (s *Store) SwapShadowIntoTarget(shadowID, targetID, originalPath string, ht
 	// the units/points just reparented above ARE that finished result, so
 	// the target must reflect "done" immediately, not "pending" until some
 	// unrelated future unit_extract run happens to touch it.
-	if _, err := tx.Exec(`UPDATE sources SET file_name = ?, format = ?, summary = ?, domain_id = ?, outline_type = ?, word_count = ?, original_path = ?, html_path = ?, version = version + 1, units_status = 'completed', updated_at = CURRENT_TIMESTAMP
+	if _, err := tx.Exec(`UPDATE sources SET file_name = ?, format = ?, summary = ?, domain_id = ?, outline_type = ?, word_count = ?, original_path = ?, html_path = ?, version = version + 1, units_status = 'completed', units_completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE source_id = ?`,
 		shadow.FileName, shadow.Format, shadow.Summary, shadow.DomainID, shadow.OutlineType, shadow.WordCount, originalPath, htmlPath, targetID); err != nil {
 		return fmt.Errorf("source store: swap: update target metadata: %w", err)

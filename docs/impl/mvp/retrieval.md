@@ -245,54 +245,19 @@ RRF 合并（步骤 6）完成后，为每条候选分配临时 candidate_id（�
 输入：问题 + 核心主题（subject）+ 意图（intent）+ 对象（audience）+ 约束（constraint，均来自
   Session 解析，缺失时分别填充占位文案"（未提取）"/"（无）"）+ 按来源文档分组的候选
   证据列表（每条附 candidate_id 和 content）；
-输出：每条证据的分类（direct / supporting / irrelevant）；
+模型输出：每条证据的结构化语义抽取结果，包括来源主题、内容主题、意图、对象、范围和关键事实；
+模型判断：将所有候选的结构化语义交给 `rerank_judge.md` 判断
+  direct / supporting / irrelevant；
+程序校验：只校验 candidate_id 必须来自当前候选批次，role 必须是 direct / supporting / irrelevant；
 direct 和 supporting 证据进入后续环节，irrelevant 排除；
-程序对判为 direct 的证据额外做一次名词校验：从问题中提取关键名词，若证据原文不包含
-  任一关键名词，强制将该条降级为 supporting（防止 LLM 误判缺乏文本依据的证据为 direct，
-  详见 extractQuestionNouns / containsAnyNoun）；
 Rerank 是逐条分类器，不是 Top-K 选择器，不截断数量；
-通过 JSON Schema 校验 Rerank 输出结构。
+程序校验两个模型输出中的 candidate_id 必须来自当前候选批次，缺失的 candidate_id 不进入后续证据集。
 ```
 
-**Prompt 文件**：`config/prompts/rerank.md`
+**第一阶段 Prompt 文件**：`config/prompts/rerank_extract.md`
 
 ```
-你是证据分类助手。根据用户提供的核心主题、意图、对象和约束，对每条证据独立判断它与回答该问题之间的关系：
-direct（可直接引用作答）、supporting（不能直接回答但有辅助价值）、irrelevant（无关）。
-
-约束是问题中限定具体场景的专有名称（如产品名、系统名、地点、时间等）。若证据讲的是同类规则、
-但约束限定的具体场景不同（如约束为"产品A"，证据讲的是"产品B"下的同类规则），即使主题和意图
-都对上，也不能算 direct，按是否仍有参考价值归为 supporting 或 irrelevant。
-
-对象是问题里享受某项待遇、或被某条规则约束的角色/岗位身份，是与"场景"（做的是什么事）相互
-独立的判断维度，不能互相替代。判断证据是否限定了另一个对象，依据有两类：①证据正文的排他性
-表述（如"仅适用于 XX 岗位""XX 角色专属"）；②证据所属来源文档的标题传达的默认适用范围（如
-标题为"XX 渠道合作政策"，即表明该文档下的证据默认面向渠道方，而非其他角色，即使正文本身
-没有重复这个限定）。只要满足其一，即使触发规则的动作表面上与问题相似，也应直接判 irrelevant，
-不适用"同领域不同场景"的破例条款——对象不同意味着这笔待遇本身不可能落到问题所问对象身上，
-不构成背景参考价值。仅当证据未限定对象角色、或对象与问题一致时，才继续按场景/事项规则判断。
-
-核心主题和意图要作为一个整体概念来理解和匹配，不要拆开成单个关键词逐一比对。很多核心主题/
-意图本身是"场景+事项"的复合表达（如"实施场景下的提成"），证据必须同时匹配场景和事项才算
-真正命中；只匹配到事项关键词、但场景不同，属于答非所问，应判 irrelevant，而不是因为共享
-某个关键词就归为 supporting。
-
-"同领域不同场景"的证据默认判 irrelevant，仅在证据原文明确将目标场景与自己所述场景做了对比、
-区分或排除性陈述，或目标场景的规则明确引用/依赖该证据的内容才能成立时，才可破例判
-supporting；仅凭"同属一个大类"不构成 supporting 的理由。
-
-判断方法（按顺序两步判断）：
-1. 这条证据本身能否直接回答"核心主题+意图"（且符合约束/对象限定），或可作为最终回答中的
-   事实、规则、步骤、定义、结论、数据、限制等内容直接引用？能 → direct，跳过第 2 步
-2. 否则：能否帮助理解、解释原因、提供前置知识、补充约束/边界条件、提供对比信息、推理依据、
-   示例或验证信息，从而让最终回答更完整或更可信？能 → supporting；都不能 → irrelevant
-
-判断的唯一依据是证据与"回答这个问题"之间的关系，而不是证据中是否出现核心主题/约束的
-关键词、或与来源文档标题字面重合。
-
-（完整判断示例见 `config/prompts/rerank.md` 正文，含 Context 超时、"同领域不同场景"、
-"对象不同即使场景相似也判 irrelevant"以及"来源文档标题传达默认对象范围"的具体反例，
-所有示例均使用泛化的产品/角色占位符，不绑定具体业务实体）
+你是证据语义抽取助手。只抽取每条候选证据本身真正表达的语义事实，不判断相关性。
 
 问题：{{question}}
 核心主题：{{subject}}
@@ -303,16 +268,23 @@ supporting；仅凭"同属一个大类"不构成 supporting 的理由。
 证据列表（按来源文档分组，格式：【来源文档：标题】后接该文档下的 [candidate_id] 证据内容）：
 {{candidates}}
 
-每条证据独立判断，不遗漏任何 candidate_id，按以下 JSON Schema 输出，不输出任何其他内容：
-{{json_schema}}
+每条证据独立抽取，不遗漏任何 candidate_id，只输出 JSON。
 ```
 
-注入 prompt 的 `{{json_schema}}` 是示例 JSON：
+模型输出示例：
 
 ```json
 {
   "results": [
-    {"candidate_id": "c1", "role": "direct|supporting|irrelevant"}
+    {
+      "candidate_id": "c1",
+      "source_theme": "来源文档主题",
+      "content_theme": "证据内容主题",
+      "intent": "证据提供的信息类型",
+      "object": "证据适用对象",
+      "scope": "证据适用范围",
+      "key_facts": ["关键事实"]
+    }
   ]
 }
 ```
@@ -322,7 +294,16 @@ supporting；仅凭"同属一个大类"不构成 supporting 的理由。
 通过 `QueryContext` 传入 Retrieval，再经 `EvidenceSet.Subject` / `EvidenceSet.Intent` /
 `EvidenceSet.Audience` / `EvidenceSet.Constraint` 传给 Answer 层。
 
-程序将模型输出解析整合（将 candidate_id 映射回完整 EvidenceItem、填充 unit_id/point_id/source_ref 等字段）后，用 `rerank.md` 内 `## Schema` 段的 JSON Schema 校验整合结果，检查：每条 `candidate_id` 存在于当前批次；`role` 值只能为 `direct` / `supporting` / `irrelevant`；结果条数与输入一致。
+程序将模型抽取结果解析后，调用 `config/prompts/rerank_judge.md` 对所有候选统一判断。
+程序不再使用业务词表规则提前判 direct / supporting / irrelevant，避免因规则覆盖面不足误杀相关证据。
+
+**第二阶段判断 Prompt 文件**：`config/prompts/rerank_judge.md`
+
+```
+你是证据关系判断助手。根据问题语义和已抽取的证据语义，判断每条候选证据的角色。
+只使用结构化字段判断，不重新解释原始证据，不补充输入之外的事实。
+对象明确冲突或主题场景明确不同且无依赖关系时判 irrelevant。
+```
 
 **Rerank 输出示例格式**（使用 candidate_id，此时 fact_id 尚未分配）：
 ```json

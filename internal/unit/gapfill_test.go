@@ -1,7 +1,6 @@
 package unit
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -147,25 +146,15 @@ func TestExtract_GapFill_ModelAnchorsInContextZoneIsRejected(t *testing.T) {
 			{PointID: "2", UnitID: "2", Content: "第三段知识点", Type: "definition"},
 		},
 	}
-	mainJSON, _ := json.Marshal(mainResp)
+	// The gap is line 3 alone; this response claims standalone but ignores
+	// the "only line 3" instruction and anchors to line 2 (context, already
+	// covered by unit 1) instead.
+	gapJSON := `{"action": "standalone",
+		"units": [{"unit_id": "1", "center": "误锚到上下文", "line_start": 2, "first_line_anchor": "第一段实质内容。", "line_end": 2, "last_line_anchor": "第一段实质内容。"}],
+		"points": [{"point_id": "1", "unit_id": "1", "content": "不应该被写入的知识点", "type": "definition"}]}`
 
-	// The gap is line 3 alone; this response ignores the "only line 3"
-	// instruction and anchors to line 2 (context, already covered by unit 1)
-	// instead.
-	misbehavingGapResp := extractOutput{
-		Units: []llmUnit{
-			{UnitID: "1", Center: "误锚到上下文", LineStart: 2, FirstLineAnchor: "第一段实质内容。", LineEnd: 2, LastLineAnchor: "第一段实质内容。"},
-		},
-		Points: []llmPoint{
-			{PointID: "1", UnitID: "1", Content: "不应该被写入的知识点", Type: "definition"},
-		},
-	}
-	gapJSON, _ := json.Marshal(misbehavingGapResp)
-
-	fake.SetResponseSequence("unit_extract.md", []llm.FakeResponse{
-		{Output: string(mainJSON)},
-		{Output: string(gapJSON)},
-	})
+	setSplitExtractFakes(t, fake, mainResp)
+	fake.SetResponse("unit_gap_extract.md", llm.FakeResponse{Output: gapJSON})
 	fake.SetResponse("kpn_extract.md", llm.FakeResponse{Output: `{"relations":[]}`})
 
 	if err := svc.Extract(t.Context(), "src-1"); err != nil {
@@ -237,8 +226,7 @@ func TestExtract_GapFill_TrivialGapMergesIntoNeighborNoExtraCall(t *testing.T) {
 			{PointID: "2", UnitID: "2", Content: "第二段知识点", Type: "definition"},
 		},
 	}
-	extractJSON, _ := json.Marshal(extractResp)
-	fake.SetResponse("unit_extract.md", llm.FakeResponse{Output: string(extractJSON)})
+	setSplitExtractFakes(t, fake, extractResp)
 	fake.SetResponse("kpn_extract.md", llm.FakeResponse{Output: `{"relations":[]}`})
 
 	if err := svc.Extract(t.Context(), "src-1"); err != nil {
@@ -264,12 +252,12 @@ func TestExtract_GapFill_TrivialGapMergesIntoNeighborNoExtraCall(t *testing.T) {
 
 	calls := 0
 	for _, c := range fake.Calls() {
-		if c.PromptFile == "unit_extract.md" {
+		if c.PromptFile == "unit_boundary_extract.md" {
 			calls++
 		}
 	}
 	if calls != 1 {
-		t.Errorf("unit_extract.md called %d times, want 1 (trivial gaps must not trigger re-extraction)", calls)
+		t.Errorf("unit_boundary_extract.md called %d times, want 1 (trivial gaps must not trigger re-extraction)", calls)
 	}
 }
 
@@ -292,22 +280,12 @@ func TestExtract_GapFill_SubstantiveGapGetsOwnUnit(t *testing.T) {
 			{PointID: "2", UnitID: "2", Content: "第三段知识点", Type: "definition"},
 		},
 	}
-	mainJSON, _ := json.Marshal(mainResp)
+	gapJSON := `{"action": "standalone",
+		"units": [{"unit_id": "1", "center": "被漏掉的第二段", "line_start": 3, "first_line_anchor": "第二段完全独立的实质内容，模型第一次没有提取到。", "line_end": 3, "last_line_anchor": "第二段完全独立的实质内容，模型第一次没有提取到。"}],
+		"points": [{"point_id": "1", "unit_id": "1", "content": "补提取到的知识点", "type": "definition"}]}`
 
-	gapResp := extractOutput{
-		Units: []llmUnit{
-			{UnitID: "1", Center: "被漏掉的第二段", LineStart: 3, FirstLineAnchor: "第二段完全独立的实质内容，模型第一次没有提取到。", LineEnd: 3, LastLineAnchor: "第二段完全独立的实质内容，模型第一次没有提取到。"},
-		},
-		Points: []llmPoint{
-			{PointID: "1", UnitID: "1", Content: "补提取到的知识点", Type: "definition"},
-		},
-	}
-	gapJSON, _ := json.Marshal(gapResp)
-
-	fake.SetResponseSequence("unit_extract.md", []llm.FakeResponse{
-		{Output: string(mainJSON)},
-		{Output: string(gapJSON)},
-	})
+	setSplitExtractFakes(t, fake, mainResp)
+	fake.SetResponse("unit_gap_extract.md", llm.FakeResponse{Output: gapJSON})
 	fake.SetResponse("kpn_extract.md", llm.FakeResponse{Output: `{"relations":[]}`})
 
 	if err := svc.Extract(t.Context(), "src-1"); err != nil {
@@ -337,14 +315,17 @@ func TestExtract_GapFill_SubstantiveGapGetsOwnUnit(t *testing.T) {
 		t.Errorf("gap-filled unit points = %+v, want one point 补提取到的知识点", points)
 	}
 
-	calls := 0
+	extractCalls, gapCalls := 0, 0
 	for _, c := range fake.Calls() {
-		if c.PromptFile == "unit_extract.md" {
-			calls++
+		switch c.PromptFile {
+		case "unit_boundary_extract.md":
+			extractCalls++
+		case "unit_gap_extract.md":
+			gapCalls++
 		}
 	}
-	if calls != 2 {
-		t.Errorf("unit_extract.md called %d times, want 2 (main segment + gap re-extraction)", calls)
+	if extractCalls != 1 || gapCalls != 1 {
+		t.Errorf("unit_boundary_extract.md called %d times (want 1), unit_gap_extract.md called %d times (want 1)", extractCalls, gapCalls)
 	}
 }
 
@@ -367,12 +348,9 @@ func TestExtract_GapFill_ModelDeclinesGapMergesIntoNeighbor(t *testing.T) {
 			{PointID: "2", UnitID: "2", Content: "第三段知识点", Type: "definition"},
 		},
 	}
-	mainJSON, _ := json.Marshal(mainResp)
-
-	fake.SetResponseSequence("unit_extract.md", []llm.FakeResponse{
-		{Output: string(mainJSON)},
-		{Output: `{"units":[],"points":[]}`}, // model judges the gap not worth its own unit
-	})
+	setSplitExtractFakes(t, fake, mainResp)
+	// model judges the gap metadata/decoration, not worth its own unit
+	fake.SetResponse("unit_gap_extract.md", llm.FakeResponse{Output: `{"action": "skip"}`})
 	fake.SetResponse("kpn_extract.md", llm.FakeResponse{Output: `{"relations":[]}`})
 
 	if err := svc.Extract(t.Context(), "src-1"); err != nil {

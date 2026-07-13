@@ -96,14 +96,17 @@ func TestStoreUpdateUnitsStatus(t *testing.T) {
 	if got.UnitsStatus != "completed" {
 		t.Errorf("units_status = %q, want completed", got.UnitsStatus)
 	}
+	if !got.UnitsCompletedAt.Valid {
+		t.Errorf("units_completed_at not set after units_status=completed")
+	}
 
 	// List must surface it too — it's a separate SELECT/scan from GetByID.
 	list, err := store.List("", "", 10, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(list) != 1 || list[0].UnitsStatus != "completed" {
-		t.Errorf("List()[0].UnitsStatus = %+v, want completed", list)
+	if len(list) != 1 || list[0].UnitsStatus != "completed" || !list[0].UnitsCompletedAt.Valid {
+		t.Errorf("List()[0] = %+v, want units_status=completed and units_completed_at set", list)
 	}
 }
 

@@ -775,6 +775,10 @@ const S = {
   currentTab:    'overview',
   currentAnswer: null,
   currentTrace:  null,
+  // 右侧面板按 answer_id 找回每条回答自己的证据快照/trace，
+  // 否则历史回答的证据链接全部串到最新一条回答上。
+  answersById:   {},
+  tracesById:    {},
   pollTimers:    {},
   explainOpen:   false,
   chatMode:      false,
@@ -1029,7 +1033,11 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
                 updateProcessStep('activation', 'fail', null, p.duration_ms);
               }
             } else if (p.phase === 'answer' && p.status === 'no_evidence') {
-              ['activation','outline','fts','rerank','evidence'].forEach(function(id) { updateProcessStep(id, 'done', null, 0, '无证据'); });
+              // 只补齐尚未完成的阶段（如快路径下没有逐阶段事件），已完成阶段保留
+              // 实时流入的真实耗时与结果，不得清零覆盖为"无证据"。
+              ['activation','outline','fts','rerank','evidence'].forEach(function(id) {
+                if (!PP_STATE[id] || PP_STATE[id].state !== 'done') updateProcessStep(id, 'done', null, 0, '无证据');
+              });
               updateProcessStep('generation', 'done', '生成回答', 0, '无需生成');
             } else if (p.phase === 'generation') {
               if (p.status === 'start') {
@@ -1217,9 +1225,10 @@ async function fetchTraceForAnswer(answerId) {
   try {
     var r = await api('GET', '/traces?answer_id=' + encodeURIComponent(answerId) + '&limit=1');
     if (r.ok && Array.isArray(r.data) && r.data.length > 0) {
-      S.currentTrace = r.data[0];
+      S.tracesById[answerId] = r.data[0];
       updateTraceInAnswerCard(answerId, r.data[0]);
       if (S.currentAnswer && S.currentAnswer.answer_id === answerId) {
+        S.currentTrace = r.data[0];
         renderRightPanel();
       }
     } else {
@@ -1261,15 +1270,18 @@ function buildFactIdNumbering(content, citations) {
   return map;
 }
 
-function linkifyEvidence(content, map) {
+function linkifyEvidence(content, map, answerId) {
+  // href 带上归属回答的 answer_id（evidence:<answer_id>:<fact_id>），
+  // 点击时才能切回那条回答自己的证据快照，而不是永远打开最新一条。
+  var prefix = answerId ? ('evidence:' + answerId + ':') : 'evidence:';
   return (content || '').replace(FACT_ID_RE, function(fid) {
     var num = map[fid] || '?';
-    return '[证据' + num + '](evidence:' + fid + ')';
+    return '[证据' + num + '](' + prefix + fid + ')';
   });
 }
 
-function renderMarkdown(text, factMap) {
-  var src = factMap ? linkifyEvidence(text, factMap) : text;
+function renderMarkdown(text, factMap, answerId) {
+  var src = factMap ? linkifyEvidence(text, factMap, answerId) : text;
   if (typeof marked !== 'undefined' && marked.parse) {
     try { return marked.parse(src); } catch(e) {}
   }
@@ -1434,6 +1446,7 @@ function pathTypeBadgeHtml(ans) {
 }
 
 function appendAnswerMsg(ans) {
+  if (ans.answer_id) S.answersById[ans.answer_id] = ans;
   var path = ans.path || 'unknown';
   var citations = ans.citations || [];
   var evSet = ans.evidence_snapshot;
@@ -1444,13 +1457,13 @@ function appendAnswerMsg(ans) {
 
   var citHtml = citations.length
     ? '<div class="ans-citations"><h4>引用证据</h4>' + citations.map(function(fid) {
-        return '<span class="citation-tag" onclick="openEvidenceInDrawer(\'' + esc(fid) + '\')">证据' + (factMap[fid] || '') + '</span>';
+        return '<span class="citation-tag" onclick="openEvidenceInDrawer(\'' + esc(fid) + '\',\'' + esc(ans.answer_id || '') + '\')">证据' + (factMap[fid] || '') + '</span>';
       }).join('') + '</div>'
     : '';
 
   var el = div('msg msg-assistant');
   el.innerHTML = '\
-    <div class="ans-body">' + renderMarkdown(ans.content || '（无回答内容）', factMap) + '</div>\
+    <div class="ans-body">' + renderMarkdown(ans.content || '（无回答内容）', factMap, ans.answer_id) + '</div>\
     ' + citHtml + '\
     <div class="ans-meta">\
       ' + pathTypeBadgeHtml(ans) + '\
@@ -1494,7 +1507,14 @@ function appendErrorMsg(msg, rawData) {
   scrollThread();
 }
 
-function openEvidenceInDrawer(factId) {
+function openEvidenceInDrawer(factId, answerId) {
+  // 先把右侧面板切到这条引用所属的回答；不带 answerId（流式渲染中的
+  // 临时链接等）时保持现状，仍显示当前回答。
+  if (answerId && S.answersById[answerId] &&
+      (!S.currentAnswer || S.currentAnswer.answer_id !== answerId)) {
+    S.currentAnswer = S.answersById[answerId];
+    S.currentTrace = S.tracesById[answerId] || null;
+  }
   openExplainDrawer();
   switchTab('sources');
   setTimeout(function() { highlightEvidence(factId); }, 200);
@@ -1785,22 +1805,23 @@ function showTimeline(title, phase, sourceData, uploadStart) {
       // unit.Service's queue handler).
       if (s.id === 'upload')   { state = 'done'; time = fmtTime(uploadStart); }
       if (s.id === 'register') { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
-      if (s.id === 'convert')  { state = 'done'; }
+      if (s.id === 'convert')  { state = 'done'; time = sourceData ? fmtTime(sourceData.completed_at) : ''; }
       if (s.id === 'units')    { state = 'active'; }
     } else if (phase === 'units_failed') {
       if (s.id === 'upload')   { state = 'done'; time = fmtTime(uploadStart); }
       if (s.id === 'register') { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
-      if (s.id === 'convert')  { state = 'done'; }
-      if (s.id === 'units')    { state = 'fail'; time = fmtTime(now); }
+      if (s.id === 'convert')  { state = 'done'; time = sourceData ? fmtTime(sourceData.completed_at) : ''; }
+      if (s.id === 'units')    { state = 'fail'; time = sourceData ? fmtTime(sourceData.units_completed_at) : ''; }
     } else if (phase === 'completed') {
       state = 'done';
       if (s.id === 'upload')   time = fmtTime(uploadStart);
       if (s.id === 'register') time = sourceData ? fmtTime(sourceData.created_at) : '';
-      if (s.id === 'units')    time = fmtTime(now);
+      if (s.id === 'convert')  time = sourceData ? fmtTime(sourceData.completed_at) : '';
+      if (s.id === 'units')    time = sourceData ? fmtTime(sourceData.units_completed_at) : '';
     } else if (phase === 'failed') {
       if (s.id === 'upload')   { state = 'done'; time = fmtTime(uploadStart); }
       if (s.id === 'register') { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
-      if (s.id === 'convert')  { state = 'done'; }
+      if (s.id === 'convert')  { state = 'done'; time = sourceData ? fmtTime(sourceData.completed_at) : ''; }
       if (s.id === 'units')    { state = 'fail'; time = fmtTime(now); }
     }
     return { label: s.label, state: state, time: time };
@@ -1845,14 +1866,14 @@ function buildStepsFromSource(d) {
     } else if (s.id === 'convert') {
       if (d.status === 'pending') { state = 'wait'; }
       else if (d.status === 'processing') { state = 'active'; time = fmtTime(d.processing_started_at); }
-      else { state = 'done'; time = fmtTime(d.processing_started_at); }
+      else { state = 'done'; time = fmtTime(d.completed_at); }
     } else if (s.id === 'units') {
       // units_status tracks knowledge-unit extraction independently of
       // sources.status — that field only reflects source processing, and
       // extraction is a separate async task enqueued after it completes.
       if (d.status !== 'completed') { state = 'wait'; }
-      else if (d.units_status === 'completed') { state = 'done'; time = fmtTime(d.completed_at); }
-      else if (d.units_status === 'failed') { state = 'fail'; time = fmtTime(d.completed_at); }
+      else if (d.units_status === 'completed') { state = 'done'; time = fmtTime(d.units_completed_at); }
+      else if (d.units_status === 'failed') { state = 'fail'; time = fmtTime(d.units_completed_at); }
       else { state = 'active'; }
     }
     return { label: s.label, state: state, time: time };
@@ -3056,7 +3077,12 @@ document.getElementById('chatInner').addEventListener('click', function(e) {
   var a = e.target.closest('a[href^="evidence:"]');
   if (!a) return;
   e.preventDefault();
-  openEvidenceInDrawer(a.getAttribute('href').slice('evidence:'.length));
+  // 两种 href 形态：evidence:<answer_id>:<fact_id>（新）/ evidence:<fact_id>（流式临时链接）。
+  // UUID 不含冒号，安全按冒号拆分。
+  var rest = a.getAttribute('href').slice('evidence:'.length);
+  var sep = rest.indexOf(':');
+  if (sep === -1) openEvidenceInDrawer(rest);
+  else openEvidenceInDrawer(rest.slice(sep + 1), rest.slice(0, sep));
 });
 
 // ═══════════════════════════════════════════════════════

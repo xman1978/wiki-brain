@@ -22,8 +22,11 @@ func TestHandlerRetrieve(t *testing.T) {
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{
 		Output: `{"outline_ids": ["o2"]}`,
 	})
-	fake.SetResponse("rerank.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "c1", "role": "direct"}]}`,
+	fake.SetResponse("rerank_extract.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "source_theme": "linear equations", "content_theme": "linear equations definition", "intent": "说明定义", "object": "linear equations", "scope": "通用", "key_facts": ["linear equations definition"]}]}`,
+	})
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据说明线性方程定义，可直接回答"}]}`,
 	})
 
 	mux := http.NewServeMux()

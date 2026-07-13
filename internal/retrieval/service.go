@@ -34,6 +34,11 @@ type Service struct {
 	wikiSvc       *wiki.Service
 }
 
+const (
+	defaultRerankBatchMaxChars = 8000
+	defaultRerankConcurrency   = 2
+)
+
 func NewService(store *Store, llmClient llm.LLMClient, unitsIdx, pointsIdx, outlinesIdx bleve.Index, cfg *config.Config, activationSvc *activation.Service, evidenceSvc *evidence.Service, wikiSvc *wiki.Service) *Service {
 	return &Service{
 		store:         store,
@@ -885,16 +890,9 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 		candidates[i].candidateID = fmt.Sprintf("c%d", i+1)
 	}
 
-	// Build candidates text grouped by source document, so the LLM can see
-	// which policy/document each piece of evidence belongs to (scope/audience
-	// limitations are often stated in the document title, not repeated in
-	// every KU snippet).
-	var sourceOrder []string
-	bySource := make(map[string][]candidate)
 	titleCache := make(map[string]string)
 	for _, c := range candidates {
-		if _, ok := bySource[c.sourceID]; !ok {
-			sourceOrder = append(sourceOrder, c.sourceID)
+		if _, ok := titleCache[c.sourceID]; !ok {
 			title, err := s.store.GetSourceTitle(c.sourceID)
 			if err != nil {
 				slog.Warn("retrieval: rerank get source title failed", "source_id", c.sourceID, "error", err)
@@ -902,23 +900,18 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 			}
 			titleCache[c.sourceID] = title
 		}
-		bySource[c.sourceID] = append(bySource[c.sourceID], c)
 	}
 
-	var candidatesText strings.Builder
-	for _, sourceID := range sourceOrder {
-		fmt.Fprintf(&candidatesText, "【来源文档：%s】\n", titleCache[sourceID])
-		for _, c := range bySource[sourceID] {
-			content, err := s.readUnitContent(c.sourceID, c.lineStart, c.lineEnd)
-			if err != nil {
-				slog.Warn("retrieval: rerank read content failed", "unit_id", c.unitID, "error", err)
-				continue
-			}
-			fmt.Fprintf(&candidatesText, "[%s] %s\n\n", c.candidateID, content)
+	prepared := make([]rerankCandidateContent, 0, len(candidates))
+	for _, c := range candidates {
+		content, err := s.readUnitContent(c.sourceID, c.lineStart, c.lineEnd)
+		if err != nil {
+			slog.Warn("retrieval: rerank read content failed", "unit_id", c.unitID, "error", err)
+			continue
 		}
+		prepared = append(prepared, rerankCandidateContent{candidate: c, content: content})
 	}
-
-	jsonSchema := `{"results": [{"candidate_id": "c1", "role": "direct|supporting|irrelevant"}]}`
+	batches := splitRerankBatches(prepared, s.rerankBatchMaxChars())
 
 	subject := qc.Subject
 	if subject == "" {
@@ -937,82 +930,268 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 		constraint = "（无）"
 	}
 
-	resp, err := s.llmClient.CompleteJSON(ctx, "rerank.md", map[string]string{
-		"question":    qc.Question,
-		"subject":     subject,
-		"intent":      intent,
-		"audience":    audience,
-		"constraint":  constraint,
-		"candidates":  candidatesText.String(),
-		"json_schema": jsonSchema,
-	}, "classification")
+	roles, err := s.rerankBatches(ctx, qc, subject, intent, audience, constraint, titleCache, batches)
 	if err != nil {
-		return nil, fmt.Errorf("retrieval: rerank llm: %w", err)
+		return nil, err
 	}
-
-	var rerankResult struct {
-		Results []struct {
-			CandidateID string `json:"candidate_id"`
-			Role        string `json:"role"`
-		} `json:"results"`
-	}
-	if err := json.Unmarshal(resp, &rerankResult); err != nil {
-		return nil, fmt.Errorf("retrieval: rerank parse: %w", err)
-	}
-
-	// Validate
-	cidSet := make(map[string]bool, len(candidates))
-	for _, c := range candidates {
-		cidSet[c.candidateID] = true
-	}
-	for _, r := range rerankResult.Results {
-		if !cidSet[r.CandidateID] {
-			return nil, fmt.Errorf("retrieval: rerank returned unknown candidate_id: %s", r.CandidateID)
-		}
-		if r.Role != "direct" && r.Role != "supporting" && r.Role != "irrelevant" {
-			return nil, fmt.Errorf("retrieval: rerank invalid role: %s", r.Role)
-		}
-	}
-
-	// Map results back
-	roleMap := make(map[string]string, len(rerankResult.Results))
-	for _, r := range rerankResult.Results {
-		roleMap[r.CandidateID] = r.Role
-	}
-
-	// Build content cache for direct validation
-	contentCache := make(map[string]string, len(candidates))
-	for _, c := range candidates {
-		content, err := s.readUnitContent(c.sourceID, c.lineStart, c.lineEnd)
-		if err == nil {
-			contentCache[c.candidateID] = content
-		}
-	}
-
-	// Extract key nouns from question for direct validation
-	questionNouns := extractQuestionNouns(qc.Question)
 
 	var kept []candidate
 	for _, c := range candidates {
-		role, ok := roleMap[c.candidateID]
-		if !ok {
+		role, ok := roles[c.candidateID]
+		if !ok || role == "irrelevant" {
 			continue
-		}
-		if role == "irrelevant" {
-			continue
-		}
-		if role == "direct" && len(questionNouns) > 0 {
-			content := contentCache[c.candidateID]
-			if !containsAnyNoun(content, questionNouns) {
-				slog.Info("retrieval: rerank direct→supporting (question noun not in evidence)",
-					"candidate_id", c.candidateID, "nouns", questionNouns)
-				role = "supporting"
-			}
 		}
 		c.sourcePaths = []string{role}
 		kept = append(kept, c)
 	}
 	return kept, nil
+}
+
+func (s *Service) rerankBatches(ctx context.Context, qc QueryContext, subject, intent, audience, constraint string, titleCache map[string]string, batches [][]rerankCandidateContent) (map[string]string, error) {
+	if len(batches) == 0 {
+		return nil, nil
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	concurrency := s.rerankConcurrency()
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	roles := make(map[string]string)
+	var firstErr error
+	var errOnce sync.Once
+
+	for _, batch := range batches {
+		batch := batch
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			batchRoles, err := s.rerankBatch(ctx, qc, subject, intent, audience, constraint, titleCache, batch)
+			if err != nil {
+				errOnce.Do(func() {
+					firstErr = err
+					cancel()
+				})
+				return
+			}
+			mu.Lock()
+			for cid, role := range batchRoles {
+				roles[cid] = role
+			}
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return roles, nil
+}
+
+func (s *Service) rerankBatch(ctx context.Context, qc QueryContext, subject, intent, audience, constraint string, titleCache map[string]string, batch []rerankCandidateContent) (map[string]string, error) {
+	candidatesText := formatRerankCandidates(batch, titleCache)
+	resp, err := s.llmClient.CompleteJSON(ctx, "rerank_extract.md", map[string]string{
+		"question":   qc.Question,
+		"subject":    subject,
+		"intent":     intent,
+		"audience":   audience,
+		"constraint": constraint,
+		"candidates": candidatesText,
+	}, "classification")
+	if err != nil {
+		return nil, fmt.Errorf("retrieval: rerank llm: %w", err)
+	}
+
+	var extraction rerankExtractionResult
+	if err := json.Unmarshal(resp, &extraction); err != nil {
+		return nil, fmt.Errorf("retrieval: rerank parse: %w", err)
+	}
+
+	// Validate
+	cidSet := make(map[string]bool, len(batch))
+	for _, item := range batch {
+		cidSet[item.candidateID] = true
+	}
+	extractedByID := make(map[string]rerankExtractedEvidence, len(extraction.Results))
+	for _, item := range extraction.Results {
+		if !cidSet[item.CandidateID] {
+			return nil, fmt.Errorf("retrieval: rerank returned unknown candidate_id: %s", item.CandidateID)
+		}
+		extractedByID[item.CandidateID] = item
+	}
+
+	judgeInputs := make([]rerankJudgeCandidate, 0, len(batch))
+	for _, item := range batch {
+		extracted, ok := extractedByID[item.candidateID]
+		if !ok {
+			continue
+		}
+		judgeInputs = append(judgeInputs, rerankJudgeCandidate{
+			CandidateID:  item.candidateID,
+			SourceTitle:  titleCache[item.sourceID],
+			SourceTheme:  extracted.SourceTheme,
+			ContentTheme: extracted.ContentTheme,
+			Intent:       extracted.Intent,
+			Object:       extracted.Object,
+			Scope:        extracted.Scope,
+			KeyFacts:     extracted.KeyFacts,
+		})
+	}
+
+	roles, err := s.judgeExtractedEvidence(ctx, qc, subject, intent, audience, constraint, judgeInputs)
+	if err != nil {
+		return nil, err
+	}
+
+	return roles, nil
+}
+
+func (s *Service) judgeExtractedEvidence(ctx context.Context, qc QueryContext, subject, intent, audience, constraint string, candidates []rerankJudgeCandidate) (map[string]string, error) {
+	payload, err := json.MarshalIndent(candidates, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("retrieval: rerank judge payload: %w", err)
+	}
+	resp, err := s.llmClient.CompleteJSON(ctx, "rerank_judge.md", map[string]string{
+		"question":   qc.Question,
+		"subject":    subject,
+		"intent":     intent,
+		"audience":   audience,
+		"constraint": constraint,
+		"candidates": string(payload),
+	}, "classification")
+	if err != nil {
+		return nil, fmt.Errorf("retrieval: rerank judge llm: %w", err)
+	}
+
+	var result rerankJudgeResult
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("retrieval: rerank judge parse: %w", err)
+	}
+
+	cidSet := make(map[string]bool, len(candidates))
+	for _, c := range candidates {
+		cidSet[c.CandidateID] = true
+	}
+	roles := make(map[string]string, len(result.Results))
+	for _, r := range result.Results {
+		if !cidSet[r.CandidateID] {
+			return nil, fmt.Errorf("retrieval: rerank judge returned unknown candidate_id: %s", r.CandidateID)
+		}
+		if r.Role != "direct" && r.Role != "supporting" && r.Role != "irrelevant" {
+			return nil, fmt.Errorf("retrieval: rerank judge invalid role: %s", r.Role)
+		}
+		roles[r.CandidateID] = r.Role
+	}
+	return roles, nil
+}
+
+type rerankCandidateContent struct {
+	candidate
+	content string
+}
+
+func (s *Service) rerankBatchMaxChars() int {
+	if s.cfg != nil && s.cfg.Retrieval.RerankBatchMaxChars > 0 {
+		return s.cfg.Retrieval.RerankBatchMaxChars
+	}
+	return defaultRerankBatchMaxChars
+}
+
+func (s *Service) rerankConcurrency() int {
+	if s.cfg != nil && s.cfg.Retrieval.RerankConcurrency > 0 {
+		return s.cfg.Retrieval.RerankConcurrency
+	}
+	return defaultRerankConcurrency
+}
+
+func splitRerankBatches(candidates []rerankCandidateContent, maxChars int) [][]rerankCandidateContent {
+	if len(candidates) == 0 {
+		return nil
+	}
+	if maxChars <= 0 {
+		maxChars = defaultRerankBatchMaxChars
+	}
+
+	var batches [][]rerankCandidateContent
+	var current []rerankCandidateContent
+	currentChars := 0
+	for _, c := range candidates {
+		itemChars := len(c.content)
+		if len(current) > 0 && currentChars+itemChars > maxChars {
+			batches = append(batches, current)
+			current = nil
+			currentChars = 0
+		}
+		current = append(current, c)
+		currentChars += itemChars
+	}
+	if len(current) > 0 {
+		batches = append(batches, current)
+	}
+	return batches
+}
+
+func formatRerankCandidates(candidates []rerankCandidateContent, titleCache map[string]string) string {
+	// Group each batch by source document, so the LLM can see which
+	// policy/document each piece belongs to without receiving every candidate.
+	var sourceOrder []string
+	bySource := make(map[string][]rerankCandidateContent)
+	for _, c := range candidates {
+		if _, ok := bySource[c.sourceID]; !ok {
+			sourceOrder = append(sourceOrder, c.sourceID)
+		}
+		bySource[c.sourceID] = append(bySource[c.sourceID], c)
+	}
+
+	var out strings.Builder
+	for _, sourceID := range sourceOrder {
+		title := titleCache[sourceID]
+		if title == "" {
+			title = sourceID
+		}
+		fmt.Fprintf(&out, "【来源文档：%s】\n", title)
+		for _, c := range bySource[sourceID] {
+			fmt.Fprintf(&out, "[%s] %s\n\n", c.candidateID, c.content)
+		}
+	}
+	return out.String()
+}
+
+type rerankExtractionResult struct {
+	Results []rerankExtractedEvidence `json:"results"`
+}
+
+type rerankExtractedEvidence struct {
+	CandidateID  string   `json:"candidate_id"`
+	SourceTheme  string   `json:"source_theme"`
+	ContentTheme string   `json:"content_theme"`
+	Intent       string   `json:"intent"`
+	Object       string   `json:"object"`
+	Scope        string   `json:"scope"`
+	KeyFacts     []string `json:"key_facts"`
+}
+
+type rerankJudgeCandidate struct {
+	CandidateID  string   `json:"candidate_id"`
+	SourceTitle  string   `json:"source_title"`
+	SourceTheme  string   `json:"source_theme"`
+	ContentTheme string   `json:"content_theme"`
+	Intent       string   `json:"intent"`
+	Object       string   `json:"object"`
+	Scope        string   `json:"scope"`
+	KeyFacts     []string `json:"key_facts"`
+}
+
+type rerankJudgeResult struct {
+	Results []struct {
+		CandidateID string `json:"candidate_id"`
+		Role        string `json:"role"`
+		Analysis    string `json:"analysis"`
+	} `json:"results"`
 }
 
 // Step 8: KPN expansion

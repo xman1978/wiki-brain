@@ -86,6 +86,50 @@ func (s *Store) InsertUnit(ku *KnowledgeUnit) error {
 	return nil
 }
 
+// UpdateUnitCenterAndBounds rewrites a unit's topic and line range in one
+// statement — used by extraction-time duplicate consolidation (see
+// dedup.go) to turn the surviving unit of a merge into the union of both
+// original units' bounds under the LLM's merged center.
+func (s *Store) UpdateUnitCenterAndBounds(unitID, center string, lineStart, lineEnd int) error {
+	_, err := s.db.Exec(`UPDATE knowledge_units SET center = ?, line_start = ?, line_end = ?, updated_at = CURRENT_TIMESTAMP WHERE unit_id = ?`,
+		center, lineStart, lineEnd, unitID)
+	if err != nil {
+		return fmt.Errorf("unit store: update unit center and bounds: %w", err)
+	}
+	return nil
+}
+
+// DeletePointsByUnitID clears a unit's existing points so dedup can replace
+// them with the LLM's deduplicated set (see dedup.go).
+func (s *Store) DeletePointsByUnitID(unitID string) error {
+	_, err := s.db.Exec(`DELETE FROM knowledge_points WHERE unit_id = ?`, unitID)
+	if err != nil {
+		return fmt.Errorf("unit store: delete points by unit id: %w", err)
+	}
+	return nil
+}
+
+// DeleteUnitAndPoints hard-deletes a knowledge unit and its points. This is
+// NOT the lifecycle soft-delete used elsewhere in this package (see
+// Service.SetUnitLifecycle) — it's only safe because extraction-time
+// duplicate consolidation (dedup.go) runs before KPN generation, concept
+// matching, or anything else downstream could have referenced either unit's
+// rows yet.
+func (s *Store) DeleteUnitAndPoints(unitID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("unit store: delete unit: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM knowledge_points WHERE unit_id = ?`, unitID); err != nil {
+		return fmt.Errorf("unit store: delete unit: delete points: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM knowledge_units WHERE unit_id = ?`, unitID); err != nil {
+		return fmt.Errorf("unit store: delete unit: delete unit: %w", err)
+	}
+	return tx.Commit()
+}
+
 func (s *Store) InsertPoint(kp *KnowledgePoint) error {
 	if kp.PointID == "" {
 		kp.PointID = uuid.New().String()
@@ -149,6 +193,19 @@ func (s *Store) UpdateUnitBounds(unitID string, lineStart, lineEnd int) error {
 		lineStart, lineEnd, unitID)
 	if err != nil {
 		return fmt.Errorf("unit store: update unit bounds: %w", err)
+	}
+	return nil
+}
+
+// MovePointToUnit reparents a knowledge point to another unit, keeping its
+// point_id stable — traces, activation links, and KPN relations reference
+// points by id, so an offline duplicate merge moves the losing unit's unique
+// points instead of copying them (see ApplyOfflineMerge).
+func (s *Store) MovePointToUnit(pointID, unitID string) error {
+	_, err := s.db.Exec(`UPDATE knowledge_points SET unit_id = ? WHERE point_id = ?`,
+		unitID, pointID)
+	if err != nil {
+		return fmt.Errorf("unit store: move point to unit: %w", err)
 	}
 	return nil
 }

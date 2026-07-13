@@ -304,33 +304,50 @@ line_start 和 line_end 使用骨架中标注的原文行号（1-based, inclusiv
 
 **设计决策沿革**：早期版本（`outline_semantic_chunk.md` v2 及之前）直接让模型给出子章节的 `line_start`/`line_end`/`level`，本质上是要求模型自己维持"相邻章节不重叠、合计覆盖全文"这个不变量——模型是概率模型，做不到稳定遵守。`repairSections` 曾试图在事后裁剪重叠，但它只在两个相邻小节 `level` 相同时才裁剪（level 不同时默认是有意的父子嵌套，不该被当重叠裁掉），而调用方又会在裁剪判断**之后**把所有返回的子节点 `level` 强制拍平成同一个值——模型如果给出了有意义的嵌套结构，裁剪被跳过，随后又被拍平成表面平级、实际互相重叠的区间，没有任何环节再处理。这是 V1 阶段发现"部分文档 KU 覆盖率异常低"（子章节互相重叠、下游 Unit 模块的 `mergeSmallSegments` 又对重叠输入没有防御，把无关章节错误合并）的根因。
 
-`outline_semantic_chunk.md` v3 起改为：**不再让模型决定边界，边界完全由程序按 Markdown 结构确定性切分；模型只负责给每个已经切好的区块起标题**。程序侧实现（`internal/source/semantic.go` 的 `splitOversizeLeaf`）：
+`outline_semantic_chunk.md` v3 起改为：**不再让模型决定边界，边界完全由程序按 Markdown 结构确定性切分；模型只负责给每个已经切好的区块起标题**。
+
+但纯长度切分对"非 Markdown 标题的主题边界"完全无感知：差旅费报销制度重传事件中，"第五条/第六条/第七条"是普通文本行（docx 转换产物），贪心装箱把三个主题装进一个 1980 rune 的窗口（刚好贴着 2000 上限），剩下 3 行成为孤儿窗口，打标模型再给孤儿块起了张冠李戴的标题——下游检索目录过滤和 KU 边界提取全部被误导。因此再演进为**语义切分点提议**方案：
+
+**当前设计（主路径 + 回退路径，`internal/source/semantic.go` 的 `splitOversizeLeaf`）**：
 
 ```text
-用 splitWindowsByMarkdown（internal/source/markdown_split.go，avoidCuttingIndivisible=true）
-  把叶节点内容切成若干区间：
-    零重叠、首尾相接、合计覆盖叶节点全部行范围；
-    不可分割元素（表格、代码块）整体保留在同一区间内，即使因此超过 segment_max_chars 也不切分；
-按 mc.MaxInputTokens 把切好的区块分批（同 outline_summary.go 的 GenerateOutlineSummaries 分批方式），
-  每批调用一次 outline_semantic_chunk.md，只问模型要"每个编号区块的标题"，不问行号/level；
-某批调用失败或某区块没拿到标题：用该区块首行内容截断生成兜底标题，不丢区块；
-生成 semantic 子节点挂在原叶节点下（level = 父节点 level + 1）；summary 留空，
-  交给 6.6 之后统一运行的 GenerateOutlineSummaries 补全。
+主路径（proposeSemanticSplit，prompt：outline_semantic_split.md v1）：
+  一次调用把叶节点内容以 "[N] 原文" 带行号格式给模型，让模型按主题小节
+  输出 title + content（复制该小节覆盖的完整原文行，保留 [N] 前缀）——
+  与 unit_boundary_extract.md 同款、实践验证过覆盖率的"复制行"契约：
+  模型必须逐行看过才能复制，比裸报行号更不易漏行/幻觉；
+  程序只取每个小节复制行中的最小合法行号作为切分点（复制的文本本身
+  不被信任，正文以原文为准），去重、排序，第一个小节强制锚定到叶节点
+  起始行，然后由程序推导区间 [cut_i, cut_{i+1}-1]，最后一段到叶节点结尾
+  ——零重叠、全覆盖由构造保证，v2 时代"模型自报范围导致重叠"的失败模式
+  在结构上不可能复现；
+  个别小节仍超过 segment_max_chars：在该小节内部用 splitWindowsByMarkdown
+  （avoidCuttingIndivisible=true）长度切分兜底，小节标题保留在第一个子块，
+  其余子块用首行兜底标题；
+  调用失败/解析失败/有效切分点不足 2 个 → 走回退路径。
+
+回退路径（lengthSplitLeaf，即 v3 时代的原行为）：
+  用 splitWindowsByMarkdown（avoidCuttingIndivisible=true）
+    把叶节点内容切成若干区间：
+      零重叠、首尾相接、合计覆盖叶节点全部行范围；
+      不可分割元素（表格、代码块）整体保留在同一区间内，即使因此超过
+      segment_max_chars 也不切分；
+  按 mc.MaxInputTokens 把切好的区块分批（同 outline_summary.go 的
+    GenerateOutlineSummaries 分批方式），每批调用一次
+    outline_semantic_chunk.md，只问模型要"每个编号区块的标题"，不问行号/level；
+  某批调用失败或某区块没拿到标题：用该区块首行内容截断生成兜底标题，不丢区块。
+
+两条路径产出相同形态：semantic 子节点挂在原叶节点下（level = 父节点 level + 1）；
+summary 留空，交给 6.6 之后统一运行的 GenerateOutlineSummaries 补全。
+两条路径都无法有效切分（如单个超限的不可分割大表格）时保留原叶节点不变。
 ```
 
-这套机制不需要递归：`splitWindowsByMarkdown` 切出的每个区块本身已经 ≤ `segment_max_chars`（唯一例外是单个超限的不可分割元素，按需求它就是最终结果，不再进一步拆分）。条件 E（仅叶节点过长，`RefineLeafNodes`）和两遍处理里节点仍超长的清理（`GenerateSemanticOutlines` 第三阶段，`refineOversizeLeaves`）都调用这同一个 `splitOversizeLeaf`，行为完全一致。此情况下 `source.outline_type` 设为 `mixed`。
+条件 E（仅叶节点过长，`RefineLeafNodes`）和两遍处理里节点仍超长的清理（`GenerateSemanticOutlines` 第三阶段，`refineOversizeLeaves`）都调用这同一个 `splitOversizeLeaf`，行为完全一致。此情况下 `source.outline_type` 设为 `mixed`。
 
-**Prompt 文件**：`config/prompts/outline_semantic_chunk.md`（v3 起生效）
+**Prompt 文件**：
 
-```text
-以下是若干文本区块，每块前用 [N] 标出编号：
-{{blocks}}
-
-按以下 JSON Schema 输出：
-{{json_schema}}
-```
-
-输出格式：`{"titles":[{"index":1,"title":"..."}]}`，`index` 对应输入的区块编号，`title` 10~30 字。
+- 主路径 `config/prompts/outline_semantic_split.md`（v1）：输入叶节点标题、范围和 "[N] 原文" 带行号内容，输出 `{"sections":[{"title":"...","content":["[5] 第5行完整原文", ...]}]}`；要求按主题边界切分（"第X条"等文档自身结构标记行属于新小节的开头），单主题超长时按子主题继续细分。
+- 回退路径 `config/prompts/outline_semantic_chunk.md`（v4）：输出格式 `{"titles":[{"index":1,"title":"..."}]}`，`index` 对应输入的区块编号，`title` 10~30 字；v4 起明确要求标题只依据对应区块自身内容（机械切分的区块可能含多主题，选覆盖面最大的），不得参考相邻区块或按主题顺序错位分配。
 
 #### 6.6 写入结果
 

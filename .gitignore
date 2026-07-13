@@ -3,3 +3,5 @@ data/
 .claude/
 .codegraph/
 logs/
+bin/
+run.pid

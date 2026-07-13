@@ -10,7 +10,7 @@ llm:
   models:
     default:
       model:            "qwen3-30b-a3b-instruct-2507"
-      temperature:      0.2
+      temperature:      0
       max_input_tokens: 4096
       max_output_tokens: 4096
       thinking:          false
@@ -24,7 +24,7 @@ llm:
       model:            "qwen3-30b-a3b-instruct-2507"
       temperature:      0
       max_input_tokens: 4096
-      max_output_tokens: 4096
+      max_output_tokens: 8192
       thinking:         false
     classification:
       model:            "qwen3-30b-a3b-instruct-2507"
@@ -70,7 +70,8 @@ queue:
 
 # FileView 服务（格式转换）
 fileview:
-  base_url:          "http://127.0.0.1:8000"
+#  base_url:          "http://127.0.0.1:8000"
+  base_url:          "http://192.168.0.169:9000"
   poll_interval_ms:  1500
   max_poll_seconds:  600
 
@@ -79,11 +80,16 @@ source:
   upload_dir:            "data/sources"
   segment_max_chars:     2000           # 大纲叶节点最大字符数（rune），超过此值在 Source 层触发语义目录细化
   min_segment_chars:     400            # Unit 切块：相邻叶节点合计低于此值时合并
+  pre_insert_dedup_min_overlap: 0.15    # 相邻两个 unit 原文分词重叠度低于此值时跳过 LLM 去重调用
+  pre_insert_dedup_concurrency: 2       # 并发提取的 segment 数
+  pre_insert_dedup_short_token_max: 4   # 相邻两个 unit 有一方有效分词数（排除标点）≤ 此值时，跳过重叠度过滤直接问 LLM
 
 # Retrieval 模块
 retrieval:
   outline_fts_min_score: 0.5
   rerank_top_n:          20
+  rerank_batch_max_chars: 4000  # 单次 rerank 传给模型的候选证据字符预算，超出后按候选切 batch
+  rerank_concurrency:     4     # rerank batch 并发数；每个 batch 内仍按 extract -> judge 串行
   activation_match_min:          0.7   # 步骤2 计分阈值（docs/impl/v1/activation.md）
   activation_match_min_fallback: 0.85  # 四元组缺失时的回退匹配阈值
   activation_match_top:          5     # 匹配结果保留条数

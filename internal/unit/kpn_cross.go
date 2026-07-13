@@ -258,11 +258,9 @@ func (s *Service) crossKPNBatch(ctx context.Context, sourceID string, newPoints,
 		fmt.Fprintf(&oppositeText, "%s\t%s\t%s\n", p.PointID, oppositeCenterMap[p.UnitID], p.Content)
 	}
 
-	schemaJSON := `{"relations":[{"from":"point_id","to":"point_id","type":"related|contradicts"}]}`
 	vars := map[string]string{
 		"new_points":      newText.String(),
 		"existing_points": oppositeText.String(),
-		"json_schema":     schemaJSON,
 	}
 
 	data, err := s.llmClient.CompleteJSON(ctx, "kpn_cross_match.md", vars, "extraction")
@@ -293,7 +291,7 @@ func (s *Service) crossKPNBatch(ctx context.Context, sourceID string, newPoints,
 			TargetPointID: rel.To,
 			RelationType:  rel.Type,
 			Direction:     "bidirectional",
-			PromptVersion: "v1",
+			PromptVersion: promptVersionKPNCross,
 			Scope:         RelationScopeCross,
 		}
 		inserted, err := s.store.InsertRelation(r)
