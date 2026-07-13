@@ -259,10 +259,10 @@ Schema 校验通过后，逐条校验每个 KnowledgeUnit：
   - center 非空；
   - line_start/first_line_anchor/line_end/last_line_anchor 经 LocateUnitBounds（见 2.3）能在 segment 内定位到行号；
   - points 非空且每条 content 非空；
-校验通过的单元写入 SQLite（line_start/line_end 取定位结果），status 设为 completed；
+校验通过的单元进入内存候选池（line_start/line_end 取定位结果），待语义抽取完成后由 PublishGeneration 统一写入；
 校验失败的单元（含定位失败）若仍可从 LLM 输出中定位其本地 unit_id，则带原始文本段单独重试一次，使用重试 Prompt（见步骤 3.1），重试的定位同样走 LocateUnitBounds（cursor 固定为 segment.line_start，因为单独重试不再有兄弟单元的顺序上下文）；
-  - 重试成功：status 设为 completed，写入 SQLite；
-  - 重试仍失败（含重试结果的锚点依然定位不到）：写入 extraction_failed 占位 KU（line_start/line_end 退化为整个 segment 的 line_start/line_end，因为已经没有可信的定位依据；保留 source_id、outline_id、error_msg），不写入 KP；
+  - 重试成功：加入同一个内存候选池；
+  - 重试仍失败（含重试结果的锚点依然定位不到）：记录结构化 warn，不在 PublishGeneration 前写入 KU/KP、语义或索引文档；
 无法定位到具体 unit 的失败项：记录 warn，跳过该项，不阻塞其他单元入库；
 不重跑整份材料。
 ```
@@ -585,7 +585,7 @@ Prompt 文件：config/prompts/ 下，版本号在文件内 frontmatter 中管�
 Rerank 语义提取或落库失败时，上一代 current KU/KP、语义和索引保持不变；
 锚点定位正确：unit.line_start / line_end 由 LocateUnitBounds 在 segment 范围内定位得出，为规范化 Markdown 的绝对行号（1-based, inclusive）；
 可通过 strings.Split(markdown, "\n")[line_start-1:line_end] 还原单元原文内容（`markdown_path` 来自 sources 表）；
-重试机制正常工作：整体 JSON 失败时 segment 级重试一次；可定位的单元业务校验失败时单元级重试一次，失败单元标记 extraction_failed 并记录 error_msg；
+重试机制正常工作：可定位的单元业务校验失败时单元级重试一次；失败诊断只写日志，不越过原子发布边界创建 current KU；
 KPN 生成在全 Source KP 提取完成后运行，关系写入 SQLite，可通过 API 按 point_id 查询；
 KPN 生成失败不阻塞 Source 完成状态；
 Concept 批量匹配在 KPN 完成后运行，concept_id 写入 SQLite，可通过 GET /units/:id 查询；

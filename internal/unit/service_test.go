@@ -166,15 +166,15 @@ func TestCollectSegmentCandidates_WidensUnitBoundsFromPointAnchors(t *testing.T)
 	}
 }
 
-// TestCollectSegmentCandidates_HallucinatedAnchorFallsBackToExtractionFailed
+// TestCollectSegmentCandidates_HallucinatedAnchorDoesNotPublishFailureMarker
 // is the regression test for the a100c7a5 incident's structural guarantee:
 // an anchor that doesn't exist anywhere in the segment can never silently
-// become a line range. It must fail validation and (after the retry prompt
-// also can't produce a locatable anchor) land as an extraction_failed
-// placeholder — never pooled as if it were a normal candidate. The
+// become a line range. It must fail validation and, after the retry prompt
+// also can't produce a locatable anchor, remain an in-memory failure rather
+// than escaping the later atomic publication boundary. The
 // legacy-shaped anchors now only enter through unit_extract_retry.md's
 // output, whose locate/validate handling lives in collectSegmentCandidates.
-func TestCollectSegmentCandidates_HallucinatedAnchorFallsBackToExtractionFailed(t *testing.T) {
+func TestCollectSegmentCandidates_HallucinatedAnchorDoesNotPublishFailureMarker(t *testing.T) {
 	svc, fake, db := setupTestService(t)
 	insertSource(t, db, "src-1", "/tmp/unused.md")
 
@@ -207,11 +207,8 @@ func TestCollectSegmentCandidates_HallucinatedAnchorFallsBackToExtractionFailed(
 	if err != nil {
 		t.Fatalf("get units: %v", err)
 	}
-	if len(units) != 1 {
-		t.Fatalf("got %d units, want 1 (extraction_failed placeholder)", len(units))
-	}
-	if units[0].Status != "extraction_failed" {
-		t.Errorf("status = %q, want extraction_failed", units[0].Status)
+	if len(units) != 0 {
+		t.Fatalf("got %d stored units, want 0 before atomic publication", len(units))
 	}
 }
 

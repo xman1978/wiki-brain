@@ -2,10 +2,12 @@ package unit
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
@@ -20,7 +22,7 @@ import (
 // Import/Process/Extract/CompleteShadowSwap synchronously), so the full
 // Shadow Source reupload lifecycle (docs/impl/v1/lifecycle.md 步骤 2) can be
 // exercised end to end with a fake LLM client.
-func setupReuploadTest(t *testing.T) (*source.Service, *Service, *llm.FakeClient, string, *index.Manager) {
+func setupReuploadTest(t *testing.T) (*source.Service, *Service, *llm.FakeClient, string, *index.Manager, *queue.Queue) {
 	t.Helper()
 	db := foundation.NewTestDB(t)
 	tmpDir := t.TempDir()
@@ -59,7 +61,7 @@ func setupReuploadTest(t *testing.T) (*source.Service, *Service, *llm.FakeClient
 	unitSvc := NewService(unitStore, sourceStore, &semanticAwareFakeClient{FakeClient: fake}, idxMgr.Units, idxMgr.Points, q, cfg)
 	sourceSvc.SetLifecycleSetter(unitSvc)
 
-	return sourceSvc, unitSvc, fake, tmpDir, idxMgr
+	return sourceSvc, unitSvc, fake, tmpDir, idxMgr, q
 }
 
 // setExtractResponse configures the fake unit_boundary_extract.md /
@@ -100,8 +102,20 @@ func importProcessExtract(t *testing.T, sourceSvc *source.Service, unitSvc *Serv
 	}
 }
 
+func awaitQueuedSourceID(t *testing.T, tasks <-chan string, want string) {
+	t.Helper()
+	select {
+	case got := <-tasks:
+		if got != want {
+			t.Fatalf("queued source_id = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for queued source_id %q", want)
+	}
+}
+
 func TestReuploadLifecycle_HappyPathSwap(t *testing.T) {
-	sourceSvc, unitSvc, fake, tmpDir, idxMgr := setupReuploadTest(t)
+	sourceSvc, unitSvc, fake, tmpDir, idxMgr, _ := setupReuploadTest(t)
 	// unit.Service.Extract reads markdown via a bare os.ReadFile(src.MarkdownPath)
 	// with no baseDir join (see cmd/server/main.go: baseDir = os.Getwd() at
 	// startup, so relative paths resolve against CWD in production). Match
@@ -276,7 +290,7 @@ func TestReuploadLifecycle_HappyPathSwap(t *testing.T) {
 }
 
 func TestReuploadLifecycle_ShadowProcessFailureLeavesTargetUntouched(t *testing.T) {
-	sourceSvc, unitSvc, fake, tmpDir, _ := setupReuploadTest(t)
+	sourceSvc, unitSvc, fake, tmpDir, _, _ := setupReuploadTest(t)
 	t.Chdir(tmpDir)
 	fake.SetResponse("source_summary.md", llm.FakeResponse{Output: "摘要"})
 	fake.SetResponse("source_domain_match.md", llm.FakeResponse{Output: `{"domain_id": null}`})
@@ -336,5 +350,109 @@ func TestReuploadLifecycle_ShadowProcessFailureLeavesTargetUntouched(t *testing.
 	}
 	if finalTarget.FileName != "a-v2.md" {
 		t.Errorf("file_name after retry+swap = %q, want a-v2.md", finalTarget.FileName)
+	}
+}
+
+func TestReuploadLifecycle_SemanticFailureRetriesUnitStageThenSwaps(t *testing.T) {
+	sourceSvc, unitSvc, fake, tmpDir, _, q := setupReuploadTest(t)
+	t.Chdir(tmpDir)
+
+	sourceTasks := make(chan string, 4)
+	unitTasks := make(chan string, 4)
+	q.RegisterHandler(queue.TaskTypeSourceProcess, func(payload interface{}) {
+		sourceTasks <- payload.(queue.SourceTask).SourceID
+	})
+	q.RegisterHandler(queue.TaskTypeUnitExtract, func(payload interface{}) {
+		unitTasks <- payload.(queue.UnitTask).SourceID
+	})
+	q.Start()
+	t.Cleanup(q.Shutdown)
+
+	fake.SetResponse("source_summary.md", llm.FakeResponse{Output: "摘要"})
+	fake.SetResponse("source_domain_match.md", llm.FakeResponse{Output: `{"domain_id": null}`})
+
+	target, err := sourceSvc.Import(context.Background(), "policy.md", strings.NewReader("# Policy\n\nOld content."))
+	if err != nil {
+		t.Fatalf("Import target: %v", err)
+	}
+	awaitQueuedSourceID(t, sourceTasks, target.SourceID)
+	seedMarkdown(t, tmpDir, target)
+	setExtractResponse(t, fake, "Old policy", "Old fact", 1, 3)
+	importProcessExtract(t, sourceSvc, unitSvc, target.SourceID)
+	awaitQueuedSourceID(t, unitTasks, target.SourceID)
+
+	shadow, err := sourceSvc.ImportShadow(context.Background(), target.SourceID, "policy-v2.md", strings.NewReader("# Policy\n\nNew content."))
+	if err != nil {
+		t.Fatalf("ImportShadow: %v", err)
+	}
+	awaitQueuedSourceID(t, sourceTasks, shadow.SourceID)
+	seedMarkdown(t, tmpDir, shadow)
+	if err := sourceSvc.Process(context.Background(), shadow.SourceID); err != nil {
+		t.Fatalf("Process shadow: %v", err)
+	}
+	awaitQueuedSourceID(t, unitTasks, shadow.SourceID)
+
+	setExtractResponse(t, fake, "New policy", "New fact", 1, 3)
+	fake.SetResponse("unit_semantics_extract.md", llm.FakeResponse{Err: errors.New("semantic extraction failed")})
+	if err := sourceSvc.Store().UpdateUnitsStatus(shadow.SourceID, "processing"); err != nil {
+		t.Fatalf("mark shadow units processing: %v", err)
+	}
+	if err := unitSvc.Extract(context.Background(), shadow.SourceID); err == nil || !strings.Contains(err.Error(), "semantic extraction failed") {
+		t.Fatalf("shadow Extract err = %v, want semantic extraction failure", err)
+	}
+	if err := sourceSvc.Store().UpdateUnitsStatus(shadow.SourceID, "failed"); err != nil {
+		t.Fatalf("mark shadow units failed: %v", err)
+	}
+
+	failedShadow, err := sourceSvc.Store().GetByID(shadow.SourceID)
+	if err != nil {
+		t.Fatalf("get failed shadow: %v", err)
+	}
+	if failedShadow.Status != "completed" || failedShadow.UnitsStatus != "failed" {
+		t.Fatalf("failed shadow status=%q units_status=%q, want completed/failed", failedShadow.Status, failedShadow.UnitsStatus)
+	}
+
+	retried, err := sourceSvc.ReuploadRetry(context.Background(), target.SourceID)
+	if err != nil {
+		t.Fatalf("ReuploadRetry after semantic failure: %v", err)
+	}
+	if retried.SourceID != shadow.SourceID {
+		t.Fatalf("retried shadow = %q, want %q", retried.SourceID, shadow.SourceID)
+	}
+	awaitQueuedSourceID(t, unitTasks, shadow.SourceID)
+	select {
+	case got := <-sourceTasks:
+		t.Fatalf("unit-stage retry unnecessarily enqueued source_process for %q", got)
+	default:
+	}
+	pendingShadow, err := sourceSvc.Store().GetByID(shadow.SourceID)
+	if err != nil {
+		t.Fatalf("get pending shadow: %v", err)
+	}
+	if pendingShadow.Status != "completed" || pendingShadow.UnitsStatus != "pending" {
+		t.Fatalf("retry status=%q units_status=%q, want completed/pending", pendingShadow.Status, pendingShadow.UnitsStatus)
+	}
+
+	setExtractResponse(t, fake, "New policy", "New fact", 1, 3)
+	fake.SetResponse("unit_semantics_extract.md", llm.FakeResponse{Err: errors.New("no response configured")})
+	if err := sourceSvc.Store().UpdateUnitsStatus(shadow.SourceID, "processing"); err != nil {
+		t.Fatalf("mark retried units processing: %v", err)
+	}
+	if err := unitSvc.Extract(context.Background(), shadow.SourceID); err != nil {
+		t.Fatalf("retried Extract: %v", err)
+	}
+	if err := sourceSvc.Store().UpdateUnitsStatus(shadow.SourceID, "completed"); err != nil {
+		t.Fatalf("mark retried units completed: %v", err)
+	}
+	if err := sourceSvc.CompleteShadowSwap(context.Background(), shadow.SourceID); err != nil {
+		t.Fatalf("CompleteShadowSwap after unit retry: %v", err)
+	}
+
+	finalTarget, err := sourceSvc.Store().GetByID(target.SourceID)
+	if err != nil {
+		t.Fatalf("get target after swap: %v", err)
+	}
+	if finalTarget.FileName != "policy-v2.md" || finalTarget.UnitsStatus != "completed" {
+		t.Fatalf("target after swap file=%q units_status=%q, want policy-v2.md/completed", finalTarget.FileName, finalTarget.UnitsStatus)
 	}
 }

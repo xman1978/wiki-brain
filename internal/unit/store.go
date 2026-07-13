@@ -209,8 +209,34 @@ func validatePublicationSemantics(pool []unitCandidate, semantics map[string]rer
 		if !ok {
 			return nil, fmt.Errorf("unit store: publish generation: missing semantics for unit_id %s", candidate.id)
 		}
-		if semantic.UnitID != "" && semantic.UnitID != candidate.id {
+		if semantic.UnitID != candidate.id {
 			return nil, fmt.Errorf("unit store: publish generation: semantic unit_id %s does not match %s", semantic.UnitID, candidate.id)
+		}
+		if semantic.PromptVersion != rerank.ExtractPromptVersion {
+			return nil, fmt.Errorf("unit store: publish generation: semantic prompt_version for unit %s = %q, want %q",
+				candidate.id, semantic.PromptVersion, rerank.ExtractPromptVersion)
+		}
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{name: "source_theme", value: semantic.SourceTheme},
+			{name: "content_theme", value: semantic.ContentTheme},
+			{name: "intent", value: semantic.Intent},
+			{name: "object", value: semantic.Object},
+			{name: "scope", value: semantic.Scope},
+		} {
+			if strings.TrimSpace(field.value) == "" {
+				return nil, fmt.Errorf("unit store: publish generation: semantic %s is empty for unit %s", field.name, candidate.id)
+			}
+		}
+		if semantic.KeyFacts == nil {
+			return nil, fmt.Errorf("unit store: publish generation: semantic key_facts is null for unit %s", candidate.id)
+		}
+		for i, fact := range semantic.KeyFacts {
+			if strings.TrimSpace(fact) == "" {
+				return nil, fmt.Errorf("unit store: publish generation: semantic key_facts[%d] is empty for unit %s", i, candidate.id)
+			}
 		}
 		keyFacts, err := json.Marshal(semantic.KeyFacts)
 		if err != nil {

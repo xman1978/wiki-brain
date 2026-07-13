@@ -72,8 +72,8 @@ POST /sources/:id/reupload
        与普通导入没有任何区别：
          - source_process 失败 → 影子的 sources.status=failed，
            不影响 :id 本身，:id 下的 KU/KP 仍为 current 正常参与检索；
-         - unit_extract 个别分段 extraction_failed → 按普通导入的部分
-           失败容忍处理（见 unit.md），不算 reupload 失败，继续走到第 3 步；
+         - unit_extract 的抽取、语义或发布失败 → 影子的 units_status=failed，
+           不执行换血；原 :id 下的 KU/KP 保持 current；
     3. 影子的 unit_extract 整体完成后（KPN 生成、Concept 匹配也走完），
        执行一次性"换血"事务：
          a. 将影子的 knowledge_units / knowledge_points / source_outlines
@@ -91,10 +91,11 @@ POST /sources/:id/reupload
    换血完成后 GET /sources/:id 返回新内容，旧 KU/KP 转为 superseded）
 
 POST /sources/:id/reupload/retry
-  仅当 :id 存在一个 shadow_of=:id 且 status=failed 的影子 Source 时生效；
-  内部直接复用既有 POST /sources/:shadow_id/retry 的续跑逻辑
-  （见 source.md，按幂等规则跳过已完成的阶段），客户端不需要知道
-  影子 Source 的内部 ID；
+  当影子的 source_process 失败（status=failed）时，复用既有
+  POST /sources/:shadow_id/retry 续跑 source_process；
+  当 source_process 已完成但 unit_extract 失败（status=completed、
+  units_status=failed）时，只重新入队 unit_extract，不重复格式转换、
+  大纲和摘要处理；客户端不需要知道影子 Source 的内部 ID；
   重试成功、影子 unit_extract 完成后同样触发第 3 步换血。
   若改用新文件重新发起 POST /sources/:id/reupload（而不是调用本接口重试
   同一次尝试），视为放弃当前失败的影子，丢弃后按上文步骤 1 重新创建。
@@ -187,6 +188,8 @@ reupload 处理全程（含影子的 source_process、unit_extract、KPN、Conce
 影子的 source_process 阶段失败：原 :id 完全不受影响，
              影子 sources.status=failed，POST /sources/:id/reupload/retry
              可续跑影子（复用既有 retry 幂等逻辑）；
+影子的 unit_extract 阶段失败：原 :id 完全不受影响，影子
+             units_status=failed；reupload/retry 只重新入队 unit_extract；
 影子放弃重试、改用新文件重新 reupload 时，旧影子被丢弃，原 :id 仍不受影响；
 影子的 unit_extract 阶段完成（含部分分段失败，不算失败）后，
              换血事务原子执行：影子 KU/KP/outlines 重新挂靠到 :id、

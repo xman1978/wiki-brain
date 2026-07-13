@@ -77,6 +77,50 @@ func TestGetUnitRerankSemanticsMalformedFacts(t *testing.T) {
 	}
 }
 
+func TestUnitRerankSemanticsMigrationRequiresFactsArray(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	insertRetrievalTestSourceAndUnit(t, db, "s1", "u1")
+	for _, factsJSON := range []string{"null", `{}`, `"fact"`} {
+		_, err := db.Exec(`INSERT INTO unit_rerank_semantics
+			(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
+			VALUES ('u1', '制度', '报销', '说明限额', '员工', '出差', ?, 'v1')`, factsJSON)
+		if err == nil {
+			t.Fatalf("key_facts_json %s passed migration CHECK, want rejection", factsJSON)
+		}
+	}
+}
+
+func TestGetUnitRerankSemanticsRejectsInvalidFactsShape(t *testing.T) {
+	tests := []struct {
+		name      string
+		factsJSON string
+	}{
+		{name: "null", factsJSON: "null"},
+		{name: "object", factsJSON: `{}`},
+		{name: "non-string element", factsJSON: `["valid", 7]`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db := foundation.NewTestDB(t)
+			insertRetrievalTestSourceAndUnit(t, db, "s1", "u1")
+			if _, err := db.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+				t.Fatal(err)
+			}
+			_, err := db.Exec(`INSERT INTO unit_rerank_semantics
+				(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
+				VALUES ('u1', '制度', '报销', '说明限额', '员工', '出差', ?, 'v1')`, tc.factsJSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = NewStore(db).GetUnitRerankSemantics([]string{"u1"})
+			if err == nil || !strings.Contains(err.Error(), "u1") {
+				t.Fatalf("GetUnitRerankSemantics err = %v, want unit-scoped decode rejection", err)
+			}
+		})
+	}
+}
+
 func seedTestData(t *testing.T, store *Store) {
 	t.Helper()
 	db := store.db

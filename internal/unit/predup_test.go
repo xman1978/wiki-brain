@@ -217,6 +217,63 @@ func TestExtractSemanticFailureLeavesPreviousGenerationCurrent(t *testing.T) {
 	}
 }
 
+func TestRetryFailureThenSemanticFailurePublishesNoStrayArtifacts(t *testing.T) {
+	svc, fake, db := setupPreInsertDedupTestService(t, 0.1, 1)
+	insertSource(t, db, "src-1", "/tmp/unused.md")
+
+	mdLines := []string{"# Policy", "Atomic publication content."}
+	seg := Segment{Title: "Policy", LineStart: 1, LineEnd: 2}
+	output := extractOutput{
+		Units: []llmUnit{
+			{
+				UnitID: "bad", Center: "Unlocatable unit",
+				FirstLineAnchor: "# Policy", LastLineAnchor: "hallucinated ending",
+			},
+			{
+				UnitID: "good", Center: "Atomic publication",
+				LineStart: 1, FirstLineAnchor: "# Policy", LineEnd: 2, LastLineAnchor: "Atomic publication content.",
+			},
+		},
+		Points: []llmPoint{
+			{PointID: "bad-point", UnitID: "bad", Content: "Invalid point.", Type: "rule"},
+			{PointID: "good-point", UnitID: "good", Content: "The generation publishes atomically.", Type: "rule"},
+		},
+	}
+	fake.SetResponse("unit_extract_retry.md", llm.FakeResponse{Err: errors.New("retry failed")})
+
+	pool := svc.collectSegmentCandidates(t.Context(), "src-1", seg, 0, mdLines, output, promptVersionExtractRetry)
+	if len(pool) != 1 || pool[0].llm.UnitID != "good" {
+		t.Fatalf("candidate pool = %+v, want only the valid unit", pool)
+	}
+	fake.SetResponse("unit_semantics_extract.md", llm.FakeResponse{Err: errors.New("semantic extraction failed")})
+	if _, err := svc.extractRerankSemantics(t.Context(), "Policy", mdLines, pool); err == nil || !strings.Contains(err.Error(), "semantic extraction failed") {
+		t.Fatalf("semantic extraction err = %v, want semantic extraction failure", err)
+	}
+
+	var currentUnits, points, semantics int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE source_id = 'src-1' AND lifecycle = 'current'`).Scan(&currentUnits); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_points WHERE source_id = 'src-1'`).Scan(&points); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM unit_rerank_semantics`).Scan(&semantics); err != nil {
+		t.Fatal(err)
+	}
+	unitDocs, err := svc.unitsIndex.DocCount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pointDocs, err := svc.pointsIndex.DocCount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if currentUnits != 0 || points != 0 || semantics != 0 || unitDocs != 0 || pointDocs != 0 {
+		t.Fatalf("stray artifacts: current_units=%d points=%d semantics=%d unit_docs=%d point_docs=%d, want all zero",
+			currentUnits, points, semantics, unitDocs, pointDocs)
+	}
+}
+
 func TestExtractSegmentFailureLeavesPreviousGenerationCurrent(t *testing.T) {
 	svc, fake, db := setupReuploadExtractionFixture(t)
 	oldID := insertCurrentIndexedUnit(t, svc, db, "src-1")

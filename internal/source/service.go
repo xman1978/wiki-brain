@@ -689,23 +689,42 @@ func (s *Service) discardShadow(shadow *Source) error {
 	return nil
 }
 
-// ReuploadRetry implements POST /sources/:id/reupload/retry: it reuses the
-// existing failed shadow's Retry() idempotent resume logic rather than
-// starting a new shadow from scratch (docs/impl/v1/lifecycle.md 步骤 2).
+// ReuploadRetry implements POST /sources/:id/reupload/retry. Source-stage
+// failures resume source processing; unit-stage failures keep the completed
+// source artifacts and enqueue only unit extraction.
 func (s *Service) ReuploadRetry(ctx context.Context, targetSourceID string) (*Source, error) {
 	shadow, err := s.store.GetShadowByTarget(targetSourceID)
 	if err != nil {
 		return nil, fmt.Errorf("get shadow: %w", err)
 	}
-	if shadow == nil || shadow.Status != "failed" {
+	if shadow == nil {
 		return nil, fmt.Errorf("no failed shadow to retry for source %s", targetSourceID)
 	}
 
-	if err := s.Retry(ctx, shadow.SourceID); err != nil {
-		return nil, fmt.Errorf("retry shadow: %w", err)
+	if shadow.Status == "completed" && shadow.UnitsStatus == "failed" {
+		if err := s.store.UpdateUnitsStatus(shadow.SourceID, "pending"); err != nil {
+			return nil, fmt.Errorf("retry shadow unit extraction: mark pending: %w", err)
+		}
+		if ok := s.queue.Enqueue(queue.Task{
+			Type:    queue.TaskTypeUnitExtract,
+			Payload: queue.UnitTask{SourceID: shadow.SourceID},
+		}); !ok {
+			if resetErr := s.store.UpdateUnitsStatus(shadow.SourceID, "failed"); resetErr != nil {
+				return nil, fmt.Errorf("retry shadow unit extraction: enqueue failed; restore failed status: %w", resetErr)
+			}
+			return nil, fmt.Errorf("retry shadow unit extraction: enqueue failed")
+		}
+		return shadow, nil
 	}
 
-	return shadow, nil
+	if shadow.Status == "failed" {
+		if err := s.Retry(ctx, shadow.SourceID); err != nil {
+			return nil, fmt.Errorf("retry shadow: %w", err)
+		}
+		return shadow, nil
+	}
+
+	return nil, fmt.Errorf("no failed shadow to retry for source %s", targetSourceID)
 }
 
 // CompleteShadowSwap performs the one-shot "换血" transaction once a Shadow

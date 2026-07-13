@@ -283,8 +283,8 @@ func (s *Service) validateUnit(u llmUnit, points []llmPoint) bool {
 // in-memory candidate — no store writes, so the pre-insert pipeline can pool
 // it with everything else instead of it bypassing dedup (the old
 // direct-insert here was the path that put v5/v6 duplicate twins in the
-// database). A failed retry inserts only the extraction_failed marker row
-// (insertFailedUnit), which is not a retrievable unit.
+// database). A failed retry is logged but never written: all generation rows
+// remain behind PublishGeneration's transaction boundary.
 func (s *Service) retryFailedUnit(ctx context.Context, sourceID string, seg Segment, segIndex int, u llmUnit, mdLines []string) (unitCandidate, bool) {
 	vars := map[string]string{
 		"segment_line_start": strconv.Itoa(seg.LineStart),
@@ -295,13 +295,13 @@ func (s *Service) retryFailedUnit(ctx context.Context, sourceID string, seg Segm
 
 	data, err := s.llmClient.CompleteJSON(ctx, "unit_extract_retry.md", vars, "extraction")
 	if err != nil {
-		s.insertFailedUnit(sourceID, seg, u, "retry LLM call failed: "+err.Error())
+		logFailedUnitRetry(sourceID, seg, u, "retry LLM call failed: "+err.Error())
 		return unitCandidate{}, false
 	}
 
 	var output extractOutput
 	if err := json.Unmarshal(data, &output); err != nil {
-		s.insertFailedUnit(sourceID, seg, u, "retry JSON parse failed: "+err.Error())
+		logFailedUnitRetry(sourceID, seg, u, "retry JSON parse failed: "+err.Error())
 		return unitCandidate{}, false
 	}
 
@@ -331,30 +331,19 @@ func (s *Service) retryFailedUnit(ctx context.Context, sourceID string, seg Segm
 		}, true
 	}
 
-	s.insertFailedUnit(sourceID, seg, u, "retry validation still failed")
+	logFailedUnitRetry(sourceID, seg, u, "retry validation still failed")
 	return unitCandidate{}, false
 }
 
-func (s *Service) insertFailedUnit(sourceID string, seg Segment, u llmUnit, errMsg string) {
-	// The model's anchor text couldn't be located (or wasn't given), so there's
-	// no derived line range to fall back to beyond the whole segment's bounds.
-	ku := &KnowledgeUnit{
-		UnitID:        uuid.New().String(),
-		SourceID:      sourceID,
-		OutlineID:     seg.OutlineID,
-		Center:        u.Center,
-		LineStart:     seg.LineStart,
-		LineEnd:       seg.LineEnd,
-		Status:        "extraction_failed",
-		ErrorMsg:      sql.NullString{String: errMsg, Valid: true},
-		PromptVersion: promptVersionExtractRetry,
-	}
-	if ku.Center == "" {
-		ku.Center = "(extraction failed)"
-	}
-	if err := s.store.InsertUnit(ku); err != nil {
-		slog.Error("unit: insert failed unit", "error", err)
-	}
+func logFailedUnitRetry(sourceID string, seg Segment, u llmUnit, errMsg string) {
+	slog.Warn("unit: failed unit retry omitted from unpublished generation",
+		"source_id", sourceID,
+		"segment", seg.Title,
+		"line_start", seg.LineStart,
+		"line_end", seg.LineEnd,
+		"center", u.Center,
+		"error", errMsg,
+	)
 }
 
 type kpnRelation struct {

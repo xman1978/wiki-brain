@@ -2,10 +2,12 @@ package retrieval
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 	"github.com/jxman78/wiki-brain/internal/rerank"
+	"github.com/jxman78/wiki-brain/internal/source"
 )
 
 func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *Store) {
@@ -296,6 +299,61 @@ func TestRerankUsesPersistedSemanticsAndRunsJudgeBatchesConcurrently(t *testing.
 	}
 	if len(got) != 2 {
 		t.Fatalf("kept = %d, want 2", len(got))
+	}
+}
+
+func TestRerankConsumesSemanticsAfterShadowReparentSwap(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	if _, err := db.Exec(`INSERT INTO sources
+		(source_id, title, format, file_name, original_path, markdown_path, status)
+		VALUES ('target-1', 'Travel Policy', 'md', 'old.md', '/tmp/old.md', '/tmp/old.md', 'completed')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO sources
+		(source_id, title, format, file_name, original_path, markdown_path, status, shadow_of)
+		VALUES ('shadow-1', 'Travel Policy Shadow', 'md', 'new.md', '/tmp/new.md', '/tmp/new.md', 'completed', 'target-1')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO knowledge_units
+		(unit_id, source_id, center, line_start, line_end, status, prompt_version, lifecycle)
+		VALUES ('shadow-u1', 'shadow-1', 'Hotel limits', 1, 2, 'completed', 'v6-split', 'current')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO unit_rerank_semantics
+		(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
+		VALUES ('shadow-u1', 'Travel policy', 'Hotel limits', 'Explain limit', 'Employees', 'Domestic travel', '["Hotel limit is 500"]', ?)`, rerank.ExtractPromptVersion); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := source.NewStore(db).SwapShadowIntoTarget("shadow-1", "target-1", "/tmp/new.md", sql.NullString{}); err != nil {
+		t.Fatalf("SwapShadowIntoTarget: %v", err)
+	}
+
+	store := NewStore(db)
+	semantics, err := store.GetUnitRerankSemantics([]string{"shadow-u1"})
+	if err != nil {
+		t.Fatalf("GetUnitRerankSemantics after swap: %v", err)
+	}
+	if got := semantics["shadow-u1"].KeyFacts; !reflect.DeepEqual(got, []string{"Hotel limit is 500"}) {
+		t.Fatalf("reparented key facts = %#v, want persisted facts", got)
+	}
+
+	tracker := &rerankJudgeTrackingLLM{}
+	svc := NewService(store, tracker, nil, nil, nil, &config.Config{}, nil, nil, nil)
+	kept, err := svc.rerank(t.Context(), QueryContext{Question: "What is the hotel limit?"}, []candidate{{
+		unitID: "shadow-u1", sourceID: "target-1", lineStart: 1, lineEnd: 2, score: 1,
+	}})
+	if err != nil {
+		t.Fatalf("rerank reparented unit: %v", err)
+	}
+	if len(kept) != 1 || kept[0].sourcePaths[0] != "direct" {
+		t.Fatalf("kept candidates = %+v, want one direct result", kept)
+	}
+	if tracker.Count("rerank_judge.md") != 1 {
+		t.Fatalf("judge calls = %d, want 1", tracker.Count("rerank_judge.md"))
+	}
+	if len(tracker.payloads) != 1 || !strings.Contains(tracker.payloads[0], "Hotel limit is 500") {
+		t.Fatalf("judge payloads = %v, want reparented semantic facts", tracker.payloads)
 	}
 }
 

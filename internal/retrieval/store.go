@@ -416,6 +416,9 @@ func (s *Store) GetUnitRerankSemantics(unitIDs []string) (map[string]rerank.Sema
 		if err := json.Unmarshal([]byte(keyFactsJSON), &semantic.KeyFacts); err != nil {
 			return nil, fmt.Errorf("retrieval store: get rerank semantics: decode key facts for unit %s: %w", semantic.UnitID, err)
 		}
+		if semantic.KeyFacts == nil {
+			return nil, fmt.Errorf("retrieval store: get rerank semantics: decode key facts for unit %s: expected non-null string array", semantic.UnitID)
+		}
 		semantics[semantic.UnitID] = semantic
 	}
 	if err := rows.Err(); err != nil {

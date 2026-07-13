@@ -2,9 +2,11 @@ package unit
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
+	"github.com/jxman78/wiki-brain/internal/rerank"
 )
 
 func setupTestStore(t *testing.T) *Store {
@@ -25,6 +27,62 @@ func insertTestSource(t *testing.T, db *sql.DB) {
 		VALUES ('ol-1', 'src-1', 1, 'Chapter 1', 1, 50, 'structural', 1)`)
 	if err != nil {
 		t.Fatalf("insert test outline: %v", err)
+	}
+}
+
+func TestPublishGenerationRejectsInvalidSemanticsBeforeWriting(t *testing.T) {
+	valid := rerank.Semantics{
+		UnitID:        "u1",
+		SourceTheme:   "policy",
+		ContentTheme:  "limits",
+		Intent:        "explain",
+		Object:        "employees",
+		Scope:         "travel",
+		KeyFacts:      []string{"The limit is 500."},
+		PromptVersion: rerank.ExtractPromptVersion,
+	}
+	tests := []struct {
+		name   string
+		mutate func(*rerank.Semantics)
+		want   string
+	}{
+		{name: "empty unit id", mutate: func(s *rerank.Semantics) { s.UnitID = "" }, want: "unit_id"},
+		{name: "wrong prompt version", mutate: func(s *rerank.Semantics) { s.PromptVersion = "v0" }, want: "prompt_version"},
+		{name: "empty source theme", mutate: func(s *rerank.Semantics) { s.SourceTheme = " " }, want: "source_theme"},
+		{name: "empty content theme", mutate: func(s *rerank.Semantics) { s.ContentTheme = "" }, want: "content_theme"},
+		{name: "empty intent", mutate: func(s *rerank.Semantics) { s.Intent = "" }, want: "intent"},
+		{name: "empty object", mutate: func(s *rerank.Semantics) { s.Object = "" }, want: "object"},
+		{name: "empty scope", mutate: func(s *rerank.Semantics) { s.Scope = "" }, want: "scope"},
+		{name: "null key facts", mutate: func(s *rerank.Semantics) { s.KeyFacts = nil }, want: "key_facts"},
+		{name: "empty key fact", mutate: func(s *rerank.Semantics) { s.KeyFacts = []string{" "} }, want: "key_facts"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := setupTestStore(t)
+			semantic := valid
+			semantic.KeyFacts = append([]string(nil), valid.KeyFacts...)
+			tc.mutate(&semantic)
+			pool := []unitCandidate{{
+				id: "u1", llm: llmUnit{Center: "Policy limits"},
+				lineStart: 1, lineEnd: 1, promptVersion: promptVersionSplitExtract,
+			}}
+
+			_, _, _, err := store.PublishGeneration("src-1", pool, map[string]rerank.Semantics{"u1": semantic})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("PublishGeneration err = %v, want field %q", err, tc.want)
+			}
+			var units, semantics int
+			if err := store.db.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE source_id = 'src-1'`).Scan(&units); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.db.QueryRow(`SELECT COUNT(*) FROM unit_rerank_semantics`).Scan(&semantics); err != nil {
+				t.Fatal(err)
+			}
+			if units != 0 || semantics != 0 {
+				t.Fatalf("rows after rejected publication: units=%d semantics=%d, want 0/0", units, semantics)
+			}
+		})
 	}
 }
 
