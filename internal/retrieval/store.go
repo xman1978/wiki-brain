@@ -413,11 +413,23 @@ func (s *Store) GetUnitRerankSemantics(unitIDs []string) (map[string]rerank.Sema
 		); err != nil {
 			return nil, fmt.Errorf("retrieval store: get rerank semantics: scan: %w", err)
 		}
-		if err := json.Unmarshal([]byte(keyFactsJSON), &semantic.KeyFacts); err != nil {
+		var rawKeyFacts []json.RawMessage
+		if err := json.Unmarshal([]byte(keyFactsJSON), &rawKeyFacts); err != nil {
 			return nil, fmt.Errorf("retrieval store: get rerank semantics: decode key facts for unit %s: %w", semantic.UnitID, err)
 		}
-		if semantic.KeyFacts == nil {
+		if rawKeyFacts == nil {
 			return nil, fmt.Errorf("retrieval store: get rerank semantics: decode key facts for unit %s: expected non-null string array", semantic.UnitID)
+		}
+		semantic.KeyFacts = make([]string, len(rawKeyFacts))
+		for i, rawFact := range rawKeyFacts {
+			var fact *string
+			if err := json.Unmarshal(rawFact, &fact); err != nil {
+				return nil, fmt.Errorf("retrieval store: get rerank semantics: decode key facts for unit %s element %d: %w", semantic.UnitID, i, err)
+			}
+			if fact == nil {
+				return nil, fmt.Errorf("retrieval store: get rerank semantics: decode key facts for unit %s element %d: expected string, got null", semantic.UnitID, i)
+			}
+			semantic.KeyFacts[i] = *fact
 		}
 		semantics[semantic.UnitID] = semantic
 	}

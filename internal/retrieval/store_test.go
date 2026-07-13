@@ -98,6 +98,8 @@ func TestGetUnitRerankSemanticsRejectsInvalidFactsShape(t *testing.T) {
 		{name: "null", factsJSON: "null"},
 		{name: "object", factsJSON: `{}`},
 		{name: "non-string element", factsJSON: `["valid", 7]`},
+		{name: "null element", factsJSON: `[null]`},
+		{name: "null after valid element", factsJSON: `["valid", null]`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
