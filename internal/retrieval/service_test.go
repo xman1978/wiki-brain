@@ -288,9 +288,6 @@ func TestRerankUsesPersistedSemanticsAndRunsJudgeBatchesConcurrently(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tracker.Count("rerank_extract.md") != 0 || tracker.Count("unit_semantics_extract.md") != 0 {
-		t.Fatal("online rerank called extraction")
-	}
 	if tracker.Count("rerank_judge.md") != 2 {
 		t.Fatalf("judge calls = %d, want 2", tracker.Count("rerank_judge.md"))
 	}

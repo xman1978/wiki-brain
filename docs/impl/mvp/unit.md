@@ -13,6 +13,7 @@ JSON Schema 校验器（校验 LLM 结构化输出）
 单元级重试处理器（失败单元局部重试，不重跑整份材料）
 KPN 关系生成器（提取完成后对全 Source KP 做关系分析）
 KnowledgeUnit / KnowledgePoint / KPN 存储（SQLite）
+Rerank 语义提取与持久化（SQLite，供在线 Rerank 直接读取）
 Bleve units / points 索引写入
 HTTP API
 ```
@@ -503,7 +504,24 @@ concept_id 为空或不存在：concept_id 保持 null；
 LLM 调用失败：记录 warn 日志，当前批次 KU 的 concept_id 保持 null，不阻塞 Source 完成。
 ```
 
-### 步骤 6：写入 Bleve 索引
+### 步骤 6：提取并原子持久化 Rerank 语义
+
+每个将被发布为可检索的 KnowledgeUnit 都必须先完成 Rerank 语义提取。程序按 unit 的
+Markdown 行范围读取正文，调用 `config/prompts/unit_semantics_extract.md` 生成并校验以下
+v1 语义：`source_theme`、`content_theme`、`intent`、`object`、`scope`、`key_facts`。
+
+```text
+对候选 KU 批量提取语义；每个 unit_id 必须恰好返回一条语义结果；
+语义与 KU / KP 的当前代写入同一 SQLite 事务，写入 unit_rerank_semantics；
+语义 prompt_version 固定为当前提取版本（v1）；
+事务成功后才发布新的 current KU/KP，并在随后写入 Bleve 索引；
+```
+
+语义提取、解析、覆盖校验或持久化任一步失败时，整个新代不发布：先前的 current KU/KP、
+对应语义行和索引继续可用，失败代不会成为可检索内容。这样在线 Retrieval 不需要也不允许
+针对原始候选正文补做语义提取。
+
+### 步骤 7：写入 Bleve 索引
 
 KnowledgeUnit 和 KnowledgePoint 入库后同步写入对应 Bleve 索引。KU 正文在写入时按 `sources.markdown_path` + `line_start` / `line_end` 动态切片读取，不单独存文件：
 
@@ -519,7 +537,7 @@ KPN 关系不写入 Bleve（通过 SQLite 按 point_id 查询）。
 
 索引写入失败记录错误日志，不将 Source 标记为 failed。
 
-### 步骤 7：暴露 HTTP API
+### 步骤 8：暴露 HTTP API
 
 ```text
 POST   /sources/:id/units
@@ -563,6 +581,8 @@ Prompt 文件：config/prompts/ 下，版本号在文件内 frontmatter 中管�
 ```text
 能对已完成的 Source 稳定触发 Unit 提取；
 提取结果（KU + KP）写入 SQLite 和 Bleve，可通过 API 查询；
+每个新发布为 current 的 KU 在同一事务中写入一条 prompt_version=v1 的 Rerank 语义；
+Rerank 语义提取或落库失败时，上一代 current KU/KP、语义和索引保持不变；
 锚点定位正确：unit.line_start / line_end 由 LocateUnitBounds 在 segment 范围内定位得出，为规范化 Markdown 的绝对行号（1-based, inclusive）；
 可通过 strings.Split(markdown, "\n")[line_start-1:line_end] 还原单元原文内容（`markdown_path` 来自 sources 表）；
 重试机制正常工作：整体 JSON 失败时 segment 级重试一次；可定位的单元业务校验失败时单元级重试一次，失败单元标记 extraction_failed 并记录 error_msg；

@@ -13,7 +13,7 @@ Source 语义过滤器（LLM 判断哪些 Source 与问题相关）
 目录结构召回器（FTS 优先，评分低于阈值时 LLM 语义 fallback）
 FTS 召回器（Bleve units + points 全文检索）
 多路召回合并器（RRF 融合，去重）
-LLM Rerank（逐条分类：直接证据 / 支持性证据 / 无关）
+LLM Rerank 判定器（读取预计算语义，分类：直接证据 / 支持性证据 / 无关）
 直接回答充分性判断器（短路径 vs 深路径决策）
 EvidenceSet 构建器（含 fact_id 和来源位置）
 HTTP API
@@ -232,61 +232,24 @@ RRF 公式：score = Σ 1 / (k + rank_i)，k 默认取 60；
 
 ### 步骤 7：LLM Rerank
 
-调用 `classification` 模型，对每条候选证据独立分类：
+在线 Rerank 只调用 `classification` 模型完成判定；候选的结构化语义在 Unit
+入库时已预计算并持久化：
 
 ```text
 RRF 合并（步骤 6）完成后，为每条候选分配临时 candidate_id（如 "c1"、"c2"，按 RRF 排名顺序）；
-候选 content 来源：JOIN knowledge_units 与 sources，按 sources.markdown_path 读取规范化 Markdown，
-  用 knowledge_units.line_start / line_end 切片（见 foundation.md 行号约定），不依赖独立正文文件；
-候选证据按 sourceID 分组聚合、标注来源文档标题（`sources.title`，通过 `Store.GetSourceTitle`
-  查询）后再拼入 prompt（格式：`【来源文档：标题】` 后接该文档下各条 `[candidate_id] content`），
-  而非逐条打散罗列，使 LLM 能够感知对象/约束等限定信息（如"仅适用于渠道伙伴"）可能只
-  出现在文档标题中、不会逐条重复在每条证据正文里；分组顺序按候选首次出现的 RRF 排名；
+从 unit_rerank_semantics 读取每个候选的 v1 语义；缺失或 prompt_version 过期时，返回包含所有
+  受影响 unit_id 的完整性错误，不调用 LLM；
+从 sources.title 读取来源标题，将 candidate_id、source_title、source_theme、content_theme、intent、
+  object、scope、key_facts 组成紧凑 JSON；不读取候选原始正文，也不执行在线语义抽取；
+按该 JSON 的 rune 长度拆分 judge 批次，受 config.yml 的
+  retrieval.rerank_judge_batch_max_chars 和 retrieval.rerank_judge_concurrency 控制；
 输入：问题 + 核心主题（subject）+ 意图（intent）+ 对象（audience）+ 约束（constraint，均来自
-  Session 解析，缺失时分别填充占位文案"（未提取）"/"（无）"）+ 按来源文档分组的候选
-  证据列表（每条附 candidate_id 和 content）；
-模型输出：每条证据的结构化语义抽取结果，包括来源主题、内容主题、意图、对象、范围和关键事实；
-模型判断：将所有候选的结构化语义交给 `rerank_judge.md` 判断
-  direct / supporting / irrelevant；
+  Session 解析，缺失时分别填充占位文案"（未提取）"/"（无）"）+ 一批候选语义 JSON；
+模型判断：`rerank_judge.md` 为每个候选输出 direct / supporting / irrelevant；
 程序校验：只校验 candidate_id 必须来自当前候选批次，role 必须是 direct / supporting / irrelevant；
 direct 和 supporting 证据进入后续环节，irrelevant 排除；
 Rerank 是逐条分类器，不是 Top-K 选择器，不截断数量；
-程序校验两个模型输出中的 candidate_id 必须来自当前候选批次，缺失的 candidate_id 不进入后续证据集。
-```
-
-**第一阶段 Prompt 文件**：`config/prompts/rerank_extract.md`
-
-```
-你是证据语义抽取助手。只抽取每条候选证据本身真正表达的语义事实，不判断相关性。
-
-问题：{{question}}
-核心主题：{{subject}}
-意图：{{intent}}
-对象：{{audience}}
-约束：{{constraint}}
-
-证据列表（按来源文档分组，格式：【来源文档：标题】后接该文档下的 [candidate_id] 证据内容）：
-{{candidates}}
-
-每条证据独立抽取，不遗漏任何 candidate_id，只输出 JSON。
-```
-
-模型输出示例：
-
-```json
-{
-  "results": [
-    {
-      "candidate_id": "c1",
-      "source_theme": "来源文档主题",
-      "content_theme": "证据内容主题",
-      "intent": "证据提供的信息类型",
-      "object": "证据适用对象",
-      "scope": "证据适用范围",
-      "key_facts": ["关键事实"]
-    }
-  ]
-}
+缺失 candidate_id 的候选不进入后续证据集。
 ```
 
 `subject` / `intent` / `audience` / `constraint` 均来自 Session 模块的上下文感知解析
@@ -294,10 +257,10 @@ Rerank 是逐条分类器，不是 Top-K 选择器，不截断数量；
 通过 `QueryContext` 传入 Retrieval，再经 `EvidenceSet.Subject` / `EvidenceSet.Intent` /
 `EvidenceSet.Audience` / `EvidenceSet.Constraint` 传给 Answer 层。
 
-程序将模型抽取结果解析后，调用 `config/prompts/rerank_judge.md` 对所有候选统一判断。
-程序不再使用业务词表规则提前判 direct / supporting / irrelevant，避免因规则覆盖面不足误杀相关证据。
+程序直接调用 `config/prompts/rerank_judge.md` 对预计算语义进行批量判断。程序不再使用业务词表规则
+提前判 direct / supporting / irrelevant，避免因规则覆盖面不足误杀相关证据。
 
-**第二阶段判断 Prompt 文件**：`config/prompts/rerank_judge.md`
+**判断 Prompt 文件**：`config/prompts/rerank_judge.md`
 
 ```
 你是证据关系判断助手。根据问题语义和已抽取的证据语义，判断每条候选证据的角色。
@@ -386,7 +349,7 @@ POST   /retrieval      接收问题，返回 EvidenceSet（HTTP API，供外部�
 基础设施：SQLite、Bleve 索引、LLM client、结构化日志、HTTP 框架
 Foundation：依赖 domains 表中已加载的预制 Domain 数据（Domain 预过滤使用）
 Source：依赖 sources.summary、sources.domain_id 和 source_outlines（title + summary）供过滤和目录召回使用
-Unit：依赖 KnowledgeUnit / KnowledgePoint 已写入 SQLite 和 Bleve 索引，以及 knowledge_point_relations 表（KPN 扩展使用）
+Unit：依赖 KnowledgeUnit / KnowledgePoint 及其 v1 unit_rerank_semantics 已原子写入 SQLite，Bleve 索引已同步更新，以及 knowledge_point_relations 表（KPN 扩展使用）
 ```
 
 ## 完成标准
@@ -398,7 +361,8 @@ Source 语义过滤在 Domain 过滤后的候选范围内正常工作，过滤�
 目录结构召回 FTS 路径正常工作；LLM fallback 对所有 FTS 最高分低于阈值（< 0.5）的 source 并发发起，受 llm.max_concurrency 约束；
 FTS 召回命中 units index 和 points index；
 RRF 合并正确去重、多路得分累加并保留来源路径，按 RRF 分截取 Top N（默认 20）后进入 Rerank；
-LLM Rerank 对每条候选正确分类，输出结构通过 JSON Schema 校验；
+LLM Rerank 只对预计算的 v1 语义执行 judge 调用；缺失或过期语义会列出全部受影响 unit_id 并阻止判定；
+judge 批次按紧凑 JSON 大小拆分并遵守 rerank_judge_batch_max_chars 与 rerank_judge_concurrency；
 KPN 扩展能正确查询直接证据 KU 的邻居 KP，新增 KU 以 supporting 角色加入 EvidenceSet；
 KPN contradicts 邻居正确写入 EvidenceSet.conflicts（不加入候选集、不分配 fact_id）；
 Evidence.origin 正确标记（KPN 扩展补充的 supporting 为 kpn_expansion，其余为 rerank）；

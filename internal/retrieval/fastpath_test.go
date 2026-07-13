@@ -96,7 +96,6 @@ func TestRetrieve_FastPathDisabled_StillRecordsHitsButUsesSlowPath(t *testing.T)
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_extract.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "source_theme": "linear equations", "content_theme": "linear equations definition", "intent": "说明定义", "object": "linear equations", "scope": "通用", "key_facts": ["linear equations definition"]}]}`})
 	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
@@ -121,7 +120,6 @@ func TestRetrieve_ForceFull_SkipsFastPath(t *testing.T) {
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_extract.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "source_theme": "linear equations", "content_theme": "linear equations definition", "intent": "说明定义", "object": "linear equations", "scope": "通用", "key_facts": ["linear equations definition"]}]}`})
 	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question, ForceFull: true}, nil)
@@ -142,7 +140,6 @@ func TestRetrieve_NoMatch_FallsBackToSlowPathWithEmptyHits(t *testing.T) {
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_extract.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "source_theme": "linear equations", "content_theme": "linear equations definition", "intent": "说明定义", "object": "linear equations", "scope": "通用", "key_facts": ["linear equations definition"]}]}`})
 	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: "linear equations"}, nil)
@@ -167,7 +164,6 @@ func TestRetrieveSlowPathWithProgress_BypassesFastPath(t *testing.T) {
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_extract.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "source_theme": "linear equations", "content_theme": "linear equations definition", "intent": "说明定义", "object": "linear equations", "scope": "通用", "key_facts": ["linear equations definition"]}]}`})
 	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
 	es, err := svc.RetrieveSlowPathWithProgress(context.Background(), QueryContext{Question: question}, nil)
@@ -195,7 +191,6 @@ func TestRetrieve_FastPath_NoCurrentKP_FallsBackToSlowPath(t *testing.T) {
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_extract.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "source_theme": "linear equations", "content_theme": "linear equations definition", "intent": "说明定义", "object": "linear equations", "scope": "通用", "key_facts": ["linear equations definition"]}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
