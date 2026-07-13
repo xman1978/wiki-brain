@@ -95,6 +95,21 @@ func TestExtractRerankSemanticsBatchesByFinalTextAndRunsConcurrently(t *testing.
 	}
 }
 
+func TestSplitRerankSemanticBatchesCountsUnicodeCharacters(t *testing.T) {
+	candidates := []rerankSemanticCandidate{
+		{id: "u1", content: "甲乙"},
+		{id: "u2", content: "丙丁"},
+	}
+
+	batches := splitRerankSemanticBatches(candidates, 4)
+	if len(batches) != 1 {
+		t.Fatalf("got %d batches, want 1 for four CJK characters", len(batches))
+	}
+	if len(batches[0]) != 2 {
+		t.Fatalf("batch size = %d, want 2", len(batches[0]))
+	}
+}
+
 func TestExtractRerankSemanticsRejectsInvalidResultCoverage(t *testing.T) {
 	pool := []unitCandidate{
 		{id: "u1", lineStart: 1, lineEnd: 1},

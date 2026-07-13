@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/jxman78/wiki-brain/internal/rerank"
 )
@@ -188,7 +189,7 @@ func splitRerankSemanticBatches(candidates []rerankSemanticCandidate, maxChars i
 	var current []rerankSemanticCandidate
 	currentChars := 0
 	for _, candidate := range candidates {
-		itemChars := len(candidate.content)
+		itemChars := utf8.RuneCountInString(candidate.content)
 		if len(current) > 0 && currentChars+itemChars > maxChars {
 			batches = append(batches, current)
 			current = nil
