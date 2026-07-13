@@ -596,8 +596,14 @@ func (s *Service) matchConceptBatch(ctx context.Context, units []KnowledgeUnit, 
 }
 
 func (s *Service) indexUnit(ku *KnowledgeUnit, mdLines []string) {
+	if err := s.indexUnitWithError(ku, mdLines); err != nil {
+		slog.Error("unit: bleve index unit failed", "unit_id", ku.UnitID, "error", err)
+	}
+}
+
+func (s *Service) indexUnitWithError(ku *KnowledgeUnit, mdLines []string) error {
 	if s.unitsIndex == nil {
-		return
+		return nil
 	}
 	content := sliceLines(mdLines, ku.LineStart, ku.LineEnd)
 	lifecycle := ku.Lifecycle
@@ -614,13 +620,20 @@ func (s *Service) indexUnit(ku *KnowledgeUnit, mdLines []string) {
 		"lifecycle":  lifecycle,
 	}
 	if err := s.unitsIndex.Index(ku.UnitID, doc); err != nil {
-		slog.Error("unit: bleve index unit failed", "error", err)
+		return fmt.Errorf("unit: bleve index unit %s: %w", ku.UnitID, err)
 	}
+	return nil
 }
 
 func (s *Service) indexPoint(kp *KnowledgePoint) {
+	if err := s.indexPointWithError(kp); err != nil {
+		slog.Error("unit: bleve index point failed", "point_id", kp.PointID, "error", err)
+	}
+}
+
+func (s *Service) indexPointWithError(kp *KnowledgePoint) error {
 	if s.pointsIndex == nil {
-		return
+		return nil
 	}
 	lifecycle := kp.Lifecycle
 	if lifecycle == "" {
@@ -635,8 +648,9 @@ func (s *Service) indexPoint(kp *KnowledgePoint) {
 		"lifecycle":  lifecycle,
 	}
 	if err := s.pointsIndex.Index(kp.PointID, doc); err != nil {
-		slog.Error("unit: bleve index point failed", "error", err)
+		return fmt.Errorf("unit: bleve index point %s: %w", kp.PointID, err)
 	}
+	return nil
 }
 
 // SetUnitLifecycle is the single entry point for changing KU lifecycle state

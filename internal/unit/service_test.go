@@ -253,8 +253,8 @@ func TestExtract_AllFailed(t *testing.T) {
 	fake.SetResponse("unit_boundary_extract.md", llm.FakeResponse{Err: llm.ErrTimeout})
 
 	err := svc.Extract(t.Context(), "src-1")
-	if err != nil {
-		t.Fatalf("extract should not return error on segment failure: %v", err)
+	if err == nil {
+		t.Fatal("extract should return an error when every segment fails")
 	}
 
 	units, _ := svc.store.GetUnitsBySourceID("src-1")

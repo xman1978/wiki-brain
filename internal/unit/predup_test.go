@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blevesearch/bleve/v2"
 	"github.com/jxman78/wiki-brain/internal/foundation"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
@@ -62,6 +63,19 @@ func setupPreInsertDedupTestService(t *testing.T, minOverlap float64, concurrenc
 // the embedded FakeClient to exercise explicit failures.
 type semanticAwareFakeClient struct {
 	*llm.FakeClient
+}
+
+type delegatedBleveIndex struct {
+	bleve.Index
+}
+
+type failingBleveIndex struct {
+	delegatedBleveIndex
+	err error
+}
+
+func (i *failingBleveIndex) Index(_ string, _ interface{}) error {
+	return i.err
 }
 
 func (f *semanticAwareFakeClient) CompleteJSON(ctx context.Context, promptFile string, vars map[string]string, model string) ([]byte, error) {
@@ -165,6 +179,20 @@ func assertOnlyUnitIndexed(t *testing.T, svc *Service, unitID string) {
 	}
 }
 
+func assertOnlyPointIndexed(t *testing.T, svc *Service, pointID string) {
+	t.Helper()
+	count, err := svc.pointsIndex.DocCount()
+	if err != nil {
+		t.Fatalf("point index count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("point index count = %d, want 1", count)
+	}
+	if lifecycle, ok := bleveField(t, svc.pointsIndex, pointID, "lifecycle"); !ok || lifecycle != LifecycleCurrent {
+		t.Fatalf("indexed old point lifecycle = %q (found=%v), want current", lifecycle, ok)
+	}
+}
+
 func TestExtractSemanticFailureLeavesPreviousGenerationCurrent(t *testing.T) {
 	svc, fake, db := setupReuploadExtractionFixture(t)
 	oldID := insertCurrentIndexedUnit(t, svc, db, "src-1")
@@ -187,6 +215,25 @@ func TestExtractSemanticFailureLeavesPreviousGenerationCurrent(t *testing.T) {
 	if units != 1 {
 		t.Fatalf("stored units = %d, want only the previous generation", units)
 	}
+}
+
+func TestExtractSegmentFailureLeavesPreviousGenerationCurrent(t *testing.T) {
+	svc, fake, db := setupReuploadExtractionFixture(t)
+	oldID := insertCurrentIndexedUnit(t, svc, db, "src-1")
+	fake.SetResponse("unit_boundary_extract.md", llm.FakeResponse{Err: errors.New("boundary extraction failed")})
+
+	err := svc.Extract(t.Context(), "src-1")
+	if err == nil || !strings.Contains(err.Error(), "src-1") || !strings.Contains(err.Error(), "Policy") {
+		t.Fatalf("err = %v, want source and segment context", err)
+	}
+	if calls := countCalls(fake, "unit_semantics_extract.md"); calls != 0 {
+		t.Fatalf("unit_semantics_extract.md calls = %d, want 0 after segment failure", calls)
+	}
+	if calls := countCalls(fake, "kpn_extract.md"); calls != 0 {
+		t.Fatalf("kpn_extract.md calls = %d, want 0 after segment failure", calls)
+	}
+	assertUnitLifecycle(t, db, oldID, LifecycleCurrent)
+	assertOnlyUnitIndexed(t, svc, oldID)
 }
 
 func TestPublishCandidatesPublishesUnitsPointsAndSemanticsTogether(t *testing.T) {
@@ -232,16 +279,57 @@ func TestPublishCandidatesTransactionFailureRollsBackGeneration(t *testing.T) {
 	}
 	assertUnitLifecycle(t, db, oldID, LifecycleCurrent)
 	assertOnlyUnitIndexed(t, svc, oldID)
+	assertOnlyPointIndexed(t, svc, "old-point")
 
-	var units, semantics int
+	var units, points, semantics int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE source_id = 'src-1'`).Scan(&units); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_points WHERE source_id = 'src-1'`).Scan(&points); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM unit_rerank_semantics`).Scan(&semantics); err != nil {
 		t.Fatal(err)
 	}
-	if units != 1 || semantics != 0 {
-		t.Fatalf("rows after rollback: units=%d semantics=%d, want 1/0", units, semantics)
+	if units != 1 || points != 1 || semantics != 0 {
+		t.Fatalf("rows after rollback: units=%d points=%d semantics=%d, want 1/1/0", units, points, semantics)
+	}
+	var pointLifecycle string
+	if err := db.QueryRow(`SELECT lifecycle FROM knowledge_points WHERE point_id = 'old-point'`).Scan(&pointLifecycle); err != nil {
+		t.Fatal(err)
+	}
+	if pointLifecycle != LifecycleCurrent {
+		t.Fatalf("old point lifecycle = %q, want current", pointLifecycle)
+	}
+}
+
+func TestPublishCandidatesReturnsBleveFailuresBeforeDownstreamProcessing(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		failIndex func(*Service)
+		wantID    string
+	}{
+		{name: "unit index", failIndex: func(svc *Service) {
+			svc.unitsIndex = &failingBleveIndex{delegatedBleveIndex: delegatedBleveIndex{Index: svc.unitsIndex}, err: errors.New("forced unit index failure")}
+		}, wantID: "old-unit"},
+		{name: "point index", failIndex: func(svc *Service) {
+			svc.pointsIndex = &failingBleveIndex{delegatedBleveIndex: delegatedBleveIndex{Index: svc.pointsIndex}, err: errors.New("forced point index failure")}
+		}, wantID: "old-point"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, fake, db := setupReuploadExtractionFixture(t)
+			insertCurrentIndexedUnit(t, svc, db, "src-1")
+			setSuccessfulUnitExtractionFakes(t, fake)
+			tc.failIndex(svc)
+
+			err := svc.Extract(t.Context(), "src-1")
+			if err == nil || !strings.Contains(err.Error(), tc.wantID) {
+				t.Fatalf("err = %v, want affected document ID %s", err, tc.wantID)
+			}
+			if calls := countCalls(fake, "kpn_extract.md"); calls != 0 {
+				t.Fatalf("kpn_extract.md calls = %d, want 0 after index failure", calls)
+			}
+		})
 	}
 }
 

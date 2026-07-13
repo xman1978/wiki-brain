@@ -120,13 +120,19 @@ func (s *Service) extractSegmentsPreInsertDedup(ctx context.Context, sourceTitle
 	// (logDocumentCandidates) before insertion — the per-segment adjacent
 	// scan alone was structurally blind to them.
 	var pool []unitCandidate
+	var extractionErr error
 	for r := range results {
 		if r.ok {
 			pool = append(pool, s.collectSegmentCandidates(ctx, sourceID, r.seg, r.segIndex, mdLines, r.output, r.promptVersion)...)
+		} else if extractionErr == nil {
+			extractionErr = fmt.Errorf("segment extraction failed: source_id %s segment %q lines %d-%d", sourceID, r.seg.Title, r.seg.LineStart, r.seg.LineEnd)
 		}
 		if onSegmentDone != nil {
 			onSegmentDone()
 		}
+	}
+	if extractionErr != nil {
+		return extractionErr
 	}
 
 	s.logDocumentCandidates(sourceID, mdLines, pool)
@@ -252,10 +258,14 @@ func (s *Service) publishCandidates(sourceID string, mdLines []string, pool []un
 	units = append(units, superseded...)
 	units = append(units, inserted...)
 	for i := range units {
-		s.indexUnit(&units[i], mdLines)
+		if err := s.indexUnitWithError(&units[i], mdLines); err != nil {
+			return fmt.Errorf("publish generation indexes: %w", err)
+		}
 	}
 	for i := range points {
-		s.indexPoint(&points[i])
+		if err := s.indexPointWithError(&points[i]); err != nil {
+			return fmt.Errorf("publish generation indexes: %w", err)
+		}
 	}
 	return nil
 }
