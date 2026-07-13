@@ -2,8 +2,11 @@ package retrieval
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/jxman78/wiki-brain/internal/rerank"
 )
 
 type Store struct {
@@ -377,6 +380,48 @@ func (s *Store) GetSourceTitle(sourceID string) (string, error) {
 		return "", fmt.Errorf("retrieval store: get source title: %w", err)
 	}
 	return title, nil
+}
+
+func (s *Store) GetUnitRerankSemantics(unitIDs []string) (map[string]rerank.Semantics, error) {
+	semantics := make(map[string]rerank.Semantics)
+	if len(unitIDs) == 0 {
+		return semantics, nil
+	}
+
+	ph, args := buildPlaceholders(unitIDs)
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version
+		FROM unit_rerank_semantics
+		WHERE unit_id IN (%s)`, ph), args...)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval store: get rerank semantics: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var semantic rerank.Semantics
+		var keyFactsJSON string
+		if err := rows.Scan(
+			&semantic.UnitID,
+			&semantic.SourceTheme,
+			&semantic.ContentTheme,
+			&semantic.Intent,
+			&semantic.Object,
+			&semantic.Scope,
+			&keyFactsJSON,
+			&semantic.PromptVersion,
+		); err != nil {
+			return nil, fmt.Errorf("retrieval store: get rerank semantics: scan: %w", err)
+		}
+		if err := json.Unmarshal([]byte(keyFactsJSON), &semantic.KeyFacts); err != nil {
+			return nil, fmt.Errorf("retrieval store: get rerank semantics: decode key facts for unit %s: %w", semantic.UnitID, err)
+		}
+		semantics[semantic.UnitID] = semantic
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("retrieval store: get rerank semantics: rows: %w", err)
+	}
+	return semantics, nil
 }
 
 func buildPlaceholders(ids []string) (string, []interface{}) {

@@ -1,10 +1,81 @@
 package retrieval
 
 import (
+	"database/sql"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
 )
+
+func insertRetrievalTestSourceAndUnit(t *testing.T, db *sql.DB, sourceID, unitID string) {
+	t.Helper()
+	_, err := db.Exec(`INSERT OR IGNORE INTO sources
+		(source_id, title, format, file_name, original_path, markdown_path, status)
+		VALUES (?, ?, 'md', ?, '/tmp/source.md', '/tmp/source.md', 'completed')`,
+		sourceID, sourceID, sourceID+".md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO knowledge_units
+		(unit_id, source_id, center, line_start, line_end, status, prompt_version)
+		VALUES (?, ?, 'test unit', 1, 1, 'completed', 'v1')`, unitID, sourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetUnitRerankSemanticsBulk(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	insertRetrievalTestSourceAndUnit(t, db, "s1", "u1")
+	insertRetrievalTestSourceAndUnit(t, db, "s1", "u2")
+	_, err := db.Exec(`INSERT INTO unit_rerank_semantics
+		(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
+		VALUES ('u1', '制度', '报销', '说明限额', '员工', '出差', '["住宿限额500元"]', 'v1')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO unit_rerank_semantics
+		(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
+		VALUES ('u2', '制度', '报销', '说明流程', '员工', '出差', '["提交发票"]', 'v1')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := NewStore(db).GetUnitRerankSemantics([]string{"u1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got["u1"].KeyFacts, []string{"住宿限额500元"}) {
+		t.Fatalf("key facts = %#v, want 住宿限额500元", got["u1"].KeyFacts)
+	}
+	if _, ok := got["u2"]; ok {
+		t.Fatal("unrequested unit returned")
+	}
+}
+
+func TestGetUnitRerankSemanticsMalformedFacts(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	insertRetrievalTestSourceAndUnit(t, db, "s1", "u1")
+	if _, err := db.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := db.Exec(`INSERT INTO unit_rerank_semantics
+		(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
+		VALUES ('u1', '制度', '报销', '说明限额', '员工', '出差', '{', 'v1')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = NewStore(db).GetUnitRerankSemantics([]string{"u1"})
+	if err == nil {
+		t.Fatal("expected malformed key facts error")
+	}
+	if !strings.Contains(err.Error(), "u1") {
+		t.Fatalf("error %q does not name unit u1", err)
+	}
+}
 
 func seedTestData(t *testing.T, store *Store) {
 	t.Helper()
