@@ -1,20 +1,25 @@
 package unit
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 	"github.com/jxman78/wiki-brain/internal/foundation/queue"
+	"github.com/jxman78/wiki-brain/internal/rerank"
 	"github.com/jxman78/wiki-brain/internal/source"
 )
 
@@ -60,6 +65,171 @@ func countCalls(fake *llm.FakeClient, promptFile string) int {
 		}
 	}
 	return n
+}
+
+func TestExtractRerankSemanticsBatchesByFinalTextAndRunsConcurrently(t *testing.T) {
+	svc, tracker := setupRerankSemanticExtractionService(t, 1, 2)
+	tracker.releaseAfterStarts(2)
+
+	pool := []unitCandidate{
+		{id: "u1", lineStart: 1, lineEnd: 1},
+		{id: "u2", lineStart: 2, lineEnd: 2},
+		{id: "u3", lineStart: 3, lineEnd: 3},
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	got, err := svc.extractRerankSemantics(ctx, "差旅制度", []string{"甲", "乙", "丙"}, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d semantics, want 3", len(got))
+	}
+	if tracker.MaxConcurrent() < 2 {
+		t.Fatalf("max concurrency = %d, want >= 2", tracker.MaxConcurrent())
+	}
+	for _, id := range []string{"u1", "u2", "u3"} {
+		if got[id].PromptVersion != rerank.ExtractPromptVersion {
+			t.Fatalf("%s prompt version = %q, want %q", id, got[id].PromptVersion, rerank.ExtractPromptVersion)
+		}
+	}
+}
+
+func TestExtractRerankSemanticsRejectsInvalidResultCoverage(t *testing.T) {
+	pool := []unitCandidate{
+		{id: "u1", lineStart: 1, lineEnd: 1},
+		{id: "u2", lineStart: 2, lineEnd: 2},
+	}
+
+	for _, tc := range []struct {
+		name      string
+		resultIDs []string
+	}{
+		{name: "unknown ID", resultIDs: []string{"u1", "unknown"}},
+		{name: "duplicate ID", resultIDs: []string{"u1", "u1"}},
+		{name: "omitted ID", resultIDs: []string{"u1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, tracker := setupRerankSemanticExtractionService(t, 4000, 1)
+			tracker.setResultIDs(tc.resultIDs)
+			tracker.release()
+
+			_, err := svc.extractRerankSemantics(t.Context(), "差旅制度", []string{"甲", "乙"}, pool)
+			if err == nil {
+				t.Fatal("extractRerankSemantics returned nil error")
+			}
+		})
+	}
+}
+
+func setupRerankSemanticExtractionService(t *testing.T, batchMaxChars, concurrency int) (*Service, *rerankSemanticExtractionTracker) {
+	t.Helper()
+	svc, _, _ := setupPreInsertDedupTestService(t, 0.1, 1)
+	tracker := newRerankSemanticExtractionTracker()
+	svc.llmClient = tracker
+	svc.cfg.Retrieval.RerankExtractBatchMaxChars = batchMaxChars
+	svc.cfg.Retrieval.RerankExtractConcurrency = concurrency
+	return svc, tracker
+}
+
+type rerankSemanticExtractionTracker struct {
+	mu          sync.Mutex
+	releaseCh   chan struct{}
+	startedCh   chan struct{}
+	releaseOnce sync.Once
+	resultIDs   []string
+	inFlight    int
+	maxInFlight int
+}
+
+func newRerankSemanticExtractionTracker() *rerankSemanticExtractionTracker {
+	return &rerankSemanticExtractionTracker{
+		releaseCh: make(chan struct{}),
+		startedCh: make(chan struct{}, 8),
+	}
+}
+
+func (f *rerankSemanticExtractionTracker) Complete(_ context.Context, promptFile string, vars map[string]string, model string) (string, error) {
+	return "", errors.New("unexpected Complete call: " + promptFile)
+}
+
+func (f *rerankSemanticExtractionTracker) CompleteStream(_ context.Context, promptFile string, vars map[string]string, model string) (<-chan llm.StreamChunk, error) {
+	return nil, errors.New("unexpected CompleteStream call: " + promptFile)
+}
+
+func (f *rerankSemanticExtractionTracker) CompleteJSON(ctx context.Context, promptFile string, vars map[string]string, model string) ([]byte, error) {
+	if promptFile != "unit_semantics_extract.md" {
+		return nil, errors.New("unexpected prompt: " + promptFile)
+	}
+	ids := unitIDsFromPrompt(vars["units"])
+
+	f.mu.Lock()
+	f.inFlight++
+	if f.inFlight > f.maxInFlight {
+		f.maxInFlight = f.inFlight
+	}
+	resultIDs := append([]string(nil), f.resultIDs...)
+	f.mu.Unlock()
+	f.startedCh <- struct{}{}
+	defer func() {
+		f.mu.Lock()
+		f.inFlight--
+		f.mu.Unlock()
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-f.releaseCh:
+	}
+	if resultIDs == nil {
+		resultIDs = ids
+	}
+
+	results := make([]map[string]interface{}, 0, len(resultIDs))
+	for _, id := range resultIDs {
+		results = append(results, map[string]interface{}{
+			"unit_id": id, "source_theme": "theme", "content_theme": "content",
+			"intent": "说明", "object": "object", "scope": "通用", "key_facts": []string{"fact"},
+		})
+	}
+	return json.Marshal(map[string]interface{}{"results": results})
+}
+
+func (f *rerankSemanticExtractionTracker) releaseAfterStarts(n int) {
+	go func() {
+		for range n {
+			<-f.startedCh
+		}
+		f.release()
+	}()
+}
+
+func (f *rerankSemanticExtractionTracker) release() {
+	f.releaseOnce.Do(func() { close(f.releaseCh) })
+}
+
+func (f *rerankSemanticExtractionTracker) setResultIDs(ids []string) {
+	f.mu.Lock()
+	f.resultIDs = append([]string(nil), ids...)
+	f.mu.Unlock()
+}
+
+func (f *rerankSemanticExtractionTracker) MaxConcurrent() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.maxInFlight
+}
+
+var unitIDFromPromptPattern = regexp.MustCompile(`\[([^\]]+)\]`)
+
+func unitIDsFromPrompt(units string) []string {
+	matches := unitIDFromPromptPattern.FindAllStringSubmatch(units, -1)
+	ids := make([]string, 0, len(matches))
+	for _, match := range matches {
+		ids = append(ids, match[1])
+	}
+	return ids
 }
 
 func TestExtractSegmentOutputSplit_AssemblesLegacyOutput(t *testing.T) {

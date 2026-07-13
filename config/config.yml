@@ -88,8 +88,10 @@ source:
 retrieval:
   outline_fts_min_score: 0.5
   rerank_top_n:          20
-  rerank_batch_max_chars: 4000  # 单次 rerank 传给模型的候选证据字符预算，超出后按候选切 batch
-  rerank_concurrency:     4     # rerank batch 并发数；每个 batch 内仍按 extract -> judge 串行
+  rerank_extract_batch_max_chars: 4000  # 单次语义抽取传给模型的 KU 正文字符预算，超出后按 KU 切 batch
+  rerank_extract_concurrency:     2     # 语义抽取 batch 并发数
+  rerank_judge_batch_max_chars:   4000  # 单次 rerank 判断传给模型的候选语义字符预算
+  rerank_judge_concurrency:       4     # rerank 判断 batch 并发数
   activation_match_min:          0.7   # 步骤2 计分阈值（docs/impl/v1/activation.md）
   activation_match_min_fallback: 0.85  # 四元组缺失时的回退匹配阈值
   activation_match_top:          5     # 匹配结果保留条数

@@ -127,6 +127,12 @@ type SourceConfig struct {
 type RetrievalConfig struct {
 	OutlineFTSMinScore         float64 `yaml:"outline_fts_min_score"`
 	RerankTopN                 int     `yaml:"rerank_top_n"`
+	RerankExtractBatchMaxChars int     `yaml:"rerank_extract_batch_max_chars"`
+	RerankExtractConcurrency   int     `yaml:"rerank_extract_concurrency"`
+	RerankJudgeBatchMaxChars   int     `yaml:"rerank_judge_batch_max_chars"`
+	RerankJudgeConcurrency     int     `yaml:"rerank_judge_concurrency"`
+	// Deprecated: retained until the retrieval service migrates to the
+	// extraction/judge-specific settings above.
 	RerankBatchMaxChars        int     `yaml:"rerank_batch_max_chars"`
 	RerankConcurrency          int     `yaml:"rerank_concurrency"`
 	ActivationMatchMin         float64 `yaml:"activation_match_min"`
