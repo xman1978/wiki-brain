@@ -53,8 +53,32 @@ func setupPreInsertDedupTestService(t *testing.T, minOverlap float64, concurrenc
 		},
 	}
 
-	svc := NewService(unitStore, sourceStore, fake, idxMgr.Units, idxMgr.Points, q, cfg)
+	svc := NewService(unitStore, sourceStore, &semanticAwareFakeClient{FakeClient: fake}, idxMgr.Units, idxMgr.Points, q, cfg)
 	return svc, fake, db
+}
+
+// semanticAwareFakeClient keeps UUID-bearing semantic responses coupled to
+// the candidates sent by extraction. Tests can still override the prompt on
+// the embedded FakeClient to exercise explicit failures.
+type semanticAwareFakeClient struct {
+	*llm.FakeClient
+}
+
+func (f *semanticAwareFakeClient) CompleteJSON(ctx context.Context, promptFile string, vars map[string]string, model string) ([]byte, error) {
+	data, err := f.FakeClient.CompleteJSON(ctx, promptFile, vars, model)
+	if promptFile != "unit_semantics_extract.md" || err == nil || !strings.Contains(err.Error(), "no response configured") {
+		return data, err
+	}
+
+	results := make([]map[string]any, 0)
+	for _, unitID := range unitIDsFromPrompt(vars["units"]) {
+		results = append(results, map[string]any{
+			"unit_id": unitID, "source_theme": "source", "content_theme": "content",
+			"intent": "explain", "object": "policy", "scope": "general",
+			"key_facts": []string{"published atomically"},
+		})
+	}
+	return json.Marshal(map[string]any{"results": results})
 }
 
 func countCalls(fake *llm.FakeClient, promptFile string) int {
@@ -65,6 +89,160 @@ func countCalls(fake *llm.FakeClient, promptFile string) int {
 		}
 	}
 	return n
+}
+
+func setupReuploadExtractionFixture(t *testing.T) (*Service, *llm.FakeClient, *sql.DB) {
+	t.Helper()
+	svc, fake, db := setupPreInsertDedupTestService(t, 0.1, 1)
+	mdPath := filepath.Join(t.TempDir(), "publication.md")
+	if err := os.WriteFile(mdPath, []byte("# Policy\nAtomic publication content."), 0644); err != nil {
+		t.Fatalf("write markdown: %v", err)
+	}
+	insertSource(t, db, "src-1", mdPath)
+	if _, err := db.Exec(`INSERT INTO source_outlines
+		(outline_id, source_id, level, title, line_start, line_end, node_type, position)
+		VALUES ('ol-1', 'src-1', 1, 'Policy', 1, 2, 'structural', 1)`); err != nil {
+		t.Fatalf("insert outline: %v", err)
+	}
+	return svc, fake, db
+}
+
+func setSuccessfulUnitExtractionFakes(t *testing.T, fake *llm.FakeClient) {
+	t.Helper()
+	setSplitExtractFakes(t, fake, extractOutput{
+		Units: []llmUnit{{
+			UnitID: "1", Center: "Atomic publication", LineStart: 1,
+			FirstLineAnchor: "# Policy", LineEnd: 2, LastLineAnchor: "Atomic publication content.",
+		}},
+		Points: []llmPoint{{PointID: "1", UnitID: "1", Content: "The generation publishes atomically.", Type: "rule"}},
+	})
+	fake.SetResponse("kpn_extract.md", llm.FakeResponse{Output: `{"relations":[]}`})
+}
+
+func insertCurrentIndexedUnit(t *testing.T, svc *Service, db *sql.DB, sourceID string) string {
+	t.Helper()
+	ku := &KnowledgeUnit{
+		UnitID: "old-unit", SourceID: sourceID, Center: "Previous generation",
+		LineStart: 1, LineEnd: 2, Status: "completed", PromptVersion: "v1",
+	}
+	if err := svc.store.InsertUnit(ku); err != nil {
+		t.Fatalf("insert old unit: %v", err)
+	}
+	kp := &KnowledgePoint{
+		PointID: "old-point", UnitID: ku.UnitID, SourceID: sourceID,
+		Content: "Previous generation point.", PointType: "rule",
+	}
+	if err := svc.store.InsertPoint(kp); err != nil {
+		t.Fatalf("insert old point: %v", err)
+	}
+	svc.indexUnit(ku, []string{"# Policy", "Atomic publication content."})
+	svc.indexPoint(kp)
+	return ku.UnitID
+}
+
+func assertUnitLifecycle(t *testing.T, db *sql.DB, unitID, want string) {
+	t.Helper()
+	var got string
+	if err := db.QueryRow(`SELECT lifecycle FROM knowledge_units WHERE unit_id = ?`, unitID).Scan(&got); err != nil {
+		t.Fatalf("query unit lifecycle: %v", err)
+	}
+	if got != want {
+		t.Fatalf("unit %s lifecycle = %q, want %q", unitID, got, want)
+	}
+}
+
+func assertOnlyUnitIndexed(t *testing.T, svc *Service, unitID string) {
+	t.Helper()
+	count, err := svc.unitsIndex.DocCount()
+	if err != nil {
+		t.Fatalf("unit index count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("unit index count = %d, want 1", count)
+	}
+	if lifecycle, ok := bleveField(t, svc.unitsIndex, unitID, "lifecycle"); !ok || lifecycle != LifecycleCurrent {
+		t.Fatalf("indexed old unit lifecycle = %q (found=%v), want current", lifecycle, ok)
+	}
+}
+
+func TestExtractSemanticFailureLeavesPreviousGenerationCurrent(t *testing.T) {
+	svc, fake, db := setupReuploadExtractionFixture(t)
+	oldID := insertCurrentIndexedUnit(t, svc, db, "src-1")
+	setSuccessfulUnitExtractionFakes(t, fake)
+	fake.SetResponse("unit_semantics_extract.md", llm.FakeResponse{Err: errors.New("semantic extraction failed")})
+
+	err := svc.Extract(t.Context(), "src-1")
+	if err == nil || !strings.Contains(err.Error(), "semantic extraction failed") {
+		t.Fatalf("err = %v, want semantic extraction failure", err)
+	}
+	if calls := countCalls(fake, "kpn_extract.md"); calls != 0 {
+		t.Fatalf("kpn_extract.md calls = %d, want 0 after semantic failure", calls)
+	}
+	assertUnitLifecycle(t, db, oldID, LifecycleCurrent)
+	assertOnlyUnitIndexed(t, svc, oldID)
+	var units int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE source_id = 'src-1'`).Scan(&units); err != nil {
+		t.Fatal(err)
+	}
+	if units != 1 {
+		t.Fatalf("stored units = %d, want only the previous generation", units)
+	}
+}
+
+func TestPublishCandidatesPublishesUnitsPointsAndSemanticsTogether(t *testing.T) {
+	svc, fake, db := setupReuploadExtractionFixture(t)
+	oldID := insertCurrentIndexedUnit(t, svc, db, "src-1")
+	setSuccessfulUnitExtractionFakes(t, fake)
+
+	if err := svc.Extract(t.Context(), "src-1"); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertUnitLifecycle(t, db, oldID, LifecycleSuperseded)
+
+	var currentUnits, currentPoints, semantics int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE source_id = 'src-1' AND lifecycle = 'current'`).Scan(&currentUnits); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_points WHERE source_id = 'src-1' AND lifecycle = 'current'`).Scan(&currentPoints); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM unit_rerank_semantics s
+		JOIN knowledge_units u ON u.unit_id = s.unit_id
+		WHERE u.source_id = 'src-1' AND u.lifecycle = 'current'`).Scan(&semantics); err != nil {
+		t.Fatal(err)
+	}
+	if currentUnits != 1 || currentPoints != 1 || semantics != 1 {
+		t.Fatalf("published current rows: units=%d points=%d semantics=%d, want 1/1/1", currentUnits, currentPoints, semantics)
+	}
+}
+
+func TestPublishCandidatesTransactionFailureRollsBackGeneration(t *testing.T) {
+	svc, fake, db := setupReuploadExtractionFixture(t)
+	oldID := insertCurrentIndexedUnit(t, svc, db, "src-1")
+	setSuccessfulUnitExtractionFakes(t, fake)
+	if _, err := db.Exec(`CREATE TRIGGER fail_semantic_publication
+		BEFORE INSERT ON unit_rerank_semantics
+		BEGIN SELECT RAISE(ABORT, 'forced semantic insert failure'); END`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	err := svc.Extract(t.Context(), "src-1")
+	if err == nil || !strings.Contains(err.Error(), "forced semantic insert failure") {
+		t.Fatalf("err = %v, want forced semantic insert failure", err)
+	}
+	assertUnitLifecycle(t, db, oldID, LifecycleCurrent)
+	assertOnlyUnitIndexed(t, svc, oldID)
+
+	var units, semantics int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE source_id = 'src-1'`).Scan(&units); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM unit_rerank_semantics`).Scan(&semantics); err != nil {
+		t.Fatal(err)
+	}
+	if units != 1 || semantics != 0 {
+		t.Fatalf("rows after rollback: units=%d semantics=%d, want 1/0", units, semantics)
+	}
 }
 
 func TestExtractRerankSemanticsBatchesByFinalTextAndRunsConcurrently(t *testing.T) {

@@ -100,35 +100,6 @@ func (s *Service) endExtract(sourceID string) {
 	s.extractMu.Unlock()
 }
 
-// supersedePreviousUnits marks every still-current unit of sourceID
-// superseded right before a re-extraction's results are inserted — so a
-// re-triggered Extract replaces the previous generation instead of doubling
-// it, while a run that dies before reaching this point leaves the old
-// generation untouched and current. Reuses SetUnitLifecycle, the same
-// mechanism the reupload shadow swap uses, so KPs cascade and indexes are
-// cleaned consistently. First-time extraction finds nothing and no-ops.
-func (s *Service) supersedePreviousUnits(sourceID string) {
-	units, err := s.store.GetUnitsBySourceID(sourceID)
-	if err != nil {
-		slog.Error("unit: supersede previous units: list failed", "source_id", sourceID, "error", err)
-		return
-	}
-	var ids []string
-	for _, u := range units {
-		if u.Lifecycle == LifecycleCurrent {
-			ids = append(ids, u.UnitID)
-		}
-	}
-	if len(ids) == 0 {
-		return
-	}
-	if err := s.SetUnitLifecycle(ids, LifecycleSuperseded, "superseded by re-extraction"); err != nil {
-		slog.Error("unit: supersede previous units failed", "source_id", sourceID, "error", err)
-		return
-	}
-	slog.Info("unit: previous generation superseded before re-extraction insert", "source_id", sourceID, "units", len(ids))
-}
-
 func (s *Service) SetBroadcaster(b *progress.Broadcaster) {
 	s.broadcaster = b
 }
@@ -222,10 +193,12 @@ func (s *Service) Extract(ctx context.Context, sourceID string) error {
 	extractStart := time.Now()
 	s.emit(sourceID, progress.Event{Step: progress.StepUnitExtract, Status: progress.StatusStarted, Message: fmt.Sprintf("并发提取知识单元 (0/%d)", len(segments)), Current: 0, Total: len(segments)})
 	done := 0
-	s.extractSegmentsPreInsertDedup(ctx, sourceID, segments, mdLines, func() {
+	if err := s.extractSegmentsPreInsertDedup(ctx, src.Title, sourceID, segments, mdLines, func() {
 		done++
 		s.emit(sourceID, progress.Event{Step: progress.StepUnitExtract, Status: progress.StatusCompleted, Message: fmt.Sprintf("提取知识单元 (%d/%d)", done, len(segments)), Current: done, Total: len(segments), ElapsedMs: time.Since(extractStart).Milliseconds()})
-	})
+	}); err != nil {
+		return fmt.Errorf("unit: extract and publish: %w", err)
+	}
 
 	stepStart := time.Now()
 	s.emit(sourceID, progress.Event{Step: progress.StepKPNGenerate, Status: progress.StatusStarted, Message: "KPN 关系生成"})

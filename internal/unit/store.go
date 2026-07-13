@@ -2,11 +2,13 @@ package unit
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jxman78/wiki-brain/internal/rerank"
 )
 
 // Lifecycle states for KnowledgeUnit / KnowledgePoint (docs/impl/v1/lifecycle.md).
@@ -70,6 +72,227 @@ type Store struct {
 
 func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
+}
+
+// PublishGeneration replaces a source's current generation in one SQLite
+// transaction. The returned rows describe every document that must be
+// rewritten in Bleve after commit: superseded units and their points, plus
+// the newly inserted current units and points.
+func (s *Store) PublishGeneration(
+	sourceID string,
+	pool []unitCandidate,
+	semantics map[string]rerank.Semantics,
+) (superseded []KnowledgeUnit, inserted []KnowledgeUnit, points []KnowledgePoint, err error) {
+	semanticJSON, err := validatePublicationSemantics(pool, semantics)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("unit store: publish generation: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	current, err := getCurrentUnitsBySourceIDTx(tx, sourceID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	currentIDs := make([]string, len(current))
+	for i := range current {
+		currentIDs[i] = current[i].UnitID
+	}
+	if len(currentIDs) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(currentIDs)), ",")
+		args := make([]any, 0, len(currentIDs)+1)
+		args = append(args, LifecycleSuperseded)
+		for _, id := range currentIDs {
+			args = append(args, id)
+		}
+		if _, err := tx.Exec(fmt.Sprintf(`UPDATE knowledge_units
+			SET lifecycle = ?, lifecycle_changed_at = CURRENT_TIMESTAMP
+			WHERE unit_id IN (%s)`, placeholders), args...); err != nil {
+			return nil, nil, nil, fmt.Errorf("unit store: publish generation: supersede units: %w", err)
+		}
+		if _, err := tx.Exec(fmt.Sprintf(`UPDATE knowledge_points
+			SET lifecycle = ?, lifecycle_changed_at = CURRENT_TIMESTAMP
+			WHERE unit_id IN (%s)`, placeholders), args...); err != nil {
+			return nil, nil, nil, fmt.Errorf("unit store: publish generation: supersede points: %w", err)
+		}
+		superseded, err = getUnitsByIDsTx(tx, currentIDs)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		points, err = getPointsByUnitIDsTx(tx, currentIDs)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+
+	inserted = make([]KnowledgeUnit, 0, len(pool))
+	for _, candidate := range pool {
+		promptVersion := candidate.promptVersion
+		if promptVersion == "" {
+			promptVersion = promptVersionSplitExtract
+		}
+		unit := KnowledgeUnit{
+			UnitID:        candidate.id,
+			SourceID:      sourceID,
+			OutlineID:     candidate.seg.OutlineID,
+			Center:        candidate.llm.Center,
+			LineStart:     candidate.lineStart,
+			LineEnd:       candidate.lineEnd,
+			Status:        "completed",
+			PromptVersion: promptVersion,
+			Lifecycle:     LifecycleCurrent,
+		}
+		if _, err := tx.Exec(`INSERT INTO knowledge_units
+			(unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			unit.UnitID, unit.SourceID, unit.OutlineID, unit.ConceptID, unit.Center,
+			unit.LineStart, unit.LineEnd, unit.Status, unit.ErrorMsg, unit.PromptVersion, unit.Lifecycle); err != nil {
+			return nil, nil, nil, fmt.Errorf("unit store: publish generation: insert unit %s: %w", unit.UnitID, err)
+		}
+
+		for _, candidatePoint := range candidate.points {
+			point := KnowledgePoint{
+				PointID:   uuid.New().String(),
+				UnitID:    unit.UnitID,
+				SourceID:  sourceID,
+				Content:   candidatePoint.Content,
+				PointType: candidatePoint.Type,
+				Lifecycle: LifecycleCurrent,
+			}
+			if _, err := tx.Exec(`INSERT INTO knowledge_points
+				(point_id, unit_id, source_id, content, point_type, lifecycle)
+				VALUES (?, ?, ?, ?, ?, ?)`,
+				point.PointID, point.UnitID, point.SourceID, point.Content, point.PointType, point.Lifecycle); err != nil {
+				return nil, nil, nil, fmt.Errorf("unit store: publish generation: insert point for unit %s: %w", unit.UnitID, err)
+			}
+			points = append(points, point)
+		}
+
+		semantic := semantics[unit.UnitID]
+		if _, err := tx.Exec(`INSERT INTO unit_rerank_semantics
+			(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			unit.UnitID, semantic.SourceTheme, semantic.ContentTheme, semantic.Intent,
+			semantic.Object, semantic.Scope, semanticJSON[unit.UnitID], semantic.PromptVersion); err != nil {
+			return nil, nil, nil, fmt.Errorf("unit store: publish generation: insert semantics for unit %s: %w", unit.UnitID, err)
+		}
+		inserted = append(inserted, unit)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, nil, nil, fmt.Errorf("unit store: publish generation: commit: %w", err)
+	}
+	return superseded, inserted, points, nil
+}
+
+func validatePublicationSemantics(pool []unitCandidate, semantics map[string]rerank.Semantics) (map[string]string, error) {
+	if len(semantics) != len(pool) {
+		return nil, fmt.Errorf("unit store: publish generation: semantics count = %d, candidates = %d", len(semantics), len(pool))
+	}
+
+	candidateIDs := make(map[string]bool, len(pool))
+	encoded := make(map[string]string, len(pool))
+	for _, candidate := range pool {
+		if candidate.id == "" {
+			return nil, fmt.Errorf("unit store: publish generation: candidate has empty unit_id")
+		}
+		if candidateIDs[candidate.id] {
+			return nil, fmt.Errorf("unit store: publish generation: duplicate candidate unit_id %s", candidate.id)
+		}
+		candidateIDs[candidate.id] = true
+
+		semantic, ok := semantics[candidate.id]
+		if !ok {
+			return nil, fmt.Errorf("unit store: publish generation: missing semantics for unit_id %s", candidate.id)
+		}
+		if semantic.UnitID != "" && semantic.UnitID != candidate.id {
+			return nil, fmt.Errorf("unit store: publish generation: semantic unit_id %s does not match %s", semantic.UnitID, candidate.id)
+		}
+		keyFacts, err := json.Marshal(semantic.KeyFacts)
+		if err != nil {
+			return nil, fmt.Errorf("unit store: publish generation: marshal semantics for unit %s: %w", candidate.id, err)
+		}
+		encoded[candidate.id] = string(keyFacts)
+	}
+	for unitID := range semantics {
+		if !candidateIDs[unitID] {
+			return nil, fmt.Errorf("unit store: publish generation: extra semantics for unit_id %s", unitID)
+		}
+	}
+	return encoded, nil
+}
+
+func getCurrentUnitsBySourceIDTx(tx *sql.Tx, sourceID string) ([]KnowledgeUnit, error) {
+	rows, err := tx.Query(`SELECT unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
+		FROM knowledge_units WHERE source_id = ? AND lifecycle = ? ORDER BY line_start ASC`, sourceID, LifecycleCurrent)
+	if err != nil {
+		return nil, fmt.Errorf("unit store: publish generation: read current units: %w", err)
+	}
+	return scanKnowledgeUnitsForPublish(rows)
+}
+
+func getUnitsByIDsTx(tx *sql.Tx, unitIDs []string) ([]KnowledgeUnit, error) {
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(unitIDs)), ",")
+	args := make([]any, len(unitIDs))
+	for i, id := range unitIDs {
+		args[i] = id
+	}
+	rows, err := tx.Query(fmt.Sprintf(`SELECT unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
+		FROM knowledge_units WHERE unit_id IN (%s) ORDER BY line_start ASC`, placeholders), args...)
+	if err != nil {
+		return nil, fmt.Errorf("unit store: publish generation: read superseded units: %w", err)
+	}
+	return scanKnowledgeUnitsForPublish(rows)
+}
+
+func scanKnowledgeUnitsForPublish(rows *sql.Rows) ([]KnowledgeUnit, error) {
+	defer rows.Close()
+	var units []KnowledgeUnit
+	for rows.Next() {
+		var unit KnowledgeUnit
+		if err := rows.Scan(&unit.UnitID, &unit.SourceID, &unit.OutlineID, &unit.ConceptID, &unit.Center,
+			&unit.LineStart, &unit.LineEnd, &unit.Status, &unit.ErrorMsg, &unit.PromptVersion,
+			&unit.Lifecycle, &unit.LifecycleChangedAt, &unit.CreatedAt, &unit.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("unit store: publish generation: scan unit: %w", err)
+		}
+		units = append(units, unit)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("unit store: publish generation: iterate units: %w", err)
+	}
+	return units, nil
+}
+
+func getPointsByUnitIDsTx(tx *sql.Tx, unitIDs []string) ([]KnowledgePoint, error) {
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(unitIDs)), ",")
+	args := make([]any, len(unitIDs))
+	for i, id := range unitIDs {
+		args[i] = id
+	}
+	rows, err := tx.Query(fmt.Sprintf(`SELECT point_id, unit_id, source_id, content, point_type, lifecycle, lifecycle_changed_at, created_at
+		FROM knowledge_points WHERE unit_id IN (%s) ORDER BY created_at ASC`, placeholders), args...)
+	if err != nil {
+		return nil, fmt.Errorf("unit store: publish generation: read superseded points: %w", err)
+	}
+	defer rows.Close()
+
+	var points []KnowledgePoint
+	for rows.Next() {
+		var point KnowledgePoint
+		if err := rows.Scan(&point.PointID, &point.UnitID, &point.SourceID, &point.Content, &point.PointType,
+			&point.Lifecycle, &point.LifecycleChangedAt, &point.CreatedAt); err != nil {
+			return nil, fmt.Errorf("unit store: publish generation: scan point: %w", err)
+		}
+		points = append(points, point)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("unit store: publish generation: iterate points: %w", err)
+	}
+	return points, nil
 }
 
 func (s *Store) InsertUnit(ku *KnowledgeUnit) error {

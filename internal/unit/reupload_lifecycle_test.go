@@ -56,7 +56,7 @@ func setupReuploadTest(t *testing.T) (*source.Service, *Service, *llm.FakeClient
 	sourceSvc := source.NewService(sourceStore, nil, fake, idxMgr.Outlines, q, cfg, tmpDir)
 	sourceSvc.SetUnitIndexes(idxMgr.Units, idxMgr.Points)
 
-	unitSvc := NewService(unitStore, sourceStore, fake, idxMgr.Units, idxMgr.Points, q, cfg)
+	unitSvc := NewService(unitStore, sourceStore, &semanticAwareFakeClient{FakeClient: fake}, idxMgr.Units, idxMgr.Points, q, cfg)
 	sourceSvc.SetLifecycleSetter(unitSvc)
 
 	return sourceSvc, unitSvc, fake, tmpDir, idxMgr

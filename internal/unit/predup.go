@@ -3,6 +3,7 @@ package unit
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/jxman78/wiki-brain/internal/rerank"
 )
 
 // preInsertDedupMinOverlapDefault mirrors BuildSegments' pattern for
@@ -78,7 +80,7 @@ type segmentExtraction struct {
 // onSegmentDone is called once per segment as it finishes, for progress
 // reporting — segments complete in extraction order, not document order, so
 // callers must not assume it matches segment index.
-func (s *Service) extractSegmentsPreInsertDedup(ctx context.Context, sourceID string, segments []Segment, mdLines []string, onSegmentDone func()) {
+func (s *Service) extractSegmentsPreInsertDedup(ctx context.Context, sourceTitle, sourceID string, segments []Segment, mdLines []string, onSegmentDone func()) error {
 	concurrency := s.cfg.Source.PreInsertDedupConcurrency
 	if concurrency <= 0 {
 		concurrency = preInsertDedupConcurrencyDefault
@@ -129,11 +131,14 @@ func (s *Service) extractSegmentsPreInsertDedup(ctx context.Context, sourceID st
 
 	s.logDocumentCandidates(sourceID, mdLines, pool)
 
-	// The whole document extracted and deduplicated successfully — only now
-	// does the previous generation (a re-extraction's old units) step aside.
-	// Dying anywhere above leaves the old generation untouched and current.
-	s.supersedePreviousUnits(sourceID)
-	s.insertCandidates(sourceID, mdLines, pool)
+	semantics, err := s.extractRerankSemantics(ctx, sourceTitle, mdLines, pool)
+	if err != nil {
+		return fmt.Errorf("extract rerank semantics: %w", err)
+	}
+	if err := s.publishCandidates(sourceID, mdLines, pool, semantics); err != nil {
+		return err
+	}
+	return nil
 }
 
 // collectSegmentCandidates is one segment's store-free half of the bypass
@@ -235,47 +240,24 @@ func (s *Service) logDocumentCandidates(sourceID string, mdLines []string, pool 
 	return diagnostic
 }
 
-// insertCandidates writes the document's final candidate set to the store
-// and indexes, single-goroutine as before — the only part of the bypass
-// pipeline that touches SQLite/bleve.
-func (s *Service) insertCandidates(sourceID string, mdLines []string, pool []unitCandidate) {
-	for _, c := range pool {
-		pv := c.promptVersion
-		if pv == "" {
-			pv = promptVersionSplitExtract
-		}
-		ku := &KnowledgeUnit{
-			UnitID:        c.id,
-			SourceID:      sourceID,
-			OutlineID:     c.seg.OutlineID,
-			Center:        c.llm.Center,
-			LineStart:     c.lineStart,
-			LineEnd:       c.lineEnd,
-			Status:        "completed",
-			PromptVersion: pv,
-		}
-		if err := s.store.InsertUnit(ku); err != nil {
-			slog.Error("unit: insert unit failed", "error", err)
-			continue
-		}
-
-		for _, p := range c.points {
-			kp := &KnowledgePoint{
-				PointID:   uuid.New().String(),
-				UnitID:    c.id,
-				SourceID:  sourceID,
-				Content:   p.Content,
-				PointType: p.Type,
-			}
-			if err := s.store.InsertPoint(kp); err != nil {
-				slog.Error("unit: insert point failed", "error", err)
-				continue
-			}
-			s.indexPoint(kp)
-		}
-
-		s.indexUnit(ku, mdLines)
+// publishCandidates commits the full document generation before rewriting
+// any Bleve documents. points contains both cascaded old points and new
+// points, matching the affected unit set returned by PublishGeneration.
+func (s *Service) publishCandidates(sourceID string, mdLines []string, pool []unitCandidate, semantics map[string]rerank.Semantics) error {
+	superseded, inserted, points, err := s.store.PublishGeneration(sourceID, pool, semantics)
+	if err != nil {
+		return fmt.Errorf("publish generation: %w", err)
 	}
+	units := make([]KnowledgeUnit, 0, len(superseded)+len(inserted))
+	units = append(units, superseded...)
+	units = append(units, inserted...)
+	for i := range units {
+		s.indexUnit(&units[i], mdLines)
+	}
+	for i := range points {
+		s.indexPoint(&points[i])
+	}
+	return nil
 }
 
 // fillGapsInMemory mirrors fillGaps but resolves gaps against the in-memory
