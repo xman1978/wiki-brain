@@ -236,6 +236,75 @@ func TestExtractSegmentFailureLeavesPreviousGenerationCurrent(t *testing.T) {
 	assertOnlyUnitIndexed(t, svc, oldID)
 }
 
+func TestExtractPointOperationalFailureLeavesPreviousGenerationCurrent(t *testing.T) {
+	svc, fake, db := setupReuploadExtractionFixture(t)
+	oldID := insertCurrentIndexedUnit(t, svc, db, "src-1")
+	out := extractOutput{
+		Units: []llmUnit{
+			{UnitID: "1", Center: "Policy heading", LineStart: 1, FirstLineAnchor: "# Policy", LineEnd: 1, LastLineAnchor: "# Policy"},
+			{UnitID: "2", Center: "Policy detail", LineStart: 2, FirstLineAnchor: "Atomic publication content.", LineEnd: 2, LastLineAnchor: "Atomic publication content."},
+		},
+		Points: []llmPoint{
+			{PointID: "1", UnitID: "1", Content: "The document has a policy heading.", Type: "definition"},
+			{PointID: "2", UnitID: "2", Content: "The generation publishes atomically.", Type: "rule"},
+		},
+	}
+	fake.SetResponse("unit_boundary_extract.md", llm.FakeResponse{Output: splitBoundaryResp(out)})
+	pointResponses := splitPointResps(out)
+	fake.SetResponseSequence("unit_point_extract.md", []llm.FakeResponse{
+		pointResponses[0],
+		{Err: errors.New("second point extraction failed")},
+	})
+
+	err := svc.Extract(t.Context(), "src-1")
+	if err == nil || !strings.Contains(err.Error(), "second point extraction failed") {
+		t.Fatalf("err = %v, want second point extraction failure", err)
+	}
+	if calls := countCalls(fake, "unit_semantics_extract.md"); calls != 0 {
+		t.Fatalf("unit_semantics_extract.md calls = %d, want 0 after point extraction failure", calls)
+	}
+	assertUnitLifecycle(t, db, oldID, LifecycleCurrent)
+	assertOnlyUnitIndexed(t, svc, oldID)
+	assertOnlyPointIndexed(t, svc, "old-point")
+	var units, points int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE source_id = 'src-1'`).Scan(&units); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_points WHERE source_id = 'src-1'`).Scan(&points); err != nil {
+		t.Fatal(err)
+	}
+	if units != 1 || points != 1 {
+		t.Fatalf("rows after point extraction failure: units=%d points=%d, want 1/1", units, points)
+	}
+}
+
+func TestExtractSegmentOutputSplitSkipsDeliberatePointRejection(t *testing.T) {
+	svc, fake, _ := setupPreInsertDedupTestService(t, 0.1, 1)
+	mdLines := []string{"First unit.", "Second unit."}
+	seg := Segment{Title: "Two units", LineStart: 1, LineEnd: 2}
+	fake.SetResponse("unit_boundary_extract.md", llm.FakeResponse{Output: `{
+		"units": [
+			{"center": "First", "content": ["[1] First unit."]},
+			{"center": "Second", "content": ["[2] Second unit."]}
+		]
+	}`})
+	fake.SetResponseSequence("unit_point_extract.md", []llm.FakeResponse{
+		{Output: `{"center":"First","points":[{"content":"First point.","type":"definition"}]}`},
+		{Output: `{"center":"Second","points":[]}`},
+	})
+
+	output, ok, err := svc.extractSegmentOutputSplit(t.Context(), "src-1", seg, mdLines)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("valid first unit should keep the segment successful")
+	}
+	if len(output.Units) != 1 || output.Units[0].Center != "First" {
+		t.Fatalf("units = %+v, want only the deliberately accepted first unit", output.Units)
+	}
+}
+
 func TestPublishCandidatesPublishesUnitsPointsAndSemanticsTogether(t *testing.T) {
 	svc, fake, db := setupReuploadExtractionFixture(t)
 	oldID := insertCurrentIndexedUnit(t, svc, db, "src-1")
@@ -536,7 +605,10 @@ func TestExtractSegmentOutputSplit_AssemblesLegacyOutput(t *testing.T) {
 		{Output: `{"center":"调休申请规则","points":[{"content":"加班人员可以按规定申请调休。","type":"rule"}]}`},
 	})
 
-	output, ok := svc.extractSegmentOutputSplit(t.Context(), "src-split", seg, mdLines)
+	output, ok, err := svc.extractSegmentOutputSplit(t.Context(), "src-split", seg, mdLines)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatalf("split extraction returned ok=false")
 	}

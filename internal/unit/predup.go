@@ -59,6 +59,7 @@ type segmentExtraction struct {
 	output        extractOutput
 	promptVersion string
 	ok            bool
+	err           error
 }
 
 // extractSegmentsPreInsertDedup is the unit-extraction path. Up to
@@ -99,8 +100,8 @@ func (s *Service) extractSegmentsPreInsertDedup(ctx context.Context, sourceTitle
 		go func() {
 			defer wg.Done()
 			for is := range work {
-				output, ok := s.extractSegmentOutputSplit(ctx, sourceID, is.seg, mdLines)
-				results <- segmentExtraction{seg: is.seg, segIndex: is.index, output: output, promptVersion: promptVersionSplitExtract, ok: ok}
+				output, ok, err := s.extractSegmentOutputSplit(ctx, sourceID, is.seg, mdLines)
+				results <- segmentExtraction{seg: is.seg, segIndex: is.index, output: output, promptVersion: promptVersionSplitExtract, ok: ok, err: err}
 			}
 		}()
 	}
@@ -122,10 +123,12 @@ func (s *Service) extractSegmentsPreInsertDedup(ctx context.Context, sourceTitle
 	var pool []unitCandidate
 	var extractionErr error
 	for r := range results {
-		if r.ok {
+		if r.err != nil {
+			if extractionErr == nil {
+				extractionErr = fmt.Errorf("segment extraction failed: source_id %s segment %q lines %d-%d: %w", sourceID, r.seg.Title, r.seg.LineStart, r.seg.LineEnd, r.err)
+			}
+		} else if r.ok {
 			pool = append(pool, s.collectSegmentCandidates(ctx, sourceID, r.seg, r.segIndex, mdLines, r.output, r.promptVersion)...)
-		} else if extractionErr == nil {
-			extractionErr = fmt.Errorf("segment extraction failed: source_id %s segment %q lines %d-%d", sourceID, r.seg.Title, r.seg.LineStart, r.seg.LineEnd)
 		}
 		if onSegmentDone != nil {
 			onSegmentDone()

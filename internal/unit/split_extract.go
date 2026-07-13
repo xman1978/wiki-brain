@@ -61,7 +61,7 @@ type pointOnly struct {
 // unit_point_extract.md call per unit extracts its knowledge points. This is
 // the only extraction path — the pre-V1 single-call unit_extract.md flow was
 // removed once the split flow became the default.
-func (s *Service) extractSegmentOutputSplit(ctx context.Context, sourceID string, seg Segment, mdLines []string) (extractOutput, bool) {
+func (s *Service) extractSegmentOutputSplit(ctx context.Context, sourceID string, seg Segment, mdLines []string) (extractOutput, bool, error) {
 	textContent := sliceLinesWithLineNumbers(mdLines, seg.LineStart, seg.LineEnd)
 	vars := map[string]string{
 		"outline_title":      seg.Title,
@@ -73,13 +73,13 @@ func (s *Service) extractSegmentOutputSplit(ctx context.Context, sourceID string
 	data, err := s.llmClient.CompleteJSON(ctx, "unit_boundary_extract.md", vars, "extraction")
 	if err != nil {
 		slog.Warn("unit: split boundary extraction failed", "source_id", sourceID, "line_start", seg.LineStart, "line_end", seg.LineEnd, "error", err)
-		return extractOutput{}, false
+		return extractOutput{}, false, fmt.Errorf("split boundary extraction: %w", err)
 	}
 
 	var boundary boundaryExtractOutput
 	if err := json.Unmarshal(data, &boundary); err != nil {
 		slog.Warn("unit: split boundary JSON parse failed", "source_id", sourceID, "line_start", seg.LineStart, "line_end", seg.LineEnd, "error", err)
-		return extractOutput{}, false
+		return extractOutput{}, false, fmt.Errorf("split boundary parse: %w", err)
 	}
 
 	output := extractOutput{}
@@ -90,7 +90,10 @@ func (s *Service) extractSegmentOutputSplit(ctx context.Context, sourceID string
 			continue
 		}
 
-		center, points, ok := s.extractPointsForSplitUnit(ctx, u, unitContent)
+		center, points, ok, err := s.extractPointsForSplitUnit(ctx, u, unitContent)
+		if err != nil {
+			return extractOutput{}, false, fmt.Errorf("split point extraction for unit %s lines %d-%d: %w", u.UnitID, u.LineStart, u.LineEnd, err)
+		}
 		if !ok {
 			continue
 		}
@@ -101,7 +104,7 @@ func (s *Service) extractSegmentOutputSplit(ctx context.Context, sourceID string
 		output.Points = append(output.Points, points...)
 	}
 
-	return output, len(output.Units) > 0
+	return output, len(output.Units) > 0, nil
 }
 
 // extractPointsForSplitUnit deliberately does NOT pass u.Center to the
@@ -111,7 +114,7 @@ func (s *Service) extractSegmentOutputSplit(ctx context.Context, sourceID string
 // only (差旅费报销制度 incident: a 住宿费-flavored fallback center left the
 // entire 第六条交通费用 half of the unit with zero points). The point model
 // derives the center from the full content itself.
-func (s *Service) extractPointsForSplitUnit(ctx context.Context, u llmUnit, unitContent string) (string, []llmPoint, bool) {
+func (s *Service) extractPointsForSplitUnit(ctx context.Context, u llmUnit, unitContent string) (string, []llmPoint, bool, error) {
 	vars := map[string]string{
 		"unit_line_start": strconv.Itoa(u.LineStart),
 		"unit_line_end":   strconv.Itoa(u.LineEnd),
@@ -120,12 +123,12 @@ func (s *Service) extractPointsForSplitUnit(ctx context.Context, u llmUnit, unit
 	data, err := s.llmClient.CompleteJSON(ctx, "unit_point_extract.md", vars, "extraction")
 	if err != nil {
 		slog.Warn("unit: split point extraction failed", "center", u.Center, "line_start", u.LineStart, "line_end", u.LineEnd, "error", err)
-		return "", nil, false
+		return "", nil, false, err
 	}
 	var out pointExtractOutput
 	if err := json.Unmarshal(data, &out); err != nil {
 		slog.Warn("unit: split point JSON parse failed", "center", u.Center, "line_start", u.LineStart, "line_end", u.LineEnd, "error", err)
-		return "", nil, false
+		return "", nil, false, err
 	}
 	points := make([]llmPoint, 0, len(out.Points))
 	for i, p := range out.Points {
@@ -143,7 +146,7 @@ func (s *Service) extractPointsForSplitUnit(ctx context.Context, u llmUnit, unit
 			LastLineAnchor:  u.LastLineAnchor,
 		})
 	}
-	return out.Center, points, len(points) > 0
+	return out.Center, points, len(points) > 0, nil
 }
 
 func buildLLMUnitFromBoundary(seg Segment, mdLines []string, bu boundaryUnit, index int) (llmUnit, string, []int, bool) {
