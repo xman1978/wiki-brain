@@ -1773,10 +1773,11 @@ function resetUploadZone() { document.getElementById('uploadZone').innerHTML = '
 
 // ── TIMELINE ──────────────────────────────────────────
 var TL_STEPS = [
-  { id:'upload',   label:'文件上传' },
-  { id:'register', label:'来源登记' },
-  { id:'convert',  label:'Markdown 转换' },
-  { id:'units',    label:'知识单元构建' }
+  { id:'upload',    label:'文件上传' },
+  { id:'register',  label:'来源登记' },
+  { id:'convert',   label:'Markdown 转换' },
+  { id:'units',     label:'知识单元构建' },
+  { id:'semantics', label:'提取知识单元语义' }
 ];
 
 function showTimeline(title, phase, sourceData, uploadStart) {
@@ -1807,17 +1808,29 @@ function showTimeline(title, phase, sourceData, uploadStart) {
       if (s.id === 'register') { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
       if (s.id === 'convert')  { state = 'done'; time = sourceData ? fmtTime(sourceData.completed_at) : ''; }
       if (s.id === 'units')    { state = 'active'; }
+    } else if (phase === 'semantics_pending') {
+      if (s.id === 'upload')    { state = 'done'; time = fmtTime(uploadStart); }
+      if (s.id === 'register')  { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
+      if (s.id === 'convert')   { state = 'done'; time = sourceData ? fmtTime(sourceData.completed_at) : ''; }
+      if (s.id === 'units')     { state = 'done'; time = sourceData ? fmtTime(sourceData.units_built_at) : ''; }
+      if (s.id === 'semantics') { state = 'active'; }
     } else if (phase === 'units_failed') {
       if (s.id === 'upload')   { state = 'done'; time = fmtTime(uploadStart); }
       if (s.id === 'register') { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
       if (s.id === 'convert')  { state = 'done'; time = sourceData ? fmtTime(sourceData.completed_at) : ''; }
-      if (s.id === 'units')    { state = 'fail'; time = sourceData ? fmtTime(sourceData.units_completed_at) : ''; }
+      if (sourceData && sourceData.units_stage === 'semantics') {
+        if (s.id === 'units')     { state = 'done'; time = fmtTime(sourceData.units_built_at); }
+        if (s.id === 'semantics') { state = 'fail'; time = fmtTime(sourceData.units_completed_at); }
+      } else if (s.id === 'units') {
+        state = 'fail'; time = sourceData ? fmtTime(sourceData.units_completed_at) : '';
+      }
     } else if (phase === 'completed') {
       state = 'done';
       if (s.id === 'upload')   time = fmtTime(uploadStart);
       if (s.id === 'register') time = sourceData ? fmtTime(sourceData.created_at) : '';
       if (s.id === 'convert')  time = sourceData ? fmtTime(sourceData.completed_at) : '';
-      if (s.id === 'units')    time = sourceData ? fmtTime(sourceData.units_completed_at) : '';
+      if (s.id === 'units')    time = sourceData ? fmtTime(sourceData.units_built_at) : '';
+      if (s.id === 'semantics') time = sourceData ? fmtTime(sourceData.units_completed_at) : '';
     } else if (phase === 'failed') {
       if (s.id === 'upload')   { state = 'done'; time = fmtTime(uploadStart); }
       if (s.id === 'register') { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
@@ -1868,13 +1881,17 @@ function buildStepsFromSource(d) {
       else if (d.status === 'processing') { state = 'active'; time = fmtTime(d.processing_started_at); }
       else { state = 'done'; time = fmtTime(d.completed_at); }
     } else if (s.id === 'units') {
-      // units_status tracks knowledge-unit extraction independently of
-      // sources.status — that field only reflects source processing, and
-      // extraction is a separate async task enqueued after it completes.
+      if (d.status !== 'completed') { state = 'wait'; }
+      else if (d.units_status === 'completed') { state = 'done'; time = fmtTime(d.units_built_at || d.units_completed_at); }
+      else if (d.units_status === 'failed' && d.units_stage !== 'semantics') { state = 'fail'; time = fmtTime(d.units_completed_at); }
+      else if (d.units_stage === 'semantics') { state = 'done'; time = fmtTime(d.units_built_at); }
+      else { state = 'active'; }
+    } else if (s.id === 'semantics') {
       if (d.status !== 'completed') { state = 'wait'; }
       else if (d.units_status === 'completed') { state = 'done'; time = fmtTime(d.units_completed_at); }
-      else if (d.units_status === 'failed') { state = 'fail'; time = fmtTime(d.units_completed_at); }
-      else { state = 'active'; }
+      else if (d.units_status === 'failed' && d.units_stage === 'semantics') { state = 'fail'; time = fmtTime(d.units_completed_at); }
+      else if (d.units_stage === 'semantics') { state = 'active'; }
+      else { state = 'wait'; }
     }
     return { label: s.label, state: state, time: time };
   });
@@ -1938,7 +1955,11 @@ async function pollSourceTimeline(sourceId, title, uploadStart) {
         loadSources();
         return;
       }
-      showTimeline(title, 'units_pending', r.data, uploadStart);
+      if (((r.data && r.data.units_stage) || 'pending') === 'semantics') {
+        showTimeline(title, 'semantics_pending', r.data, uploadStart);
+      } else {
+        showTimeline(title, 'units_pending', r.data, uploadStart);
+      }
     } else {
       showTimeline(title, 'processing', r.data, uploadStart);
     }
