@@ -193,12 +193,22 @@ func (s *Service) Extract(ctx context.Context, sourceID string) error {
 	extractStart := time.Now()
 	s.emit(sourceID, progress.Event{Step: progress.StepUnitExtract, Status: progress.StatusStarted, Message: fmt.Sprintf("并发提取知识单元 (0/%d)", len(segments)), Current: 0, Total: len(segments)})
 	done := 0
+	semanticsStart := time.Now()
+	onBeforeSemantics := func() error {
+		if err := s.sourceStore.MarkUnitsSemanticsStarted(sourceID); err != nil {
+			return err
+		}
+		s.emit(sourceID, progress.Event{Step: progress.StepUnitSemantics, Status: progress.StatusStarted, Message: "提取知识单元语义"})
+		semanticsStart = time.Now()
+		return nil
+	}
 	if err := s.extractSegmentsPreInsertDedup(ctx, src.Title, sourceID, segments, mdLines, func() {
 		done++
 		s.emit(sourceID, progress.Event{Step: progress.StepUnitExtract, Status: progress.StatusCompleted, Message: fmt.Sprintf("提取知识单元 (%d/%d)", done, len(segments)), Current: done, Total: len(segments), ElapsedMs: time.Since(extractStart).Milliseconds()})
-	}); err != nil {
+	}, onBeforeSemantics); err != nil {
 		return fmt.Errorf("unit: extract and publish: %w", err)
 	}
+	s.emit(sourceID, progress.Event{Step: progress.StepUnitSemantics, Status: progress.StatusCompleted, Message: "知识单元语义已发布", ElapsedMs: time.Since(semanticsStart).Milliseconds()})
 
 	stepStart := time.Now()
 	s.emit(sourceID, progress.Event{Step: progress.StepKPNGenerate, Status: progress.StatusStarted, Message: "KPN 关系生成"})

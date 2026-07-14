@@ -28,6 +28,7 @@ const (
 	StepDomainMatch       = "domain_match"
 	StepUnitSegment       = "unit_segment"
 	StepUnitExtract       = "unit_extract"
+	StepUnitSemantics     = "unit_semantics"
 	StepKPNGenerate       = "kpn_generate"
 	StepConceptMatch      = "concept_match"
 	StepKPNCrossMatch     = "kpn_cross_match"

@@ -38,6 +38,61 @@ func TestStoreCreateAndGet(t *testing.T) {
 	}
 }
 
+func TestSwapShadowIntoTargetCopiesUnitStageState(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	store := NewStore(db)
+
+	target := &Source{
+		SourceID:     "target-stage",
+		Title:        "Target",
+		Format:       "md",
+		FileName:     "target.md",
+		OriginalPath: "/tmp/target.md",
+		MarkdownPath: "/tmp/target.md",
+		Status:       "completed",
+	}
+	shadowOf := sql.NullString{String: target.SourceID, Valid: true}
+	shadow := &Source{
+		SourceID:     "shadow-stage",
+		Title:        "Shadow",
+		Format:       "md",
+		FileName:     "shadow.md",
+		OriginalPath: "/tmp/shadow.md",
+		MarkdownPath: "/tmp/shadow.md",
+		Status:       "completed",
+		ShadowOf:     shadowOf,
+	}
+	if err := store.Create(target); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if err := store.Create(shadow); err != nil {
+		t.Fatalf("create shadow: %v", err)
+	}
+	if err := store.StartUnitsProcessing(shadow.SourceID); err != nil {
+		t.Fatalf("start shadow units: %v", err)
+	}
+	if err := store.MarkUnitsSemanticsStarted(shadow.SourceID); err != nil {
+		t.Fatalf("mark shadow semantics: %v", err)
+	}
+	if err := store.UpdateUnitsStatus(shadow.SourceID, "completed"); err != nil {
+		t.Fatalf("complete shadow units: %v", err)
+	}
+
+	if err := store.SwapShadowIntoTarget(shadow.SourceID, target.SourceID, "/tmp/shadow.md", sql.NullString{}); err != nil {
+		t.Fatalf("swap shadow: %v", err)
+	}
+	got, err := store.GetByID(target.SourceID)
+	if err != nil {
+		t.Fatalf("get target: %v", err)
+	}
+	if got.UnitsStatus != "completed" || got.UnitsStage != "semantics" {
+		t.Fatalf("target units_status=%q units_stage=%q, want completed/semantics", got.UnitsStatus, got.UnitsStage)
+	}
+	if !got.UnitsBuiltAt.Valid || !got.UnitsCompletedAt.Valid {
+		t.Fatalf("target unit timestamps should be preserved/set after swap")
+	}
+}
+
 func TestStoreUpdateStatus(t *testing.T) {
 	db := foundation.NewTestDB(t)
 	store := NewStore(db)

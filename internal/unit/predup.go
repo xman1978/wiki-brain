@@ -81,7 +81,7 @@ type segmentExtraction struct {
 // onSegmentDone is called once per segment as it finishes, for progress
 // reporting — segments complete in extraction order, not document order, so
 // callers must not assume it matches segment index.
-func (s *Service) extractSegmentsPreInsertDedup(ctx context.Context, sourceTitle, sourceID string, segments []Segment, mdLines []string, onSegmentDone func()) error {
+func (s *Service) extractSegmentsPreInsertDedup(ctx context.Context, sourceTitle, sourceID string, segments []Segment, mdLines []string, onSegmentDone func(), onBeforeSemantics func() error) error {
 	concurrency := s.cfg.Source.PreInsertDedupConcurrency
 	if concurrency <= 0 {
 		concurrency = preInsertDedupConcurrencyDefault
@@ -139,6 +139,12 @@ func (s *Service) extractSegmentsPreInsertDedup(ctx context.Context, sourceTitle
 	}
 
 	s.logDocumentCandidates(sourceID, mdLines, pool)
+
+	if onBeforeSemantics != nil {
+		if err := onBeforeSemantics(); err != nil {
+			return err
+		}
+	}
 
 	semantics, err := s.extractRerankSemantics(ctx, sourceTitle, mdLines, pool)
 	if err != nil {

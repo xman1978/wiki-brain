@@ -118,6 +118,7 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 		Format              string  `json:"format"`
 		Status              string  `json:"status"`
 		UnitsStatus         string  `json:"units_status"`
+		UnitsStage          string  `json:"units_stage"`
 		OutlineType         *string `json:"outline_type"`
 		DomainID            *string `json:"domain_id,omitempty"`
 		DomainName          *string `json:"domain_name,omitempty"`
@@ -125,6 +126,7 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 		ProcessingStartedAt *string `json:"processing_started_at,omitempty"`
 		CompletedAt         *string `json:"completed_at,omitempty"`
 		UnitsCompletedAt    *string `json:"units_completed_at,omitempty"`
+		UnitsBuiltAt        *string `json:"units_built_at,omitempty"`
 	}
 
 	var items []item
@@ -135,6 +137,7 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 			Format:      s.Format,
 			Status:      s.Status,
 			UnitsStatus: s.UnitsStatus,
+			UnitsStage:  s.UnitsStage,
 			CreatedAt:   s.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		}
 		if s.OutlineType.Valid {
@@ -157,6 +160,10 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 		if s.UnitsCompletedAt.Valid {
 			t := s.UnitsCompletedAt.Time.Format("2006-01-02T15:04:05Z")
 			it.UnitsCompletedAt = &t
+		}
+		if s.UnitsBuiltAt.Valid {
+			t := s.UnitsBuiltAt.Time.Format("2006-01-02T15:04:05Z")
+			it.UnitsBuiltAt = &t
 		}
 		items = append(items, it)
 	}
@@ -197,6 +204,7 @@ func (h *Handler) getSource(w http.ResponseWriter, r *http.Request) {
 		"format":       src.Format,
 		"status":       src.Status,
 		"units_status": src.UnitsStatus,
+		"units_stage":  src.UnitsStage,
 		"version":      src.Version,
 		"created_at":   src.CreatedAt.Format("2006-01-02T15:04:05Z"),
 	}
@@ -223,6 +231,9 @@ func (h *Handler) getSource(w http.ResponseWriter, r *http.Request) {
 	}
 	if src.UnitsCompletedAt.Valid {
 		resp["units_completed_at"] = src.UnitsCompletedAt.Time.Format("2006-01-02T15:04:05Z")
+	}
+	if src.UnitsBuiltAt.Valid {
+		resp["units_built_at"] = src.UnitsBuiltAt.Time.Format("2006-01-02T15:04:05Z")
 	}
 
 	foundation.WriteJSON(w, http.StatusOK, resp)

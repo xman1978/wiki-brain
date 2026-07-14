@@ -184,7 +184,7 @@ func main() {
 		// management page can tell "source parsed" apart from "knowledge
 		// units actually finished extracting" instead of showing 已完成 the
 		// moment this task is merely enqueued.
-		if err := sourceStore.UpdateUnitsStatus(task.SourceID, "processing"); err != nil {
+		if err := sourceStore.StartUnitsProcessing(task.SourceID); err != nil {
 			slog.Error("update units_status to processing failed", "source_id", task.SourceID, "error", err)
 		}
 
