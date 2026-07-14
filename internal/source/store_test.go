@@ -110,6 +110,85 @@ func TestStoreUpdateUnitsStatus(t *testing.T) {
 	}
 }
 
+func TestStoreUnitStageLifecycle(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	store := NewStore(db)
+
+	src := &Source{
+		SourceID:     "src-stage-1",
+		Title:        "Doc",
+		Format:       "md",
+		FileName:     "doc.md",
+		OriginalPath: "/tmp/doc.md",
+		MarkdownPath: "/tmp/doc.md",
+		Status:       "completed",
+	}
+	if err := store.Create(src); err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+
+	got, err := store.GetByID(src.SourceID)
+	if err != nil {
+		t.Fatalf("get initial source: %v", err)
+	}
+	if got.UnitsStage != "pending" {
+		t.Fatalf("initial units_stage = %q, want pending", got.UnitsStage)
+	}
+	if got.UnitsBuiltAt.Valid {
+		t.Fatalf("initial units_built_at should be NULL")
+	}
+
+	if err := store.StartUnitsProcessing(src.SourceID); err != nil {
+		t.Fatalf("start units processing: %v", err)
+	}
+	got, err = store.GetByID(src.SourceID)
+	if err != nil {
+		t.Fatalf("get building source: %v", err)
+	}
+	if got.UnitsStatus != "processing" || got.UnitsStage != "building" {
+		t.Fatalf("after start units_status=%q units_stage=%q, want processing/building", got.UnitsStatus, got.UnitsStage)
+	}
+	if got.UnitsBuiltAt.Valid || got.UnitsCompletedAt.Valid {
+		t.Fatalf("start should clear units_built_at and units_completed_at")
+	}
+
+	if err := store.MarkUnitsSemanticsStarted(src.SourceID); err != nil {
+		t.Fatalf("mark semantics started: %v", err)
+	}
+	got, err = store.GetByID(src.SourceID)
+	if err != nil {
+		t.Fatalf("get semantics source: %v", err)
+	}
+	if got.UnitsStage != "semantics" {
+		t.Fatalf("units_stage = %q, want semantics", got.UnitsStage)
+	}
+	if !got.UnitsBuiltAt.Valid {
+		t.Fatalf("units_built_at should be set")
+	}
+
+	if err := store.UpdateUnitsStatus(src.SourceID, "completed"); err != nil {
+		t.Fatalf("complete units: %v", err)
+	}
+	got, err = store.GetByID(src.SourceID)
+	if err != nil {
+		t.Fatalf("get completed source: %v", err)
+	}
+	if got.UnitsStatus != "completed" || got.UnitsStage != "semantics" {
+		t.Fatalf("after complete units_status=%q units_stage=%q, want completed/semantics", got.UnitsStatus, got.UnitsStage)
+	}
+	if !got.UnitsCompletedAt.Valid {
+		t.Fatalf("units_completed_at should be set")
+	}
+
+	list, err := store.List("", "", 10, 0)
+	if err != nil {
+		t.Fatalf("list sources: %v", err)
+	}
+	if list[0].UnitsStage != "semantics" || !list[0].UnitsBuiltAt.Valid {
+		t.Fatalf("List()[0] units_stage=%q units_built_at.Valid=%v, want semantics/true", list[0].UnitsStage, list[0].UnitsBuiltAt.Valid)
+	}
+}
+
 func TestStoreList(t *testing.T) {
 	db := foundation.NewTestDB(t)
 	store := NewStore(db)

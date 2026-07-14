@@ -19,6 +19,7 @@ type Source struct {
 	MarkdownPath        string
 	Status              string
 	UnitsStatus         string
+	UnitsStage          string
 	ErrorMsg            sql.NullString
 	OutlineType         sql.NullString
 	Summary             sql.NullString
@@ -31,6 +32,7 @@ type Source struct {
 	ProcessingStartedAt sql.NullTime
 	CompletedAt         sql.NullTime
 	UnitsCompletedAt    sql.NullTime
+	UnitsBuiltAt        sql.NullTime
 }
 
 // SourceVersion is a snapshot of a source's files as they were the moment a
@@ -98,13 +100,13 @@ func (s *Store) Create(src *Source) error {
 
 func (s *Store) GetByID(sourceID string) (*Source, error) {
 	src := &Source{}
-	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at
+	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at, units_built_at
 		FROM sources WHERE source_id = ?`, sourceID).Scan(
 		&src.SourceID, &src.Title, &src.Format, &src.FileName,
-		&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status, &src.UnitsStatus,
+		&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status, &src.UnitsStatus, &src.UnitsStage,
 		&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
 		&src.WordCount, &src.ShadowOf, &src.Version, &src.CreatedAt, &src.UpdatedAt,
-		&src.ProcessingStartedAt, &src.CompletedAt, &src.UnitsCompletedAt)
+		&src.ProcessingStartedAt, &src.CompletedAt, &src.UnitsCompletedAt, &src.UnitsBuiltAt)
 	if err != nil {
 		return nil, fmt.Errorf("source store: get by id: %w", err)
 	}
@@ -116,7 +118,7 @@ func (s *Store) GetByID(sourceID string) (*Source, error) {
 func (s *Store) List(status, domainID string, limit, offset int) ([]Source, error) {
 	var rows *sql.Rows
 	var err error
-	base := `SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at FROM sources`
+	base := `SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at, units_built_at FROM sources`
 	where := []string{"shadow_of IS NULL"}
 	var args []any
 	if status != "" {
@@ -140,10 +142,10 @@ func (s *Store) List(status, domainID string, limit, offset int) ([]Source, erro
 	for rows.Next() {
 		var src Source
 		if err := rows.Scan(&src.SourceID, &src.Title, &src.Format, &src.FileName,
-			&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status, &src.UnitsStatus,
+			&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status, &src.UnitsStatus, &src.UnitsStage,
 			&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
 			&src.WordCount, &src.ShadowOf, &src.Version, &src.CreatedAt, &src.UpdatedAt,
-			&src.ProcessingStartedAt, &src.CompletedAt, &src.UnitsCompletedAt); err != nil {
+			&src.ProcessingStartedAt, &src.CompletedAt, &src.UnitsCompletedAt, &src.UnitsBuiltAt); err != nil {
 			return nil, fmt.Errorf("source store: scan: %w", err)
 		}
 		sources = append(sources, src)
@@ -194,11 +196,37 @@ func (s *Store) UpdateUnitsStatus(sourceID, unitsStatus string) error {
 			return fmt.Errorf("source store: update units status: %w", err)
 		}
 	default:
-		_, err := s.db.Exec(`UPDATE sources SET units_status = ?, updated_at = CURRENT_TIMESTAMP WHERE source_id = ?`,
+		_, err := s.db.Exec(`UPDATE sources SET units_status = ?, units_completed_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE source_id = ?`,
 			unitsStatus, sourceID)
 		if err != nil {
 			return fmt.Errorf("source store: update units status: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *Store) StartUnitsProcessing(sourceID string) error {
+	_, err := s.db.Exec(`UPDATE sources
+		SET units_status = 'processing',
+			units_stage = 'building',
+			units_built_at = NULL,
+			units_completed_at = NULL,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE source_id = ?`, sourceID)
+	if err != nil {
+		return fmt.Errorf("source store: start units processing: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) MarkUnitsSemanticsStarted(sourceID string) error {
+	_, err := s.db.Exec(`UPDATE sources
+		SET units_stage = 'semantics',
+			units_built_at = CURRENT_TIMESTAMP,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE source_id = ?`, sourceID)
+	if err != nil {
+		return fmt.Errorf("source store: mark units semantics started: %w", err)
 	}
 	return nil
 }
@@ -282,10 +310,10 @@ func (s *Store) ExistsByFileNameExcept(fileName, excludeSourceID string) (bool, 
 // at a time (enforced by discarding stale ones before creating a new one).
 func (s *Store) GetShadowByTarget(targetSourceID string) (*Source, error) {
 	src := &Source{}
-	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, created_at, updated_at, processing_started_at, completed_at
+	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, created_at, updated_at, processing_started_at, completed_at
 		FROM sources WHERE shadow_of = ?`, targetSourceID).Scan(
 		&src.SourceID, &src.Title, &src.Format, &src.FileName,
-		&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status, &src.UnitsStatus,
+		&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status, &src.UnitsStatus, &src.UnitsStage,
 		&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
 		&src.WordCount, &src.ShadowOf, &src.CreatedAt, &src.UpdatedAt,
 		&src.ProcessingStartedAt, &src.CompletedAt)
