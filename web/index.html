@@ -1845,6 +1845,10 @@ function showTimeline(title, phase, sourceData, uploadStart) {
 }
 
 function closeSourceTimelineProgress() {
+  if (S.sourceTimelineSourceId) {
+    clearTimeout(S.pollTimers['tl-' + S.sourceTimelineSourceId]);
+    delete S.pollTimers['tl-' + S.sourceTimelineSourceId];
+  }
   if (S.sourceTimelineEventSource) S.sourceTimelineEventSource.close();
   S.sourceTimelineEventSource = null;
   S.sourceTimelineSourceId = null;
@@ -1858,7 +1862,8 @@ function subscribeSourceTimelineProgress(sourceId) {
 
   function refreshPersistedTimeline() {
     if (S.sourceTimelineSourceId !== sourceId) return;
-    closeSourceTimelineProgress();
+    stream.close();
+    if (S.sourceTimelineEventSource === stream) S.sourceTimelineEventSource = null;
     showTimelineForSource(sourceId, true);
   }
 
@@ -1868,7 +1873,7 @@ function subscribeSourceTimelineProgress(sourceId) {
     if (evt.step === 'unit_semantics' && (evt.status === 'started' || evt.status === 'progress')) {
       api('GET', '/sources/' + sourceId).then(function(r) {
         if (S.sourceTimelineSourceId !== sourceId || !r.ok || !r.data) return;
-        showTimeline(r.data.title || r.data.source_id, 'semantics_pending', r.data, new Date(r.data.created_at));
+        showTimeline(r.data.title || r.data.source_id, timelinePhaseFromSource(r.data), r.data, new Date(r.data.created_at));
       });
     } else if ((evt.step === 'unit_semantics' && evt.status === 'completed') || evt.step === 'done') {
       refreshPersistedTimeline();
@@ -1878,7 +1883,9 @@ function subscribeSourceTimelineProgress(sourceId) {
 }
 
 function showTimelineForSource(sourceId, isRefresh) {
+  if (isRefresh && S.sourceTimelineSourceId !== sourceId) return;
   if (!isRefresh) subscribeSourceTimelineProgress(sourceId);
+  if (S.sourceTimelineSourceId !== sourceId) return;
   var panel = document.getElementById('timelinePanel');
   panel.innerHTML = '<div class="tl-empty">加载中...</div>';
   document.querySelectorAll('.source-card').forEach(function(c) { c.classList.remove('active'); });
@@ -1886,6 +1893,7 @@ function showTimelineForSource(sourceId, isRefresh) {
   if (card) card.classList.add('active');
 
   api('GET', '/sources/' + sourceId).then(function(r) {
+    if (S.sourceTimelineSourceId !== sourceId) return;
     if (!r.ok || !r.data) { panel.innerHTML = '<div class="tl-empty">加载失败</div>'; return; }
     var d = r.data;
     var steps = buildStepsFromSource(d);
@@ -1971,35 +1979,25 @@ function fmtTime(t) {
 // reached a terminal state before this timeline shows the source as fully
 // done — otherwise "已完成"/"处理完毕" is shown while units are still (or
 // haven't even started) being extracted, which is the bug this guards against.
+function timelinePhaseFromSource(d) {
+  var status = (d && d.status) || 'unknown';
+  var unitsStatus = (d && d.units_status) || 'pending';
+  if (status === 'failed') return 'failed';
+  if (status !== 'completed') return 'processing';
+  if (unitsStatus === 'completed') return 'completed';
+  if (unitsStatus === 'failed') return 'units_failed';
+  return ((d && d.units_stage) || 'pending') === 'semantics' ? 'semantics_pending' : 'units_pending';
+}
+
 async function pollSourceTimeline(sourceId, title, uploadStart) {
   clearTimeout(S.pollTimers[sourceId]);
   try {
     var r = await api('GET', '/sources/' + sourceId);
-    var status = (r.data && r.data.status) || 'unknown';
-    var unitsStatus = (r.data && r.data.units_status) || 'pending';
-    if (status === 'failed') {
-      showTimeline(title, 'failed', r.data, uploadStart);
+    var phase = timelinePhaseFromSource(r.data);
+    showTimeline(title, phase, r.data, uploadStart);
+    if (phase === 'failed' || phase === 'completed' || phase === 'units_failed') {
       loadSources();
       return;
-    }
-    if (status === 'completed') {
-      if (unitsStatus === 'completed') {
-        showTimeline(title, 'completed', r.data, uploadStart);
-        loadSources();
-        return;
-      }
-      if (unitsStatus === 'failed') {
-        showTimeline(title, 'units_failed', r.data, uploadStart);
-        loadSources();
-        return;
-      }
-      if (((r.data && r.data.units_stage) || 'pending') === 'semantics') {
-        showTimeline(title, 'semantics_pending', r.data, uploadStart);
-      } else {
-        showTimeline(title, 'units_pending', r.data, uploadStart);
-      }
-    } else {
-      showTimeline(title, 'processing', r.data, uploadStart);
     }
   } catch(e) { /* ignore */ }
   S.pollTimers[sourceId] = setTimeout(function() { pollSourceTimeline(sourceId, title, uploadStart); }, 3000);
