@@ -38,7 +38,7 @@ func TestStoreCreateAndGet(t *testing.T) {
 	}
 }
 
-func TestSwapShadowIntoTargetCopiesUnitStageState(t *testing.T) {
+func TestSwapShadowIntoTargetSetsCompletionTimeWhenShadowStillProcessing(t *testing.T) {
 	db := foundation.NewTestDB(t)
 	store := NewStore(db)
 
@@ -74,8 +74,12 @@ func TestSwapShadowIntoTargetCopiesUnitStageState(t *testing.T) {
 	if err := store.MarkUnitsSemanticsStarted(shadow.SourceID); err != nil {
 		t.Fatalf("mark shadow semantics: %v", err)
 	}
-	if err := store.UpdateUnitsStatus(shadow.SourceID, "completed"); err != nil {
-		t.Fatalf("complete shadow units: %v", err)
+	beforeSwap, err := store.GetByID(shadow.SourceID)
+	if err != nil {
+		t.Fatalf("get processing shadow: %v", err)
+	}
+	if beforeSwap.UnitsStatus != "processing" || beforeSwap.UnitsCompletedAt.Valid {
+		t.Fatalf("shadow units state = %q completed_at=%v, want processing with NULL completion time", beforeSwap.UnitsStatus, beforeSwap.UnitsCompletedAt.Valid)
 	}
 
 	if err := store.SwapShadowIntoTarget(shadow.SourceID, target.SourceID, "/tmp/shadow.md", sql.NullString{}); err != nil {

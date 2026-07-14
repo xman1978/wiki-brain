@@ -172,6 +172,7 @@ func main() {
 		task := payload.(queue.SourceTask)
 		if err := sourceSvc.Process(context.Background(), task.SourceID); err != nil {
 			slog.Error("source process failed", "source_id", task.SourceID, "error", err)
+			broadcaster.Close(task.SourceID)
 		}
 	})
 

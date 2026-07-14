@@ -404,7 +404,7 @@ func (s *Store) SwapShadowIntoTarget(shadowID, targetID, originalPath string, ht
 	// the units/points just reparented above ARE that finished result, so
 	// the target must reflect "done" immediately, not "pending" until some
 	// unrelated future unit_extract run happens to touch it.
-	if _, err := tx.Exec(`UPDATE sources SET file_name = ?, format = ?, summary = ?, domain_id = ?, outline_type = ?, word_count = ?, original_path = ?, html_path = ?, version = version + 1, units_status = 'completed', units_stage = ?, units_built_at = ?, units_completed_at = ?, updated_at = CURRENT_TIMESTAMP
+	if _, err := tx.Exec(`UPDATE sources SET file_name = ?, format = ?, summary = ?, domain_id = ?, outline_type = ?, word_count = ?, original_path = ?, html_path = ?, version = version + 1, units_status = 'completed', units_stage = ?, units_built_at = ?, units_completed_at = COALESCE(?, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP
 		WHERE source_id = ?`,
 		shadow.FileName, shadow.Format, shadow.Summary, shadow.DomainID, shadow.OutlineType, shadow.WordCount, originalPath, htmlPath, shadow.UnitsStage, shadow.UnitsBuiltAt, shadow.UnitsCompletedAt, targetID); err != nil {
 		return fmt.Errorf("source store: swap: update target metadata: %w", err)

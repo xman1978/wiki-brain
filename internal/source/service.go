@@ -347,7 +347,10 @@ func (s *Service) Process(ctx context.Context, sourceID string) error {
 		Payload: queue.UnitTask{SourceID: sourceID},
 	})
 	if !ok {
-		slog.Error("failed to enqueue unit extraction", "source_id", sourceID)
+		if err := s.store.UpdateUnitsStatus(sourceID, "failed"); err != nil {
+			return fmt.Errorf("enqueue unit extraction: queue full; mark units failed: %w", err)
+		}
+		return fmt.Errorf("enqueue unit extraction: queue full")
 	}
 
 	return nil

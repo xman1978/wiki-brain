@@ -18,6 +18,8 @@ requirePattern(/async function pollSourceTimeline\(sourceId, title, uploadStart,
 requirePattern(/var requestGeneration = \+\+S\.sourceTimelineRequestGeneration;/, 'selected-source requests must claim a generation');
 requirePattern(/requestGeneration !== S\.sourceTimelineRequestGeneration \|\| S\.sourceTimelineSourceId !== sourceId/, 'stale persisted requests must not render');
 requirePattern(/if \(!isRefresh\) \{\s*S\.sourceTimelineUploadGeneration\+\+;/, 'manual source selection must invalidate in-flight upload responses');
+requirePattern(/var uploadGeneration = \+\+S\.sourceTimelineUploadGeneration;\s*S\.sourceTimelineRequestGeneration\+\+;\s*closeSourceTimelineProgress\(\);/, 'upload start must invalidate selected-source requests and close its progress stream');
+requirePattern(/api\('GET', '\/sources\/' \+ sourceId\)\.then\(function\(r\) \{\s*if \(sourceRequestGeneration !== S\.sourceTimelineRequestGeneration \|\| S\.sourceTimelineSourceId !== sourceId/, 'SSE-triggered source GETs must be guarded by the selected request generation');
 
 if (page.includes('if (S.sourceTimelineUploadSourceId && S.sourceTimelineUploadSourceId !== sourceId) return;')) {
   throw new Error('first upload must not retain ownership over newer uploads');
