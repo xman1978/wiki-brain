@@ -110,6 +110,41 @@ func TestStoreUpdateUnitsStatus(t *testing.T) {
 	}
 }
 
+func TestStoreUpdateUnitsStatusClearsCompletedAtForNonTerminalStatus(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	store := NewStore(db)
+
+	src := &Source{
+		Title: "Test", Format: "pdf", FileName: "test.pdf",
+		OriginalPath: "o/t.pdf", MarkdownPath: "m/t.md", Status: "completed",
+	}
+	if err := store.Create(src); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := store.UpdateUnitsStatus(src.SourceID, "completed"); err != nil {
+		t.Fatalf("complete units: %v", err)
+	}
+	got, err := store.GetByID(src.SourceID)
+	if err != nil {
+		t.Fatalf("get completed source: %v", err)
+	}
+	if !got.UnitsCompletedAt.Valid {
+		t.Fatal("units_completed_at should be set after units_status=completed")
+	}
+
+	if err := store.UpdateUnitsStatus(src.SourceID, "processing"); err != nil {
+		t.Fatalf("restart units: %v", err)
+	}
+	got, err = store.GetByID(src.SourceID)
+	if err != nil {
+		t.Fatalf("get processing source: %v", err)
+	}
+	if got.UnitsCompletedAt.Valid {
+		t.Fatal("units_completed_at should be NULL after a non-terminal status")
+	}
+}
+
 func TestStoreUnitStageLifecycle(t *testing.T) {
 	db := foundation.NewTestDB(t)
 	store := NewStore(db)
