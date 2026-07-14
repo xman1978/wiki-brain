@@ -208,8 +208,6 @@ func (s *Service) Extract(ctx context.Context, sourceID string) error {
 	}, onBeforeSemantics); err != nil {
 		return fmt.Errorf("unit: extract and publish: %w", err)
 	}
-	s.emit(sourceID, progress.Event{Step: progress.StepUnitSemantics, Status: progress.StatusCompleted, Message: "知识单元语义已发布", ElapsedMs: time.Since(semanticsStart).Milliseconds()})
-
 	stepStart := time.Now()
 	s.emit(sourceID, progress.Event{Step: progress.StepKPNGenerate, Status: progress.StatusStarted, Message: "KPN 关系生成"})
 	s.generateKPN(ctx, sourceID)
@@ -229,6 +227,7 @@ func (s *Service) Extract(ctx context.Context, sourceID string) error {
 	}
 	s.emit(sourceID, progress.Event{Step: progress.StepKPNCrossMatch, Status: progress.StatusCompleted, ElapsedMs: time.Since(stepStart).Milliseconds()})
 
+	s.emit(sourceID, progress.Event{Step: progress.StepUnitSemantics, Status: progress.StatusCompleted, Message: "知识单元语义已发布", ElapsedMs: time.Since(semanticsStart).Milliseconds()})
 	s.emit(sourceID, progress.Event{Step: "done", Status: progress.StatusCompleted, Message: "处理完成"})
 
 	return nil
