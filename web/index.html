@@ -780,6 +780,8 @@ const S = {
   answersById:   {},
   tracesById:    {},
   pollTimers:    {},
+  sourceTimelineEventSource: null,
+  sourceTimelineSourceId:    null,
   explainOpen:   false,
   chatMode:      false,
   sessionId:     null,
@@ -1842,7 +1844,41 @@ function showTimeline(title, phase, sourceData, uploadStart) {
   panel.innerHTML = renderTimeline(title, steps, sourceData);
 }
 
-function showTimelineForSource(sourceId) {
+function closeSourceTimelineProgress() {
+  if (S.sourceTimelineEventSource) S.sourceTimelineEventSource.close();
+  S.sourceTimelineEventSource = null;
+  S.sourceTimelineSourceId = null;
+}
+
+function subscribeSourceTimelineProgress(sourceId) {
+  closeSourceTimelineProgress();
+  S.sourceTimelineSourceId = sourceId;
+  var stream = new EventSource(S.baseUrl + '/sources/' + encodeURIComponent(sourceId) + '/progress');
+  S.sourceTimelineEventSource = stream;
+
+  function refreshPersistedTimeline() {
+    if (S.sourceTimelineSourceId !== sourceId) return;
+    closeSourceTimelineProgress();
+    showTimelineForSource(sourceId, true);
+  }
+
+  stream.addEventListener('progress', function(e) {
+    var evt;
+    try { evt = JSON.parse(e.data); } catch (_) { return; }
+    if (evt.step === 'unit_semantics' && (evt.status === 'started' || evt.status === 'progress')) {
+      api('GET', '/sources/' + sourceId).then(function(r) {
+        if (S.sourceTimelineSourceId !== sourceId || !r.ok || !r.data) return;
+        showTimeline(r.data.title || r.data.source_id, 'semantics_pending', r.data, new Date(r.data.created_at));
+      });
+    } else if ((evt.step === 'unit_semantics' && evt.status === 'completed') || evt.step === 'done') {
+      refreshPersistedTimeline();
+    }
+  });
+  stream.addEventListener('done', refreshPersistedTimeline);
+}
+
+function showTimelineForSource(sourceId, isRefresh) {
+  if (!isRefresh) subscribeSourceTimelineProgress(sourceId);
   var panel = document.getElementById('timelinePanel');
   panel.innerHTML = '<div class="tl-empty">加载中...</div>';
   document.querySelectorAll('.source-card').forEach(function(c) { c.classList.remove('active'); });
@@ -1862,7 +1898,9 @@ function showTimelineForSource(sourceId) {
     var unitsSettled = d.units_status === 'completed' || d.units_status === 'failed';
     if (d.status === 'processing' || d.status === 'pending' || (d.status === 'completed' && !unitsSettled)) {
       clearTimeout(S.pollTimers['tl-' + sourceId]);
-      S.pollTimers['tl-' + sourceId] = setTimeout(function() { showTimelineForSource(sourceId); }, 3000);
+      S.pollTimers['tl-' + sourceId] = setTimeout(function() { showTimelineForSource(sourceId, true); }, 3000);
+    } else if (S.sourceTimelineSourceId === sourceId) {
+      closeSourceTimelineProgress();
     }
   });
 }
