@@ -173,27 +173,16 @@ func main() {
 		if err := sourceSvc.Process(context.Background(), task.SourceID); err != nil {
 			slog.Error("source process failed", "source_id", task.SourceID, "error", err)
 		}
-		broadcaster.Close(task.SourceID)
 	})
 
 	q.RegisterHandler(queue.TaskTypeUnitExtract, func(payload interface{}) {
 		task := payload.(queue.UnitTask)
-
-		// units_status tracks knowledge-unit extraction independently of
-		// sources.status (which only reflects source processing) so the file
-		// management page can tell "source parsed" apart from "knowledge
-		// units actually finished extracting" instead of showing 已完成 the
-		// moment this task is merely enqueued.
-		if err := sourceStore.StartUnitsProcessing(task.SourceID); err != nil {
-			slog.Error("update units_status to processing failed", "source_id", task.SourceID, "error", err)
-		}
 
 		unitsStatus := "completed"
 		if err := unitSvc.Extract(context.Background(), task.SourceID); errors.Is(err, unit.ErrExtractionInProgress) {
 			// A concurrent run already owns this source's extraction and its
 			// units_status — this duplicate task must not touch either.
 			slog.Warn("unit extract skipped, already in progress", "source_id", task.SourceID)
-			broadcaster.Close(task.SourceID)
 			return
 		} else if err != nil {
 			slog.Error("unit extract failed", "source_id", task.SourceID, "error", err)

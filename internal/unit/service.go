@@ -165,6 +165,9 @@ func (s *Service) Extract(ctx context.Context, sourceID string) error {
 		return fmt.Errorf("%w: source %s", ErrExtractionInProgress, sourceID)
 	}
 	defer s.endExtract(sourceID)
+	if err := s.sourceStore.StartUnitsProcessing(sourceID); err != nil {
+		return fmt.Errorf("unit: start processing: %w", err)
+	}
 
 	src, err := s.sourceStore.GetByID(sourceID)
 	if err != nil {

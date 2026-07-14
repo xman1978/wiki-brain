@@ -75,8 +75,9 @@ func (b *Broadcaster) Unsubscribe(sourceID string, ch <-chan Event) {
 
 func (b *Broadcaster) Emit(sourceID string, evt Event) {
 	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	chs := b.listeners[sourceID]
-	b.mu.RUnlock()
 
 	for _, ch := range chs {
 		select {
@@ -88,9 +89,10 @@ func (b *Broadcaster) Emit(sourceID string, evt Event) {
 
 func (b *Broadcaster) Close(sourceID string) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	chs := b.listeners[sourceID]
 	delete(b.listeners, sourceID)
-	b.mu.Unlock()
 
 	for _, ch := range chs {
 		close(ch)
