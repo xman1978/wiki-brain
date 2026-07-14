@@ -19,7 +19,12 @@ requirePattern(/var requestGeneration = \+\+S\.sourceTimelineRequestGeneration;/
 requirePattern(/requestGeneration !== S\.sourceTimelineRequestGeneration \|\| S\.sourceTimelineSourceId !== sourceId/, 'stale persisted requests must not render');
 requirePattern(/if \(!isRefresh\) \{\s*S\.sourceTimelineUploadGeneration\+\+;/, 'manual source selection must invalidate in-flight upload responses');
 requirePattern(/var uploadGeneration = \+\+S\.sourceTimelineUploadGeneration;\s*S\.sourceTimelineRequestGeneration\+\+;\s*closeSourceTimelineProgress\(\);/, 'upload start must invalidate selected-source requests and close its progress stream');
-requirePattern(/api\('GET', '\/sources\/' \+ sourceId\)\.then\(function\(r\) \{\s*if \(sourceRequestGeneration !== S\.sourceTimelineRequestGeneration \|\| S\.sourceTimelineSourceId !== sourceId/, 'SSE-triggered source GETs must be guarded by the selected request generation');
+requirePattern(/function ownsSourceTimelineStream\(\) \{\s*return S\.sourceTimelineEventSource === stream && S\.sourceTimelineSourceId === sourceId;\s*\}/, 'SSE ownership must be based on the active stream and source');
+requirePattern(/var requestGeneration = \+\+S\.sourceTimelineRequestGeneration;\s*api\('GET', '\/sources\/' \+ sourceId\)\.then\(function\(r\) \{\s*if \(!ownsSourceTimelineStream\(\) \|\| requestGeneration !== S\.sourceTimelineRequestGeneration/, 'SSE-triggered source GETs must have their own stale-response guard');
+
+if (/var sourceRequestGeneration = S\.sourceTimelineRequestGeneration;/.test(page)) {
+  throw new Error('SSE stream ownership must not capture the selected request generation at subscription time');
+}
 
 if (page.includes('if (S.sourceTimelineUploadSourceId && S.sourceTimelineUploadSourceId !== sourceId) return;')) {
   throw new Error('first upload must not retain ownership over newer uploads');

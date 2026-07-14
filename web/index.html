@@ -1872,23 +1872,28 @@ function closeSourceTimelineProgress() {
 function subscribeSourceTimelineProgress(sourceId) {
   closeSourceTimelineProgress();
   S.sourceTimelineSourceId = sourceId;
-  var sourceRequestGeneration = S.sourceTimelineRequestGeneration;
   var stream = new EventSource(S.baseUrl + '/sources/' + encodeURIComponent(sourceId) + '/progress');
   S.sourceTimelineEventSource = stream;
 
+  function ownsSourceTimelineStream() {
+    return S.sourceTimelineEventSource === stream && S.sourceTimelineSourceId === sourceId;
+  }
+
   function refreshPersistedTimeline() {
-    if (sourceRequestGeneration !== S.sourceTimelineRequestGeneration || S.sourceTimelineSourceId !== sourceId) return;
+    if (!ownsSourceTimelineStream()) return;
     stream.close();
     if (S.sourceTimelineEventSource === stream) S.sourceTimelineEventSource = null;
     showTimelineForSource(sourceId, true);
   }
 
   stream.addEventListener('progress', function(e) {
+    if (!ownsSourceTimelineStream()) return;
     var evt;
     try { evt = JSON.parse(e.data); } catch (_) { return; }
     if (evt.step === 'unit_semantics' && (evt.status === 'started' || evt.status === 'progress')) {
+      var requestGeneration = ++S.sourceTimelineRequestGeneration;
       api('GET', '/sources/' + sourceId).then(function(r) {
-        if (sourceRequestGeneration !== S.sourceTimelineRequestGeneration || S.sourceTimelineSourceId !== sourceId || !r.ok || !r.data) return;
+        if (!ownsSourceTimelineStream() || requestGeneration !== S.sourceTimelineRequestGeneration || !r.ok || !r.data) return;
         showTimeline(r.data.title || r.data.source_id, timelinePhaseFromSource(r.data), r.data, new Date(r.data.created_at));
       });
     } else if ((evt.step === 'unit_semantics' && evt.status === 'completed') || evt.step === 'done') {
