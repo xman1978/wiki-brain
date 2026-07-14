@@ -782,6 +782,7 @@ const S = {
   pollTimers:    {},
   sourceTimelineEventSource: null,
   sourceTimelineSourceId:    null,
+  sourceTimelineUploadSourceId: null,
   explainOpen:   false,
   chatMode:      false,
   sessionId:     null,
@@ -1884,7 +1885,14 @@ function subscribeSourceTimelineProgress(sourceId) {
 
 function showTimelineForSource(sourceId, isRefresh) {
   if (isRefresh && S.sourceTimelineSourceId !== sourceId) return;
-  if (!isRefresh) subscribeSourceTimelineProgress(sourceId);
+  if (!isRefresh) {
+    if (S.sourceTimelineUploadSourceId) {
+      clearTimeout(S.pollTimers[S.sourceTimelineUploadSourceId]);
+      delete S.pollTimers[S.sourceTimelineUploadSourceId];
+      S.sourceTimelineUploadSourceId = null;
+    }
+    subscribeSourceTimelineProgress(sourceId);
+  }
   if (S.sourceTimelineSourceId !== sourceId) return;
   var panel = document.getElementById('timelinePanel');
   panel.innerHTML = '<div class="tl-empty">加载中...</div>';
@@ -1991,15 +1999,23 @@ function timelinePhaseFromSource(d) {
 
 async function pollSourceTimeline(sourceId, title, uploadStart) {
   clearTimeout(S.pollTimers[sourceId]);
+  if (S.sourceTimelineUploadSourceId && S.sourceTimelineUploadSourceId !== sourceId) return;
+  S.sourceTimelineUploadSourceId = sourceId;
   try {
     var r = await api('GET', '/sources/' + sourceId);
+    if (S.sourceTimelineSourceId && S.sourceTimelineSourceId !== sourceId) {
+      if (S.sourceTimelineUploadSourceId === sourceId) S.sourceTimelineUploadSourceId = null;
+      return;
+    }
     var phase = timelinePhaseFromSource(r.data);
     showTimeline(title, phase, r.data, uploadStart);
     if (phase === 'failed' || phase === 'completed' || phase === 'units_failed') {
+      if (S.sourceTimelineUploadSourceId === sourceId) S.sourceTimelineUploadSourceId = null;
       loadSources();
       return;
     }
   } catch(e) { /* ignore */ }
+  if (S.sourceTimelineUploadSourceId !== sourceId || (S.sourceTimelineSourceId && S.sourceTimelineSourceId !== sourceId)) return;
   S.pollTimers[sourceId] = setTimeout(function() { pollSourceTimeline(sourceId, title, uploadStart); }, 3000);
 }
 
