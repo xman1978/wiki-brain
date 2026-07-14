@@ -1869,6 +1869,29 @@ function closeSourceTimelineProgress() {
   S.sourceTimelineSourceId = null;
 }
 
+function scheduleSourceTimelinePoll(sourceId) {
+  if (S.sourceTimelineSourceId !== sourceId) return;
+  clearTimeout(S.pollTimers['tl-' + sourceId]);
+  S.pollTimers['tl-' + sourceId] = setTimeout(function() { showTimelineForSource(sourceId, true); }, 3000);
+}
+
+function renderPersistedSourceTimeline(sourceId, d) {
+  var panel = document.getElementById('timelinePanel');
+  var steps = buildStepsFromSource(d);
+  var errHtml = d.error_msg ? '<div style="margin-top:8px;font-size:11px;color:var(--red);padding:6px 8px;background:var(--red-lt);border-radius:var(--radius-xs)">' + esc(d.error_msg) + '</div>' : '';
+  panel.innerHTML = renderTimeline(d.title || d.source_id, steps, d) + errHtml;
+
+  // Keep polling until BOTH source processing and knowledge-unit extraction
+  // are done — sources.status alone only covers the former (see
+  // buildStepsFromSource / sources.units_status).
+  var unitsSettled = d.units_status === 'completed' || d.units_status === 'failed';
+  if (d.status === 'processing' || d.status === 'pending' || (d.status === 'completed' && !unitsSettled)) {
+    scheduleSourceTimelinePoll(sourceId);
+  } else if (S.sourceTimelineSourceId === sourceId) {
+    closeSourceTimelineProgress();
+  }
+}
+
 function subscribeSourceTimelineProgress(sourceId) {
   closeSourceTimelineProgress();
   S.sourceTimelineSourceId = sourceId;
@@ -1893,8 +1916,12 @@ function subscribeSourceTimelineProgress(sourceId) {
     if (evt.step === 'unit_semantics' && (evt.status === 'started' || evt.status === 'progress')) {
       var requestGeneration = ++S.sourceTimelineRequestGeneration;
       api('GET', '/sources/' + sourceId).then(function(r) {
-        if (!ownsSourceTimelineStream() || requestGeneration !== S.sourceTimelineRequestGeneration || !r.ok || !r.data) return;
-        showTimeline(r.data.title || r.data.source_id, timelinePhaseFromSource(r.data), r.data, new Date(r.data.created_at));
+        if (!ownsSourceTimelineStream() || requestGeneration !== S.sourceTimelineRequestGeneration) return;
+        if (!r.ok || !r.data) { scheduleSourceTimelinePoll(sourceId); return; }
+        renderPersistedSourceTimeline(sourceId, r.data);
+      }).catch(function() {
+        if (!ownsSourceTimelineStream() || requestGeneration !== S.sourceTimelineRequestGeneration) return;
+        scheduleSourceTimelinePoll(sourceId);
       });
     } else if ((evt.step === 'unit_semantics' && evt.status === 'completed') || evt.step === 'done') {
       refreshPersistedTimeline();
@@ -1924,22 +1951,12 @@ function showTimelineForSource(sourceId, isRefresh) {
 
   api('GET', '/sources/' + sourceId).then(function(r) {
     if (requestGeneration !== S.sourceTimelineRequestGeneration || S.sourceTimelineSourceId !== sourceId) return;
-    if (!r.ok || !r.data) { panel.innerHTML = '<div class="tl-empty">加载失败</div>'; return; }
-    var d = r.data;
-    var steps = buildStepsFromSource(d);
-    var errHtml = d.error_msg ? '<div style="margin-top:8px;font-size:11px;color:var(--red);padding:6px 8px;background:var(--red-lt);border-radius:var(--radius-xs)">' + esc(d.error_msg) + '</div>' : '';
-    panel.innerHTML = renderTimeline(d.title || d.source_id, steps, d) + errHtml;
-
-    // Keep polling until BOTH source processing and knowledge-unit extraction
-    // are done — sources.status alone only covers the former (see
-    // buildStepsFromSource / sources.units_status).
-    var unitsSettled = d.units_status === 'completed' || d.units_status === 'failed';
-    if (d.status === 'processing' || d.status === 'pending' || (d.status === 'completed' && !unitsSettled)) {
-      clearTimeout(S.pollTimers['tl-' + sourceId]);
-      S.pollTimers['tl-' + sourceId] = setTimeout(function() { showTimelineForSource(sourceId, true); }, 3000);
-    } else if (S.sourceTimelineSourceId === sourceId) {
-      closeSourceTimelineProgress();
-    }
+    if (!r.ok || !r.data) { panel.innerHTML = '<div class="tl-empty">加载失败</div>'; scheduleSourceTimelinePoll(sourceId); return; }
+    renderPersistedSourceTimeline(sourceId, r.data);
+  }).catch(function() {
+    if (requestGeneration !== S.sourceTimelineRequestGeneration || S.sourceTimelineSourceId !== sourceId) return;
+    panel.innerHTML = '<div class="tl-empty">加载失败</div>';
+    scheduleSourceTimelinePoll(sourceId);
   });
 }
 

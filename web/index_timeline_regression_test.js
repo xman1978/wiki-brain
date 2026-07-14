@@ -21,6 +21,9 @@ requirePattern(/if \(!isRefresh\) \{\s*S\.sourceTimelineUploadGeneration\+\+;/, 
 requirePattern(/var uploadGeneration = \+\+S\.sourceTimelineUploadGeneration;\s*S\.sourceTimelineRequestGeneration\+\+;\s*closeSourceTimelineProgress\(\);/, 'upload start must invalidate selected-source requests and close its progress stream');
 requirePattern(/function ownsSourceTimelineStream\(\) \{\s*return S\.sourceTimelineEventSource === stream && S\.sourceTimelineSourceId === sourceId;\s*\}/, 'SSE ownership must be based on the active stream and source');
 requirePattern(/var requestGeneration = \+\+S\.sourceTimelineRequestGeneration;\s*api\('GET', '\/sources\/' \+ sourceId\)\.then\(function\(r\) \{\s*if \(!ownsSourceTimelineStream\(\) \|\| requestGeneration !== S\.sourceTimelineRequestGeneration/, 'SSE-triggered source GETs must have their own stale-response guard');
+requirePattern(/function scheduleSourceTimelinePoll\(sourceId\) \{[\s\S]*?S\.pollTimers\['tl-' \+ sourceId\] = setTimeout\(function\(\) \{ showTimelineForSource\(sourceId, true\); \}, 3000\);/, 'selected-source polling must have a shared fallback scheduler');
+requirePattern(/function renderPersistedSourceTimeline\(sourceId, d\) \{[\s\S]*?scheduleSourceTimelinePoll\(sourceId\);/, 'persisted timeline rendering must retain fallback polling for non-terminal sources');
+requirePattern(/if \(!ownsSourceTimelineStream\(\) \|\| requestGeneration !== S\.sourceTimelineRequestGeneration\) return;\s*if \(!r\.ok \|\| !r\.data\) \{ scheduleSourceTimelinePoll\(sourceId\); return; \}\s*renderPersistedSourceTimeline\(sourceId, r\.data\);/, 'SSE-triggered source GETs must use the poll-preserving persisted timeline renderer');
 
 if (/var sourceRequestGeneration = S\.sourceTimelineRequestGeneration;/.test(page)) {
   throw new Error('SSE stream ownership must not capture the selected request generation at subscription time');
