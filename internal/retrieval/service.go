@@ -256,23 +256,67 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 }
 
 func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progress ProgressFunc) (*EvidenceSet, error) {
-	question := qc.Question
 	emit := func(phase, status, detail string, dur int64) {
 		if progress != nil {
 			progress(ProgressEvent{Phase: phase, Status: status, Detail: detail, Duration: dur})
 		}
 	}
 
-	// Step 2-3: 知识点激活（Domain pre-filter + Source semantic filter）
-	emit("activation", "start", "", 0)
-	activationStart := time.Now()
-
-	candidateSources, err := s.domainPreFilter(ctx, question)
+	// Step 2: Domain pre-filter
+	domainStart := time.Now()
+	candidateSources, err := s.domainPreFilter(ctx, qc.Question)
 	if err != nil {
-		emit("activation", "error", err.Error(), time.Since(activationStart).Milliseconds())
+		emit("activation", "error", err.Error(), time.Since(domainStart).Milliseconds())
 		return nil, fmt.Errorf("retrieval: domain pre-filter: %w", err)
 	}
 	slog.Info("retrieval: step2 domain pre-filter done", "candidates", len(candidateSources))
+
+	es, err := s.filterAndRecall(ctx, qc, candidateSources, emit, progress)
+	if err != nil {
+		return nil, err
+	}
+	if !evidenceEmpty(es) {
+		return es, nil
+	}
+
+	// Fallback 1（问答准确率测试 2026-07-16 诊断，方向 C）：结果为空且问题没带
+	// subject/intent（如直连 POST /answer，未经 /session/turn 解析）时，补做一次
+	// 单轮解析再整链路重试一遍——Source 语义过滤和 rerank judge 都会用 subject/intent
+	// 做语义判断，裸问题被字面关键词带偏导致选错文档/误判不相关的情况，补上后可能自愈。
+	retryQC := qc
+	if qc.Subject == "" && qc.Intent == "" {
+		parsed := session.NewParser(s.llmClient).Parse(ctx, qc.Question, &session.SessionState{})
+		if parsed.Subject != "" || parsed.Intent != "" {
+			retryQC.Subject = parsed.Subject
+			retryQC.Intent = parsed.Intent
+			slog.Info("retrieval: empty result, retrying with extracted subject/intent",
+				"subject", parsed.Subject, "intent", parsed.Intent)
+			es, err = s.filterAndRecall(ctx, retryQC, candidateSources, emit, progress)
+			if err != nil {
+				return nil, err
+			}
+			if !evidenceEmpty(es) {
+				return es, nil
+			}
+		}
+	}
+
+	// Fallback 2（方向 A）：仍为空，跳过 Source 语义过滤，直接在 Domain 预过滤后的全部
+	// 候选 source 上召回——单段摘要天然覆盖不了多主题文档（如"问题汇总"类）的所有子话题，
+	// Source 过滤会系统性漏选正确文档，只能放宽候选池交给 outline/FTS 召回自己发现。
+	slog.Info("retrieval: empty result, retrying against full domain-filtered source pool", "sources", len(candidateSources))
+	return s.recallFromSources(ctx, retryQC, candidateSources, emit, progress)
+}
+
+func evidenceEmpty(es *EvidenceSet) bool {
+	return es == nil || (len(es.DirectEvidence) == 0 && len(es.Supporting) == 0)
+}
+
+// filterAndRecall runs Step 3 (Source semantic filter) then Steps 4-10 within
+// the filtered source set.
+func (s *Service) filterAndRecall(ctx context.Context, qc QueryContext, candidateSources []SourceInfo, emit func(phase, status, detail string, dur int64), progress ProgressFunc) (*EvidenceSet, error) {
+	activationStart := time.Now()
+	emit("activation", "start", "", 0)
 
 	filteredSources, err := s.sourceSemanticFilter(ctx, qc, candidateSources)
 	if err != nil {
@@ -286,6 +330,18 @@ func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progres
 	}
 	slog.Info("retrieval: step3 source filter done", "sources", sourceIDs)
 	emit("activation", "done", fmt.Sprintf("%d 个来源", len(sourceIDs)), time.Since(activationStart).Milliseconds())
+
+	return s.recallFromSources(ctx, qc, filteredSources, emit, progress)
+}
+
+// recallFromSources runs Steps 4-10 (outline+FTS recall through
+// EvidenceSet construction) against a fixed source set.
+func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, sources []SourceInfo, emit func(phase, status, detail string, dur int64), progress ProgressFunc) (*EvidenceSet, error) {
+	question := qc.Question
+	sourceIDs := make([]string, len(sources))
+	for i, src := range sources {
+		sourceIDs[i] = src.SourceID
+	}
 
 	// Step 4: 目录结构检索（Outline recall）
 	emit("outline", "start", "", 0)
@@ -901,8 +957,15 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 		return nil, fmt.Errorf("retrieval: rerank get semantics: %w", err)
 	}
 
+	// A unit's persisted semantics are used regardless of which extraction
+	// prompt version produced them — prompt_version is kept on the row for
+	// diagnostics only, not as a completeness gate. Requiring an exact match
+	// meant every prompt wording tweak instantly broke rerank for the whole
+	// existing corpus until every source was re-extracted; only a genuinely
+	// missing row (nothing to feed the judge with at all) is a real
+	// integrity problem.
 	missingSet := make(map[string]struct{})
-	staleSet := make(map[string]struct{})
+	var staleCount int
 	for _, c := range candidates {
 		semantic, ok := semanticsByUnit[c.unitID]
 		if !ok {
@@ -910,18 +973,14 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 			continue
 		}
 		if semantic.PromptVersion != rerank.ExtractPromptVersion {
-			staleSet[c.unitID] = struct{}{}
+			staleCount++
 		}
 	}
-	if len(missingSet) > 0 || len(staleSet) > 0 {
-		issues := make([]string, 0, 2)
-		if len(missingSet) > 0 {
-			issues = append(issues, "missing unit_ids: "+strings.Join(sortedUnitIDs(missingSet), ", "))
-		}
-		if len(staleSet) > 0 {
-			issues = append(issues, "stale unit_ids: "+strings.Join(sortedUnitIDs(staleSet), ", "))
-		}
-		return nil, fmt.Errorf("retrieval: rerank semantics integrity: %s", strings.Join(issues, "; "))
+	if staleCount > 0 {
+		slog.Debug("retrieval: rerank using semantics from an older extraction prompt version", "stale_count", staleCount)
+	}
+	if len(missingSet) > 0 {
+		return nil, fmt.Errorf("retrieval: rerank semantics integrity: missing unit_ids: %s", strings.Join(sortedUnitIDs(missingSet), ", "))
 	}
 
 	titleCache := make(map[string]string)

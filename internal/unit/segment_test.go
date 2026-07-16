@@ -210,8 +210,51 @@ func TestIsMetadataSegment(t *testing.T) {
 }
 
 func TestBuildSegments_EmptyOutlines(t *testing.T) {
+	// No outline nodes at all still has to produce a segment covering the
+	// document's actual content — otherwise it silently never reaches Unit
+	// extraction (2026-07-16 QA gap diagnosis).
 	segments := BuildSegments(nil, []string{"line1"}, 4000, 400)
+	if len(segments) != 1 {
+		t.Fatalf("expected 1 fallback segment for nil outlines with content, got %d", len(segments))
+	}
+	if segments[0].LineStart != 1 || segments[0].LineEnd != 1 {
+		t.Errorf("expected fallback segment to cover L1-L1, got L%d-L%d", segments[0].LineStart, segments[0].LineEnd)
+	}
+	if segments[0].OutlineID.Valid {
+		t.Errorf("expected fallback segment to have no outline_id, got %v", segments[0].OutlineID)
+	}
+}
+
+func TestBuildSegments_EmptyOutlinesNoContent(t *testing.T) {
+	segments := BuildSegments(nil, nil, 4000, 400)
 	if len(segments) != 0 {
-		t.Errorf("expected 0 segments for nil outlines, got %d", len(segments))
+		t.Errorf("expected 0 segments for nil outlines and no content, got %d", len(segments))
+	}
+}
+
+func TestBuildSegments_UncoveredGapBetweenLeaves(t *testing.T) {
+	// A misdetected heading (or any other cause) can leave a leaf's own
+	// declared range unrepresented by any leaf at all — e.g. leaf A covers
+	// L1-L10, the next real leaf B starts at L21, and lines 11-20 belong to
+	// no leaf. That range must surface as its own segment instead of
+	// silently vanishing before Unit extraction ever sees it.
+	outlines := []source.Outline{
+		makeOutline("a", "", 1, "Section A", 1, 10),
+		makeOutline("b", "", 1, "Section B", 21, 30),
+	}
+	lines := make([]string, 30)
+	for i := range lines {
+		lines[i] = strings.Repeat("x", 50)
+	}
+
+	segments := BuildSegments(outlines, lines, 4000, 1)
+	var gapCovered bool
+	for _, seg := range segments {
+		if seg.LineStart <= 11 && seg.LineEnd >= 20 {
+			gapCovered = true
+		}
+	}
+	if !gapCovered {
+		t.Fatalf("expected lines 11-20 to be covered by a synthesized segment, got segments %+v", segments)
 	}
 }

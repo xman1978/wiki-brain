@@ -514,6 +514,25 @@ type conceptMatchOutput struct {
 	Matches []conceptMatch `json:"matches"`
 }
 
+// MatchConcepts implements source.ConceptMatcher: re-runs concept matching
+// for sourceID's current KUs against domainID's concept list. Exported so
+// source.Service.SetDomain can re-trigger it after a manual domain
+// reassignment — matchConcepts itself otherwise only runs once, inline,
+// during unit_extract. Concept ids are cleared first: matchConcepts only ever
+// writes a match it found and never clears one that came up empty, so without
+// this a KU that doesn't fit any concept in the new domain would keep
+// pointing at a concept from its old one.
+func (s *Service) MatchConcepts(ctx context.Context, sourceID, domainID string) {
+	if err := s.store.ClearConceptIDBySourceID(sourceID); err != nil {
+		slog.Warn("unit: clear concept id before rematch failed", "source_id", sourceID, "error", err)
+	}
+	var did sql.NullString
+	if domainID != "" {
+		did = sql.NullString{String: domainID, Valid: true}
+	}
+	s.matchConcepts(ctx, sourceID, did)
+}
+
 func (s *Service) matchConcepts(ctx context.Context, sourceID string, domainID sql.NullString) {
 	allUnits, err := s.store.GetCompletedUnitsBySourceID(sourceID)
 	if err != nil {
@@ -543,6 +562,7 @@ func (s *Service) matchConcepts(ctx context.Context, sourceID string, domainID s
 	if len(concepts) == 0 {
 		return
 	}
+	slog.Info("unit: matching concepts", "source_id", sourceID, "domain_id", did, "units", len(units), "concepts", len(concepts))
 
 	var conceptList strings.Builder
 	for _, c := range concepts {

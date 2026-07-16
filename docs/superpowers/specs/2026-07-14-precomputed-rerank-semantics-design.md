@@ -69,13 +69,19 @@ A source is not published partially. Semantic extraction failure leaves the prev
 Recall and RRF continue to produce the same ordered candidate list and query-time candidate IDs (`c1`, `c2`, and so on).
 
 1. Batch-load semantic rows for all candidate unit IDs in one store operation.
-2. Require one semantic row per candidate and require its `prompt_version` to match the current supported extraction prompt version.
+2. Require one semantic row per candidate. `prompt_version` is *not* a completeness gate — a row from an older extraction prompt is used exactly like a current one (see "Prompt version, revisited" below).
 3. Combine each persisted semantic record with the query-time `candidate_id` and current source title to form the existing `rerankJudgeCandidate` shape.
 4. Serialize candidates compactly and split batches according to `rerank_judge_batch_max_chars`. Batch accounting includes the complete serialized candidate object rather than the original unit text.
 5. Run at most `rerank_judge_concurrency` `rerank_judge.md` calls concurrently.
 6. Validate and merge roles by `candidate_id`, preserving the original candidate order and existing role handling.
 
-Online rerank never calls the semantic extraction prompt. Missing, duplicate, undecodable, or stale semantic records produce a data-integrity error containing the affected unit IDs. The error is logged and returned; there is no silent candidate drop and no query-time extraction fallback.
+Online rerank never calls the semantic extraction prompt. A missing or undecodable semantic record produces a data-integrity error containing the affected unit IDs. The error is logged and returned; there is no silent candidate drop and no query-time extraction fallback.
+
+### Prompt version, revisited
+
+The original version of this design required a candidate's `prompt_version` to match the current `ExtractPromptVersion` constant, treating any mismatch as a data-integrity error identical to a missing row. In practice this meant every wording tweak to `unit_semantics_extract.md` — including fixes for genuine extraction bugs, not just quality polish — instantly broke rerank for the *entire* existing corpus until every source was manually re-uploaded, since there is deliberately no backfill command (see Scope). A one-line prompt fix should not require a full-corpus outage.
+
+`prompt_version` is still written on every row and still bumped when the prompt's behavior changes — it remains useful for diagnosing which units were extracted under which prompt, and stays a hard requirement at *insert* time (a freshly-extracted row must be stamped with the current version; see Ingestion Flow's validation). It is simply no longer read as a precondition for using a row online. A stale row is logged at debug level (unit count only) and otherwise treated the same as a current one.
 
 ## Configuration
 
@@ -95,7 +101,7 @@ Positive configured values are used directly. Unset or non-positive values use t
 
 - Extraction request, schema, ID validation, or persistence failure aborts the new generation before publication.
 - A context cancellation stops outstanding extraction or judge batches and returns the context error wrapped with the phase and batch information.
-- Online semantic lookup reports all missing or stale unit IDs together so an upload problem is diagnosable in one request.
+- Online semantic lookup reports all missing unit IDs together so an upload problem is diagnosable in one request. A mismatched `prompt_version` is not reported as an error.
 - Judge failure keeps the existing all-or-error behavior; partial batch roles are not returned.
 - The LLM client's existing retry and JSON repair behavior remains unchanged.
 
@@ -117,7 +123,8 @@ Retrieval tests cover:
 - rerank issuing judge calls without any extraction call;
 - compact structured-input length batching and judge concurrency;
 - role merge preserving candidate IDs and order;
-- missing and stale semantics returning explicit data-integrity errors;
+- missing semantics returning an explicit data-integrity error;
+- stale (old `prompt_version`) semantics being used normally rather than rejected;
 - unchanged filtering of `irrelevant` and retention of `direct` and `supporting` candidates.
 
 The complete Go test suite must pass after implementation.
@@ -126,6 +133,6 @@ The complete Go test suite must pass after implementation.
 
 1. Deploy the schema and code in an environment where queries are not yet served.
 2. Re-upload every source so all current units are produced by the new ingestion pipeline.
-3. Verify there are no current knowledge units without a matching `unit_rerank_semantics` row and no prompt-version mismatches.
+3. Verify there are no current knowledge units without a matching `unit_rerank_semantics` row. A prompt-version mismatch is not a release blocker (see "Prompt version, revisited").
 4. Enable question answering traffic.
 

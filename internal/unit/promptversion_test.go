@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/rerank"
 )
 
 // TestPromptVersionConstantsMatchTemplates pins the promptVersion* constants
@@ -23,6 +24,7 @@ func TestPromptVersionConstantsMatchTemplates(t *testing.T) {
 		{"unit_point_extract.md", promptVersionPointExtract},
 		{"kpn_extract.md", promptVersionKPNExtract},
 		{"kpn_cross_match.md", promptVersionKPNCross},
+		{"unit_semantics_extract.md", rerank.ExtractPromptVersion},
 	}
 	for _, c := range cases {
 		t.Run(c.promptFile, func(t *testing.T) {

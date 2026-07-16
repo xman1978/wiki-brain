@@ -1,7 +1,9 @@
 package unit
 
 import (
+	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
@@ -19,6 +21,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /sources/{id}/units", h.triggerExtract)
 	mux.HandleFunc("GET /sources/{id}/units", h.listUnits)
 	mux.HandleFunc("GET /sources/{id}/coverage", h.getCoverage)
+	mux.HandleFunc("POST /sources/{id}/coverage/fix", h.fixCoverageGap)
+	mux.HandleFunc("GET /sources/{id}/coverage/merge-target", h.previewMergeTarget)
+	mux.HandleFunc("POST /sources/{id}/coverage/merge", h.mergeCoverageGap)
 	mux.HandleFunc("POST /sources/{id}/kpn-cross", h.triggerCrossKPN)
 	mux.HandleFunc("GET /units/{id}", h.getUnit)
 	mux.HandleFunc("GET /units/{id}/points", h.listPoints)
@@ -140,6 +145,120 @@ func (h *Handler) getCoverage(w http.ResponseWriter, r *http.Request) {
 		"total_lines":   totalLines,
 		"covered_lines": coveredLines,
 		"segments":      report,
+	})
+}
+
+// fixCoverageGap implements POST /sources/:id/coverage/fix — manually
+// recovers one gap surfaced by GET /sources/:id/coverage by re-running point
+// and rerank-semantics extraction for exactly that line range and inserting
+// it as a new standalone current knowledge unit (see Service.FixCoverageGap).
+func (h *Handler) fixCoverageGap(w http.ResponseWriter, r *http.Request) {
+	sourceID := r.PathValue("id")
+	if sourceID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "missing source id")
+		return
+	}
+
+	var body struct {
+		LineStart int `json:"line_start"`
+		LineEnd   int `json:"line_end"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.LineStart < 1 || body.LineEnd < body.LineStart {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid line range")
+		return
+	}
+
+	ku, err := h.svc.FixCoverageGap(r.Context(), sourceID, body.LineStart, body.LineEnd)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"unit_id":    ku.UnitID,
+		"center":     ku.Center,
+		"line_start": ku.LineStart,
+		"line_end":   ku.LineEnd,
+	})
+}
+
+// previewMergeTarget implements GET /sources/:id/coverage/merge-target —
+// read-only lookup of which neighbor unit POST .../coverage/merge would
+// widen for the same (line_start, line_end, direction), so the frontend can
+// show its content and ask for confirmation before actually merging.
+func (h *Handler) previewMergeTarget(w http.ResponseWriter, r *http.Request) {
+	sourceID := r.PathValue("id")
+	if sourceID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "missing source id")
+		return
+	}
+
+	lineStart, errStart := strconv.Atoi(r.URL.Query().Get("line_start"))
+	lineEnd, errEnd := strconv.Atoi(r.URL.Query().Get("line_end"))
+	direction := r.URL.Query().Get("direction")
+	if errStart != nil || errEnd != nil || lineStart < 1 || lineEnd < lineStart {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid line range")
+		return
+	}
+	if direction != MergeDirectionPrev && direction != MergeDirectionNext {
+		foundation.WriteError(w, http.StatusBadRequest, "direction must be \"prev\" or \"next\"")
+		return
+	}
+
+	preview, err := h.svc.PreviewMergeTarget(sourceID, lineStart, lineEnd, direction)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, preview)
+}
+
+// mergeCoverageGap implements POST /sources/:id/coverage/merge — manually
+// recovers one gap surfaced by GET /sources/:id/coverage by absorbing it
+// into a neighboring knowledge unit's line range (see
+// Service.MergeCoverageGap), for content too fragmentary to deserve its own
+// unit (e.g. single /etc/hosts-style lines).
+func (h *Handler) mergeCoverageGap(w http.ResponseWriter, r *http.Request) {
+	sourceID := r.PathValue("id")
+	if sourceID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "missing source id")
+		return
+	}
+
+	var body struct {
+		LineStart int    `json:"line_start"`
+		LineEnd   int    `json:"line_end"`
+		Direction string `json:"direction"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.LineStart < 1 || body.LineEnd < body.LineStart {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid line range")
+		return
+	}
+	if body.Direction != MergeDirectionPrev && body.Direction != MergeDirectionNext {
+		foundation.WriteError(w, http.StatusBadRequest, "direction must be \"prev\" or \"next\"")
+		return
+	}
+
+	ku, err := h.svc.MergeCoverageGap(r.Context(), sourceID, body.LineStart, body.LineEnd, body.Direction)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"unit_id":    ku.UnitID,
+		"center":     ku.Center,
+		"line_start": ku.LineStart,
+		"line_end":   ku.LineEnd,
 	})
 }
 

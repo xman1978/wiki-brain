@@ -131,6 +131,18 @@ func (s *Store) PublishGeneration(
 
 	inserted = make([]KnowledgeUnit, 0, len(pool))
 	for _, candidate := range pool {
+		// A unit_id absent from semantics is one that extractRerankSemantics
+		// gave up on even after every fallback tier (see rerank_semantics.go)
+		// — the whole unit is discarded rather than published without a
+		// usable rerank signal: it would never be selectable by rerank
+		// anyway (see the retrieval integrity check), so keeping it around
+		// with no semantics row would only be dead weight. Every other
+		// candidate in the same pool still publishes normally.
+		semantic, ok := semantics[candidate.id]
+		if !ok {
+			continue
+		}
+
 		promptVersion := candidate.promptVersion
 		if promptVersion == "" {
 			promptVersion = promptVersionSplitExtract
@@ -172,7 +184,6 @@ func (s *Store) PublishGeneration(
 			points = append(points, point)
 		}
 
-		semantic := semantics[unit.UnitID]
 		if _, err := tx.Exec(`INSERT INTO unit_rerank_semantics
 			(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -189,11 +200,12 @@ func (s *Store) PublishGeneration(
 	return superseded, inserted, points, nil
 }
 
+// validatePublicationSemantics validates whatever semantics were actually
+// produced — a candidate with no entry in semantics at all is tolerated here
+// (it's simply discarded later, see the loop above) since
+// extractRerankSemantics already gave up on it after every fallback tier;
+// what it does return an entry for must still be well-formed.
 func validatePublicationSemantics(pool []unitCandidate, semantics map[string]rerank.Semantics) (map[string]string, error) {
-	if len(semantics) != len(pool) {
-		return nil, fmt.Errorf("unit store: publish generation: semantics count = %d, candidates = %d", len(semantics), len(pool))
-	}
-
 	candidateIDs := make(map[string]bool, len(pool))
 	encoded := make(map[string]string, len(pool))
 	for _, candidate := range pool {
@@ -207,42 +219,13 @@ func validatePublicationSemantics(pool []unitCandidate, semantics map[string]rer
 
 		semantic, ok := semantics[candidate.id]
 		if !ok {
-			return nil, fmt.Errorf("unit store: publish generation: missing semantics for unit_id %s", candidate.id)
+			continue
 		}
-		if semantic.UnitID != candidate.id {
-			return nil, fmt.Errorf("unit store: publish generation: semantic unit_id %s does not match %s", semantic.UnitID, candidate.id)
-		}
-		if semantic.PromptVersion != rerank.ExtractPromptVersion {
-			return nil, fmt.Errorf("unit store: publish generation: semantic prompt_version for unit %s = %q, want %q",
-				candidate.id, semantic.PromptVersion, rerank.ExtractPromptVersion)
-		}
-		for _, field := range []struct {
-			name  string
-			value string
-		}{
-			{name: "source_theme", value: semantic.SourceTheme},
-			{name: "content_theme", value: semantic.ContentTheme},
-			{name: "intent", value: semantic.Intent},
-			{name: "object", value: semantic.Object},
-			{name: "scope", value: semantic.Scope},
-		} {
-			if strings.TrimSpace(field.value) == "" {
-				return nil, fmt.Errorf("unit store: publish generation: semantic %s is empty for unit %s", field.name, candidate.id)
-			}
-		}
-		if semantic.KeyFacts == nil {
-			return nil, fmt.Errorf("unit store: publish generation: semantic key_facts is null for unit %s", candidate.id)
-		}
-		for i, fact := range semantic.KeyFacts {
-			if strings.TrimSpace(fact) == "" {
-				return nil, fmt.Errorf("unit store: publish generation: semantic key_facts[%d] is empty for unit %s", i, candidate.id)
-			}
-		}
-		keyFacts, err := json.Marshal(semantic.KeyFacts)
+		keyFacts, err := validateAndEncodeSemantic(candidate.id, semantic)
 		if err != nil {
-			return nil, fmt.Errorf("unit store: publish generation: marshal semantics for unit %s: %w", candidate.id, err)
+			return nil, fmt.Errorf("unit store: publish generation: %w", err)
 		}
-		encoded[candidate.id] = string(keyFacts)
+		encoded[candidate.id] = keyFacts
 	}
 	for unitID := range semantics {
 		if !candidateIDs[unitID] {
@@ -250,6 +233,101 @@ func validatePublicationSemantics(pool []unitCandidate, semantics map[string]rer
 		}
 	}
 	return encoded, nil
+}
+
+// validateAndEncodeSemantic validates one unit's semantics (the same rules
+// validatePublicationSemantics applies per-candidate) and returns its
+// key_facts encoded as a JSON array string, ready for unit_rerank_semantics.
+// Shared by validatePublicationSemantics (a whole generation) and
+// InsertStandaloneUnit (a single manually-fixed unit) so both insert paths
+// enforce identical row well-formedness.
+func validateAndEncodeSemantic(unitID string, semantic rerank.Semantics) (string, error) {
+	if semantic.UnitID != unitID {
+		return "", fmt.Errorf("semantic unit_id %s does not match %s", semantic.UnitID, unitID)
+	}
+	if semantic.PromptVersion != rerank.ExtractPromptVersion {
+		return "", fmt.Errorf("semantic prompt_version for unit %s = %q, want %q",
+			unitID, semantic.PromptVersion, rerank.ExtractPromptVersion)
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "source_theme", value: semantic.SourceTheme},
+		{name: "content_theme", value: semantic.ContentTheme},
+		{name: "intent", value: semantic.Intent},
+		{name: "object", value: semantic.Object},
+		{name: "scope", value: semantic.Scope},
+	} {
+		if strings.TrimSpace(field.value) == "" {
+			return "", fmt.Errorf("semantic %s is empty for unit %s", field.name, unitID)
+		}
+	}
+	if semantic.KeyFacts == nil {
+		return "", fmt.Errorf("semantic key_facts is null for unit %s", unitID)
+	}
+	for i, fact := range semantic.KeyFacts {
+		if strings.TrimSpace(fact) == "" {
+			return "", fmt.Errorf("semantic key_facts[%d] is empty for unit %s", i, unitID)
+		}
+	}
+	keyFacts, err := json.Marshal(semantic.KeyFacts)
+	if err != nil {
+		return "", fmt.Errorf("marshal semantics for unit %s: %w", unitID, err)
+	}
+	return string(keyFacts), nil
+}
+
+// InsertStandaloneUnit inserts one new current knowledge unit together with
+// its points and rerank semantics in a single transaction. Unlike
+// PublishGeneration, it is purely additive — it never supersedes any other
+// unit for the source — so it's the insert path for manually recovering one
+// coverage gap (see Service.FixCoverageGap) without re-running the source's
+// whole extraction generation.
+func (s *Store) InsertStandaloneUnit(ku *KnowledgeUnit, points []KnowledgePoint, sem rerank.Semantics) error {
+	if ku.UnitID == "" {
+		return fmt.Errorf("unit store: insert standalone unit: empty unit_id")
+	}
+	keyFactsJSON, err := validateAndEncodeSemantic(ku.UnitID, sem)
+	if err != nil {
+		return fmt.Errorf("unit store: insert standalone unit: %w", err)
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("unit store: insert standalone unit: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`INSERT INTO knowledge_units
+		(unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ku.UnitID, ku.SourceID, ku.OutlineID, ku.ConceptID, ku.Center,
+		ku.LineStart, ku.LineEnd, ku.Status, ku.ErrorMsg, ku.PromptVersion, LifecycleCurrent); err != nil {
+		return fmt.Errorf("unit store: insert standalone unit: insert unit: %w", err)
+	}
+
+	for i := range points {
+		if points[i].PointID == "" {
+			points[i].PointID = uuid.New().String()
+		}
+		points[i].UnitID = ku.UnitID
+		if _, err := tx.Exec(`INSERT INTO knowledge_points
+			(point_id, unit_id, source_id, content, point_type, lifecycle)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			points[i].PointID, points[i].UnitID, points[i].SourceID, points[i].Content, points[i].PointType, LifecycleCurrent); err != nil {
+			return fmt.Errorf("unit store: insert standalone unit: insert point: %w", err)
+		}
+	}
+
+	if _, err := tx.Exec(`INSERT INTO unit_rerank_semantics
+		(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		ku.UnitID, sem.SourceTheme, sem.ContentTheme, sem.Intent, sem.Object, sem.Scope, keyFactsJSON, sem.PromptVersion); err != nil {
+		return fmt.Errorf("unit store: insert standalone unit: insert semantics: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 func getCurrentUnitsBySourceIDTx(tx *sql.Tx, sourceID string) ([]KnowledgeUnit, error) {
@@ -468,6 +546,19 @@ func (s *Store) UpdateUnitConceptID(unitID string, conceptID *string) error {
 		val, unitID)
 	if err != nil {
 		return fmt.Errorf("unit store: update concept id: %w", err)
+	}
+	return nil
+}
+
+// ClearConceptIDBySourceID resets concept_id for all of a source's current
+// KUs — used before a domain-switch re-match (MatchConcepts) so a KU that no
+// longer fits any concept in the new domain ends up unclassified instead of
+// silently keeping a concept_id that belongs to its old domain (matchConcepts
+// only ever writes a match it found; it never clears one that came up empty).
+func (s *Store) ClearConceptIDBySourceID(sourceID string) error {
+	_, err := s.db.Exec(`UPDATE knowledge_units SET concept_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE source_id = ? AND lifecycle = 'current'`, sourceID)
+	if err != nil {
+		return fmt.Errorf("unit store: clear concept id by source: %w", err)
 	}
 	return nil
 }

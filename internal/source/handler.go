@@ -27,6 +27,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sources/{id}", h.getSource)
 	mux.HandleFunc("DELETE /sources/{id}", h.deleteSource)
 	mux.HandleFunc("POST /sources/{id}/restore", h.restoreSource)
+	mux.HandleFunc("PATCH /sources/{id}/domain", h.setSourceDomain)
 	mux.HandleFunc("POST /sources/{id}/retry", h.retrySource)
 	mux.HandleFunc("POST /sources/{id}/reupload", h.reuploadSource)
 	mux.HandleFunc("POST /sources/{id}/reupload/retry", h.reuploadRetry)
@@ -240,9 +241,11 @@ func (h *Handler) getSource(w http.ResponseWriter, r *http.Request) {
 }
 
 // deleteSource dispatches DELETE /sources/:id by current status
-// (docs/impl/v1/lifecycle.md 步骤 2): failed sources are hard-deleted
-// (unchanged MVP behavior — nothing useful to preserve), any other status
-// is soft-deleted (KU/KP marked deprecated, rows and files kept).
+// (docs/impl/v1/lifecycle.md 步骤 2): failed sources — status=failed (parse
+// failure) or units_status=failed (knowledge-unit extraction failure, with
+// status itself completed) — are hard-deleted (unchanged MVP behavior —
+// nothing useful to preserve), any other status is soft-deleted (KU/KP
+// marked deprecated, rows and files kept).
 func (h *Handler) deleteSource(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -257,7 +260,7 @@ func (h *Handler) deleteSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if src.Status == "failed" {
+	if src.Status == "failed" || src.UnitsStatus == "failed" {
 		if err := h.svc.Delete(id); err != nil {
 			slog.Error("delete source failed", "error", err)
 			foundation.WriteError(w, http.StatusInternalServerError, "delete failed")
@@ -306,6 +309,40 @@ func (h *Handler) restoreSource(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"source_id":      id,
 		"restored_units": restored,
+	})
+}
+
+// setSourceDomain implements PATCH /sources/:id/domain: the file list's manual
+// override for a source's knowledge domain, for when matchDomain's LLM
+// classification picked the wrong one.
+func (h *Handler) setSourceDomain(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var body struct {
+		DomainID string `json:"domain_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := h.svc.SetDomain(id, body.DomainID); err != nil {
+		if strings.Contains(err.Error(), "source not found") {
+			foundation.WriteError(w, http.StatusNotFound, "source not found")
+			return
+		}
+		if strings.Contains(err.Error(), "unknown domain_id") {
+			foundation.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		slog.Error("set source domain failed", "error", err)
+		foundation.WriteError(w, http.StatusInternalServerError, "set domain failed")
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"source_id": id,
+		"domain_id": body.DomainID,
 	})
 }
 
@@ -395,8 +432,9 @@ func (h *Handler) retrySource(w http.ResponseWriter, r *http.Request) {
 
 	src, _ := h.svc.store.GetByID(id)
 	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"source_id": src.SourceID,
-		"status":    src.Status,
+		"source_id":    src.SourceID,
+		"status":       src.Status,
+		"units_status": src.UnitsStatus,
 	})
 }
 

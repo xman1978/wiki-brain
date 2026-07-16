@@ -11,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/foundation/queue"
 )
 
 func TestHandlerCreateSource(t *testing.T) {
@@ -470,6 +472,97 @@ func TestHandlerDeleteSource_Failed(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(origDir, sourceID+".pdf")); !os.IsNotExist(err) {
 		t.Error("original file should be deleted")
+	}
+}
+
+// TestHandlerDeleteSource_UnitsFailedHardDeletes covers a source whose parse
+// succeeded (status=completed) but whose knowledge-unit extraction failed
+// (units_status=failed): it must be treated as failed and hard-deleted, not
+// silently soft-deleted (which would leave the failed row/files behind with
+// no way to retry via reupload's filename dedup check).
+func TestHandlerDeleteSource_UnitsFailedHardDeletes(t *testing.T) {
+	svc, _ := setupTestService(t)
+	handler := NewHandler(svc)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	sourceID := "del-units-failed"
+	origDir := filepath.Join(svc.baseDir, "data", "sources", "original")
+	os.WriteFile(filepath.Join(origDir, sourceID+".pdf"), []byte("fake pdf"), 0644)
+
+	svc.store.Create(&Source{
+		SourceID: sourceID, Title: "Test", Format: "pdf", FileName: "test.pdf",
+		OriginalPath: "data/sources/original/" + sourceID + ".pdf",
+		MarkdownPath: "data/sources/markdown/" + sourceID + ".md", Status: "completed",
+	})
+	if err := svc.store.UpdateUnitsStatus(sourceID, "failed"); err != nil {
+		t.Fatalf("UpdateUnitsStatus: %v", err)
+	}
+
+	req := httptest.NewRequest("DELETE", "/sources/"+sourceID, nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (hard delete), body: %s", rr.Code, rr.Body.String())
+	}
+
+	if _, err := svc.store.GetByID(sourceID); err == nil {
+		t.Error("units-failed source should be deleted from DB")
+	}
+	if _, err := os.Stat(filepath.Join(origDir, sourceID+".pdf")); !os.IsNotExist(err) {
+		t.Error("original file should be deleted")
+	}
+}
+
+func TestHandlerRetrySource_UnitsFailedReenqueuesExtractOnly(t *testing.T) {
+	svc, _ := setupTestService(t)
+	handler := NewHandler(svc)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	sourceID := "retry-units-failed"
+	svc.store.Create(&Source{
+		SourceID: sourceID, Title: "Test", Format: "markdown", FileName: "test.md",
+		OriginalPath: "o/test.md", MarkdownPath: "m/test.md", Status: "completed",
+	})
+	if err := svc.store.UpdateUnitsStatus(sourceID, "failed"); err != nil {
+		t.Fatalf("UpdateUnitsStatus: %v", err)
+	}
+
+	enqueued := make(chan queue.UnitTask, 1)
+	svc.queue.RegisterHandler(queue.TaskTypeUnitExtract, func(payload interface{}) {
+		enqueued <- payload.(queue.UnitTask)
+	})
+	svc.queue.RegisterHandler(queue.TaskTypeSourceProcess, func(payload interface{}) {
+		t.Errorf("unexpected source_process re-enqueue for units_status=failed retry: %#v", payload)
+	})
+	svc.queue.StartN(1)
+	t.Cleanup(svc.queue.Shutdown)
+
+	req := httptest.NewRequest("POST", "/sources/"+sourceID+"/retry", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", rr.Code, rr.Body.String())
+	}
+
+	select {
+	case ut := <-enqueued:
+		if ut.SourceID != sourceID {
+			t.Errorf("enqueued unit_extract source_id = %q, want %q", ut.SourceID, sourceID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for unit_extract to be enqueued")
+	}
+
+	// status (parse stage) is untouched — only unit_extract should be
+	// re-enqueued, never the whole source_process pipeline.
+	got, err := svc.store.GetByID(sourceID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Status != "completed" {
+		t.Errorf("status = %q, want unchanged completed", got.Status)
 	}
 }
 

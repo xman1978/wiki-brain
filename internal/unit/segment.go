@@ -25,21 +25,31 @@ func BuildSegments(outlines []source.Outline, markdownLines []string, segmentMax
 	}
 
 	leaves := findLeaves(outlines)
-	if len(leaves) == 0 {
-		return nil
-	}
 
-	rawSegments := make([]Segment, 0, len(leaves))
+	candidates := make([]Segment, 0, len(leaves))
 	for _, leaf := range leaves {
-		if isMetadataSegment(markdownLines, leaf.LineStart, leaf.LineEnd, leaf.Title) {
-			continue
-		}
-		rawSegments = append(rawSegments, Segment{
+		candidates = append(candidates, Segment{
 			OutlineID: sql.NullString{String: leaf.OutlineID, Valid: true},
 			Title:     leaf.Title,
 			LineStart: leaf.LineStart,
 			LineEnd:   leaf.LineEnd,
 		})
+	}
+	// 补上没有任何叶节点认领的行区间（如标题误判把后续内容并入错误的标题辖区、
+	// 文档开头在第一个标题之前的正文）——否则这段内容在 Unit 提取阶段永远不会
+	// 被看到，也不会出现在 SourceCoverageReport 的缺口里（2026-07-16 QA 排查，
+	// 见 docs/impl/mvp/unit.md 覆盖率相关讨论）。
+	candidates = append(candidates, uncoveredSegments(leaves, markdownLines)...)
+
+	rawSegments := make([]Segment, 0, len(candidates))
+	for _, seg := range candidates {
+		if isMetadataSegment(markdownLines, seg.LineStart, seg.LineEnd, seg.Title) {
+			continue
+		}
+		rawSegments = append(rawSegments, seg)
+	}
+	if len(rawSegments) == 0 {
+		return nil
 	}
 
 	sort.Slice(rawSegments, func(i, j int) bool {
@@ -47,6 +57,69 @@ func BuildSegments(outlines []source.Outline, markdownLines []string, segmentMax
 	})
 
 	return mergeSmallSegments(rawSegments, outlines, markdownLines, minSegmentChars)
+}
+
+// uncoveredSegments returns one synthetic Segment per contiguous line range
+// in [1, len(markdownLines)] that no leaf covers and that has at least one
+// non-blank line (an all-blank gap — e.g. the lone empty line of a truly
+// empty document — has nothing worth an extraction call). A leaf's own line
+// range can miss part of the document even when every leaf is individually
+// well-formed — e.g. a misdetected heading whose declared range absorbs
+// unrelated content up to the next real heading, leaving that real heading's
+// parent's own range uncovered by any leaf; or plain text before the first
+// detected heading, which never becomes part of any outline node at all.
+// Without this, such ranges silently never reach Unit extraction.
+func uncoveredSegments(leaves []source.Outline, markdownLines []string) []Segment {
+	totalLines := len(markdownLines)
+	if totalLines <= 0 {
+		return nil
+	}
+	covered := make([]bool, totalLines+1) // 1-indexed; index 0 unused
+	for _, leaf := range leaves {
+		start, end := leaf.LineStart, leaf.LineEnd
+		if start < 1 {
+			start = 1
+		}
+		if end > totalLines {
+			end = totalLines
+		}
+		for line := start; line <= end; line++ {
+			covered[line] = true
+		}
+	}
+
+	addGap := func(gaps []Segment, start, end int) []Segment {
+		hasContent := false
+		for line := start; line <= end; line++ {
+			if strings.TrimSpace(markdownLines[line-1]) != "" {
+				hasContent = true
+				break
+			}
+		}
+		if !hasContent {
+			return gaps
+		}
+		return append(gaps, Segment{Title: "未识别标题内容", LineStart: start, LineEnd: end})
+	}
+
+	var gaps []Segment
+	gapStart := -1
+	for line := 1; line <= totalLines; line++ {
+		if !covered[line] {
+			if gapStart == -1 {
+				gapStart = line
+			}
+			continue
+		}
+		if gapStart != -1 {
+			gaps = addGap(gaps, gapStart, line-1)
+			gapStart = -1
+		}
+	}
+	if gapStart != -1 {
+		gaps = addGap(gaps, gapStart, totalLines)
+	}
+	return gaps
 }
 
 func findLeaves(outlines []source.Outline) []source.Outline {

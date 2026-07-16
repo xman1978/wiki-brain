@@ -799,6 +799,7 @@ const S = {
   conceptStatus:       'pending_confirm',
   conceptCandidates:   [],
   conceptSelectedId:   null,
+  allDomains:          [],
 };
 
 // ═══════════════════════════════════════════════════════
@@ -1887,8 +1888,15 @@ function renderPersistedSourceTimeline(sourceId, d) {
   var unitsSettled = d.units_status === 'completed' || d.units_status === 'failed';
   if (d.status === 'processing' || d.status === 'pending' || (d.status === 'completed' && !unitsSettled)) {
     scheduleSourceTimelinePoll(sourceId);
-  } else if (S.sourceTimelineSourceId === sourceId) {
-    closeSourceTimelineProgress();
+  } else {
+    // Reached a terminal state (status=failed, or status=completed with
+    // units settled) — the 来源列表 badge (sourceDisplayStatus) is driven by
+    // this same status/units_status pair, so it needs the same refresh
+    // pollSourceTimeline already does for the just-uploaded path. Without
+    // this, viewing an existing card's timeline via SSE/showTimelineForSource
+    // (as opposed to the immediate post-upload poll) never updates the list.
+    loadSources();
+    if (S.sourceTimelineSourceId === sourceId) closeSourceTimelineProgress();
   }
 }
 
@@ -2058,6 +2066,28 @@ async function pollSourceTimeline(sourceId, title, uploadStart, uploadGeneration
   S.pollTimers[sourceId] = setTimeout(function() { pollSourceTimeline(sourceId, title, uploadStart, uploadGeneration); }, 3000);
 }
 
+// 文件列表内联知识领域下拉（PATCH /sources/:id/domain）：域分类器判错域时人工纠正，
+// 不用等重新上传，见 preset/domains.json 域定义 + 用户 2026-07-16 反馈。
+function sourceDomainSelectHtml(s) {
+  var opts = '<option value="">未分类</option>' + S.allDomains.map(function(d) {
+    return '<option value="' + esc(d.domain_id) + '"' + (d.domain_id === s.domain_id ? ' selected' : '') + '>' + esc(d.name) + '</option>';
+  }).join('');
+  return '<select class="badge" style="background:var(--bg-3);color:var(--text-2);border:none;cursor:pointer" onclick="event.stopPropagation()" onchange="event.stopPropagation();updateSourceDomain(\'' + esc(s.source_id) + '\',this)">' + opts + '</select>';
+}
+
+async function updateSourceDomain(sourceId, selectEl) {
+  var domainId = selectEl.value;
+  var statusEl = document.getElementById('sd-status-' + sourceId);
+  if (statusEl) statusEl.textContent = '保存中...';
+  try {
+    var r = await api('PATCH', '/sources/' + sourceId + '/domain', { domain_id: domainId });
+    if (statusEl) statusEl.textContent = r.ok ? '已保存' : '保存失败';
+  } catch(e) {
+    if (statusEl) statusEl.textContent = '保存失败';
+  }
+  if (statusEl) setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 2000);
+}
+
 var sourcePage = 0;
 var sourcePageSize = 10;
 async function loadSources() {
@@ -2078,6 +2108,7 @@ async function loadSources() {
     var countEl = document.getElementById('sourcesCount');
     if (countEl) countEl.textContent = '(' + total + ')';
     // update domain filter options
+    if (Array.isArray(body.domains)) S.allDomains = body.domains;
     var domainSel = document.getElementById('sourceDomainFilter');
     if (domainSel && body.domains) {
       var curVal = domainSel.value;
@@ -2098,15 +2129,16 @@ async function loadSources() {
       return '<div class="source-card" id="sc-' + esc(s.source_id) + '" onclick="showTimelineForSource(\'' + esc(s.source_id) + '\')"><div class="sc-title">' + esc(s.title || s.source_id) + '</div><div class="sc-meta">\
         <span class="status-chip status-' + (sourceDisplayStatus(s) || 'unknown') + '">' + statusLabel(sourceDisplayStatus(s)) + '</span>\
         <span class="badge">' + esc(s.format || '') + '</span>\
-        ' + (s.domain_name ? '<span class="badge" style="background:var(--bg-3);color:var(--text-2)">' + esc(s.domain_name) + '</span>' : '') + '\
+        ' + sourceDomainSelectHtml(s) + '\
+        <span id="sd-status-' + esc(s.source_id) + '" style="font-size:10px;color:var(--text-3)"></span>\
         <span style="font-size:10px;color:var(--text-3)">' + dateStr(s.created_at) + '</span>\
       </div><div class="sc-actions">\
         <button class="btn btn-sm" onclick="viewSource(\'' + esc(s.source_id) + '\')">详情</button>\
         ' + (s.status==='completed' ? '<button class="btn btn-sm" onclick="window.open(S.baseUrl+\'/sources/' + esc(s.source_id) + '/preview\',\'_blank\')">预览</button>' : '') + '\
-        ' + (s.status==='completed' ? '<button class="btn btn-sm" onclick="event.stopPropagation();reuploadSource(\'' + esc(s.source_id) + '\')">重新上传</button>' : '') + '\
-        ' + (s.status==='completed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="event.stopPropagation();deleteSource(\'' + esc(s.source_id) + '\',false)">删除</button>' : '') + '\
-        ' + (s.status==='failed' ? '<button class="btn btn-sm" onclick="event.stopPropagation();retrySource(\'' + esc(s.source_id) + '\')">重试</button>' : '') + '\
-        ' + (s.status==='failed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="event.stopPropagation();deleteSource(\'' + esc(s.source_id) + '\',true)">删除</button>' : '') + '\
+        ' + (sourceDisplayStatus(s)==='completed' ? '<button class="btn btn-sm" onclick="event.stopPropagation();reuploadSource(\'' + esc(s.source_id) + '\')">重新上传</button>' : '') + '\
+        ' + (sourceDisplayStatus(s)==='completed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="event.stopPropagation();deleteSource(\'' + esc(s.source_id) + '\',false)">删除</button>' : '') + '\
+        ' + (sourceDisplayStatus(s)==='failed' ? '<button class="btn btn-sm" onclick="event.stopPropagation();retrySource(\'' + esc(s.source_id) + '\')">重试</button>' : '') + '\
+        ' + (sourceDisplayStatus(s)==='failed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="event.stopPropagation();deleteSource(\'' + esc(s.source_id) + '\',true)">删除</button>' : '') + '\
         ' + (s.status==='deleted' ? '<button class="btn btn-sm" style="color:var(--green)" onclick="event.stopPropagation();restoreSource(\'' + esc(s.source_id) + '\')">恢复</button>' : '') + '\
         <button class="copy-btn" onclick="event.stopPropagation();copy(\'' + esc(s.source_id) + '\',this)">复制ID</button>\
       </div></div>';
@@ -2134,11 +2166,11 @@ async function viewSource(sourceId) {
         <div class="detail-row"><span class="dl">创建时间</span><span class="dv">' + dateStr(d.created_at) + '</span></div>\
         <div class="modal-actions">\
           ' + (d.status==='completed' ? '<button class="btn btn-sm" onclick="window.open(S.baseUrl+\'/sources/' + esc(d.source_id) + '/preview\',\'_blank\')">预览</button>' : '') + '\
-          ' + (d.status==='completed' ? '<button class="btn btn-sm" onclick="reuploadSource(\'' + esc(d.source_id) + '\')">重新上传</button>' : '') + '\
+          ' + (sourceDisplayStatus(d)==='completed' ? '<button class="btn btn-sm" onclick="reuploadSource(\'' + esc(d.source_id) + '\')">重新上传</button>' : '') + '\
           ' + (d.status==='completed' ? '<button class="btn btn-sm" onclick="verifyCoverage(\'' + esc(d.source_id) + '\')">验证</button>' : '') + '\
-          ' + (d.status==='completed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteSource(\'' + esc(d.source_id) + '\',false);closeSourceDetail()">删除</button>' : '') + '\
-          ' + (d.status==='failed' ? '<button class="btn btn-sm" onclick="retrySource(\'' + esc(d.source_id) + '\');closeSourceDetail()">重试</button>' : '') + '\
-          ' + (d.status==='failed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteSource(\'' + esc(d.source_id) + '\',true);closeSourceDetail()">删除</button>' : '') + '\
+          ' + (sourceDisplayStatus(d)==='completed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteSource(\'' + esc(d.source_id) + '\',false);closeSourceDetail()">删除</button>' : '') + '\
+          ' + (sourceDisplayStatus(d)==='failed' ? '<button class="btn btn-sm" onclick="retrySource(\'' + esc(d.source_id) + '\');closeSourceDetail()">重试</button>' : '') + '\
+          ' + (sourceDisplayStatus(d)==='failed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteSource(\'' + esc(d.source_id) + '\',true);closeSourceDetail()">删除</button>' : '') + '\
           ' + (d.status==='deleted' ? '<button class="btn btn-sm" style="color:var(--green)" onclick="restoreSource(\'' + esc(d.source_id) + '\');closeSourceDetail()">恢复</button>' : '') + '\
           <button class="btn" onclick="closeSourceDetail()">关闭</button>\
         </div>\
@@ -2223,7 +2255,13 @@ async function verifyCoverage(sourceId) {
       html += '<div style="margin-top:6px">' + flagged.map(function(s) {
         var failedTag = s.has_extraction_failed ? '<span class="badge gap" style="margin-left:6px">提取失败</span>' : '';
         var gapsHtml = (s.gaps || []).map(function(g) {
-          return '<div style="padding:2px 0 2px 10px;color:var(--text-3)">L' + g.line_start + '-L' + g.line_end + '：' + esc(g.preview || '') + '</div>';
+          var gid = 'gapfix-' + g.line_start + '-' + g.line_end;
+          return '<div id="' + gid + '-row" style="padding:2px 0 2px 10px;color:var(--text-3);display:flex;align-items:center;gap:8px">\
+            <span style="flex:1">L' + g.line_start + '-L' + g.line_end + '：' + esc(g.preview || '') + '</span>\
+            <button class="btn btn-sm" id="' + gid + '-btn" onclick="fixCoverageGap(\'' + esc(sourceId) + '\',' + g.line_start + ',' + g.line_end + ',\'' + gid + '\')">修复</button>\
+            <button class="btn btn-sm" id="' + gid + '-prev-btn" onclick="mergeCoverageGap(\'' + esc(sourceId) + '\',' + g.line_start + ',' + g.line_end + ',\'prev\',\'' + gid + '\')">向上合并</button>\
+            <button class="btn btn-sm" id="' + gid + '-next-btn" onclick="mergeCoverageGap(\'' + esc(sourceId) + '\',' + g.line_start + ',' + g.line_end + ',\'next\',\'' + gid + '\')">向下合并</button>\
+          </div>';
         }).join('');
         return '<div style="padding:5px 0;border-bottom:1px solid var(--border-lt);font-size:12px">\
           <span>' + esc(s.outline_title || '') + ' (L' + s.line_start + '-L' + s.line_end + ', ' + s.covered_lines + '/' + s.total_lines + ')</span>' + failedTag + gapsHtml + '\
@@ -2232,6 +2270,75 @@ async function verifyCoverage(sourceId) {
     }
     el.innerHTML = html;
   } catch(e) { el.innerHTML = '<h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">覆盖率校验</h3><div style="margin-top:8px;font-size:12px;color:var(--red)">校验失败：' + esc(e.message) + '</div>'; }
+}
+
+// 手动修复覆盖率缺口（POST /sources/:id/coverage/fix）：把这段没被任何知识
+// 单元覆盖的原文当一个知识单元，重新提取知识点+语义（不重新做边界切分判断），
+// 成功则作为新知识单元写入，不影响其余已有知识单元；成功/失败后都重新校验一次
+// 覆盖率，让列表反映最新状态。
+async function fixCoverageGap(sourceId, lineStart, lineEnd, gid) {
+  var btn = document.getElementById(gid + '-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '修复中...'; }
+  try {
+    var r = await api('POST', '/sources/' + sourceId + '/coverage/fix', { line_start: lineStart, line_end: lineEnd });
+    if (r.ok) {
+      verifyCoverage(sourceId);
+      loadSourceUnits(sourceId);
+    } else {
+      alert('修复失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+      if (btn) { btn.disabled = false; btn.textContent = '修复'; }
+    }
+  } catch(e) {
+    alert('修复出错：' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = '修复'; }
+  }
+}
+
+// 手动合并覆盖率缺口（POST /sources/:id/coverage/merge）：把这段零碎内容
+// （如单行的 /etc/hosts 条目，本身不构成独立知识点）并入相邻知识单元的行区间，
+// 不新建知识点、不调用模型——和自动提取阶段的缺口合并（predup.go
+// mergeGapIntoNeighborInMemory）是同一套逻辑，只是这里手动选方向。合并前先
+// GET merge-target 查出目标知识单元的内容，弹窗给用户确认，避免误合并到不相关
+// 的相邻单元——这一步之后没有再校正的机会（目标单元的 center/points 不会重算）。
+async function mergeCoverageGap(sourceId, lineStart, lineEnd, direction, gid) {
+  var fixBtn = document.getElementById(gid + '-btn');
+  var prevBtn = document.getElementById(gid + '-prev-btn');
+  var nextBtn = document.getElementById(gid + '-next-btn');
+  var btn = direction === 'prev' ? prevBtn : nextBtn;
+  var dirLabel = direction === 'prev' ? '向上合并' : '向下合并';
+  var reset = function(label) {
+    [fixBtn, prevBtn, nextBtn].forEach(function(b) { if (b) b.disabled = false; });
+    if (btn) btn.textContent = label;
+  };
+
+  [fixBtn, prevBtn, nextBtn].forEach(function(b) { if (b) b.disabled = true; });
+  if (btn) btn.textContent = '查询中...';
+  try {
+    var q = '?line_start=' + lineStart + '&line_end=' + lineEnd + '&direction=' + direction;
+    var pr = await api('GET', '/sources/' + sourceId + '/coverage/merge-target' + q);
+    if (!pr.ok) {
+      alert('查询相邻知识单元失败：' + (pr.data && pr.data.message ? pr.data.message : JSON.stringify(pr.data)));
+      reset(dirLabel);
+      return;
+    }
+    var t = pr.data;
+    var msg = '将把 L' + lineStart + '-L' + lineEnd + ' 合并到以下知识单元（合并后不会重新生成该单元的知识点/语义）：\n\n'
+      + t.center + '（L' + t.line_start + '-L' + t.line_end + '）\n\n' + t.content + '\n\n确认合并？';
+    if (!confirm(msg)) { reset(dirLabel); return; }
+
+    if (btn) btn.textContent = '合并中...';
+    var r = await api('POST', '/sources/' + sourceId + '/coverage/merge', { line_start: lineStart, line_end: lineEnd, direction: direction });
+    if (r.ok) {
+      verifyCoverage(sourceId);
+      loadSourceUnits(sourceId);
+    } else {
+      alert('合并失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+      reset(dirLabel);
+    }
+  } catch(e) {
+    alert('合并出错：' + e.message);
+    reset(dirLabel);
+  }
 }
 
 async function retrySource(sourceId) {
@@ -3162,6 +3269,9 @@ function statusLabel(s) { return {pending:'等待中',processing:'处理中',com
 // shows as "处理中" until units_status also reaches completed, instead of
 // the badge claiming 已完成 while extraction hasn't even started yet.
 function sourceDisplayStatus(s) {
+  if (s.status === 'completed' && s.units_status === 'failed') {
+    return 'failed';
+  }
   if (s.status === 'completed' && s.units_status && s.units_status !== 'completed') {
     return 'processing';
   }

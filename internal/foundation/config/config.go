@@ -128,6 +128,7 @@ type RetrievalConfig struct {
 	OutlineFTSMinScore         float64 `yaml:"outline_fts_min_score"`
 	RerankTopN                 int     `yaml:"rerank_top_n"`
 	RerankExtractBatchMaxChars int     `yaml:"rerank_extract_batch_max_chars"`
+	RerankExtractBatchMaxUnits int     `yaml:"rerank_extract_batch_max_units"`
 	RerankExtractConcurrency   int     `yaml:"rerank_extract_concurrency"`
 	RerankJudgeBatchMaxChars   int     `yaml:"rerank_judge_batch_max_chars"`
 	RerankJudgeConcurrency     int     `yaml:"rerank_judge_concurrency"`

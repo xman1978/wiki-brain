@@ -86,6 +86,59 @@ func TestPublishGenerationRejectsInvalidSemanticsBeforeWriting(t *testing.T) {
 	}
 }
 
+// TestPublishGenerationDiscardsUnitWhenSemanticsMissing covers the "discard
+// units semantics extraction gave up on" policy: a candidate simply absent
+// from the semantics map (as opposed to present-but-invalid, covered by
+// TestPublishGenerationRejectsInvalidSemanticsBeforeWriting) must not be
+// published at all — no knowledge_units row, no knowledge_points rows —
+// while every other candidate in the same generation still publishes
+// normally.
+func TestPublishGenerationDiscardsUnitWhenSemanticsMissing(t *testing.T) {
+	store := setupTestStore(t)
+	pool := []unitCandidate{
+		{id: "u1", llm: llmUnit{Center: "Policy limits"}, lineStart: 1, lineEnd: 1, promptVersion: promptVersionSplitExtract},
+		{id: "u2", llm: llmUnit{Center: "Heading only"}, lineStart: 2, lineEnd: 2, promptVersion: promptVersionSplitExtract},
+	}
+	semantics := map[string]rerank.Semantics{
+		"u1": {
+			UnitID: "u1", SourceTheme: "policy", ContentTheme: "limits", Intent: "explain",
+			Object: "employees", Scope: "travel", KeyFacts: []string{"The limit is 500."},
+			PromptVersion: rerank.ExtractPromptVersion,
+		},
+		// u2 intentionally has no entry — simulates extractRerankSemantics
+		// giving up on it after every fallback tier.
+	}
+
+	_, inserted, _, err := store.PublishGeneration("src-1", pool, semantics)
+	if err != nil {
+		t.Fatalf("PublishGeneration: %v", err)
+	}
+	if len(inserted) != 1 || inserted[0].UnitID != "u1" {
+		t.Fatalf("inserted = %+v, want only u1 (u2 discarded, semantics never resolved)", inserted)
+	}
+
+	var unitCount, semanticsCount int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE source_id = 'src-1'`).Scan(&unitCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM unit_rerank_semantics`).Scan(&semanticsCount); err != nil {
+		t.Fatal(err)
+	}
+	if unitCount != 1 {
+		t.Fatalf("knowledge_units rows = %d, want 1 (u2 discarded entirely)", unitCount)
+	}
+	if semanticsCount != 1 {
+		t.Fatalf("unit_rerank_semantics rows = %d, want 1 (only u1)", semanticsCount)
+	}
+	var semanticUnitID string
+	if err := store.db.QueryRow(`SELECT unit_id FROM unit_rerank_semantics`).Scan(&semanticUnitID); err != nil {
+		t.Fatal(err)
+	}
+	if semanticUnitID != "u1" {
+		t.Fatalf("unit_rerank_semantics row is for %q, want u1", semanticUnitID)
+	}
+}
+
 func TestInsertAndGetUnit(t *testing.T) {
 	store := setupTestStore(t)
 

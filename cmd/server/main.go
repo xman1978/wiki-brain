@@ -140,6 +140,7 @@ func main() {
 	unitSvc := unit.NewService(unitStore, sourceStore, llmClient, idxMgr.Units, idxMgr.Points, q, cfg)
 	unitSvc.SetBroadcaster(broadcaster)
 	sourceSvc.SetLifecycleSetter(unitSvc)
+	sourceSvc.SetConceptMatcher(unitSvc)
 
 	activationMatcher := activation.NewMatcher(activationStore)
 	activationSvc := activation.NewService(activationStore, activationMatcher)

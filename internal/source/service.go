@@ -33,6 +33,7 @@ type Service struct {
 	baseDir         string
 	broadcaster     *progress.Broadcaster
 	lifecycleSetter LifecycleSetter
+	conceptMatcher  ConceptMatcher
 }
 
 // LifecycleSetter is implemented by the unit package's Service. Source depends
@@ -53,6 +54,19 @@ type LifecycleSetter interface {
 	// reparents the shadow's rows, or the documents keep the (now-deleted)
 	// shadow source_id and Retrieval's source filter drops every hit.
 	ReindexSource(sourceID string) error
+}
+
+// ConceptMatcher is implemented by the unit package's Service. SetDomain uses
+// it to re-run concept matching for a source's current KUs after a manual
+// domain reassignment — matchDomain/matchConcepts normally run once, back to
+// back, during unit_extract, so a KU's concept_id otherwise keeps pointing at
+// a concept from whatever domain the source had at extraction time even after
+// a human corrects the domain (docs/impl/v1/lifecycle.md's domain-fix flow,
+// added per user feedback 2026-07-16). Async and best-effort: SetDomain does
+// not wait on it, matching the existing "go func(){ TouchLastUsed }" pattern
+// in tryFastPath.
+type ConceptMatcher interface {
+	MatchConcepts(ctx context.Context, sourceID, domainID string)
 }
 
 func NewService(store *Store, fv FileViewClient, lc llm.LLMClient, outlineIdx bleve.Index, q *queue.Queue, cfg *config.Config, baseDir string) *Service {
@@ -78,6 +92,10 @@ func (s *Service) SetUnitIndexes(unitsIdx, pointsIdx bleve.Index) {
 
 func (s *Service) SetLifecycleSetter(ls LifecycleSetter) {
 	s.lifecycleSetter = ls
+}
+
+func (s *Service) SetConceptMatcher(cm ConceptMatcher) {
+	s.conceptMatcher = cm
 }
 
 func (s *Service) SetBroadcaster(b *progress.Broadcaster) {
@@ -490,6 +508,49 @@ func (s *Service) matchDomain(ctx context.Context, sourceID string) {
 	}
 }
 
+// SetDomain implements the file list's manual domain override (文件列表可修改
+// 所属知识领域): matchDomain's LLM classification can misfile a source when the
+// domain definitions don't clearly cover its topic, so a human correction has
+// to be possible without waiting on a re-import. An empty domainID clears the
+// assignment back to unclassified. When the domain actually changes, this
+// also kicks off async concept re-matching (see ConceptMatcher) so the
+// source's KUs stop pointing at concepts from their old domain.
+func (s *Service) SetDomain(sourceID, domainID string) error {
+	src, err := s.store.GetByID(sourceID)
+	if err != nil {
+		return fmt.Errorf("source not found")
+	}
+
+	if domainID != "" {
+		exists, err := s.store.DomainExists(domainID)
+		if err != nil {
+			return fmt.Errorf("source: set domain: %w", err)
+		}
+		if !exists {
+			return fmt.Errorf("unknown domain_id: %s", domainID)
+		}
+	}
+
+	oldDomainID := ""
+	if src.DomainID.Valid {
+		oldDomainID = src.DomainID.String
+	}
+
+	if domainID == "" {
+		err = s.store.UpdateDomainID(sourceID, nil)
+	} else {
+		err = s.store.UpdateDomainID(sourceID, &domainID)
+	}
+	if err != nil {
+		return err
+	}
+
+	if domainID != oldDomainID && s.conceptMatcher != nil {
+		go s.conceptMatcher.MatchConcepts(context.Background(), sourceID, domainID)
+	}
+	return nil
+}
+
 func (s *Service) indexOutlines(outlines []Outline) {
 	batch := s.outlineIdx.NewBatch()
 	for _, o := range outlines {
@@ -578,14 +639,15 @@ func (s *Service) removeIndexedArtifacts(src *Source) {
 }
 
 // Delete 删除失败状态的 Source 及其关联资源（文件、DB 记录、Bleve 索引）。
-// 仅对 status=failed 的 Source 生效；其他状态走 SoftDelete（软删除）。
+// 仅对 status=failed 或 units_status=failed 的 Source 生效（后者是 status=
+// completed 但知识单元抽取阶段失败的情形）；其他状态走 SoftDelete（软删除）。
 func (s *Service) Delete(sourceID string) error {
 	src, err := s.store.GetByID(sourceID)
 	if err != nil {
 		return fmt.Errorf("source not found: %w", err)
 	}
-	if src.Status != "failed" {
-		return fmt.Errorf("only failed sources can be deleted (current: %s)", src.Status)
+	if src.Status != "failed" && src.UnitsStatus != "failed" {
+		return fmt.Errorf("only failed sources can be deleted (current: status=%s units_status=%s)", src.Status, src.UnitsStatus)
 	}
 
 	s.removeIndexedArtifacts(src)
@@ -934,13 +996,32 @@ func copyFile(srcPath, dstPath string) error {
 	return os.WriteFile(dstPath, data, 0644)
 }
 
+// Retry re-runs whichever stage failed. A source-level failure (status=
+// failed, e.g. parse/outline) restarts the whole source_process pipeline
+// from scratch. A source that parsed fine but whose knowledge-unit
+// extraction failed (status=completed, units_status=failed) only re-enqueues
+// unit_extract — nothing from the failed attempt was ever persisted (Extract
+// publishes the whole generation in one call, only after extraction and
+// semantics both succeed), so re-running it is safe to repeat as many times
+// as needed without leaving duplicate or partial knowledge_units/points/
+// semantics behind.
 func (s *Service) Retry(ctx context.Context, sourceID string) error {
 	src, err := s.store.GetByID(sourceID)
 	if err != nil {
 		return err
 	}
 	if src.Status != "failed" {
-		return fmt.Errorf("source %s is not in failed state (current: %s)", sourceID, src.Status)
+		if src.UnitsStatus != "failed" {
+			return fmt.Errorf("source %s is not in failed state (current: status=%s units_status=%s)", sourceID, src.Status, src.UnitsStatus)
+		}
+		ok := s.queue.Enqueue(queue.Task{
+			Type:    queue.TaskTypeUnitExtract,
+			Payload: queue.UnitTask{SourceID: sourceID},
+		})
+		if !ok {
+			return fmt.Errorf("failed to enqueue retry")
+		}
+		return nil
 	}
 
 	// Clear existing outlines

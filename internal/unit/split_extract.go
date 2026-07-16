@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	promptVersionBoundaryExtract = "v2"
+	promptVersionBoundaryExtract = "v3"
 	promptVersionPointExtract    = "v3"
 	// promptVersionSplitExtract tags candidates produced by the two-step
 	// boundary+point split pipeline — derived from the two prompts' own

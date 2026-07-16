@@ -416,17 +416,24 @@ func TestRerankRejectsMissingSemanticsListsAllUnitIDs(t *testing.T) {
 	}
 }
 
-func TestRerankRejectsStaleSemanticsListsAllUnitIDs(t *testing.T) {
+// TestRerankUsesStaleSemanticsWithoutRejecting confirms prompt_version is no
+// longer a completeness gate (see rerank's staleCount comment): a row from
+// an older extraction prompt is still fed to the judge like any other, so a
+// prompt wording change doesn't instantly break rerank for the whole
+// existing corpus until every source is re-extracted. Only a genuinely
+// missing row is treated as an integrity problem — that's covered by
+// TestRerankRejectsMissingSemanticsListsAllUnitIDs.
+func TestRerankUsesStaleSemanticsWithoutRejecting(t *testing.T) {
 	svc, tracker, candidates := setupPersistedSemanticRerank(t, 4000, 4)
 	if _, err := svc.store.db.Exec(`UPDATE unit_rerank_semantics SET prompt_version = 'v0' WHERE unit_id IN ('u1', 'u2')`); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, reverseCandidates(candidates))
-	assertRerankIntegrityError(t, err,
-		"retrieval: rerank semantics integrity: stale unit_ids: u1, u2")
-	if tracker.Count("rerank_judge.md") != 0 {
-		t.Fatalf("judge calls = %d, want 0", tracker.Count("rerank_judge.md"))
+	if _, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, reverseCandidates(candidates)); err != nil {
+		t.Fatalf("rerank returned error for stale (not missing) semantics: %v", err)
+	}
+	if tracker.Count("rerank_judge.md") == 0 {
+		t.Fatal("judge calls = 0, want at least 1 — stale semantics should still be judged")
 	}
 }
 
