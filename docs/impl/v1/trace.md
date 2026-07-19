@@ -35,6 +35,13 @@ EvidenceSet 新增：
   path_type          fast / full / wiki
   activation_hits[]  [{ link_id, point_id, match_score }]
                      激活层命中的链接及其目标 KP（full 路径为空数组）
+  gap_reason         no_candidates / judge_filtered / ""（产出规则见
+                     retrieval.md 步骤 6，Trace 只读取，用于 knowledge_gap
+                     payload，见下方「learning_events 事件类型扩展」）
+  filtered_evidence[] 被 rerank judge 判无关的候选快照（结构同 Evidence，
+                     role="irrelevant"）；Trace 不读取，随 EvidenceSet 原样
+                     经 AnswerResult 落入 answers.snapshot，供 study.md
+                     经 last_trace_id 回查
 
 EvidenceItem 新增（证据挖掘产出，见 evidence.md）：
   mined              bool，该证据是否为挖掘出的片段（false=整段回退）
@@ -45,13 +52,16 @@ EvidenceItem 新增（证据挖掘产出，见 evidence.md）：
 `learning_events` 表结构不变，`event_type` 枚举扩展：
 
 ```text
-既有：knowledge_gap / user_correction
+既有：knowledge_gap / user_correction（knowledge_gap payload 结构 V1 扩展，见下）
 新增：activation_success / activation_failure / activation_gap
 ```
 
 各类型 payload 结构：
 
 ```json
+// knowledge_gap —— 检索质量为 gap 时产生（MVP 既有事件，V1 payload 扩展）
+{ "question": "...", "reason": "no_candidates | judge_filtered | answer_error | unspecified" }
+
 // activation_success —— 每个满足条件的 link 一条事件
 { "link_id": "...", "point_id": "...", "question_terms": "...",
   "match_score": 0.83, "cited_fact_ids": ["..."] }
@@ -75,6 +85,15 @@ confident / partial / gap 分级规则、question_hash / question_terms 归一�
 `path_type=wiki` 的补充规则：Wiki 直答的 evidence_snapshot 结构为 `{ wiki_page_id, cited_point_ids }`（见 wiki.md 步骤 4），分级按 cited_point_ids 判定——非空 → confident 且 `direct_point_ids = cited_point_ids`；为空（citations 被白名单校验清空）→ partial。共现统计照常按 direct_point_ids 归集。
 
 片段级证据的影响：证据挖掘后 citations 引用的是片段级 fact_id，但每个片段仍绑定 point_id（继承所属 KU 证据的 point_id，见 evidence.md），因此 `direct_point_ids` 的计算方式不变，精度自然提升——只有片段真正被引用的 KP 才计入。
+
+`knowledge_gap` 事件 payload 的 `reason` 判定（quality==gap 时，写入事件前）：
+
+```text
+AnswerResult.Path == "error"        → "answer_error"
+    （检索阶段本可能有证据，但 LLM 生成失败，不是真正的知识缺口）
+EvidenceSet.GapReason != ""         → 原样取值（"no_candidates" 或 "judge_filtered"）
+其余（理论边界情况，如 EvidenceSet == nil） → "unspecified"
+```
 
 ### 步骤 2：写入 trace（扩展）
 
@@ -145,7 +164,8 @@ GET /learning-events
 
 ```text
 基础设施：SQLite（migration）、异步任务队列（trace_write，沿用）
-Retrieval：EvidenceSet 新增 path_type / activation_hits 字段（见 retrieval.md）
+Retrieval：EvidenceSet 新增 path_type / activation_hits / gap_reason /
+           filtered_evidence 字段（见 retrieval.md）
 Answer：   AnswerResult 原样传递扩展后的 EvidenceSet，Answer 自身无逻辑改动
 Study：    消费新增事件类型（只读，经 learning_events.processed 标记）
 Activation：不直接依赖——Trace 只记录 link_id，不读写 activation_links 表
@@ -162,5 +182,7 @@ wiki 路径不产生激活类事件；
 一次问答多链接命中时事件逐条产生且 trace_id 一致；
 user_correction 对 fast 路径问答携带 link_ids；
 共现统计行为与 MVP 完全一致（片段级 citations 不改变 point_id 归集逻辑）；
+knowledge_gap payload.reason 按 Path==error → answer_error、
+  GapReason 非空 → 原样取值、其余 → unspecified 的顺序正确判定；
 fake 队列下全部事件产生路径测试稳定运行。
 ```

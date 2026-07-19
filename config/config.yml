@@ -93,10 +93,9 @@ retrieval:
   rerank_extract_concurrency:     2     # 语义抽取 batch 并发数
   rerank_judge_batch_max_chars:   4000  # 单次 rerank 判断传给模型的候选语义字符预算
   rerank_judge_concurrency:       4     # rerank 判断 batch 并发数
-  activation_match_min:          0.7   # 步骤2 计分阈值（docs/impl/v1/activation.md）
-  activation_match_min_fallback: 0.85  # 四元组缺失时的回退匹配阈值
-  activation_match_top:          5     # 匹配结果保留条数
+  activation_match_top:          5     # 匹配结果保留条数（四元组完全匹配，无阈值可调）
   fast_path:              true   # false 时激活层只记录命中、不走快路径（灰度开关）
+  fast_path_verify:       true   # 快路径证据充分性校验开关（false 时跳过校验，仅灰度/评估用）
   fast_path_fallback:     true   # 快路径回答失败时自动回落慢路径
   wiki_min_score:         2.0    # Wiki 直答的 Bleve 最低分（Wiki 模块未实现前不生效）
 
@@ -120,7 +119,7 @@ wiki:
 # Study 模块
 study:
   schedule_interval:       "1h"
-  candidate_confident_min: 5
+  candidate_confident_min: 3
   candidate_ratio_min:     0.6
   wiki_kp_min:             4
   wiki_confident_min:      8

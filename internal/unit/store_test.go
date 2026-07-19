@@ -38,7 +38,6 @@ func TestPublishGenerationRejectsInvalidSemanticsBeforeWriting(t *testing.T) {
 		Intent:        "explain",
 		Object:        "employees",
 		Scope:         "travel",
-		KeyFacts:      []string{"The limit is 500."},
 		PromptVersion: rerank.ExtractPromptVersion,
 	}
 	tests := []struct {
@@ -53,15 +52,12 @@ func TestPublishGenerationRejectsInvalidSemanticsBeforeWriting(t *testing.T) {
 		{name: "empty intent", mutate: func(s *rerank.Semantics) { s.Intent = "" }, want: "intent"},
 		{name: "empty object", mutate: func(s *rerank.Semantics) { s.Object = "" }, want: "object"},
 		{name: "empty scope", mutate: func(s *rerank.Semantics) { s.Scope = "" }, want: "scope"},
-		{name: "null key facts", mutate: func(s *rerank.Semantics) { s.KeyFacts = nil }, want: "key_facts"},
-		{name: "empty key fact", mutate: func(s *rerank.Semantics) { s.KeyFacts = []string{" "} }, want: "key_facts"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := setupTestStore(t)
 			semantic := valid
-			semantic.KeyFacts = append([]string(nil), valid.KeyFacts...)
 			tc.mutate(&semantic)
 			pool := []unitCandidate{{
 				id: "u1", llm: llmUnit{Center: "Policy limits"},
@@ -102,7 +98,7 @@ func TestPublishGenerationDiscardsUnitWhenSemanticsMissing(t *testing.T) {
 	semantics := map[string]rerank.Semantics{
 		"u1": {
 			UnitID: "u1", SourceTheme: "policy", ContentTheme: "limits", Intent: "explain",
-			Object: "employees", Scope: "travel", KeyFacts: []string{"The limit is 500."},
+			Object: "employees", Scope: "travel",
 			PromptVersion: rerank.ExtractPromptVersion,
 		},
 		// u2 intentionally has no entry — simulates extractRerankSemantics

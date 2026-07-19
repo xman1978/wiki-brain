@@ -39,7 +39,14 @@ type mineResponse struct {
 // whole-segment evidence (mined=false) wherever mining can't be trusted.
 // It never returns an error — every failure mode degrades to a usable
 // candidate list, per "Mine 在任何失败下都返回可用的候选列表，不向上抛错".
-func (s *Service) Mine(ctx context.Context, question, subject, intent string, candidates []EvidenceItem) []EvidenceItem {
+//
+// lastResort extends that same whole-segment fallback to role=supporting
+// candidates that mine nothing (normally they're just dropped — see
+// mineBatch). The caller sets it only on retrieval's final retry attempt,
+// where the alternative to a noisier supporting fallback is an empty
+// EvidenceSet and a "no evidence found" answer despite rerank having judged
+// the candidate at least topically relevant.
+func (s *Service) Mine(ctx context.Context, question, subject, intent string, candidates []EvidenceItem, lastResort bool) []EvidenceItem {
 	if !s.cfg.Enabled || len(candidates) == 0 {
 		return candidates
 	}
@@ -50,7 +57,7 @@ func (s *Service) Mine(ctx context.Context, question, subject, intent string, ca
 	var out []EvidenceItem
 	fragmentsProduced, droppedFragments, wholeSegmentFallbacks := 0, 0, 0
 	for _, batch := range batches {
-		items, fp, df, wf := s.mineBatch(ctx, question, subject, intent, batch)
+		items, fp, df, wf := s.mineBatch(ctx, question, subject, intent, batch, lastResort)
 		out = append(out, items...)
 		fragmentsProduced += fp
 		droppedFragments += df
@@ -106,7 +113,7 @@ func batchCandidates(candidates []EvidenceItem, maxChars int) [][]EvidenceItem {
 // the per-KU / batch-level fallback rules. Returns the resulting items plus
 // observability counters (fragments produced, fragments dropped by
 // validation, whole-segment fallbacks).
-func (s *Service) mineBatch(ctx context.Context, question, subject, intent string, batch []EvidenceItem) ([]EvidenceItem, int, int, int) {
+func (s *Service) mineBatch(ctx context.Context, question, subject, intent string, batch []EvidenceItem, lastResort bool) ([]EvidenceItem, int, int, int) {
 	ids := make([]string, len(batch))
 	var candidatesText strings.Builder
 	for i, c := range batch {
@@ -163,11 +170,16 @@ func (s *Service) mineBatch(ctx context.Context, question, subject, intent strin
 		mined, dropped := s.mineCandidate(c, fragmentsByID[ids[i]])
 		droppedFragments += dropped
 		if len(mined) == 0 {
-			if c.Role == RoleDirect {
+			switch {
+			case c.Role == RoleDirect:
 				slog.Warn("evidence: direct candidate mined nothing, whole-segment fallback", "unit_id", c.UnitID)
 				out = append(out, wholeSegmentItem(c))
 				wholeSegmentFallbacks++
-			} else {
+			case lastResort:
+				slog.Warn("evidence: supporting candidate mined nothing, last-resort whole-segment fallback", "unit_id", c.UnitID)
+				out = append(out, wholeSegmentItem(c))
+				wholeSegmentFallbacks++
+			default:
 				slog.Debug("evidence: supporting candidate mined nothing, dropped", "unit_id", c.UnitID)
 			}
 			continue

@@ -143,7 +143,15 @@ KU 级： fragments 为空数组（模型判定无支撑内容）→
           直接证据，宁可整段进入也不静默丢失）并记录 warn；
           role=supporting 的候选：丢弃该候选（挖不出内容的背景证据
           价值有限，减少噪声），记录 debug；
-        片段全部被校验丢弃 → 同上按 role 处理；
+          但调用方传入 lastResort=true 时，role=supporting 也整段回退
+          （记录 warn）——这是 Retrieval 空结果重试链路最后一次尝试专用
+          的例外（见 retrieval.md 空结果重试小节）：rerank_judge 只依据
+          预抽取的语义摘要判断 role，摘要遗漏问题关键事实会把本该是
+          direct 的候选错判成 supporting；若这唯一的 supporting 候选
+          又挖不出片段，常规规则会让结果整体判空（"知识库中暂无相关
+          材料"），比整段回退一条已被 rerank 判定至少主题相关的候选
+          更差。前两次重试仍用默认的 lastResort=false，不放宽噪声；
+        片段全部被校验丢弃 → 同上按 role 与 lastResort 处理；
 
 产出组装：校验通过的片段生成新 EvidenceItem（继承 role/point_id/unit_id，
         mined=true）；回退候选保留原 item（mined=false）；
@@ -183,7 +191,8 @@ Answer / Trace：无直接依赖——通过 EvidenceSet 契约间接生效
   EvidenceSet；
 宽松匹配：仅空白差异的片段可通过，content 取原文形态；
 回退路径：批次 JSON 失败重试后仍失败 → 全批整段回退，回答链路不中断；
-  direct 候选挖空时整段回退，supporting 挖空时丢弃；
+  direct 候选挖空时整段回退，supporting 挖空时默认丢弃、
+  lastResort=true 时同样整段回退（Retrieval 空结果重试链路最后一次尝试）；
 截断与去重：超过 max_fragments_per_ku 截断，重叠行范围去重；
 enabled=false 时输出与输入完全一致（MVP 行为）；
 citations 可引用片段级 fact_id 并经 evidence_snapshot 反查到片段行号；

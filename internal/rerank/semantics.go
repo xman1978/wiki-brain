@@ -1,6 +1,6 @@
 package rerank
 
-const ExtractPromptVersion = "v12"
+const ExtractPromptVersion = "v13"
 
 type Semantics struct {
 	UnitID        string
@@ -9,6 +9,5 @@ type Semantics struct {
 	Intent        string
 	Object        string
 	Scope         string
-	KeyFacts      []string
 	PromptVersion string
 }

@@ -2,7 +2,9 @@ package activation
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/google/uuid"
 )
@@ -19,12 +21,54 @@ const linkColumns = `link_id, question_terms, subject_terms, intent_terms, audie
 	constraint_terms, scene, goal, point_id, status, adopt_count, fail_count,
 	last_used_at, created_from, status_changed_at, created_at, updated_at`
 
+// encodeTermSet sorts and JSON-encodes an accumulated condition set
+// (intent_terms/audience/constraint_terms) — sorting makes the stored form
+// deterministic regardless of the caller's map/slice iteration order, which
+// both change-detection (conditionEqual in study) and byte-for-byte test
+// assertions rely on. nil encodes as "[]", never "null".
+func encodeTermSet(values []string) (string, error) {
+	sorted := append([]string(nil), values...)
+	sort.Strings(sorted)
+	if sorted == nil {
+		sorted = []string{}
+	}
+	b, err := json.Marshal(sorted)
+	if err != nil {
+		return "", fmt.Errorf("activation store: encode term set: %w", err)
+	}
+	return string(b), nil
+}
+
+// decodeTermSet parses a stored condition-set column. "" is treated as an
+// empty set (defensive — migration 027 rewrites every row to valid JSON, but
+// a blank column should degrade to "no values" rather than fail the scan).
+func decodeTermSet(raw string) ([]string, error) {
+	if raw == "" {
+		return []string{}, nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, fmt.Errorf("activation store: decode term set %q: %w", raw, err)
+	}
+	return values, nil
+}
+
 func scanLink(row interface{ Scan(...interface{}) error }) (*ActivationLink, error) {
 	var l ActivationLink
-	err := row.Scan(&l.LinkID, &l.QuestionTerms, &l.SubjectTerms, &l.IntentTerms, &l.Audience,
-		&l.ConstraintTerms, &l.Scene, &l.Goal, &l.PointID, &l.Status, &l.AdoptCount, &l.FailCount,
+	var intentRaw, audienceRaw, constraintRaw string
+	err := row.Scan(&l.LinkID, &l.QuestionTerms, &l.SubjectTerms, &intentRaw, &audienceRaw,
+		&constraintRaw, &l.Scene, &l.Goal, &l.PointID, &l.Status, &l.AdoptCount, &l.FailCount,
 		&l.LastUsedAt, &l.CreatedFrom, &l.StatusChangedAt, &l.CreatedAt, &l.UpdatedAt)
 	if err != nil {
+		return nil, err
+	}
+	if l.IntentTerms, err = decodeTermSet(intentRaw); err != nil {
+		return nil, err
+	}
+	if l.Audience, err = decodeTermSet(audienceRaw); err != nil {
+		return nil, err
+	}
+	if l.ConstraintTerms, err = decodeTermSet(constraintRaw); err != nil {
 		return nil, err
 	}
 	return &l, nil
@@ -43,16 +87,49 @@ func (s *Store) InsertLink(l *ActivationLink) error {
 	if l.CreatedFrom == "" {
 		l.CreatedFrom = "[]"
 	}
-	_, err := s.db.Exec(`INSERT INTO activation_links
+	intentJSON, err := encodeTermSet(l.IntentTerms)
+	if err != nil {
+		return err
+	}
+	audienceJSON, err := encodeTermSet(l.Audience)
+	if err != nil {
+		return err
+	}
+	constraintJSON, err := encodeTermSet(l.ConstraintTerms)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`INSERT INTO activation_links
 		(link_id, question_terms, subject_terms, intent_terms, audience, constraint_terms,
 		 point_id, status, created_from)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		l.LinkID, l.QuestionTerms, l.SubjectTerms, l.IntentTerms, l.Audience, l.ConstraintTerms,
+		l.LinkID, l.QuestionTerms, l.SubjectTerms, intentJSON, audienceJSON, constraintJSON,
 		l.PointID, l.Status, l.CreatedFrom)
 	if err != nil {
 		return fmt.Errorf("activation store: insert link: %w", err)
 	}
 	return nil
+}
+
+// PointUnitInfo resolves a link's target KP into displayable context for the
+// detail dialog: the KP content, its owning KU's id/center, and the source
+// document title (the product/document a link belongs to lives nowhere else
+// in the dialog — same-label links are otherwise indistinguishable). Missing
+// point (shouldn't happen — FK) degrades to empty strings.
+func (s *Store) PointUnitInfo(pointID string) (pointContent, unitID, unitCenter, sourceTitle string, err error) {
+	err = s.db.QueryRow(`
+		SELECT kp.content, ku.unit_id, ku.center, s.title
+		FROM knowledge_points kp
+		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
+		JOIN sources s ON s.source_id = kp.source_id
+		WHERE kp.point_id = ?`, pointID).Scan(&pointContent, &unitID, &unitCenter, &sourceTitle)
+	if err == sql.ErrNoRows {
+		return "", "", "", "", nil
+	}
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("activation store: point unit info: %w", err)
+	}
+	return pointContent, unitID, unitCenter, sourceTitle, nil
 }
 
 func (s *Store) GetByID(linkID string) (*ActivationLink, error) {
@@ -63,6 +140,22 @@ func (s *Store) GetByID(linkID string) (*ActivationLink, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("activation store: get by id: %w", err)
+	}
+	return l, nil
+}
+
+// GetByPointID returns the point's single link (idx_al_point_id is a UNIQUE
+// index — at most one row can exist), or nil if none. This is the identity
+// check Service.CreateLink uses now that point_id, not (question_terms,
+// point_id), is the dedup key (docs/impl/v1/activation.md 数据结构).
+func (s *Store) GetByPointID(pointID string) (*ActivationLink, error) {
+	row := s.db.QueryRow(`SELECT `+linkColumns+` FROM activation_links WHERE point_id = ?`, pointID)
+	l, err := scanLink(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("activation store: get by point id: %w", err)
 	}
 	return l, nil
 }
@@ -89,6 +182,32 @@ func (s *Store) UpdateStatus(linkID, status string) error {
 		WHERE link_id = ?`, status, linkID)
 	if err != nil {
 		return fmt.Errorf("activation store: update status: %w", err)
+	}
+	return nil
+}
+
+// UpdateConditions overwrites a link's condition fields in place — used by
+// Study's condition refresh (docs/impl/v1/study.md 步骤 2, computeLinkCondition)
+// each time a point with an existing link accumulates new confident signal.
+// Not part of the status lifecycle (see Service.TransitionLink for that).
+func (s *Store) UpdateConditions(linkID string, cond LinkCondition) error {
+	intentJSON, err := encodeTermSet(cond.IntentTerms)
+	if err != nil {
+		return err
+	}
+	audienceJSON, err := encodeTermSet(cond.Audience)
+	if err != nil {
+		return err
+	}
+	constraintJSON, err := encodeTermSet(cond.ConstraintTerms)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`UPDATE activation_links
+		SET subject_terms = ?, intent_terms = ?, audience = ?, constraint_terms = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE link_id = ?`, cond.SubjectTerms, intentJSON, audienceJSON, constraintJSON, linkID)
+	if err != nil {
+		return fmt.Errorf("activation store: update conditions: %w", err)
 	}
 	return nil
 }
@@ -204,12 +323,22 @@ func (s *Store) ListLinks(f ListLinksFilter) ([]ActivationLinkListRow, error) {
 	var results []ActivationLinkListRow
 	for rows.Next() {
 		var r ActivationLinkListRow
-		err := rows.Scan(&r.LinkID, &r.QuestionTerms, &r.SubjectTerms, &r.IntentTerms, &r.Audience,
-			&r.ConstraintTerms, &r.Scene, &r.Goal, &r.PointID, &r.Status, &r.AdoptCount, &r.FailCount,
+		var intentRaw, audienceRaw, constraintRaw string
+		err := rows.Scan(&r.LinkID, &r.QuestionTerms, &r.SubjectTerms, &intentRaw, &audienceRaw,
+			&constraintRaw, &r.Scene, &r.Goal, &r.PointID, &r.Status, &r.AdoptCount, &r.FailCount,
 			&r.LastUsedAt, &r.CreatedFrom, &r.StatusChangedAt, &r.CreatedAt, &r.UpdatedAt,
 			&r.PointSummary, &r.UnitCenter)
 		if err != nil {
 			return nil, fmt.Errorf("activation store: scan list row: %w", err)
+		}
+		if r.IntentTerms, err = decodeTermSet(intentRaw); err != nil {
+			return nil, err
+		}
+		if r.Audience, err = decodeTermSet(audienceRaw); err != nil {
+			return nil, err
+		}
+		if r.ConstraintTerms, err = decodeTermSet(constraintRaw); err != nil {
+			return nil, err
 		}
 		results = append(results, r)
 	}

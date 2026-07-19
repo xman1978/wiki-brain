@@ -119,8 +119,9 @@ func (h *Handler) listCandidates(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) listGaps(w http.ResponseWriter, r *http.Request) {
 	minHitCount := queryInt(r, "min_hit_count", 0)
 	limit := queryInt(r, "limit", 50)
+	reason := r.URL.Query().Get("reason")
 
-	gaps, err := h.svc.store.ListGaps(minHitCount, limit)
+	gaps, err := h.svc.store.ListGaps(minHitCount, limit, reason)
 	if err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -128,12 +129,7 @@ func (h *Handler) listGaps(w http.ResponseWriter, r *http.Request) {
 
 	result := make([]KnowledgeGapEntry, len(gaps))
 	for i, g := range gaps {
-		result[i] = KnowledgeGapEntry{
-			QuestionTerms:  g.QuestionTerms,
-			Question:       g.Question,
-			HitCount:       g.HitCount,
-			Recommendation: "补充材料",
-		}
+		result[i] = gapEntryFromRow(g)
 	}
 	foundation.WriteJSON(w, http.StatusOK, result)
 }

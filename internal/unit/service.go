@@ -449,7 +449,11 @@ func groupPointsByTopOutline(points []KnowledgePoint, units []KnowledgeUnit, top
 	return result
 }
 
-func (s *Service) kpnBatch(ctx context.Context, points []KnowledgePoint, unitCenterMap map[string]string) {
+// kpnBatch returns the number of relations actually inserted (new rows, not
+// ones InsertRelation silently no-opped as duplicates) — used by
+// incrementalKPNForPoint to report how many relations a manual KP add
+// produced.
+func (s *Service) kpnBatch(ctx context.Context, points []KnowledgePoint, unitCenterMap map[string]string) int {
 	var sb strings.Builder
 	pointIDs := make(map[string]bool)
 	for _, p := range points {
@@ -470,15 +474,16 @@ func (s *Service) kpnBatch(ctx context.Context, points []KnowledgePoint, unitCen
 	data, err := s.llmClient.CompleteJSON(ctx, "kpn_extract.md", vars, "extraction")
 	if err != nil {
 		slog.Warn("unit: kpn extraction failed", "error", err)
-		return
+		return 0
 	}
 
 	var output kpnOutput
 	if err := json.Unmarshal(data, &output); err != nil {
 		slog.Warn("unit: kpn JSON parse failed", "error", err)
-		return
+		return 0
 	}
 
+	created := 0
 	for _, rel := range output.Relations {
 		if !pointIDs[rel.From] || !pointIDs[rel.To] {
 			continue
@@ -499,10 +504,85 @@ func (s *Service) kpnBatch(ctx context.Context, points []KnowledgePoint, unitCen
 			PromptVersion: promptVersionKPNExtract,
 			Scope:         RelationScopeIntra,
 		}
-		if _, err := s.store.InsertRelation(r); err != nil {
+		inserted, err := s.store.InsertRelation(r)
+		if err != nil {
 			slog.Error("unit: insert kpn relation failed", "error", err)
+			continue
+		}
+		if inserted {
+			created++
 		}
 	}
+	return created
+}
+
+// incrementalKPNForPoint runs KPN relation analysis for one manually-added
+// KP (docs/impl/v1/semantics-curation.md "KP 人工修正") against the rest of
+// its Source's current KPs, reusing kpnBatch/kpn_extract.md — no new prompt.
+// Re-running against points that already have relations is safe: InsertRelation
+// is INSERT OR IGNORE against idx_kp_relations_uniq (a global unique index,
+// not scoped to intra vs cross), so already-known pairs are silently skipped.
+//
+// To keep the cost of "add one fact" proportional rather than re-analyzing
+// the whole Source every time, large sources are scoped down to newPoint's
+// own top-level outline group (the same grouping generateKPN uses to batch
+// ≤60 points per LLM call) instead of the full point set.
+func (s *Service) incrementalKPNForPoint(ctx context.Context, newPoint KnowledgePoint) (int, error) {
+	points, err := s.store.GetPointsBySourceID(newPoint.SourceID)
+	if err != nil {
+		return 0, fmt.Errorf("unit: incremental kpn: get points: %w", err)
+	}
+
+	units, err := s.store.GetCompletedUnitsBySourceID(newPoint.SourceID)
+	if err != nil {
+		return 0, fmt.Errorf("unit: incremental kpn: get units: %w", err)
+	}
+	unitCenterMap := make(map[string]string, len(units))
+	for _, u := range units {
+		unitCenterMap[u.UnitID] = u.Center
+	}
+
+	if len(points) <= 60 {
+		return s.kpnBatch(ctx, points, unitCenterMap), nil
+	}
+
+	outlines, err := s.sourceStore.GetOutlines(newPoint.SourceID)
+	if err != nil {
+		return 0, fmt.Errorf("unit: incremental kpn: get outlines: %w", err)
+	}
+	topLevel := findTopLevelOutlines(outlines)
+	groups := groupPointsByTopOutline(points, units, topLevel)
+
+	scope := []KnowledgePoint{newPoint}
+	for _, g := range groups {
+		if containsPointID(g, newPoint.PointID) {
+			scope = g
+			break
+		}
+	}
+
+	created := 0
+	for i := 0; i < len(scope); i += 60 {
+		end := i + 60
+		if end > len(scope) {
+			end = len(scope)
+		}
+		batch := scope[i:end]
+		if !containsPointID(batch, newPoint.PointID) {
+			batch = append(append([]KnowledgePoint{}, batch...), newPoint)
+		}
+		created += s.kpnBatch(ctx, batch, unitCenterMap)
+	}
+	return created, nil
+}
+
+func containsPointID(points []KnowledgePoint, pointID string) bool {
+	for _, p := range points {
+		if p.PointID == pointID {
+			return true
+		}
+	}
+	return false
 }
 
 type conceptMatch struct {

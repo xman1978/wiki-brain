@@ -21,6 +21,39 @@ func TestComputeCoverage_FullyCovered(t *testing.T) {
 	}
 }
 
+func TestComputeCoverage_SegmentListItselfMissesLines(t *testing.T) {
+	// Segments only cover L1-4 and L8-10 of a 10-line document — L5-7 was
+	// never a segment at all (the Dock Swam-style failure: a segmentation
+	// bug drops a range before ComputeCoverage ever sees it as something to
+	// check). This must surface as its own gap entry instead of silently
+	// reporting "fully covered" over the segments it did receive.
+	segments := []Segment{
+		{Title: "第一节", LineStart: 1, LineEnd: 4},
+		{Title: "第二节", LineStart: 8, LineEnd: 10},
+	}
+	units := []KnowledgeUnit{
+		{LineStart: 1, LineEnd: 4, Status: "completed"},
+		{LineStart: 8, LineEnd: 10, Status: "completed"},
+	}
+	mdLines := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
+
+	report := ComputeCoverage(segments, units, mdLines)
+	if len(report) != 3 {
+		t.Fatalf("got %d reports, want 3 (2 segments + 1 synthesized gap)", len(report))
+	}
+
+	last := report[2]
+	if last.LineStart != 5 || last.LineEnd != 7 {
+		t.Errorf("synthesized gap = L%d-L%d, want L5-L7", last.LineStart, last.LineEnd)
+	}
+	if last.TotalLines != 3 || last.CoveredLines != 0 {
+		t.Errorf("synthesized gap total/covered = %d/%d, want 3/0", last.TotalLines, last.CoveredLines)
+	}
+	if len(last.Gaps) != 1 || last.Gaps[0].LineStart != 5 || last.Gaps[0].LineEnd != 7 {
+		t.Errorf("synthesized gap's Gaps = %v, want one gap L5-L7", last.Gaps)
+	}
+}
+
 func TestComputeCoverage_MiddleGap(t *testing.T) {
 	segments := []Segment{{Title: "第一节", LineStart: 1, LineEnd: 6}}
 	units := []KnowledgeUnit{

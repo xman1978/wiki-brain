@@ -223,7 +223,7 @@ func TestGapAggregation(t *testing.T) {
 		t.Errorf("expected question_terms=并发, got %s", events[0].QuestionTerms)
 	}
 
-	gapID, hitCount, err := store.UpsertKnowledgeGap("并发", "什么是并发")
+	gapID, hitCount, err := store.UpsertKnowledgeGap("并发", "什么是并发", "no_candidates", "tr1")
 	if err != nil {
 		t.Fatalf("UpsertKnowledgeGap: %v", err)
 	}
@@ -234,8 +234,8 @@ func TestGapAggregation(t *testing.T) {
 		t.Error("expected non-empty gap_id")
 	}
 
-	// Second upsert increments, keeps the same gap_id
-	gapID2, hitCount2, err := store.UpsertKnowledgeGap("并发", "什么是并发模型")
+	// Second upsert (different reason) increments, keeps the same gap_id
+	gapID2, hitCount2, err := store.UpsertKnowledgeGap("并发", "什么是并发模型", "judge_filtered", "tr2")
 	if err != nil {
 		t.Fatalf("UpsertKnowledgeGap 2nd: %v", err)
 	}
@@ -246,11 +246,25 @@ func TestGapAggregation(t *testing.T) {
 		t.Errorf("expected gap_id to stay stable across upserts, got %q then %q", gapID, gapID2)
 	}
 
-	// Verify question updated
-	var q string
-	db.QueryRow(`SELECT question FROM knowledge_gaps WHERE question_terms = '并发'`).Scan(&q)
+	// Verify question, reason_counts, last_reason, last_trace_id updated
+	var q, reasonCountsJSON, lastReason, lastTraceID string
+	db.QueryRow(`SELECT question, reason_counts, last_reason, last_trace_id FROM knowledge_gaps WHERE question_terms = '并发'`).
+		Scan(&q, &reasonCountsJSON, &lastReason, &lastTraceID)
 	if q != "什么是并发模型" {
 		t.Errorf("expected updated question, got %s", q)
+	}
+	var counts map[string]int
+	if err := json.Unmarshal([]byte(reasonCountsJSON), &counts); err != nil {
+		t.Fatalf("unmarshal reason_counts: %v", err)
+	}
+	if counts["no_candidates"] != 1 || counts["judge_filtered"] != 1 {
+		t.Errorf("expected reason_counts to have both reasons once each, got %v", counts)
+	}
+	if lastReason != "judge_filtered" {
+		t.Errorf("expected last_reason=judge_filtered, got %s", lastReason)
+	}
+	if lastTraceID != "tr2" {
+		t.Errorf("expected last_trace_id=tr2, got %s", lastTraceID)
 	}
 
 	if err := store.MarkEventProcessed("evt1"); err != nil {

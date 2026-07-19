@@ -164,6 +164,72 @@ func TestCreateCandidates_RejectsRecreateOfDeprecated(t *testing.T) {
 	}
 }
 
+// TestCreateCandidates_SourceA_AggregatesAcrossLabels covers the 2026-07-18
+// point-level aggregation fix: the same KP hit confidently under several
+// subject labels (each below candidate_confident_min on its own) must still
+// qualify on the aggregated total, produce ONE link for the point under the
+// representative label, and take the labels' shared term core as the link's
+// subject condition.
+func TestCreateCandidates_SourceA_AggregatesAcrossLabels(t *testing.T) {
+	svc, _, activationSvc, db := setupStudyWithActivation(t)
+
+	seedSource(t, db, "src1")
+	seedDomain(t, db, "dom1", "D")
+	seedConcept(t, db, "con1", "dom1", "C")
+	seedKU(t, db, "ku1", "src1", "con1")
+	seedKP(t, db, "kp1", "ku1", "src1", "content")
+	// 三个标签各自 confident < 5，聚合后 3+2+2=7 ≥ 5，ratio 7/7=1.0。
+	seedCooccurrence(t, db, "数据库 句柄 限制", "kp1", 3, 3)
+	seedCooccurrence(t, db, "数据库 句柄 管理", "kp1", 2, 2)
+	seedCooccurrence(t, db, "数据库 句柄 上限", "kp1", 2, 2)
+	seedAnswer(t, db, "ans1")
+	seedTrace(t, db, "tr1", "ans1", "句柄数超限怎么办", "数据库 句柄 限制", "confident", "short", []string{"kp1"})
+
+	if _, err := svc.store.ScanCandidates(5, 0.6, 200); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	// 快照应是一行、代表标签为 confident 最高的"数据库 句柄 限制"、计数为聚合值。
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM link_candidates WHERE point_id = 'kp1'`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("expected 1 aggregated candidate row, got %d", n)
+	}
+	var qterms string
+	var cc, hc int
+	db.QueryRow(`SELECT question_terms, confident_count, hit_count FROM link_candidates WHERE point_id = 'kp1'`).
+		Scan(&qterms, &cc, &hc)
+	if qterms != "数据库 句柄 限制" || cc != 7 || hc != 7 {
+		t.Errorf("unexpected aggregated candidate: terms=%s cc=%d hc=%d", qterms, cc, hc)
+	}
+
+	var actions LearningActionsSummary
+	if err := svc.createCandidates(&actions); err != nil {
+		t.Fatalf("createCandidates: %v", err)
+	}
+	if actions.CreatedCandidates != 1 {
+		t.Fatalf("expected 1 created candidate, got %d", actions.CreatedCandidates)
+	}
+
+	links, err := activationSvc.Store().ListLinks(activation.ListLinksFilter{PointID: "kp1"})
+	if err != nil || len(links) != 1 {
+		t.Fatalf("expected exactly 1 link for point, got %d (err=%v)", len(links), err)
+	}
+	// subject 条件应为三个标签的词项交集 {句柄, 数据库}，而不是某一个标签的原文。
+	if links[0].SubjectTerms != "句柄 数据库" {
+		t.Errorf("subject_terms = %q, want 交集 \"句柄 数据库\"", links[0].SubjectTerms)
+	}
+
+	// 再跑一轮：同一 point 不得因代表标签或来源不同再建第二条链接。
+	var actions2 LearningActionsSummary
+	if err := svc.createCandidates(&actions2); err != nil {
+		t.Fatalf("createCandidates 2nd: %v", err)
+	}
+	if actions2.CreatedCandidates != 0 {
+		t.Errorf("expected point-level dedup to block recreation, got %d", actions2.CreatedCandidates)
+	}
+}
+
 func TestCreateCandidates_SourceB_ActivationGap(t *testing.T) {
 	svc, _, activationSvc, db := setupStudyWithActivation(t)
 

@@ -2,7 +2,6 @@ package retrieval
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -390,7 +389,7 @@ func (s *Store) GetUnitRerankSemantics(unitIDs []string) (map[string]rerank.Sema
 
 	ph, args := buildPlaceholders(unitIDs)
 	rows, err := s.db.Query(fmt.Sprintf(`
-		SELECT unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version
+		SELECT unit_id, source_theme, content_theme, intent, object, scope, prompt_version
 		FROM unit_rerank_semantics
 		WHERE unit_id IN (%s)`, ph), args...)
 	if err != nil {
@@ -400,7 +399,6 @@ func (s *Store) GetUnitRerankSemantics(unitIDs []string) (map[string]rerank.Sema
 
 	for rows.Next() {
 		var semantic rerank.Semantics
-		var keyFactsJSON string
 		if err := rows.Scan(
 			&semantic.UnitID,
 			&semantic.SourceTheme,
@@ -408,28 +406,9 @@ func (s *Store) GetUnitRerankSemantics(unitIDs []string) (map[string]rerank.Sema
 			&semantic.Intent,
 			&semantic.Object,
 			&semantic.Scope,
-			&keyFactsJSON,
 			&semantic.PromptVersion,
 		); err != nil {
 			return nil, fmt.Errorf("retrieval store: get rerank semantics: scan: %w", err)
-		}
-		var rawKeyFacts []json.RawMessage
-		if err := json.Unmarshal([]byte(keyFactsJSON), &rawKeyFacts); err != nil {
-			return nil, fmt.Errorf("retrieval store: get rerank semantics: decode key facts for unit %s: %w", semantic.UnitID, err)
-		}
-		if rawKeyFacts == nil {
-			return nil, fmt.Errorf("retrieval store: get rerank semantics: decode key facts for unit %s: expected non-null string array", semantic.UnitID)
-		}
-		semantic.KeyFacts = make([]string, len(rawKeyFacts))
-		for i, rawFact := range rawKeyFacts {
-			var fact *string
-			if err := json.Unmarshal(rawFact, &fact); err != nil {
-				return nil, fmt.Errorf("retrieval store: get rerank semantics: decode key facts for unit %s element %d: %w", semantic.UnitID, i, err)
-			}
-			if fact == nil {
-				return nil, fmt.Errorf("retrieval store: get rerank semantics: decode key facts for unit %s element %d: expected string, got null", semantic.UnitID, i)
-			}
-			semantic.KeyFacts[i] = *fact
 		}
 		semantics[semantic.UnitID] = semantic
 	}
@@ -437,6 +416,88 @@ func (s *Store) GetUnitRerankSemantics(unitIDs []string) (map[string]rerank.Sema
 		return nil, fmt.Errorf("retrieval store: get rerank semantics: rows: %w", err)
 	}
 	return semantics, nil
+}
+
+// PointFact is one candidate's knowledge point, as fed to rerank_judge.md in
+// place of the retired unit_rerank_semantics.key_facts (see
+// docs/impl/v1/semantics-curation.md): KP is the same "fact extracted from
+// this KU" data that center/key_facts used to approximate independently, and
+// is already produced at unit-extraction time for every KU, so there is
+// nothing to backfill.
+type PointFact struct {
+	PointID   string
+	Content   string
+	PointType string
+}
+
+// GetPointContentsByUnitIDs returns each unit's current knowledge points
+// (point_id, content, point_type), grouped by unit_id — the rerank judge
+// candidate payload's fact source. Only lifecycle=current points are
+// included: a candidate unit is itself already filtered to current by the
+// caller, but its points independently carry their own lifecycle.
+func (s *Store) GetPointContentsByUnitIDs(unitIDs []string) (map[string][]PointFact, error) {
+	facts := make(map[string][]PointFact)
+	if len(unitIDs) == 0 {
+		return facts, nil
+	}
+
+	ph, args := buildPlaceholders(unitIDs)
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT point_id, unit_id, content, point_type
+		FROM knowledge_points
+		WHERE unit_id IN (%s) AND lifecycle = 'current'
+		ORDER BY created_at ASC`, ph), args...)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval store: get point contents: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var unitID string
+		var fact PointFact
+		if err := rows.Scan(&fact.PointID, &unitID, &fact.Content, &fact.PointType); err != nil {
+			return nil, fmt.Errorf("retrieval store: get point contents: scan: %w", err)
+		}
+		facts[unitID] = append(facts[unitID], fact)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("retrieval store: get point contents: rows: %w", err)
+	}
+	return facts, nil
+}
+
+// GetUnitCenters returns unit_id -> center for the given units. Centers come
+// from unit extraction — an independent LLM pass from the point extraction
+// that produces knowledge_points — so feeding both to rerank_judge means a
+// fact missed by one can still surface through the other (问答准确率测试
+// 2026-07-17：A5 的"清零"只出现在 center 里，当时的 key_facts 摘要漏了；KP 已
+// 取代 key_facts 作为 points 字段的来源，见 docs/impl/v1/semantics-curation.md).
+func (s *Store) GetUnitCenters(unitIDs []string) (map[string]string, error) {
+	centers := make(map[string]string)
+	if len(unitIDs) == 0 {
+		return centers, nil
+	}
+
+	ph, args := buildPlaceholders(unitIDs)
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT unit_id, center FROM knowledge_units
+		WHERE unit_id IN (%s)`, ph), args...)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval store: get unit centers: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var unitID, center string
+		if err := rows.Scan(&unitID, &center); err != nil {
+			return nil, fmt.Errorf("retrieval store: get unit centers: scan: %w", err)
+		}
+		centers[unitID] = center
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("retrieval store: get unit centers: rows: %w", err)
+	}
+	return centers, nil
 }
 
 func buildPlaceholders(ids []string) (string, []interface{}) {

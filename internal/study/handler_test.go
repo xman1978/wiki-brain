@@ -174,3 +174,47 @@ func TestHandler_Gaps_Empty(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 }
+
+func TestHandler_Gaps_ReasonFilterAndFields(t *testing.T) {
+	handler, svc := setupHandler(t)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	if _, _, err := svc.store.UpsertKnowledgeGap("terms-a", "问题A", "no_candidates", "tr-a"); err != nil {
+		t.Fatalf("seed gap a: %v", err)
+	}
+	if _, _, err := svc.store.UpsertKnowledgeGap("terms-b", "问题B", "judge_filtered", "tr-b"); err != nil {
+		t.Fatalf("seed gap b: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/study/gaps?reason=judge_filtered", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var gaps []KnowledgeGapEntry
+	if err := json.Unmarshal(w.Body.Bytes(), &gaps); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(gaps) != 1 {
+		t.Fatalf("expected 1 gap filtered by reason=judge_filtered, got %d", len(gaps))
+	}
+	g := gaps[0]
+	if g.QuestionTerms != "terms-b" {
+		t.Errorf("expected terms-b, got %s", g.QuestionTerms)
+	}
+	if g.LastReason != "judge_filtered" {
+		t.Errorf("expected last_reason=judge_filtered, got %s", g.LastReason)
+	}
+	if g.LastTraceID != "tr-b" {
+		t.Errorf("expected last_trace_id=tr-b, got %s", g.LastTraceID)
+	}
+	if g.Recommendation != "语义提取待核对" {
+		t.Errorf("expected recommendation=语义提取待核对, got %s", g.Recommendation)
+	}
+	if g.ReasonCounts["judge_filtered"] != 1 {
+		t.Errorf("expected reason_counts[judge_filtered]=1, got %v", g.ReasonCounts)
+	}
+}

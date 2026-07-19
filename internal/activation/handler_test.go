@@ -52,6 +52,7 @@ func TestHandler_List_FilterByStatus(t *testing.T) {
 	handler, svc := setupHandler(t)
 	db := setupDBFromSvc(t, svc)
 	seedKPFull(t, db, "kp1")
+	seedKPFull(t, db, "kp2")
 
 	l, err := svc.CreateLink("t1", LinkCondition{}, "kp1", nil)
 	if err != nil {
@@ -60,7 +61,9 @@ func TestHandler_List_FilterByStatus(t *testing.T) {
 	if _, err := svc.TransitionLink(l.LinkID, StatusVerified, "test", nil); err != nil {
 		t.Fatalf("promote: %v", err)
 	}
-	if _, err := svc.CreateLink("t2", LinkCondition{}, "kp1", nil); err != nil {
+	// Different point_id — a point has at most one link (idx_al_point_id is
+	// UNIQUE), so a second candidate to filter out must target a different KP.
+	if _, err := svc.CreateLink("t2", LinkCondition{}, "kp2", nil); err != nil {
 		t.Fatalf("create link2: %v", err)
 	}
 

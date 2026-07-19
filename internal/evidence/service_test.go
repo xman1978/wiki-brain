@@ -27,7 +27,7 @@ func TestMine_Disabled_ReturnsInputUnchanged(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", Content: "some KU content", Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in)
+	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
 
 	if len(out) != 1 || out[0].Content != "some KU content" || out[0].Mined {
 		t.Fatalf("expected passthrough of input, got %+v", out)
@@ -49,7 +49,7 @@ func TestMine_NormalPath_ProducesFragmentLevelEvidence(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", SourceID: "s1", LineStart: 10, LineEnd: 12, Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in)
+	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
 
 	if len(out) != 1 {
 		t.Fatalf("expected 1 fragment, got %d: %+v", len(out), out)
@@ -84,7 +84,7 @@ func TestMine_HallucinatedFragment_Dropped(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", Content: content, Role: RoleSupporting},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in)
+	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
 
 	if len(out) != 0 {
 		t.Fatalf("expected hallucinated fragment to be dropped entirely, got %+v", out)
@@ -103,7 +103,7 @@ func TestMine_EmptyFragments_DirectFallsBackWholeSegment(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", LineStart: 1, LineEnd: 3, Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in)
+	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
 
 	if len(out) != 1 {
 		t.Fatalf("expected whole-segment fallback item, got %+v", out)
@@ -130,10 +130,40 @@ func TestMine_EmptyFragments_SupportingDropped(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", Content: "supporting content", Role: RoleSupporting},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in)
+	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
 
 	if len(out) != 0 {
 		t.Fatalf("expected supporting candidate with no fragments to be dropped, got %+v", out)
+	}
+}
+
+// TestMine_EmptyFragments_SupportingFallsBackWhenLastResort covers
+// retrieval's last retry attempt (docs/impl/v1/retrieval.md 空结果重试链路的
+// 最后一环): when nothing else is left to try, a supporting candidate that
+// mines nothing gets the same whole-segment fallback as direct, instead of
+// being silently dropped into an empty EvidenceSet.
+func TestMine_EmptyFragments_SupportingFallsBackWhenLastResort(t *testing.T) {
+	fake := llm.NewFakeClient()
+	svc := NewService(fake, testConfig())
+
+	content := "supporting content"
+	fake.SetResponse("evidence_mine.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "fragments": []}]}`,
+	})
+
+	in := []EvidenceItem{
+		{UnitID: "u1", PointID: "p1", LineStart: 1, LineEnd: 3, Content: content, Role: RoleSupporting},
+	}
+	out := svc.Mine(context.Background(), "q", "s", "i", in, true)
+
+	if len(out) != 1 {
+		t.Fatalf("expected whole-segment fallback item, got %+v", out)
+	}
+	if out[0].Mined {
+		t.Error("expected mined=false for whole-segment fallback")
+	}
+	if out[0].Content != content {
+		t.Errorf("expected original KU content preserved, got %q", out[0].Content)
 	}
 }
 
@@ -149,7 +179,7 @@ func TestMine_BatchFailure_WholeSegmentFallbackAfterRetries(t *testing.T) {
 		{UnitID: "u1", PointID: "p1", Content: "content one", Role: RoleDirect},
 		{UnitID: "u2", PointID: "p2", Content: "content two", Role: RoleSupporting},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in)
+	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
 
 	if len(out) != 2 {
 		t.Fatalf("expected both candidates to whole-segment fallback (batch failure applies regardless of role), got %+v", out)
@@ -181,7 +211,7 @@ func TestMine_MissingCandidateCoverage_TreatedAsBatchFailure(t *testing.T) {
 		{UnitID: "u1", PointID: "p1", Content: "content one", Role: RoleDirect},
 		{UnitID: "u2", PointID: "p2", Content: "content two", Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in)
+	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
 
 	if len(out) != 2 {
 		t.Fatalf("expected whole-batch fallback due to incomplete coverage, got %+v", out)
@@ -210,7 +240,7 @@ func TestMine_TruncatesToMaxFragmentsPerKU(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in)
+	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
 
 	if len(out) != 2 {
 		t.Fatalf("expected truncation to max_fragments_per_ku=2, got %d: %+v", len(out), out)
@@ -233,7 +263,7 @@ func TestMine_DedupesOverlappingLineRanges(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in)
+	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
 
 	if len(out) != 1 {
 		t.Fatalf("expected exact-overlapping duplicate dropped, got %d: %+v", len(out), out)
@@ -254,7 +284,7 @@ func TestMine_MinFragmentChars_DropsShortFragments(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in)
+	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
 
 	if len(out) != 1 {
 		t.Fatalf("expected short fragment 'ok' dropped, got %+v", out)
@@ -287,7 +317,7 @@ func TestMine_TableDataRowFragment_WidensToWholeTable(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", SourceID: "s1", LineStart: 67, LineEnd: 71, Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "福州属于哪一类城市，报销标准是多少？", "出差报销", "查询报销标准", in)
+	out := svc.Mine(context.Background(), "福州属于哪一类城市，报销标准是多少？", "出差报销", "查询报销标准", in, false)
 
 	if len(out) != 1 {
 		t.Fatalf("expected 1 widened fragment, got %d: %+v", len(out), out)

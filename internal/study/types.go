@@ -11,6 +11,7 @@ type GapEvent struct {
 	TraceID       string
 	Question      string
 	QuestionTerms string
+	Reason        string
 }
 
 type LinkCandidateRow struct {
@@ -32,10 +33,13 @@ type QualifyingKP struct {
 }
 
 type KnowledgeGapRow struct {
-	GapID         string
-	QuestionTerms string
-	Question      string
-	HitCount      int
+	GapID            string
+	QuestionTerms    string
+	Question         string
+	HitCount         int
+	ReasonCountsJSON string
+	LastReason       string
+	LastTraceID      string
 }
 
 type TracePathRow struct {
@@ -162,10 +166,13 @@ type WikiCandidateStats struct {
 }
 
 type KnowledgeGapEntry struct {
-	QuestionTerms  string `json:"question_terms"`
-	Question       string `json:"question"`
-	HitCount       int    `json:"hit_count"`
-	Recommendation string `json:"recommendation"`
+	QuestionTerms  string         `json:"question_terms"`
+	Question       string         `json:"question"`
+	HitCount       int            `json:"hit_count"`
+	ReasonCounts   map[string]int `json:"reason_counts"`
+	LastReason     string         `json:"last_reason,omitempty"`
+	LastTraceID    string         `json:"last_trace_id,omitempty"`
+	Recommendation string         `json:"recommendation"`
 }
 
 type RunResult struct {

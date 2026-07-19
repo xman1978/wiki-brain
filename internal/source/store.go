@@ -702,3 +702,21 @@ type Domain struct {
 	Name        string
 	Description string
 }
+
+// CountManuallyEditedSemantics returns how many current-lifecycle KUs of the
+// source carry manually edited rerank semantics
+// (docs/impl/v1/semantics-curation.md)。GET /sources/:id 用它填
+// manually_edited_count，reupload 入口据此提示"N 条人工修正将随重传失效"
+// —— Shadow Source 替换产生全新 unit_id，人工修正随原 KU 一起 superseded。
+func (s *Store) CountManuallyEditedSemantics(sourceID string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*)
+		FROM unit_rerank_semantics urs
+		INNER JOIN knowledge_units ku ON ku.unit_id = urs.unit_id
+		WHERE ku.source_id = ? AND ku.lifecycle = 'current' AND urs.manually_edited = 1`,
+		sourceID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("source store: count manually edited semantics: %w", err)
+	}
+	return n, nil
+}

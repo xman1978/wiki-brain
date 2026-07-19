@@ -6,18 +6,18 @@ MVP 验收测试方案第 4 节「问答准确率测试集」自动化脚本。
 short 路径），自动核对：
   - direct 命中：EvidenceSet.direct_evidence 的来源是否落在期望文档
   - 关键词覆盖：从「期望答案要点」抽取的数字/代码片段是否出现在回答正文中
-    （这是可自动化的正确性代理指标，不能替代 test/mvp-acceptance-test-plan.md
+    （这是可自动化的正确性代理指标，不能替代 test/mvp/mvp-acceptance-test-plan.md
     第 4 节要求的人工核对「回答要点是否正确」——报告里留了 manual_verdict 列，
     人工复核后按该列重新统计才是最终验收结果）
 
-题库直接从 test/mvp-acceptance-test-plan.md 的表格解析，不在本脚本内重复抄写，
+题库直接从 test/mvp/mvp-acceptance-test-plan.md 的表格解析，不在本脚本内重复抄写，
 避免两处漂移（该文档第 5 行本身要求"两份方案的题库同源，修改任一处须同步"）。
 
 用法：
-  python3 test/qa_accuracy_test.py                  # 跑全部 80 题
-  python3 test/qa_accuracy_test.py --group A        # 只跑 A 组
-  python3 test/qa_accuracy_test.py --ids A1,T3,G10  # 只跑指定题
-  python3 test/qa_accuracy_test.py --base-url http://localhost:8800
+  python3 test/mvp/qa_accuracy_test.py                  # 跑全部 80 题
+  python3 test/mvp/qa_accuracy_test.py --group A        # 只跑 A 组
+  python3 test/mvp/qa_accuracy_test.py --ids A1,T3,G10  # 只跑指定题
+  python3 test/mvp/qa_accuracy_test.py --base-url http://localhost:8800
 """
 import argparse
 import json
@@ -28,9 +28,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-PLAN_PATH = REPO_ROOT / "test" / "mvp-acceptance-test-plan.md"
-RESULTS_DIR = REPO_ROOT / "test" / "results"
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+PLAN_PATH = REPO_ROOT / "test" / "mvp" / "mvp-acceptance-test-plan.md"
+RESULTS_DIR = REPO_ROOT / "test" / "mvp" / "results"
 
 # 期望证据来源缩写 -> 实际已导入 Source 的标题（见 data/wiki-brain.db sources 表）。
 # 一个缩写可能对应多个候选标题（如"两篇 RAC"同时指向 11g/19c 两篇文档），

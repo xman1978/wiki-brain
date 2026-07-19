@@ -88,7 +88,7 @@ evidence:
 
 ## 4. 问答测试集
 
-期望答案以文档原文为准；「期望证据」指引用片段应落在的原文位置。每题标注用途。A/T/G 三组同时内嵌于 `test/mvp-acceptance-test-plan.md` 第 4 节（准确率测试集），两处同源，修改须同步。
+期望答案以文档原文为准；「期望证据」指引用片段应落在的原文位置。每题标注用途。A/T/G 三组同时内嵌于 `test/mvp/mvp-acceptance-test-plan.md` 第 4 节（准确率测试集），两处同源，修改须同步。
 
 ### 4.1 A 组 · 单文档事实类（学习信号主力，每题含 2-3 个变体问法）
 
@@ -146,7 +146,7 @@ evidence:
 
 | ID | 问题 | 期望行为 |
 |----|------|---------|
-| C1 | 公司年假有多少天？ | 明确表示知识库无相关内容，产生 knowledge_gap 事件，不得引用任何 KP 编造 |
+| C1 | 公司年假有多少天？ | 明确表示知识库无相关内容，不得引用任何 KP 编造；knowledge_gap 事件仅在检索证据全空（direct+supporting 均空）时产生——有证据即不归 gap（无法机器判断证据是否真与问题无关，2026-07-19 定案），事件是否出现不计失败，主判定是回答不幻构 |
 | C2 | 报销单在 OA 里怎么填？ | 同上（报销规定只讲期限，不讲操作步骤） |
 | C3 | OpenGauss 数据库怎么优化？ | 同上（只有达梦/金仓/神通/Oracle，不得把其他数据库的参数张冠李戴——技术域幻构风险高于制度域，重点观察） |
 | C4 | K8S 集群怎么升级版本？ | 同上（部署文档无升级章节） |
@@ -266,7 +266,7 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
    - A/T/B/D/G 组回答要点正确率 ≥ 90%（制度域约 45 题、技术域约 50 题，**分开统计**，两边各自 ≥90%——单边达标不算过，V1 目标要求跨领域成立），错误题记录原因（提取缺失 or 检索未召回 or 回答错引）；
    - 技术域重点核查：C3 不得把达梦/神通参数安到 OpenGauss 头上；B3/B5 的引用不得张冠李戴（引用的 KP 所属 source 必须与回答中提到的产品一致）；
    - D 组每条 `mined=true` 的证据 content 必须是对应 KU 原文的子串（脚本核验 `content in 原文`）；出现 `mined=false` 整段回退时数量记录在案，回退率 ≤ 30%；
-   - C 组两题不产生虚假引用，`learning_events` 出现 knowledge_gap；
+   - C 组不产生虚假引用（回答明确说明无相关内容，不编造）；knowledge_gap 事件仅当该题检索证据全空时出现，partial（有 supporting）不出现且不计失败（2026-07-19 定案，见 4.4 节）；
    - A 组答对的题在 `learning_events` 中产生 `activation_gap`（path=full 且 confident 时应写入，payload 含 question_terms 与 direct_point_ids）；
    - 慢路径 LLM 调用次数记录为基线（预期 ≥4 次/题）。
 3. 通过标准：以上全部成立。activation_gap 一条都没有 → 标准 1 的燃料链路断裂，先修再继续。
@@ -281,18 +281,43 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 6. 验证：confirm 的链接 status=verified 且有对应 learning_result 落库；reject 的链接不参与后续召回。
 7. 通过标准：candidate 不经确认绝不出现在 verified 列表；每次迁移都能从 learning_result → reason → event_ids 完整回溯（标准 3）。
 
-### P3 快路径生效（标准 1 后半 + 标准 2）+ 对象守门
+### P3 快路径生效（标准 1 后半 + 标准 2）+ 对象守门 + ActivationLink 可用性验证
 
-1. 重问 A1、A9、A12、T8、T12、T15（换第三种问法，语义同、字面不同）各 3 次，逐题记录 path_type、LLM 调用次数、耗时、引用正确性；
-2. 验证点：
-   - `path_type=fast`，trace 的 `activation_link_ids` 非空，Page 显示快路径徽标；
-   - LLM 调用 ≤2 次/题（证据挖掘 1 + Answer 1），对比 P1 基线 ≥4 次；
-   - 耗时对比 P1 同题明显下降（目标 ≥40%）；
-   - 回答要点正确率与 P1 持平（direct 命中率不低于慢路径——标准 2 的硬约束）；制度域、技术域分开核对——技术域答案含命令/参数名，逐字核对（`srvctl start database -d orcl -o mount` 写成别的命令即错）；
-   - 每次快路径命中且被引用后产生 `activation_success` 事件（cited_fact_ids 非空）；
-   - 未晋升的 A2、T13 问题仍走 `path_type=full`（candidate 不参与快路径召回）。
-3. 对象守门（F 组）：执行 F1、F2、F3 各 3 次，验证前置 verified 链接不被同句式异对象问题错误激活（判定标准见 4.7）；同时 E3 追问一轮，确认补全后的问题也不串台；
-4. 通过标准：6 题 18 次快路径问答全部满足验证点；F 组 9 次守门 0 失效。
+**2026-07-19 改版说明**：`activation.md` 步骤 2 已从"打分+阈值"改为"四元组归一化后完全匹配"（不再有 `activation_match_min` / `activation_match_min_fallback` 阈值），并新增步骤 2a 快路径证据充分性校验（`fast_path_verify`，1 次 LLM）。旧版"换第三种问法验证仍能命中"的前提（打分容忍改写）不再成立——完全匹配下，改写后的问题是否命中，取决于 Session Parser 对 subject/intent 抽取标签的稳定性，这是待观测的效果指标，不是本次要验收的正确性标准。本节按两个轴重新设计：**轴一验证"链接是否被正确找到"（匹配正确性），轴二验证"命中后证据是否真能完整回答问题"（步骤 2a 校验）**。
+
+**轴一：匹配正确性**
+
+1. M1 精确复现：对 A1、A9、A12、T8、T12、T15 六条已 verified 链接，各用**培养时的主问法原句**重问 3 次；
+   验证：`path_type=fast`，trace 的 `activation_link_ids` 命中对应链接，Page 显示快路径徽标；
+2. M2 归一化容差：六题各任选 1 题，只调整词序或增删多余空白/标点（不改变用词），重问 1 次；
+   验证：仍然 `path_type=fast`——证明归一化没有引入不必要的字面依赖；
+3. M3 改写观察（原"换第三种问法"保留，改为观测指标，不设通过/失败判定）：六题各换 1 种未出现过的自然表述（沿用 `--extra-phrasing-file` 机制）重问 3 次；
+   记录：命中率、以及 `GET /activation-links?point_id=...` 是否新增了一条对应新问法的 `candidate` 链接（慢路径 confident 时应产生新 candidate，验证"覆盖靠积累，不靠模糊匹配"这条设计假设）；**此项不计入 P3 通过标准**，结果写入报告供后续判断是否需要在 Study 侧做 subject 归一化演进；
+4. M4 约束不对称已取消——超集不再放行（**已试跑确认可行问法**，见下方"试跑记录"）：复用 F1_PRE 链接（P2 已培养、已确认为 verified），核心问法追加一个 F1_PRE 未覆盖的环境限定词重问：
+   ```
+   基线（F1_PRE 培养问法）：达梦怎么查询会话执行情况
+     → subject=数据库会话监控 intent=查询会话执行情况 audience="" constraint=达梦
+   M4 探针：            达梦在Windows环境下怎么查询会话执行情况？
+     → subject=数据库会话监控 intent=查询会话执行情况 audience="" constraint=达梦,Windows环境
+   ```
+   subject/intent/audience 与培养时完全一致，constraint 从"达梦"变成"达梦,Windows环境"（干净超集，不改变其余三维）——正是验证对称语义所需的最小变量控制；
+   验证：`path_type=full`（不命中）——这是本次设计变更后的新行为，取代旧版"问题多出的限定不拦截"；
+5. M5 对象/约束错配排除（F 组，判定口径不变）：F1、F2、F3 各 3 次，验证前置 verified 链接不被同句式异对象问题错误激活；同时 E3 追问一轮，确认补全后的问题也不串台；
+6. M6/M7 四元组缺失回退——**回退分支在真实数据里无法自然培养出**（试跑已证实：Session Parser 对任意真实问题都会抽出非空 subject/audience/constraint，即使是 A11 这种纯数字条件的问题也不例外；回退分支存在的意义是兼容"存量迁移链接"或"本轮 Session 解析异常降级"，两者都不是健康链路的自然产物），改为直接改库模拟存量链接：
+   - 前置：任选一条已 verified 的链接（如 F1_PRE），`UPDATE activation_links SET subject_terms='', intent_terms='', audience='', constraint_terms='' WHERE link_id=?`，模拟其为存量迁移链接；`POST /study/run` 或等价方式确认 Matcher 缓存能反映改动（必要时重启触发缓存重载）；
+   - M6 精确复现：用该链接培养时的原始问句原样重问 → 应命中（`path_type=fast`）；
+   - M7 改写不命中：同一链接，问题换一种表述重问 → 不命中（`path_type=full`）——回退分支不再有包含度阈值兜底改写，这是新行为；
+   - 收尾：测试后如需保留该链接供后续阶段使用，需手工把四个字段改回原值（或重新培养）。
+7. M8 状态过滤（沿用不变）：未晋升的 A2、T13 问题仍走 `path_type=full`；candidate/weakened/deprecated 或目标 KP 非 current 的链接不参与匹配（与 P2/P5 的验证点呼应，本阶段不重复造场景，仅复核一次现状）。
+
+**轴二：证据充分性校验（步骤 2a，`fast_path_verify`）**
+
+8. V1 正常充分：M1 六题的快路径回答本身就是正向样本——额外核对 trace 中可观察到 `fast_verify` 这次 LLM 调用发生过（若无独立日志字段，退化为核对总调用次数从旧基线的 2 次变为 3 次：证据挖掘 1 + 校验 1 + Answer 1）；
+9. V2 内容变窄后校验拦截：见 P6 附加步骤（依赖 reupload 换血机制，安排在 P6 而非本阶段，避免打断 P3 的数据依赖顺序）；
+10. V3 校验异常的保守回落：LLM 层面的畸形返回/超时无法在真实数据验收里可靠复现，已改为 Go 单测覆盖（`internal/retrieval/fastpath_test.go`），本阶段不测；
+11. V4 灰度关闭对照：`fast_path_verify=false` 时行为应等同旧版快路径（不校验直接采纳）——用 M1 的六题之一，临时改配置重跑 1 次，验证仍为 `path_type=fast` 且不因关闭校验而报错。
+
+**通过标准**：M1 18 次、M2 6 次、M4 1 次（超集排除）、M5 9 次（F 组）+ E3 1 次、M6/M7 各 F1_PRE 3 次全部满足验证点；M3 不设通过标准，仅记录观测数据；V1 通过标准并入 M1；V4 1 次验证通过。
 
 ### P4 证据挖掘与幻构拦截专项（标准 4）
 
@@ -323,6 +348,14 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 5. 依赖旧 KP 的 ActivationLink 停止强化：重问后 `POST /study/run`，确认 A4、T15 链接无 adopt_count 增长、无晋升/reverify（文档规则：目标 KP 非 current 只降不升）；
 6. 失败分支：任选一个 source 再造一次必失败的 reupload（如上传空文件/触发 LLM 失败），验证原 Source 与旧 KU/KP 完全不受影响，影子 status=failed，`POST /sources/:id/reupload/retry` 可续跑。
 7. 通过标准：两域换血原子性均成立（要么全新要么全旧，无中间态暴露）；新旧答案切换准确。
+
+8. **附加步骤 V2（P3 轴二遗留项）：内容变窄后步骤 2a 校验拦截**——验证"命中≠答得对"这条防线（`docs/impl/v1/retrieval.md` 步骤 2a）在真实换血场景下生效，须在第 4 步（T15 已完成 128→256 换血、新 KU 仍完整覆盖"默认值+上限"两个事实）之后进行：
+   1. 对已完成第一次换血的《神通数据库优化》再制作第二份衍生文件：仅删除"最大连接数上限 65535"这一句，保留"默认 256"及其余内容不变（制造客观可判定的缺失——T15 原问法"神通数据库最大连接数默认是多少、上限多少？"明确问了两个数字，新文档只对得上一个）；
+   2. `POST /sources/:id/reupload` 上传该版本，等待换血完成；
+   3. 重问 T15 原句：
+      - 验证 `fast_path_verify=true`（默认配置）时，步骤 2a 判 `sufficient=false`，最终 `path_type=full`，`activation_hits` 保留原 T15 链接（产生 `activation_failure`，非 `activation_success`）；
+      - 回答内容不得凭空编出"上限 65535"（旧值）或臆造新上限——验证幻构未发生；
+   4. 通过标准：重问 3 次全部触发步骤 2a 拦截并正确回落，无一次把缺失的上限事实当作已知信息回答。
 
 ### P7 跨 Source KPN（两域）
 

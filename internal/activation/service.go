@@ -31,22 +31,27 @@ func (s *Service) Match(query session.ExpandedQuery, cfg MatchConfig) ([]LinkMat
 	return s.matcher.Match(query, cfg)
 }
 
-// CreateLink is idempotent on (question_terms, point_id): a second call with
-// the same pair returns the existing link unchanged. If that existing link
-// was deprecated, creation is refused rather than reviving it — a deprecated
-// condition needs a human/Study decision informed by fresh accumulated
-// signal, not an automatic recreate (docs/impl/v1/activation.md 步骤 1).
+// CreateLink is idempotent on point_id: a second call for a point that
+// already has a link returns the existing link unchanged (Study's own
+// tryCreateLink already checks this before calling in — see
+// docs/impl/v1/study.md 步骤 2 — but this check stays here too so CreateLink
+// is safe to call directly: idx_al_point_id is a UNIQUE index, so skipping
+// this check would surface as a raw SQL constraint error instead of a
+// graceful return). If the existing link was deprecated, creation is refused
+// rather than reviving it — a deprecated condition needs a human/Study
+// decision informed by fresh accumulated signal, not an automatic recreate
+// (docs/impl/v1/activation.md 步骤 1).
 func (s *Service) CreateLink(questionTerms string, cond LinkCondition, pointID string, createdFrom []string) (*ActivationLink, error) {
-	existing, err := s.store.GetByQuestionAndPoint(questionTerms, pointID)
+	existing, err := s.store.GetByPointID(pointID)
 	if err != nil {
 		return nil, err
 	}
 	if existing != nil {
 		if existing.Status == StatusDeprecated {
 			slog.Info("activation: refusing to recreate deprecated link",
-				"link_id", existing.LinkID, "question_terms", questionTerms, "point_id", pointID)
-			return nil, fmt.Errorf("activation: link %s for (question_terms=%q, point_id=%s) is deprecated; refusing to recreate",
-				existing.LinkID, questionTerms, pointID)
+				"link_id", existing.LinkID, "point_id", pointID)
+			return nil, fmt.Errorf("activation: link %s for point_id=%s is deprecated; refusing to recreate",
+				existing.LinkID, pointID)
 		}
 		return existing, nil
 	}

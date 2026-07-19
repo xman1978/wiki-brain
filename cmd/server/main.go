@@ -77,6 +77,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// gse 分词器：必须在任何触发 InitSegmenter() 的调用（trace/activation 的
+	// question_terms 归一化、Bleve 索引）之前显式带上自定义词典完成首次加载
+	// （sync.Once），否则会有其他调用点用零参数把词典锁定成只含基础词库，
+	// 导致"达梦""会话"这类词典外术语被切碎成单字。
+	if err := index.InitSegmenter("config/dict/it.txt", "config/dict/finance.txt", "config/dict/wiki_brain.txt"); err != nil {
+		slog.Error("初始化分词器失败", "error", err)
+		os.Exit(1)
+	}
+
 	// Database
 	database, err := db.Open(cfg.Database.Path)
 	if err != nil {

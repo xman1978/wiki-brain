@@ -146,9 +146,7 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 	}
 
 	matchCfg := activation.MatchConfig{
-		MatchMin:         s.cfg.Retrieval.ActivationMatchMin,
-		MatchMinFallback: s.cfg.Retrieval.ActivationMatchMinFallback,
-		MatchTop:         s.cfg.Retrieval.ActivationMatchTop,
+		MatchTop: s.cfg.Retrieval.ActivationMatchTop,
 	}
 	expandedQuery := session.ExpandedQuery{
 		ExpandedQuestion: qc.Question,
@@ -175,6 +173,24 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 		pointIDs[i] = m.Link.PointID
 	}
 	slog.Info("retrieval: activation layer matched", "link_count", len(matches), "link_ids", linkIDs)
+
+	// A precise-hit cache only means something when there's exactly one
+	// candidate — every activation score is 1.0 (exact match, no similarity
+	// ranking), so >1 distinct link matching the same query is ambiguity,
+	// not precision: there's no signal to tell which one is actually right.
+	// Bundling every matched point's KP as "direct" evidence (the loop below
+	// does exactly that with no filtering) would risk smuggling an unrelated
+	// fact into the answer alongside the correct one. Fall back to the slow
+	// path instead, which already knows how to synthesize an answer across
+	// multiple KPs when a question genuinely needs more than one — this
+	// still returns activationHits so Trace grades these links same as any
+	// other fast-path miss, it just skips TouchLastUsed since none of them
+	// were actually used to answer.
+	if len(matches) > 1 {
+		slog.Info("retrieval: activation matched more than one link, ambiguous, falling back to slow path",
+			"link_ids", linkIDs)
+		return nil, activationHits, false
+	}
 
 	// Async, non-blocking — Retrieval's own failure/success handling doesn't
 	// depend on this having completed.
@@ -233,7 +249,7 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 		}
 	}
 
-	es, err := s.buildEvidenceSet(ctx, qc.Question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, "short", directCands, supportingCands, conflictCandidates, nil)
+	es, err := s.buildEvidenceSet(ctx, qc.Question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, "short", directCands, supportingCands, conflictCandidates, nil, false)
 	if err != nil {
 		slog.Warn("retrieval: fast path build evidence set failed, falling back to slow path", "error", err)
 		return nil, activationHits, false
@@ -248,11 +264,63 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 		return nil, activationHits, false
 	}
 
+	if s.cfg.Retrieval.FastPathVerify {
+		sufficient, err := s.verifyFastPathEvidence(ctx, qc.Question, es)
+		if err != nil {
+			slog.Warn("retrieval: fast path verify failed, falling back to slow path", "error", err)
+			return nil, activationHits, false
+		}
+		if !sufficient {
+			slog.Info("retrieval: fast path verify judged evidence insufficient, falling back to slow path", "link_ids", linkIDs)
+			return nil, activationHits, false
+		}
+	}
+
 	es.PathType = PathTypeFast
 	es.ActivationHits = activationHits
 	slog.Info("retrieval: fast path evidence built",
 		"direct", len(es.DirectEvidence), "supporting", len(es.Supporting), "link_ids", linkIDs)
 	return es, activationHits, true
+}
+
+// verifyFastPathEvidence implements docs/impl/v1/retrieval.md 步骤 2a: a
+// single LLM call judging whether the fast path's evidence (built from an
+// exact quadruple match, without Rerank) still independently and completely
+// answers the question. A match on the activation condition doesn't
+// guarantee the KP's content is still adequate — it may have been updated,
+// or the question may carry detail the quadruple didn't capture — so this
+// is the only check standing between an exact-match hit and answering the
+// user directly. Any ambiguity (LLM error, unparseable response,
+// sufficient=false) is treated as failure; the caller falls back to the
+// slow path.
+func (s *Service) verifyFastPathEvidence(ctx context.Context, question string, es *EvidenceSet) (bool, error) {
+	var evidenceText strings.Builder
+	for i, ev := range es.DirectEvidence {
+		fmt.Fprintf(&evidenceText, "[direct-%d] %s\n", i+1, ev.Content)
+	}
+	for i, ev := range es.Supporting {
+		fmt.Fprintf(&evidenceText, "[supporting-%d] %s\n", i+1, ev.Content)
+	}
+
+	resp, err := s.llmClient.CompleteJSON(ctx, "fast_verify.md", map[string]string{
+		"question": question,
+		"evidence": evidenceText.String(),
+	}, "classification")
+	if err != nil {
+		return false, fmt.Errorf("retrieval: fast path verify call: %w", err)
+	}
+
+	var result struct {
+		Sufficient bool   `json:"sufficient"`
+		Reason     string `json:"reason"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return false, fmt.Errorf("retrieval: parse fast path verify response: %w", err)
+	}
+	if !result.Sufficient {
+		slog.Info("retrieval: fast path verify judged insufficient", "reason", result.Reason)
+	}
+	return result.Sufficient, nil
 }
 
 func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progress ProgressFunc) (*EvidenceSet, error) {
@@ -271,7 +339,7 @@ func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progres
 	}
 	slog.Info("retrieval: step2 domain pre-filter done", "candidates", len(candidateSources))
 
-	es, err := s.filterAndRecall(ctx, qc, candidateSources, emit, progress)
+	es, err := s.filterAndRecall(ctx, qc, candidateSources, emit, progress, false)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +359,7 @@ func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progres
 			retryQC.Intent = parsed.Intent
 			slog.Info("retrieval: empty result, retrying with extracted subject/intent",
 				"subject", parsed.Subject, "intent", parsed.Intent)
-			es, err = s.filterAndRecall(ctx, retryQC, candidateSources, emit, progress)
+			es, err = s.filterAndRecall(ctx, retryQC, candidateSources, emit, progress, false)
 			if err != nil {
 				return nil, err
 			}
@@ -304,8 +372,14 @@ func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progres
 	// Fallback 2（方向 A）：仍为空，跳过 Source 语义过滤，直接在 Domain 预过滤后的全部
 	// 候选 source 上召回——单段摘要天然覆盖不了多主题文档（如"问题汇总"类）的所有子话题，
 	// Source 过滤会系统性漏选正确文档，只能放宽候选池交给 outline/FTS 召回自己发现。
+	// This is also the last attempt before giving up entirely, so it passes
+	// lastResort=true through to evidence mining（问答准确率测试 2026-07-17
+	// 诊断）：rerank_judge 只看预抽取的语义/KP 摘要，摘要遗漏问题关键事实时
+	// 唯一候选会被判成 supporting 而非 direct；供 direct 用的整段回退规则本身没变
+	// （docs/impl/v1/evidence.md），只是在最后一次重试里把这条回退也对 supporting
+	// 开放，避免"rerank 已经判定候选主题相关、只是摘要没抓到关键句"这种情况直接判空。
 	slog.Info("retrieval: empty result, retrying against full domain-filtered source pool", "sources", len(candidateSources))
-	return s.recallFromSources(ctx, retryQC, candidateSources, emit, progress)
+	return s.recallFromSources(ctx, retryQC, candidateSources, emit, progress, true)
 }
 
 func evidenceEmpty(es *EvidenceSet) bool {
@@ -314,7 +388,7 @@ func evidenceEmpty(es *EvidenceSet) bool {
 
 // filterAndRecall runs Step 3 (Source semantic filter) then Steps 4-10 within
 // the filtered source set.
-func (s *Service) filterAndRecall(ctx context.Context, qc QueryContext, candidateSources []SourceInfo, emit func(phase, status, detail string, dur int64), progress ProgressFunc) (*EvidenceSet, error) {
+func (s *Service) filterAndRecall(ctx context.Context, qc QueryContext, candidateSources []SourceInfo, emit func(phase, status, detail string, dur int64), progress ProgressFunc, lastResort bool) (*EvidenceSet, error) {
 	activationStart := time.Now()
 	emit("activation", "start", "", 0)
 
@@ -331,12 +405,14 @@ func (s *Service) filterAndRecall(ctx context.Context, qc QueryContext, candidat
 	slog.Info("retrieval: step3 source filter done", "sources", sourceIDs)
 	emit("activation", "done", fmt.Sprintf("%d 个来源", len(sourceIDs)), time.Since(activationStart).Milliseconds())
 
-	return s.recallFromSources(ctx, qc, filteredSources, emit, progress)
+	return s.recallFromSources(ctx, qc, filteredSources, emit, progress, lastResort)
 }
 
 // recallFromSources runs Steps 4-10 (outline+FTS recall through
-// EvidenceSet construction) against a fixed source set.
-func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, sources []SourceInfo, emit func(phase, status, detail string, dur int64), progress ProgressFunc) (*EvidenceSet, error) {
+// EvidenceSet construction) against a fixed source set. lastResort is
+// forwarded to buildEvidenceSet — see retrieveSlowPath's fallback 2 for what
+// it changes.
+func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, sources []SourceInfo, emit func(phase, status, detail string, dur int64), progress ProgressFunc, lastResort bool) (*EvidenceSet, error) {
 	question := qc.Question
 	sourceIDs := make([]string, len(sources))
 	for i, src := range sources {
@@ -383,18 +459,19 @@ func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, source
 			DirectEvidence: []Evidence{},
 			Supporting:     []Evidence{},
 			Conflicts:      nil,
+			GapReason:      GapReasonNoCandidates,
 		}, nil
 	}
 
 	// Step 7: 证据分类（LLM Rerank）
 	emit("rerank", "start", fmt.Sprintf("%d 条候选", len(merged)), 0)
 	rerankStart := time.Now()
-	reranked, err := s.rerank(ctx, qc, merged)
+	reranked, filteredEvidence, err := s.rerank(ctx, qc, merged)
 	if err != nil {
 		emit("rerank", "error", err.Error(), time.Since(rerankStart).Milliseconds())
 		return nil, fmt.Errorf("retrieval: rerank: %w", err)
 	}
-	slog.Info("retrieval: step7 rerank done", "kept", len(reranked))
+	slog.Info("retrieval: step7 rerank done", "kept", len(reranked), "filtered", len(filteredEvidence))
 
 	// Step 8: KPN expansion
 	reranked, conflictCandidates, err := s.kpnExpand(reranked)
@@ -420,9 +497,13 @@ func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, source
 	emit("rerank", "done", fmt.Sprintf("%d 直接 · %d 补充", len(direct), len(supporting)), time.Since(rerankStart).Milliseconds())
 
 	// Step 10: Build EvidenceSet
-	es, err := s.buildEvidenceSet(ctx, question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, path, direct, supporting, conflictCandidates, progress)
+	es, err := s.buildEvidenceSet(ctx, question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, path, direct, supporting, conflictCandidates, progress, lastResort)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: build evidence set: %w", err)
+	}
+	es.FilteredEvidence = filteredEvidence
+	if len(direct) == 0 && len(supporting) == 0 {
+		es.GapReason = GapReasonJudgeFiltered
 	}
 	return es, nil
 }
@@ -937,7 +1018,7 @@ func (s *Service) rrfMerge(outlineCandidates, ftsCandidates []candidate) []candi
 }
 
 // Step 7: LLM Rerank
-func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []candidate) ([]candidate, error) {
+func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []candidate) ([]candidate, []Evidence, error) {
 	// Re-check KU lifecycle right before reranking — recall
 	// happened moments earlier via Bleve, which can lag a DB lifecycle change
 	// (docs/impl/v1/retrieval.md 步骤 5, "防扫描间隙状态变更").
@@ -954,7 +1035,15 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 	}
 	semanticsByUnit, err := s.store.GetUnitRerankSemantics(unitIDs)
 	if err != nil {
-		return nil, fmt.Errorf("retrieval: rerank get semantics: %w", err)
+		return nil, nil, fmt.Errorf("retrieval: rerank get semantics: %w", err)
+	}
+	centersByUnit, err := s.store.GetUnitCenters(unitIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("retrieval: rerank get centers: %w", err)
+	}
+	pointsByUnit, err := s.store.GetPointContentsByUnitIDs(unitIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("retrieval: rerank get points: %w", err)
 	}
 
 	// A unit's persisted semantics are used regardless of which extraction
@@ -980,7 +1069,7 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 		slog.Debug("retrieval: rerank using semantics from an older extraction prompt version", "stale_count", staleCount)
 	}
 	if len(missingSet) > 0 {
-		return nil, fmt.Errorf("retrieval: rerank semantics integrity: missing unit_ids: %s", strings.Join(sortedUnitIDs(missingSet), ", "))
+		return nil, nil, fmt.Errorf("retrieval: rerank semantics integrity: missing unit_ids: %s", strings.Join(sortedUnitIDs(missingSet), ", "))
 	}
 
 	titleCache := make(map[string]string)
@@ -998,24 +1087,50 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 	judgeCandidates := make([]rerankJudgeCandidate, 0, len(candidates))
 	for _, c := range candidates {
 		judgeCandidates = append(judgeCandidates, buildRerankJudgeCandidate(
-			c.candidateID, titleCache[c.sourceID], semanticsByUnit[c.unitID]))
+			c.candidateID, titleCache[c.sourceID], centersByUnit[c.unitID], semanticsByUnit[c.unitID], pointsByUnit[c.unitID]))
 	}
 
 	roles, err := s.judgeRerankBatches(ctx, qc, judgeCandidates)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		for _, c := range candidates {
+			role, ok := roles[c.candidateID]
+			if !ok {
+				role = "(no role returned)"
+			}
+			slog.Debug("retrieval: rerank judge role", "unit_id", c.unitID, "candidate_id", c.candidateID, "role", role)
+		}
 	}
 
 	var kept []candidate
+	var filtered []Evidence
 	for _, c := range candidates {
 		role, ok := roles[c.candidateID]
 		if !ok || role == "irrelevant" {
+			content, err := s.readUnitContent(c.sourceID, c.lineStart, c.lineEnd)
+			if err != nil {
+				slog.Warn("retrieval: read filtered candidate content failed", "unit_id", c.unitID, "error", err)
+				continue
+			}
+			ref := SourceRef{SourceID: c.sourceID, LineStart: c.lineStart, LineEnd: c.lineEnd}
+			refJSON, _ := json.Marshal(ref)
+			filtered = append(filtered, Evidence{
+				UnitID:    c.unitID,
+				PointID:   c.pointID,
+				Content:   content,
+				SourceRef: refJSON,
+				Role:      RoleIrrelevant,
+				Origin:    OriginRerank,
+			})
 			continue
 		}
 		c.sourcePaths = []string{role}
 		kept = append(kept, c)
 	}
-	return kept, nil
+	return kept, filtered, nil
 }
 
 func sortedUnitIDs(ids map[string]struct{}) []string {
@@ -1027,16 +1142,26 @@ func sortedUnitIDs(ids map[string]struct{}) []string {
 	return sorted
 }
 
-func buildRerankJudgeCandidate(candidateID, sourceTitle string, semantic rerank.Semantics) rerankJudgeCandidate {
+// buildRerankJudgeCandidate assembles the judge's entire view of one
+// candidate. center (knowledge_units.center, from unit extraction) and points
+// (this KU's knowledge_points) come from two independent extraction passes
+// over the same KU — including both lowers the chance that a fact the
+// question hinges on is invisible to the judge because one pass dropped it.
+func buildRerankJudgeCandidate(candidateID, sourceTitle, center string, semantic rerank.Semantics, points []PointFact) rerankJudgeCandidate {
+	judgePoints := make([]rerankJudgePoint, len(points))
+	for i, p := range points {
+		judgePoints[i] = rerankJudgePoint{Content: p.Content, Type: p.PointType}
+	}
 	return rerankJudgeCandidate{
 		CandidateID:  candidateID,
 		SourceTitle:  sourceTitle,
+		Center:       center,
 		SourceTheme:  semantic.SourceTheme,
 		ContentTheme: semantic.ContentTheme,
 		Intent:       semantic.Intent,
 		Object:       semantic.Object,
 		Scope:        semantic.Scope,
-		KeyFacts:     semantic.KeyFacts,
+		Points:       judgePoints,
 	}
 }
 
@@ -1115,6 +1240,7 @@ func (s *Service) judgeExtractedEvidence(ctx context.Context, qc QueryContext, s
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: rerank judge payload: %w", err)
 	}
+	slog.Debug("retrieval: rerank judge payload", "payload", string(payload))
 	resp, err := s.llmClient.CompleteJSON(ctx, "rerank_judge.md", map[string]string{
 		"question":   qc.Question,
 		"subject":    subject,
@@ -1144,6 +1270,7 @@ func (s *Service) judgeExtractedEvidence(ctx context.Context, qc QueryContext, s
 		if r.Role != "direct" && r.Role != "supporting" && r.Role != "irrelevant" {
 			return nil, fmt.Errorf("retrieval: rerank judge invalid role: %s", r.Role)
 		}
+		slog.Debug("retrieval: rerank judge analysis", "candidate_id", r.CandidateID, "role", r.Role, "analysis", r.Analysis)
 		roles[r.CandidateID] = r.Role
 	}
 	return roles, nil
@@ -1197,14 +1324,20 @@ func splitRerankJudgeBatches(candidates []rerankJudgeCandidate, maxChars int) []
 }
 
 type rerankJudgeCandidate struct {
-	CandidateID  string   `json:"candidate_id"`
-	SourceTitle  string   `json:"source_title"`
-	SourceTheme  string   `json:"source_theme"`
-	ContentTheme string   `json:"content_theme"`
-	Intent       string   `json:"intent"`
-	Object       string   `json:"object"`
-	Scope        string   `json:"scope"`
-	KeyFacts     []string `json:"key_facts"`
+	CandidateID  string             `json:"candidate_id"`
+	SourceTitle  string             `json:"source_title"`
+	Center       string             `json:"center"`
+	SourceTheme  string             `json:"source_theme"`
+	ContentTheme string             `json:"content_theme"`
+	Intent       string             `json:"intent"`
+	Object       string             `json:"object"`
+	Scope        string             `json:"scope"`
+	Points       []rerankJudgePoint `json:"points"`
+}
+
+type rerankJudgePoint struct {
+	Content string `json:"content"`
+	Type    string `json:"type"`
 }
 
 type rerankJudgeResult struct {
@@ -1318,7 +1451,7 @@ func (s *Service) kpnExpand(candidates []candidate) ([]candidate, []candidate, e
 // final EvidenceSet (docs/impl/v1/retrieval.md 步骤 3-4). Mining runs once
 // here for both the fast and slow paths, since both funnel through this
 // function.
-func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, intent, audience, constraint, path string, direct, supporting, conflicts []candidate, progress ProgressFunc) (*EvidenceSet, error) {
+func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, intent, audience, constraint, path string, direct, supporting, conflicts []candidate, progress ProgressFunc, lastResort bool) (*EvidenceSet, error) {
 	emit := func(phase, status, detail string, dur int64) {
 		if progress != nil {
 			progress(ProgressEvent{Phase: phase, Status: status, Detail: detail, Duration: dur})
@@ -1364,7 +1497,7 @@ func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, inten
 	evidenceStart := time.Now()
 	mined := items
 	if s.evidenceSvc != nil {
-		mined = s.evidenceSvc.Mine(ctx, question, subject, intent, items)
+		mined = s.evidenceSvc.Mine(ctx, question, subject, intent, items, lastResort)
 	}
 	minedCount := 0
 	for _, item := range mined {

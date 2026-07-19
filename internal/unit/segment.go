@@ -70,56 +70,26 @@ func BuildSegments(outlines []source.Outline, markdownLines []string, segmentMax
 // detected heading, which never becomes part of any outline node at all.
 // Without this, such ranges silently never reach Unit extraction.
 func uncoveredSegments(leaves []source.Outline, markdownLines []string) []Segment {
-	totalLines := len(markdownLines)
-	if totalLines <= 0 {
-		return nil
-	}
-	covered := make([]bool, totalLines+1) // 1-indexed; index 0 unused
-	for _, leaf := range leaves {
-		start, end := leaf.LineStart, leaf.LineEnd
-		if start < 1 {
-			start = 1
-		}
-		if end > totalLines {
-			end = totalLines
-		}
-		for line := start; line <= end; line++ {
-			covered[line] = true
-		}
+	leafRanges := make([]lineRange, len(leaves))
+	for i, leaf := range leaves {
+		leafRanges[i] = lineRange{start: leaf.LineStart, end: leaf.LineEnd}
 	}
 
-	addGap := func(gaps []Segment, start, end int) []Segment {
+	var segs []Segment
+	for _, gap := range findUncoveredRanges(leafRanges, len(markdownLines)) {
 		hasContent := false
-		for line := start; line <= end; line++ {
+		for line := gap.start; line <= gap.end; line++ {
 			if strings.TrimSpace(markdownLines[line-1]) != "" {
 				hasContent = true
 				break
 			}
 		}
 		if !hasContent {
-			return gaps
-		}
-		return append(gaps, Segment{Title: "未识别标题内容", LineStart: start, LineEnd: end})
-	}
-
-	var gaps []Segment
-	gapStart := -1
-	for line := 1; line <= totalLines; line++ {
-		if !covered[line] {
-			if gapStart == -1 {
-				gapStart = line
-			}
 			continue
 		}
-		if gapStart != -1 {
-			gaps = addGap(gaps, gapStart, line-1)
-			gapStart = -1
-		}
+		segs = append(segs, Segment{Title: "未识别标题内容", LineStart: gap.start, LineEnd: gap.end})
 	}
-	if gapStart != -1 {
-		gaps = addGap(gaps, gapStart, totalLines)
-	}
-	return gaps
+	return segs
 }
 
 func findLeaves(outlines []source.Outline) []source.Outline {

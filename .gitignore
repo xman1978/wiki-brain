@@ -5,4 +5,5 @@ data/
 logs/
 bin/
 run.pid
-test/results/
+test/mvp/results/
+test/v1/results/

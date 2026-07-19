@@ -209,6 +209,11 @@ func (h *Handler) getSource(w http.ResponseWriter, r *http.Request) {
 		"version":      src.Version,
 		"created_at":   src.CreatedAt.Format("2006-01-02T15:04:05Z"),
 	}
+	if n, err := h.svc.store.CountManuallyEditedSemantics(id); err != nil {
+		slog.Warn("get source: count manually edited semantics failed", "source_id", id, "error", err)
+	} else {
+		resp["manually_edited_count"] = n
+	}
 	if src.OutlineType.Valid {
 		resp["outline_type"] = src.OutlineType.String
 	}

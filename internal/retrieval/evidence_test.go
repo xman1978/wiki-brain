@@ -32,7 +32,7 @@ func TestBuildEvidenceSet_WithMining_ProducesFragmentLevelEvidence(t *testing.T)
 		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25},
 	}
 
-	es, err := svc.buildEvidenceSet(context.Background(), "what is a linear equation", "", "", "", "", "short", direct, nil, nil, nil)
+	es, err := svc.buildEvidenceSet(context.Background(), "what is a linear equation", "", "", "", "", "short", direct, nil, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestBuildEvidenceSet_MiningDisabled_WholeSegmentUnchanged(t *testing.T) {
 		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25},
 	}
 
-	es, err := svc.buildEvidenceSet(context.Background(), "q", "", "", "", "", "short", direct, nil, nil, nil)
+	es, err := svc.buildEvidenceSet(context.Background(), "q", "", "", "", "", "short", direct, nil, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

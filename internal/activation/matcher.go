@@ -2,35 +2,26 @@ package activation
 
 import (
 	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/jxman78/wiki-brain/internal/foundation/text"
 	"github.com/jxman78/wiki-brain/internal/session"
 )
 
-// Default thresholds (docs/impl/v1/activation.md 步骤 2), overridable via
-// config.yml retrieval.activation_match_*.
-const (
-	DefaultMatchMin         = 0.7
-	DefaultMatchMinFallback = 0.85
-	DefaultMatchTop         = 5
-)
+// Default result cap (docs/impl/v1/activation.md 步骤 2), overridable via
+// config.yml retrieval.activation_match_top. Matching itself is exact —
+// there is no score threshold to configure.
+const DefaultMatchTop = 5
 
-// MatchConfig carries the configurable thresholds in from config.yml
-// (retrieval section). Zero values fall back to the documented defaults.
+// MatchConfig carries the configurable result cap in from config.yml
+// (retrieval section). Zero value falls back to the documented default.
 type MatchConfig struct {
-	MatchMin         float64
-	MatchMinFallback float64
-	MatchTop         int
+	MatchTop int
 }
 
 func (c MatchConfig) withDefaults() MatchConfig {
-	if c.MatchMin <= 0 {
-		c.MatchMin = DefaultMatchMin
-	}
-	if c.MatchMinFallback <= 0 {
-		c.MatchMinFallback = DefaultMatchMinFallback
-	}
 	if c.MatchTop <= 0 {
 		c.MatchTop = DefaultMatchTop
 	}
@@ -83,10 +74,47 @@ func (m *Matcher) loadCache() ([]ActivationLink, error) {
 	return links, nil
 }
 
-// Match implements docs/impl/v1/activation.md 步骤 2 in full: hard gating on
-// audience/constraint, then subject/intent scoring for links with a subject
-// condition, falling back to question_terms overlap (higher threshold, no
-// gated links) for links or queries missing the quadruple.
+// Match implements docs/impl/v1/activation.md 步骤 2: the activation link is
+// a precise-hit cache, not a small retrieval engine, so a false positive here
+// answers the user directly with no downstream check, while a false negative
+// only costs a fallback to the slow path (which already works). Every hit
+// scores 1.0; there is no partial credit.
+//
+// subject_terms is matched by substring containment against the query's
+// subject+intent combined text, not token-set equality or even token-set
+// subset. Two real-world gaps found by testing against live traffic drove
+// this (both confirmed via actual queries against production-shaped data,
+// not hypothetical):
+//
+//  1. Session doesn't reliably put the same concept in the same slot across
+//     rephrasings of the same question — "扣分" landed in `subject` for the
+//     historical trace that put it into a link's stored core, but in
+//     `intent` for a fresh, on-topic rephrasing. A subset check against
+//     subject alone misses this even though the concept is right there in
+//     the query. Checking containment against subject+intent combined fixes
+//     it without having to also broaden what Study is willing to put in the
+//     core in the first place (computeLinkCondition/LabelTermIntersection
+//     are untouched — still subject-only, still conservative).
+//  2. The gse segmenter doesn't draw the same word boundary for the same
+//     compound noun on every call — "数据库连接" as one token in the trace
+//     that built the core, "数据库"+"连接" as two tokens in a fresh query
+//     containing the identical substring. Token-set membership treats that
+//     as two different words; substring containment doesn't care where the
+//     tokenizer drew the boundary.
+//
+// This trades a small amount of precision (a short core word could in
+// principle match inside an unrelated longer word) for recall on exactly
+// the two failure modes above; audience/constraint stay exact-match hard
+// gates below specifically to bound that risk — a topic-word coincidence
+// alone can never activate a link whose audience/constraint don't also
+// agree.
+//
+// intent_terms/audience/constraint_terms are matched by set membership:
+// Study accumulates every distinct normalized value it has independently
+// confirmed for this point (including "" when a confident trace's field
+// came back blank — that is itself a real observation, not a gap to
+// special-case) into a whitelist that only grows, so a hit requires the
+// query's (single) normalized value to be *in* that set.
 func (m *Matcher) Match(query session.ExpandedQuery, cfg MatchConfig) ([]LinkMatch, error) {
 	cfg = cfg.withDefaults()
 
@@ -95,97 +123,114 @@ func (m *Matcher) Match(query session.ExpandedQuery, cfg MatchConfig) ([]LinkMat
 		return nil, err
 	}
 
-	qs := text.TermSet(query.Subject)
-	qi := text.TermSet(query.Intent)
-	qc := text.TermSet(query.Constraint)
+	// queryTopic combines subject+intent into one text blob for the core
+	// containment check (see doc comment above) — a space between them keeps
+	// a word at the end of one from fusing with a word at the start of the
+	// other into something neither actually said.
+	queryTopic := strings.TrimSpace(text.Normalize(query.Subject) + " " + text.Normalize(query.Intent))
+	qi := text.Terms(text.Normalize(query.Intent))
+	qc := text.Terms(text.Normalize(query.Constraint))
 	qa := text.NormalizeCompact(query.Audience)
-	qq := text.TermSet(query.ExpandedQuestion)
+	qq := text.Terms(text.Normalize(query.ExpandedQuestion))
 
 	var results []LinkMatch
 	for _, link := range links {
-		if link.SubjectTerms == "" || len(qs) == 0 {
-			if link.Audience != "" || link.ConstraintTerms != "" {
+		linkCore := text.SplitTerms(link.SubjectTerms)
+		if len(linkCore) == 0 || queryTopic == "" {
+			// Fallback: no reliable subject signal on either side (stale
+			// link predating the quadruple, or this turn's Session parse
+			// degraded). audience/constraint can't be verified for equality
+			// with confidence here, so only links that have never observed a
+			// real (non-empty) restriction on either field are eligible — a
+			// gated link must never be reachable through this branch. A set
+			// that's empty or contains only "" both count as "never gated";
+			// only a set holding an actual value counts as gated.
+			if hasNonEmpty(link.Audience) || hasNonEmpty(link.ConstraintTerms) {
 				continue
 			}
-			lq := text.SplitTerms(link.QuestionTerms)
-			score := overlapRatio(qq, lq)
-			if score >= cfg.MatchMinFallback {
-				results = append(results, LinkMatch{Link: link, Score: score})
+			if qq != "" && qq == link.QuestionTerms {
+				results = append(results, LinkMatch{Link: link, Score: 1.0})
 			}
 			continue
 		}
 
-		if !audienceGate(link.Audience, qa) {
+		if !coreContained(linkCore, queryTopic) {
 			continue
 		}
-		if !constraintGate(link.ConstraintTerms, qc) {
+		if !containsString(link.IntentTerms, qi) {
 			continue
 		}
-
-		ls := text.SplitTerms(link.SubjectTerms)
-		li := text.SplitTerms(link.IntentTerms)
-
-		sSubject := overlapRatio(qs, ls)
-		sIntent := 1.0
-		if len(li) > 0 {
-			sIntent = overlapRatio(qi, li)
+		if !containsString(link.Audience, qa) {
+			continue
 		}
-		score := 0.7*sSubject + 0.3*sIntent
-		if score >= cfg.MatchMin {
-			results = append(results, LinkMatch{Link: link, Score: score})
+		if !containsString(link.ConstraintTerms, qc) {
+			continue
 		}
+		results = append(results, LinkMatch{Link: link, Score: 1.0})
 	}
 
-	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+	// Exact matches carry no score to rank by; break ties by recency so the
+	// most recently useful link wins when a cap trims the result set.
+	sort.SliceStable(results, func(i, j int) bool {
+		var ti, tj time.Time
+		if results[i].Link.LastUsedAt.Valid {
+			ti = results[i].Link.LastUsedAt.Time
+		}
+		if results[j].Link.LastUsedAt.Valid {
+			tj = results[j].Link.LastUsedAt.Time
+		}
+		return ti.After(tj)
+	})
 	if len(results) > cfg.MatchTop {
 		results = results[:cfg.MatchTop]
 	}
 	return results, nil
 }
 
-// overlapRatio uses the link side as the denominator: link conditions come
-// from historical normalized questions and are typically shorter than a new
-// question, so a plain Jaccard ratio would systematically under-score
-// (docs/impl/v1/activation.md 步骤 2, closing note).
-func overlapRatio(query, link map[string]struct{}) float64 {
-	if len(link) == 0 {
-		return 0
-	}
-	hits := 0
-	for w := range query {
-		if _, ok := link[w]; ok {
-			hits++
-		}
-	}
-	return float64(hits) / float64(len(link))
-}
-
-func audienceGate(linkAudience, queryAudience string) bool {
-	if linkAudience == "" {
-		return true
-	}
-	if queryAudience == "" {
-		return false
-	}
-	return linkAudience == queryAudience
-}
-
-// constraintGate requires the link's constraint terms to be fully covered by
-// the query's — the link's scoping must hold, but the query is allowed to
-// carry additional constraints the link doesn't know about
-// (docs/impl/v1/activation.md 步骤 2, "守门方向不对称").
-func constraintGate(linkConstraintTerms string, queryConstraint map[string]struct{}) bool {
-	if linkConstraintTerms == "" {
-		return true
-	}
-	if len(queryConstraint) == 0 {
-		return false
-	}
-	linkSet := text.SplitTerms(linkConstraintTerms)
-	for w := range linkSet {
-		if _, ok := queryConstraint[w]; !ok {
+// coreContained reports whether every word in core appears as a substring of
+// topicText — deliberately substring, not token-set membership (see Match's
+// doc comment for why): the gse segmenter doesn't always draw the same word
+// boundary for the same compound noun across calls, so requiring the query's
+// own tokenization to reproduce the exact boundary the core word was stored
+// with is needlessly fragile.
+func coreContained(core map[string]struct{}, topicText string) bool {
+	for w := range core {
+		if !strings.Contains(topicText, w) {
 			return false
 		}
 	}
 	return true
+}
+
+// containsString reports whether v is a member of set — the whitelist
+// membership test for intent_terms/audience/constraint_terms. "" is a
+// legitimate member like any other value (see Match's doc comment). An
+// empty set (this field was never populated — a link predating condition
+// sets, or one built without touching it) is treated the same as a set
+// containing only "": both mean "no value has been confirmed for this
+// field", so an empty query value still matches (generalizing the original
+// scalar rule that "" == "" counted as agreement) while a non-empty query
+// value correctly does not.
+func containsString(set []string, v string) bool {
+	if v == "" && len(set) == 0 {
+		return true
+	}
+	for _, s := range set {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// hasNonEmpty reports whether set contains at least one non-empty value —
+// used only to gate the fallback branch, where the question is "has this
+// link ever observed a real restriction" rather than plain set membership.
+func hasNonEmpty(set []string) bool {
+	for _, s := range set {
+		if s != "" {
+			return true
+		}
+	}
+	return false
 }

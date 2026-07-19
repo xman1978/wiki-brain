@@ -24,16 +24,28 @@ func init() {
 	})
 }
 
-// InitSegmenter loads the gse dictionary. Safe to call multiple times.
+// InitSegmenter loads the gse dictionary. Safe to call multiple times (only
+// the first call's dictFiles take effect — sync.Once).
+//
+// gse.LoadDict(files...) is additive only when called more than once: the
+// first call with no arguments loads gse's bundled base dictionary; a
+// **second** call with files replaces nothing, it just reads those files into
+// the already-initialized Dict (LoadDict only skips the base-dict load when
+// len(files) > 0, see dict_util.go). Calling it once with custom files and
+// never with no args — which is what this function used to do — silently
+// segments on the custom vocabulary alone, splitting nearly every ordinary
+// word into single characters (discovered via 达梦/会话 both shattering into
+// individual Han characters in production). Base-then-custom is required.
 func InitSegmenter(dictFiles ...string) error {
 	segOnce.Do(func() {
-		if len(dictFiles) > 0 && dictFiles[0] != "" {
-			segErr = seg.LoadDict(strings.Join(dictFiles, ","))
-		} else {
-			segErr = seg.LoadDict()
+		if segErr = seg.LoadDict(); segErr != nil {
+			segErr = fmt.Errorf("gse: load base dict: %w", segErr)
+			return
 		}
-		if segErr != nil {
-			segErr = fmt.Errorf("gse: load dict: %w", segErr)
+		if len(dictFiles) > 0 && dictFiles[0] != "" {
+			if err := seg.LoadDict(strings.Join(dictFiles, ",")); err != nil {
+				segErr = fmt.Errorf("gse: load custom dict: %w", err)
+			}
 		}
 	})
 	return segErr

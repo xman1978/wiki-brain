@@ -92,7 +92,6 @@ func (f *semanticAwareFakeClient) CompleteJSON(ctx context.Context, promptFile s
 			"index": i + 1, "content_head": runePrefix(content, 10),
 			"source_theme": "source", "content_theme": "content",
 			"intent": "explain", "object": "policy", "scope": "general",
-			"key_facts": []string{"published atomically"},
 		})
 	}
 	return json.Marshal(map[string]any{"results": results})
@@ -565,7 +564,6 @@ func semanticEntry(index int, contentHead string) string {
 	b, _ := json.Marshal(map[string]any{
 		"index": index, "content_head": contentHead,
 		"source_theme": "s", "content_theme": "c", "intent": "i", "object": "o", "scope": "g",
-		"key_facts": []string{"f"},
 	})
 	return string(b)
 }
@@ -617,8 +615,8 @@ func TestExtractRerankSemanticBatch_FallsBackToPerUnitAfterRetryStillMissing(t *
 	batch := []rerankSemanticCandidate{{id: "u1", content: "出差期间往返机票"}, {id: "u2", content: "住宿费按城市分级标准"}}
 
 	fake.SetResponseSequence("unit_semantics_extract.md", []llm.FakeResponse{
-		{Output: semanticResultJSON(semanticEntry(1, "出差期间往返机票"))}, // initial: omits u2
-		{Output: semanticResultJSON()},                          // retry-of-missing (batch=[u2]): still omits it
+		{Output: semanticResultJSON(semanticEntry(1, "出差期间往返机票"))},   // initial: omits u2
+		{Output: semanticResultJSON()},                               // retry-of-missing (batch=[u2]): still omits it
 		{Output: semanticResultJSON(semanticEntry(1, "住宿费按城市分级标准"))}, // per-unit fallback (batch=[u2]): succeeds
 	})
 
@@ -859,7 +857,7 @@ func (f *rerankSemanticExtractionTracker) CompleteJSON(ctx context.Context, prom
 		results = append(results, map[string]interface{}{
 			"index": i + 1, "content_head": runePrefix(content, 10),
 			"source_theme": "theme", "content_theme": "content",
-			"intent": "说明", "object": "object", "scope": "通用", "key_facts": []string{"fact"},
+			"intent": "说明", "object": "object", "scope": "通用",
 		})
 	}
 	return json.Marshal(map[string]interface{}{"results": results})

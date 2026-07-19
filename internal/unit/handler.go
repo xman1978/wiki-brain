@@ -1,12 +1,16 @@
 package unit
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
+	"github.com/jxman78/wiki-brain/internal/rerank"
 )
 
 type Handler struct {
@@ -26,8 +30,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /sources/{id}/coverage/merge", h.mergeCoverageGap)
 	mux.HandleFunc("POST /sources/{id}/kpn-cross", h.triggerCrossKPN)
 	mux.HandleFunc("GET /units/{id}", h.getUnit)
+	mux.HandleFunc("GET /units/{id}/semantics", h.getUnitSemantics)
+	mux.HandleFunc("PUT /units/{id}/semantics", h.putUnitSemantics)
 	mux.HandleFunc("GET /units/{id}/points", h.listPoints)
+	mux.HandleFunc("POST /units/{id}/points", h.addPoint)
 	mux.HandleFunc("GET /points/{id}", h.getPoint)
+	mux.HandleFunc("PUT /points/{id}", h.updatePoint)
 	mux.HandleFunc("GET /points/{id}/relations", h.listRelations)
 }
 
@@ -262,6 +270,136 @@ func (h *Handler) mergeCoverageGap(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// getUnitSemantics / putUnitSemantics: rerank 语义人工修正
+// (docs/impl/v1/semantics-curation.md)。GET 返回 KU 本体（只读，含正文切片）
+// 与语义行（missing 时为 null）；PUT 只接受 semantics —— KU 本体不可编辑。
+func (h *Handler) getUnitSemantics(w http.ResponseWriter, r *http.Request) {
+	unitID := r.PathValue("id")
+	if unitID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "missing unit id")
+		return
+	}
+
+	view, err := h.svc.GetUnitSemanticsView(unitID)
+	if err != nil {
+		foundation.WriteError(w, http.StatusNotFound, "unit not found")
+		return
+	}
+
+	type semanticsResp struct {
+		SourceTheme    string  `json:"source_theme"`
+		ContentTheme   string  `json:"content_theme"`
+		Intent         string  `json:"intent"`
+		Object         string  `json:"object"`
+		Scope          string  `json:"scope"`
+		PromptVersion  string  `json:"prompt_version"`
+		ManuallyEdited bool    `json:"manually_edited"`
+		EditedAt       *string `json:"edited_at"`
+	}
+	type unitResp struct {
+		UnitID          string `json:"unit_id"`
+		SourceID        string `json:"source_id"`
+		Center          string `json:"center"`
+		LineStart       int    `json:"line_start"`
+		LineEnd         int    `json:"line_end"`
+		Lifecycle       string `json:"lifecycle"`
+		Content         string `json:"content"`
+		OutlinePath     string `json:"outline_path,omitempty"`
+		OutlineNodeType string `json:"outline_node_type,omitempty"`
+	}
+
+	resp := struct {
+		Unit      unitResp       `json:"unit"`
+		Semantics *semanticsResp `json:"semantics"`
+	}{
+		Unit: unitResp{
+			UnitID:          view.Unit.UnitID,
+			SourceID:        view.Unit.SourceID,
+			Center:          view.Unit.Center,
+			LineStart:       view.Unit.LineStart,
+			LineEnd:         view.Unit.LineEnd,
+			Lifecycle:       view.Unit.Lifecycle,
+			Content:         view.Unit.Content,
+			OutlinePath:     view.Unit.OutlinePath,
+			OutlineNodeType: view.Unit.OutlineNodeType,
+		},
+	}
+	if view.Semantics != nil {
+		sem := &semanticsResp{
+			SourceTheme:    view.Semantics.SourceTheme,
+			ContentTheme:   view.Semantics.ContentTheme,
+			Intent:         view.Semantics.Intent,
+			Object:         view.Semantics.Object,
+			Scope:          view.Semantics.Scope,
+			PromptVersion:  view.Semantics.PromptVersion,
+			ManuallyEdited: view.Semantics.ManuallyEdited,
+		}
+		if view.Semantics.EditedAt.Valid {
+			t := view.Semantics.EditedAt.Time.UTC().Format(time.RFC3339)
+			sem.EditedAt = &t
+		}
+		resp.Semantics = sem
+	}
+	foundation.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) putUnitSemantics(w http.ResponseWriter, r *http.Request) {
+	unitID := r.PathValue("id")
+	if unitID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "missing unit id")
+		return
+	}
+
+	var req struct {
+		Semantics *struct {
+			SourceTheme  string `json:"source_theme"`
+			ContentTheme string `json:"content_theme"`
+			Intent       string `json:"intent"`
+			Object       string `json:"object"`
+			Scope        string `json:"scope"`
+		} `json:"semantics"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Semantics == nil {
+		foundation.WriteError(w, http.StatusBadRequest, "semantics is required")
+		return
+	}
+
+	sem := req.Semantics
+	// 校验规则与 unit_semantics_extract.md 的 Schema 一致：五字段均非空 ——
+	// 人工数据与 LLM 数据形状相同。
+	for name, v := range map[string]string{
+		"source_theme": sem.SourceTheme, "content_theme": sem.ContentTheme,
+		"intent": sem.Intent, "object": sem.Object, "scope": sem.Scope,
+	} {
+		if strings.TrimSpace(v) == "" {
+			foundation.WriteError(w, http.StatusBadRequest, name+" is required")
+			return
+		}
+	}
+
+	err := h.svc.UpdateUnitSemantics(unitID, rerank.Semantics{
+		UnitID:       unitID,
+		SourceTheme:  sem.SourceTheme,
+		ContentTheme: sem.ContentTheme,
+		Intent:       sem.Intent,
+		Object:       sem.Object,
+		Scope:        sem.Scope,
+	})
+	if errors.Is(err, ErrUnitNotCurrent) {
+		foundation.WriteError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		foundation.WriteError(w, http.StatusNotFound, "unit not found")
+		return
+	}
+	foundation.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (h *Handler) getUnit(w http.ResponseWriter, r *http.Request) {
 	unitID := r.PathValue("id")
 	if unitID == "" {
@@ -287,6 +425,8 @@ func (h *Handler) getUnit(w http.ResponseWriter, r *http.Request) {
 		PointType          string  `json:"point_type"`
 		Lifecycle          string  `json:"lifecycle"`
 		LifecycleChangedAt *string `json:"lifecycle_changed_at,omitempty"`
+		ManuallyEdited     bool    `json:"manually_edited"`
+		EditedAt           *string `json:"edited_at,omitempty"`
 	}
 
 	type unitDetail struct {
@@ -325,14 +465,19 @@ func (h *Handler) getUnit(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, p := range points {
 		pr := pointResp{
-			PointID:   p.PointID,
-			Content:   p.Content,
-			PointType: p.PointType,
-			Lifecycle: p.Lifecycle,
+			PointID:        p.PointID,
+			Content:        p.Content,
+			PointType:      p.PointType,
+			Lifecycle:      p.Lifecycle,
+			ManuallyEdited: p.ManuallyEdited,
 		}
 		if p.LifecycleChangedAt.Valid {
 			t := p.LifecycleChangedAt.Time.Format("2006-01-02T15:04:05Z")
 			pr.LifecycleChangedAt = &t
+		}
+		if p.EditedAt.Valid {
+			t := p.EditedAt.Time.UTC().Format(time.RFC3339)
+			pr.EditedAt = &t
 		}
 		resp.Points = append(resp.Points, pr)
 	}
@@ -359,24 +504,78 @@ func (h *Handler) listPoints(w http.ResponseWriter, r *http.Request) {
 		PointType          string  `json:"point_type"`
 		Lifecycle          string  `json:"lifecycle"`
 		LifecycleChangedAt *string `json:"lifecycle_changed_at,omitempty"`
+		ManuallyEdited     bool    `json:"manually_edited"`
+		EditedAt           *string `json:"edited_at,omitempty"`
 	}
 
 	result := make([]pointResp, 0, len(points))
 	for _, p := range points {
 		pr := pointResp{
-			PointID:   p.PointID,
-			Content:   p.Content,
-			PointType: p.PointType,
-			Lifecycle: p.Lifecycle,
+			PointID:        p.PointID,
+			Content:        p.Content,
+			PointType:      p.PointType,
+			Lifecycle:      p.Lifecycle,
+			ManuallyEdited: p.ManuallyEdited,
 		}
 		if p.LifecycleChangedAt.Valid {
 			t := p.LifecycleChangedAt.Time.Format("2006-01-02T15:04:05Z")
 			pr.LifecycleChangedAt = &t
 		}
+		if p.EditedAt.Valid {
+			t := p.EditedAt.Time.UTC().Format(time.RFC3339)
+			pr.EditedAt = &t
+		}
 		result = append(result, pr)
 	}
 
 	foundation.WriteJSON(w, http.StatusOK, result)
+}
+
+// addPoint implements POST /units/:id/points — 人工新增 KP
+// (docs/impl/v1/semantics-curation.md "KP 人工修正")，取代旧版 key_facts
+// 人工编辑。成功后同步触发该 KP 的增量 KPN 分析。
+func (h *Handler) addPoint(w http.ResponseWriter, r *http.Request) {
+	unitID := r.PathValue("id")
+	if unitID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "missing unit id")
+		return
+	}
+
+	var req struct {
+		Content   string `json:"content"`
+		PointType string `json:"point_type"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	result, err := h.svc.AddManualPoint(r.Context(), unitID, req.Content, req.PointType)
+	if errors.Is(err, ErrUnitNotCurrent) {
+		foundation.WriteError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, ErrInvalidPointType) || errors.Is(err, ErrEmptyPointContent) {
+		foundation.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		foundation.WriteError(w, http.StatusNotFound, "unit not found")
+		return
+	}
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"point_id":          result.Point.PointID,
+		"unit_id":           result.Point.UnitID,
+		"content":           result.Point.Content,
+		"point_type":        result.Point.PointType,
+		"manually_edited":   true,
+		"relations_created": result.RelationsCreated,
+	})
 }
 
 func (h *Handler) getPoint(w http.ResponseWriter, r *http.Request) {
@@ -400,22 +599,69 @@ func (h *Handler) getPoint(w http.ResponseWriter, r *http.Request) {
 		PointType          string  `json:"point_type"`
 		Lifecycle          string  `json:"lifecycle"`
 		LifecycleChangedAt *string `json:"lifecycle_changed_at,omitempty"`
+		ManuallyEdited     bool    `json:"manually_edited"`
+		EditedAt           *string `json:"edited_at,omitempty"`
 	}
 
 	resp := pointDetail{
-		PointID:   kp.PointID,
-		UnitID:    kp.UnitID,
-		SourceID:  kp.SourceID,
-		Content:   kp.Content,
-		PointType: kp.PointType,
-		Lifecycle: kp.Lifecycle,
+		PointID:        kp.PointID,
+		UnitID:         kp.UnitID,
+		SourceID:       kp.SourceID,
+		Content:        kp.Content,
+		PointType:      kp.PointType,
+		Lifecycle:      kp.Lifecycle,
+		ManuallyEdited: kp.ManuallyEdited,
 	}
 	if kp.LifecycleChangedAt.Valid {
 		t := kp.LifecycleChangedAt.Time.Format("2006-01-02T15:04:05Z")
 		resp.LifecycleChangedAt = &t
 	}
+	if kp.EditedAt.Valid {
+		t := kp.EditedAt.Time.UTC().Format(time.RFC3339)
+		resp.EditedAt = &t
+	}
 
 	foundation.WriteJSON(w, http.StatusOK, resp)
+}
+
+// updatePoint implements PUT /points/:id — 人工编辑已有 KP 的 content/
+// point_type（docs/impl/v1/semantics-curation.md "KP 人工修正"）。不触发
+// KPN 重跑，理由见 Service.UpdateManualPoint 的注释。
+func (h *Handler) updatePoint(w http.ResponseWriter, r *http.Request) {
+	pointID := r.PathValue("id")
+	if pointID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "missing point id")
+		return
+	}
+
+	var req struct {
+		Content   string `json:"content"`
+		PointType string `json:"point_type"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	err := h.svc.UpdateManualPoint(pointID, req.Content, req.PointType)
+	if errors.Is(err, ErrUnitNotCurrent) {
+		foundation.WriteError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, ErrInvalidPointType) || errors.Is(err, ErrEmptyPointContent) {
+		foundation.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		foundation.WriteError(w, http.StatusNotFound, "point not found")
+		return
+	}
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *Handler) listRelations(w http.ResponseWriter, r *http.Request) {

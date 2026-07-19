@@ -80,12 +80,6 @@ func TestIntegration_ProcessMarkdownFiles(t *testing.T) {
 			{"title":"细则","summary":"执行 规范 要求","line_start":11,"line_end":20,"level":1}
 		]}`,
 	})
-	fake.SetResponse("outline_semantic_skeleton.md", llm.FakeResponse{
-		Output: `{"sections":[
-			{"title":"概述","summary":"通知 制度 规定","line_start":1,"line_end":10,"level":1},
-			{"title":"细则","summary":"执行 规范 要求","line_start":11,"line_end":20,"level":1}
-		]}`,
-	})
 	fake.SetResponse("outline_semantic_chunk.md", llm.FakeResponse{
 		Output: `{"sections":[
 			{"title":"子章节A","summary":"细节 要点 说明","line_start":1,"line_end":15,"level":3},

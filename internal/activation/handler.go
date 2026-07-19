@@ -24,20 +24,20 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 type linkResp struct {
-	LinkID          string  `json:"link_id"`
-	QuestionTerms   string  `json:"question_terms"`
-	SubjectTerms    string  `json:"subject_terms,omitempty"`
-	IntentTerms     string  `json:"intent_terms,omitempty"`
-	Audience        string  `json:"audience,omitempty"`
-	ConstraintTerms string  `json:"constraint_terms,omitempty"`
-	PointID         string  `json:"point_id"`
-	PointSummary    string  `json:"point_summary,omitempty"`
-	UnitCenter      string  `json:"unit_center,omitempty"`
-	Status          string  `json:"status"`
-	AdoptCount      int     `json:"adopt_count"`
-	FailCount       int     `json:"fail_count"`
-	LastUsedAt      *string `json:"last_used_at,omitempty"`
-	CreatedAt       string  `json:"created_at"`
+	LinkID          string   `json:"link_id"`
+	QuestionTerms   string   `json:"question_terms"`
+	SubjectTerms    string   `json:"subject_terms,omitempty"`
+	IntentTerms     []string `json:"intent_terms"`
+	Audience        []string `json:"audience"`
+	ConstraintTerms []string `json:"constraint_terms"`
+	PointID         string   `json:"point_id"`
+	PointSummary    string   `json:"point_summary,omitempty"`
+	UnitCenter      string   `json:"unit_center,omitempty"`
+	Status          string   `json:"status"`
+	AdoptCount      int      `json:"adopt_count"`
+	FailCount       int      `json:"fail_count"`
+	LastUsedAt      *string  `json:"last_used_at,omitempty"`
+	CreatedAt       string   `json:"created_at"`
 }
 
 func toLinkResp(l ActivationLink, pointSummary, unitCenter string) linkResp {
@@ -88,6 +88,8 @@ type linkDetailResp struct {
 	linkResp
 	Scene           string           `json:"scene,omitempty"`
 	Goal            string           `json:"goal,omitempty"`
+	UnitID          string           `json:"unit_id,omitempty"`
+	SourceTitle     string           `json:"source_title,omitempty"`
 	CreatedFrom     []string         `json:"created_from"`
 	LearningResults []LearningResult `json:"learning_results"`
 }
@@ -118,10 +120,18 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		createdFrom = []string{}
 	}
 
+	pointContent, unitID, unitCenter, sourceTitle, err := h.svc.Store().PointUnitInfo(link.PointID)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	resp := linkDetailResp{
-		linkResp:        toLinkResp(*link, "", ""),
+		linkResp:        toLinkResp(*link, pointContent, unitCenter),
 		Scene:           link.Scene,
 		Goal:            link.Goal,
+		UnitID:          unitID,
+		SourceTitle:     sourceTitle,
 		CreatedFrom:     createdFrom,
 		LearningResults: results,
 	}

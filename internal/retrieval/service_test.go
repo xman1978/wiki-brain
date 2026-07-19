@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -269,7 +268,7 @@ func TestRerankPreservesCandidateOrderAndFiltersIrrelevant(t *testing.T) {
 		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据说明线性方程定义，可直接回答"}, {"candidate_id": "c2", "role": "irrelevant", "analysis": "证据主题与问题不匹配"}]}`,
 	})
 
-	kept, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates)
+	kept, filtered, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,12 +281,27 @@ func TestRerankPreservesCandidateOrderAndFiltersIrrelevant(t *testing.T) {
 	if kept[0].sourcePaths[0] != "direct" {
 		t.Errorf("expected role=direct, got %s", kept[0].sourcePaths[0])
 	}
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 filtered (c2 irrelevant), got %d", len(filtered))
+	}
+	if filtered[0].UnitID != "u2" {
+		t.Errorf("expected filtered unit_id=u2, got %s", filtered[0].UnitID)
+	}
+	if filtered[0].Role != RoleIrrelevant {
+		t.Errorf("expected filtered role=%s, got %s", RoleIrrelevant, filtered[0].Role)
+	}
+	if filtered[0].FactID != "" {
+		t.Errorf("expected filtered evidence to have no fact_id (not mined/citable), got %q", filtered[0].FactID)
+	}
+	if filtered[0].Content == "" {
+		t.Error("expected filtered evidence to carry the candidate's KU content")
+	}
 }
 
 func TestRerankUsesPersistedSemanticsAndRunsJudgeBatchesConcurrently(t *testing.T) {
 	svc, tracker, candidates := setupPersistedSemanticRerank(t, 1, 2)
 
-	got, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, candidates)
+	got, _, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, candidates)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,8 +334,12 @@ func TestRerankConsumesSemanticsAfterShadowReparentSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO unit_rerank_semantics
-		(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
-		VALUES ('shadow-u1', 'Travel policy', 'Hotel limits', 'Explain limit', 'Employees', 'Domestic travel', '["Hotel limit is 500"]', ?)`, rerank.ExtractPromptVersion); err != nil {
+		(unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
+		VALUES ('shadow-u1', 'Travel policy', 'Hotel limits', 'Explain limit', 'Employees', 'Domestic travel', ?)`, rerank.ExtractPromptVersion); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO knowledge_points (point_id, unit_id, source_id, content, point_type)
+		VALUES ('shadow-p1', 'shadow-u1', 'shadow-1', 'Hotel limit is 500', 'rule')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -334,13 +352,13 @@ func TestRerankConsumesSemanticsAfterShadowReparentSwap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetUnitRerankSemantics after swap: %v", err)
 	}
-	if got := semantics["shadow-u1"].KeyFacts; !reflect.DeepEqual(got, []string{"Hotel limit is 500"}) {
-		t.Fatalf("reparented key facts = %#v, want persisted facts", got)
+	if got := semantics["shadow-u1"].ContentTheme; got != "Hotel limits" {
+		t.Fatalf("reparented semantics content_theme = %q, want persisted value", got)
 	}
 
 	tracker := &rerankJudgeTrackingLLM{}
 	svc := NewService(store, tracker, nil, nil, nil, &config.Config{}, nil, nil, nil)
-	kept, err := svc.rerank(t.Context(), QueryContext{Question: "What is the hotel limit?"}, []candidate{{
+	kept, _, err := svc.rerank(t.Context(), QueryContext{Question: "What is the hotel limit?"}, []candidate{{
 		unitID: "shadow-u1", sourceID: "target-1", lineStart: 1, lineEnd: 2, score: 1,
 	}})
 	if err != nil {
@@ -368,8 +386,16 @@ func TestRerankJudgeBatchBudgetCountsCompactJSONRunesAndDelimiters(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := buildRerankJudgeCandidate("c1", "Algebra", semantics["u1"])
-	second := buildRerankJudgeCandidate("c2", "Algebra", semantics["u2"])
+	centers, err := svc.store.GetUnitCenters([]string{"u1", "u2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	points, err := svc.store.GetPointContentsByUnitIDs([]string{"u1", "u2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := buildRerankJudgeCandidate("c1", "Algebra", centers["u1"], semantics["u1"], points["u1"])
+	second := buildRerankJudgeCandidate("c2", "Algebra", centers["u2"], semantics["u2"], points["u2"])
 	firstJSON, err := json.Marshal(first)
 	if err != nil {
 		t.Fatal(err)
@@ -381,7 +407,7 @@ func TestRerankJudgeBatchBudgetCountsCompactJSONRunesAndDelimiters(t *testing.T)
 	// Two brackets plus the comma between two compact JSON objects.
 	svc.cfg.Retrieval.RerankJudgeBatchMaxChars = 2 + utf8.RuneCount(firstJSON) + 1 + utf8.RuneCount(secondJSON)
 
-	if _, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, candidates); err != nil {
+	if _, _, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, candidates); err != nil {
 		t.Fatal(err)
 	}
 	if got := tracker.BatchSizes(); !equalInts(got, []int{2, 1}) {
@@ -408,7 +434,7 @@ func TestRerankRejectsMissingSemanticsListsAllUnitIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, reverseCandidates(candidates))
+	_, _, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, reverseCandidates(candidates))
 	assertRerankIntegrityError(t, err,
 		"retrieval: rerank semantics integrity: missing unit_ids: u1, u2")
 	if tracker.Count("rerank_judge.md") != 0 {
@@ -429,7 +455,7 @@ func TestRerankUsesStaleSemanticsWithoutRejecting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, reverseCandidates(candidates)); err != nil {
+	if _, _, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, reverseCandidates(candidates)); err != nil {
 		t.Fatalf("rerank returned error for stale (not missing) semantics: %v", err)
 	}
 	if tracker.Count("rerank_judge.md") == 0 {
@@ -455,8 +481,8 @@ func setupPersistedSemanticRerank(t *testing.T, maxChars, concurrency int) (*Ser
 func insertRerankSemantic(t *testing.T, store *Store, unitID, promptVersion string) {
 	t.Helper()
 	_, err := store.db.Exec(`INSERT OR REPLACE INTO unit_rerank_semantics
-		(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
-		VALUES (?, '差旅制度', '住宿报销', '说明限额', '出差员工', '境内差旅', '["住宿限额为500元", "超额需审批"]', ?)`,
+		(unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
+		VALUES (?, '差旅制度', '住宿报销', '说明限额', '出差员工', '境内差旅', ?)`,
 		unitID, promptVersion)
 	if err != nil {
 		t.Fatal(err)
@@ -660,7 +686,7 @@ func TestBuildEvidenceSet(t *testing.T) {
 		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50},
 	}
 
-	es, err := svc.buildEvidenceSet(context.Background(), "test question", "", "", "", "", "short", direct, supporting, nil, nil)
+	es, err := svc.buildEvidenceSet(context.Background(), "test question", "", "", "", "", "short", direct, supporting, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -738,5 +764,77 @@ func TestRetrieveEndToEnd(t *testing.T) {
 	}
 	if len(es.DirectEvidence) == 0 {
 		t.Error("expected at least 1 direct evidence")
+	}
+	if es.GapReason != "" {
+		t.Errorf("expected empty gap_reason on a direct hit, got %q", es.GapReason)
+	}
+}
+
+// TestRetrieveEndToEnd_NoCandidatesGapReason covers docs/impl/v1/retrieval.md
+// 步骤 6's first branch: outline+FTS recall both come back empty (nothing
+// to even hand the rerank judge), so GapReason=no_candidates.
+func TestRetrieveEndToEnd_NoCandidatesGapReason(t *testing.T) {
+	svc, fake, _ := setupTestService(t)
+
+	fake.SetResponse("question_domain_match.md", llm.FakeResponse{
+		Output: `{"domain_ids": ["d1"]}`,
+	})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{
+		Output: `{"source_ids": ["s1"]}`,
+	})
+	// Low-scoring outlines fall back to this LLM classifier; returning no
+	// ids means outline recall found nothing either.
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{
+		Output: `{"outline_ids": []}`,
+	})
+
+	es, err := svc.Retrieve(context.Background(), "purple dinosaur spacecraft maintenance manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(es.DirectEvidence) != 0 || len(es.Supporting) != 0 {
+		t.Fatalf("expected no evidence, got direct=%d supporting=%d", len(es.DirectEvidence), len(es.Supporting))
+	}
+	if es.GapReason != GapReasonNoCandidates {
+		t.Errorf("expected gap_reason=%s, got %q", GapReasonNoCandidates, es.GapReason)
+	}
+	if len(es.FilteredEvidence) != 0 {
+		t.Errorf("expected no filtered evidence (nothing reached the judge), got %d", len(es.FilteredEvidence))
+	}
+}
+
+// TestRetrieveEndToEnd_JudgeFilteredGapReason covers the second branch:
+// candidates were recalled but the rerank judge classified all of them
+// irrelevant, so direct+supporting stay empty after sufficiency check.
+func TestRetrieveEndToEnd_JudgeFilteredGapReason(t *testing.T) {
+	svc, fake, _ := setupTestService(t)
+
+	fake.SetResponse("question_domain_match.md", llm.FakeResponse{
+		Output: `{"domain_ids": ["d1"]}`,
+	})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{
+		Output: `{"source_ids": ["s1"]}`,
+	})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{
+		Output: `{"outline_ids": ["o2"]}`,
+	})
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "role": "irrelevant", "analysis": "证据主题与问题不匹配"}]}`,
+	})
+
+	es, err := svc.Retrieve(context.Background(), "linear equations")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(es.DirectEvidence) != 0 || len(es.Supporting) != 0 {
+		t.Fatalf("expected no evidence, got direct=%d supporting=%d", len(es.DirectEvidence), len(es.Supporting))
+	}
+	if es.GapReason != GapReasonJudgeFiltered {
+		t.Errorf("expected gap_reason=%s, got %q", GapReasonJudgeFiltered, es.GapReason)
+	}
+	if len(es.FilteredEvidence) == 0 {
+		t.Error("expected filtered_evidence to carry the judge-rejected candidate")
 	}
 }

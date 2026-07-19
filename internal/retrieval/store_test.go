@@ -2,8 +2,6 @@ package retrieval
 
 import (
 	"database/sql"
-	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
@@ -31,14 +29,14 @@ func TestGetUnitRerankSemanticsBulk(t *testing.T) {
 	insertRetrievalTestSourceAndUnit(t, db, "s1", "u1")
 	insertRetrievalTestSourceAndUnit(t, db, "s1", "u2")
 	_, err := db.Exec(`INSERT INTO unit_rerank_semantics
-		(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
-		VALUES ('u1', '制度', '报销', '说明限额', '员工', '出差', '["住宿限额500元"]', 'v1')`)
+		(unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
+		VALUES ('u1', '制度', '报销', '说明限额', '员工', '出差', 'v1')`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = db.Exec(`INSERT INTO unit_rerank_semantics
-		(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
-		VALUES ('u2', '制度', '报销', '说明流程', '员工', '出差', '["提交发票"]', 'v1')`)
+		(unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
+		VALUES ('u2', '制度', '报销', '说明流程', '员工', '出差', 'v1')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,79 +45,44 @@ func TestGetUnitRerankSemanticsBulk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got["u1"].KeyFacts, []string{"住宿限额500元"}) {
-		t.Fatalf("key facts = %#v, want 住宿限额500元", got["u1"].KeyFacts)
+	if got["u1"].ContentTheme != "报销" || got["u1"].Intent != "说明限额" {
+		t.Fatalf("semantics = %#v, want content_theme=报销 intent=说明限额", got["u1"])
 	}
 	if _, ok := got["u2"]; ok {
 		t.Fatal("unrequested unit returned")
 	}
 }
 
-func TestGetUnitRerankSemanticsMalformedFacts(t *testing.T) {
+func TestGetPointContentsByUnitIDs(t *testing.T) {
 	db := foundation.NewTestDB(t)
 	insertRetrievalTestSourceAndUnit(t, db, "s1", "u1")
-	if _, err := db.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+	insertRetrievalTestSourceAndUnit(t, db, "s1", "u2")
+	if _, err := db.Exec(`INSERT INTO knowledge_points (point_id, unit_id, source_id, content, point_type)
+		VALUES ('p1', 'u1', 's1', '住宿限额500元', 'rule')`); err != nil {
 		t.Fatal(err)
 	}
-	_, err := db.Exec(`INSERT INTO unit_rerank_semantics
-		(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
-		VALUES ('u1', '制度', '报销', '说明限额', '员工', '出差', '{', 'v1')`)
+	if _, err := db.Exec(`INSERT INTO knowledge_points (point_id, unit_id, source_id, content, point_type)
+		VALUES ('p2', 'u1', 's1', '提交发票', 'method')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO knowledge_points
+		(point_id, unit_id, source_id, content, point_type, lifecycle)
+		VALUES ('p3', 'u1', 's1', 'superseded fact', 'rule', 'superseded')`); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := NewStore(db).GetPointContentsByUnitIDs([]string{"u1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	_, err = NewStore(db).GetUnitRerankSemantics([]string{"u1"})
-	if err == nil {
-		t.Fatal("expected malformed key facts error")
+	if len(got["u1"]) != 2 {
+		t.Fatalf("points for u1 = %#v, want 2 current points (superseded excluded)", got["u1"])
 	}
-	if !strings.Contains(err.Error(), "u1") {
-		t.Fatalf("error %q does not name unit u1", err)
+	if got["u1"][0].Content != "住宿限额500元" || got["u1"][0].PointType != "rule" {
+		t.Fatalf("first point = %#v", got["u1"][0])
 	}
-}
-
-func TestUnitRerankSemanticsMigrationRequiresFactsArray(t *testing.T) {
-	db := foundation.NewTestDB(t)
-	insertRetrievalTestSourceAndUnit(t, db, "s1", "u1")
-	for _, factsJSON := range []string{"null", `{}`, `"fact"`} {
-		_, err := db.Exec(`INSERT INTO unit_rerank_semantics
-			(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
-			VALUES ('u1', '制度', '报销', '说明限额', '员工', '出差', ?, 'v1')`, factsJSON)
-		if err == nil {
-			t.Fatalf("key_facts_json %s passed migration CHECK, want rejection", factsJSON)
-		}
-	}
-}
-
-func TestGetUnitRerankSemanticsRejectsInvalidFactsShape(t *testing.T) {
-	tests := []struct {
-		name      string
-		factsJSON string
-	}{
-		{name: "null", factsJSON: "null"},
-		{name: "object", factsJSON: `{}`},
-		{name: "non-string element", factsJSON: `["valid", 7]`},
-		{name: "null element", factsJSON: `[null]`},
-		{name: "null after valid element", factsJSON: `["valid", null]`},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			db := foundation.NewTestDB(t)
-			insertRetrievalTestSourceAndUnit(t, db, "s1", "u1")
-			if _, err := db.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
-				t.Fatal(err)
-			}
-			_, err := db.Exec(`INSERT INTO unit_rerank_semantics
-				(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
-				VALUES ('u1', '制度', '报销', '说明限额', '员工', '出差', ?, 'v1')`, tc.factsJSON)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			_, err = NewStore(db).GetUnitRerankSemantics([]string{"u1"})
-			if err == nil || !strings.Contains(err.Error(), "u1") {
-				t.Fatalf("GetUnitRerankSemantics err = %v, want unit-scoped decode rejection", err)
-			}
-		})
+	if _, ok := got["u2"]; ok {
+		t.Fatal("unrequested unit returned")
 	}
 }
 

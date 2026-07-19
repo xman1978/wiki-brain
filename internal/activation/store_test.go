@@ -107,7 +107,7 @@ func TestService_CreateLink_Idempotent(t *testing.T) {
 	svc := NewService(store, NewMatcher(store))
 	seedKPFull(t, db, "kp1")
 
-	cond := LinkCondition{SubjectTerms: "s1", IntentTerms: "i1"}
+	cond := LinkCondition{SubjectTerms: "s1", IntentTerms: []string{"i1"}}
 	l1, err := svc.CreateLink("t1", cond, "kp1", []string{"ev1"})
 	if err != nil {
 		t.Fatalf("create link: %v", err)

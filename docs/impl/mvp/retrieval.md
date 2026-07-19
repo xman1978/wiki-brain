@@ -237,10 +237,12 @@ RRF 公式：score = Σ 1 / (k + rank_i)，k 默认取 60；
 
 ```text
 RRF 合并（步骤 6）完成后，为每条候选分配临时 candidate_id（如 "c1"、"c2"，按 RRF 排名顺序）；
-从 unit_rerank_semantics 读取每个候选的 v1 语义；缺失或 prompt_version 过期时，返回包含所有
-  受影响 unit_id 的完整性错误，不调用 LLM；
-从 sources.title 读取来源标题，将 candidate_id、source_title、source_theme、content_theme、intent、
-  object、scope、key_facts 组成紧凑 JSON；不读取候选原始正文，也不执行在线语义抽取；
+从 unit_rerank_semantics 读取每个候选的语义分类字段；语义行整行缺失时，返回包含所有
+  受影响 unit_id 的完整性错误，不调用 LLM（prompt_version 不一致只记 debug 日志，不报错）；
+从 sources.title 读取来源标题、knowledge_units.center 读取中心句、knowledge_points 读取该 KU 的
+  current 知识点列表（content + type，V1 起取代 key_facts，见 docs/impl/v1/semantics-curation.md），
+  将 candidate_id、source_title、center、source_theme、content_theme、intent、object、scope、points
+  组成紧凑 JSON；不读取候选原始正文，也不执行在线语义抽取；
 按该 JSON 的 rune 长度拆分 judge 批次，受 config.yml 的
   retrieval.rerank_judge_batch_max_chars 和 retrieval.rerank_judge_concurrency 控制；
 输入：问题 + 核心主题（subject）+ 意图（intent）+ 对象（audience）+ 约束（constraint，均来自

@@ -20,7 +20,9 @@ Output per candidate:
 - `intent`: what information the evidence provides.
 - `object`: the people, roles, teams, or entities targeted by the evidence.
 - `scope`: product, scenario, time, business process, or applicability constraints.
-- `key_facts`: concrete facts extracted from the evidence.
+- `key_facts`: concrete facts extracted from the evidence. (Retired in V1 — the
+  production judge now reads the KU's knowledge points instead; see
+  `docs/impl/v1/semantics-curation.md`.)
 
 Stage 1 must not output relevance decisions or relationship labels. It must not use `direct`, `supporting`, `irrelevant`, `related`, `conflict`, or similar relationship conclusions.
 

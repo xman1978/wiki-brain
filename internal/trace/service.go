@@ -105,7 +105,7 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 
 	s.generateActivationEvents(t, r, grade)
 	s.updateCooccurrence(t, r)
-	s.generateLearningEvents(t)
+	s.generateLearningEvents(t, r)
 
 	slog.Debug("trace: process complete",
 		"trace_id", t.TraceID,
@@ -274,16 +274,32 @@ func citedFactIDsByPoint(es *retrieval.EvidenceSet, citations []string) map[stri
 	return result
 }
 
-func (s *Service) generateLearningEvents(t *Trace) {
+func (s *Service) generateLearningEvents(t *Trace, r *answer.AnswerResult) {
 	if t.RetrievalQuality == QualityGap {
-		slog.Debug("trace: generating knowledge_gap event", "trace_id", t.TraceID, "question", t.Question)
-		payload, _ := json.Marshal(map[string]string{"question": t.Question})
+		reason := gapReason(r)
+		slog.Debug("trace: generating knowledge_gap event", "trace_id", t.TraceID, "question", t.Question, "reason", reason)
+		payload, _ := json.Marshal(map[string]string{"question": t.Question, "reason": reason})
 		if err := s.store.SaveLearningEvent(t.TraceID, "knowledge_gap", string(payload)); err != nil {
 			slog.Error("trace: save knowledge_gap event failed", "trace_id", t.TraceID, "error", err)
 		}
 	} else {
 		slog.Debug("trace: no learning event needed", "trace_id", t.TraceID, "quality", t.RetrievalQuality)
 	}
+}
+
+// gapReason implements docs/impl/v1/trace.md's knowledge_gap payload.reason
+// derivation: an LLM generation failure takes priority over whatever
+// retrieval found (or didn't), since it means the gap isn't really about
+// missing knowledge; otherwise defer to EvidenceSet.GapReason (set by
+// retrieval — see docs/impl/v1/retrieval.md 步骤 6).
+func gapReason(r *answer.AnswerResult) string {
+	if r.Path == "error" {
+		return "answer_error"
+	}
+	if r.EvidenceSet != nil && r.EvidenceSet.GapReason != "" {
+		return r.EvidenceSet.GapReason
+	}
+	return "unspecified"
 }
 
 // SubmitFeedback records user feedback on t and, for negative/correction

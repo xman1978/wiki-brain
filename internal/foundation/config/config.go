@@ -132,11 +132,10 @@ type RetrievalConfig struct {
 	RerankExtractConcurrency   int     `yaml:"rerank_extract_concurrency"`
 	RerankJudgeBatchMaxChars   int     `yaml:"rerank_judge_batch_max_chars"`
 	RerankJudgeConcurrency     int     `yaml:"rerank_judge_concurrency"`
-	ActivationMatchMin         float64 `yaml:"activation_match_min"`
-	ActivationMatchMinFallback float64 `yaml:"activation_match_min_fallback"`
 	ActivationMatchTop         int     `yaml:"activation_match_top"`
 	// —— V1 新增（docs/impl/v1/retrieval.md 配置项）——
 	FastPath         bool    `yaml:"fast_path"`
+	FastPathVerify   bool    `yaml:"fast_path_verify"`
 	FastPathFallback bool    `yaml:"fast_path_fallback"`
 	WikiMinScore     float64 `yaml:"wiki_min_score"`
 }
@@ -321,6 +320,18 @@ func applyEnvOverrides(cfg *Config) {
 			var n int
 			if _, err := fmt.Sscanf(val, "%d", &n); err == nil {
 				*ptr = n
+			}
+		}
+	}
+
+	// PORT is the conventional env var dev-preview tooling assigns a free
+	// port through; only honored when WB_SERVER_PORT (this project's own
+	// override) wasn't already set, so it never fights an explicit choice.
+	if os.Getenv("WB_SERVER_PORT") == "" {
+		if val := os.Getenv("PORT"); val != "" {
+			var n int
+			if _, err := fmt.Sscanf(val, "%d", &n); err == nil {
+				cfg.Server.Port = n
 			}
 		}
 	}

@@ -61,13 +61,11 @@ func setupFallbackTestService(t *testing.T, fastPathFallback bool) (*Service, *s
 
 	cfg := &config.Config{
 		Retrieval: config.RetrievalConfig{
-			OutlineFTSMinScore:         0.5,
-			RerankTopN:                 20,
-			ActivationMatchMin:         0.7,
-			ActivationMatchMinFallback: 0.85,
-			ActivationMatchTop:         5,
-			FastPath:                   true,
-			FastPathFallback:           fastPathFallback,
+			OutlineFTSMinScore: 0.5,
+			RerankTopN:         20,
+			ActivationMatchTop: 5,
+			FastPath:           true,
+			FastPathFallback:   fastPathFallback,
 		},
 	}
 

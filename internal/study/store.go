@@ -18,42 +18,128 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
-// Step 1: ScanCandidates queries cooccurrence rows meeting thresholds and upserts link_candidates.
+// Step 1: ScanCandidates aggregates cooccurrence per point_id and upserts one
+// link_candidates row per qualifying point, under that point's representative
+// label with the aggregated counts.
+//
+// Aggregation rationale (docs/impl/v1/study.md 步骤 1, 2026-07-18 修订)：
+// question_terms 的取值是 session 解析出的 subject 标签，同一话题的不同问法会
+// 产生不同标签（"数据库句柄限制"/"数据库句柄管理"……），按 (label, point) 行级
+// 计数会把同一 KP 的学习信号打散在多行、每行都到不了阈值；KP 本身才是稳定锚点，
+// 达标判定改在 point 级聚合上做。代表标签取 confident_count 最高（并列取
+// last_seen_at 最新）的一行，作为候选与后续链接的 question_terms。
 func (s *Store) ScanCandidates(confidentMin int, ratioMin float64, batchSize int) (int, error) {
 	rows, err := s.db.Query(`
-		SELECT question_terms, point_id, confident_count, hit_count
+		SELECT point_id, SUM(confident_count), SUM(hit_count)
 		FROM question_kp_cooccurrence
-		WHERE confident_count >= ?
-		  AND CAST(confident_count AS FLOAT) / CAST(hit_count AS FLOAT) >= ?
-		ORDER BY confident_count DESC
+		GROUP BY point_id
+		HAVING SUM(confident_count) >= ?
+		  AND CAST(SUM(confident_count) AS FLOAT) / CAST(SUM(hit_count) AS FLOAT) >= ?
+		ORDER BY SUM(confident_count) DESC
 		LIMIT ?`, confidentMin, ratioMin, batchSize)
 	if err != nil {
 		return 0, fmt.Errorf("study store: scan candidates: %w", err)
 	}
 	defer rows.Close()
 
-	count := 0
+	type pointAgg struct {
+		pointID        string
+		confidentCount int
+		hitCount       int
+	}
+	var aggs []pointAgg
 	for rows.Next() {
-		var questionTerms, pointID string
-		var confidentCount, hitCount int
-		if err := rows.Scan(&questionTerms, &pointID, &confidentCount, &hitCount); err != nil {
-			return count, fmt.Errorf("study store: scan row: %w", err)
+		var a pointAgg
+		if err := rows.Scan(&a.pointID, &a.confidentCount, &a.hitCount); err != nil {
+			return 0, fmt.Errorf("study store: scan row: %w", err)
+		}
+		aggs = append(aggs, a)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for _, a := range aggs {
+		var representative string
+		err := s.db.QueryRow(`
+			SELECT question_terms FROM question_kp_cooccurrence
+			WHERE point_id = ?
+			ORDER BY confident_count DESC, last_seen_at DESC, question_terms
+			LIMIT 1`, a.pointID).Scan(&representative)
+		if err != nil {
+			return count, fmt.Errorf("study store: representative label: %w", err)
 		}
 
 		candidateID := uuid.New().String()
-		_, err := s.db.Exec(`
+		_, err = s.db.Exec(`
 			INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count)
 			VALUES (?, ?, ?, ?, ?)
 			ON CONFLICT(question_terms, point_id) DO UPDATE SET
 				confident_count = excluded.confident_count,
 				hit_count = excluded.hit_count`,
-			candidateID, questionTerms, pointID, confidentCount, hitCount)
+			candidateID, representative, a.pointID, a.confidentCount, a.hitCount)
 		if err != nil {
 			return count, fmt.Errorf("study store: upsert candidate: %w", err)
 		}
 		count++
 	}
-	return count, rows.Err()
+	return count, nil
+}
+
+// CooccurrenceLabelsForPoint returns the distinct subject labels that have at
+// least one confident co-occurrence with the point — the inputs for deriving
+// an aggregated link's subject condition (交集，见 service.tryCreateLink).
+func (s *Store) CooccurrenceLabelsForPoint(pointID string) ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT question_terms FROM question_kp_cooccurrence
+		WHERE point_id = ? AND confident_count > 0`, pointID)
+	if err != nil {
+		return nil, fmt.Errorf("study store: labels for point: %w", err)
+	}
+	defer rows.Close()
+
+	var labels []string
+	for rows.Next() {
+		var l string
+		if err := rows.Scan(&l); err != nil {
+			return nil, fmt.Errorf("study store: labels scan: %w", err)
+		}
+		labels = append(labels, l)
+	}
+	return labels, rows.Err()
+}
+
+// ConfidentTraceFieldValues returns the distinct raw (un-normalized)
+// intent/audience/constraint_text values across every confident trace whose
+// question_terms has ever confidently co-occurred with pointID — the inputs
+// for computeLinkCondition's accumulated whitelist sets (docs/impl/v1/study.md
+// 步骤 2). Same source table as CooccurrenceLabelsForPoint
+// (question_kp_cooccurrence, confident_count > 0), joined to traces for the
+// other three quadruple columns. Normalization/dedup-after-normalization is
+// the caller's job, matching LatestConfidentTraceQuadruple's existing
+// division of responsibility (store returns raw, service normalizes).
+func (s *Store) ConfidentTraceFieldValues(pointID string) (intents, audiences, constraints []string, err error) {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT t.intent, t.audience, t.constraint_text
+		FROM question_kp_cooccurrence c
+		JOIN traces t ON t.question_terms = c.question_terms AND t.retrieval_quality = 'confident'
+		WHERE c.point_id = ? AND c.confident_count > 0`, pointID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("study store: confident trace field values: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var in, au, co string
+		if err := rows.Scan(&in, &au, &co); err != nil {
+			return nil, nil, nil, fmt.Errorf("study store: confident trace field values scan: %w", err)
+		}
+		intents = append(intents, in)
+		audiences = append(audiences, au)
+		constraints = append(constraints, co)
+	}
+	return intents, audiences, constraints, rows.Err()
 }
 
 // Step 2: FetchUnprocessedGapEvents returns unprocessed knowledge_gap learning events.
@@ -79,31 +165,73 @@ func (s *Store) FetchUnprocessedGapEvents() ([]GapEvent, error) {
 		var p map[string]string
 		if err := json.Unmarshal([]byte(payload), &p); err == nil {
 			e.Question = p["question"]
+			e.Reason = p["reason"]
 		}
 		events = append(events, e)
 	}
 	return events, rows.Err()
 }
 
-func (s *Store) UpsertKnowledgeGap(questionTerms, question string) (gapID string, hitCount int, err error) {
-	newID := uuid.New().String()
-	_, err = s.db.Exec(`
-		INSERT INTO knowledge_gaps (gap_id, question_terms, question)
-		VALUES (?, ?, ?)
-		ON CONFLICT(question_terms) DO UPDATE SET
-			hit_count = hit_count + 1,
-			question = excluded.question,
-			updated_at = CURRENT_TIMESTAMP`,
-		newID, questionTerms, question)
+// UpsertKnowledgeGap implements docs/impl/v1/study.md "knowledge_gaps 表扩展":
+// reason_counts is a JSON map incremented per-reason (not a SQL ON CONFLICT
+// increment — SQLite here isn't built with the JSON1 functions this repo
+// otherwise avoids relying on), so the read-modify-write happens in a
+// transaction to stay correct if this is ever called concurrently.
+func (s *Store) UpsertKnowledgeGap(questionTerms, question, reason, traceID string) (gapID string, hitCount int, err error) {
+	tx, err := s.db.Begin()
 	if err != nil {
-		return "", 0, fmt.Errorf("study store: upsert gap: %w", err)
+		return "", 0, fmt.Errorf("study store: upsert gap begin tx: %w", err)
 	}
-	// ON CONFLICT keeps the row's original gap_id (only hit_count/question/updated_at
-	// are updated), so re-query rather than trust newID.
-	err = s.db.QueryRow(`SELECT gap_id, hit_count FROM knowledge_gaps WHERE question_terms = ?`, questionTerms).
-		Scan(&gapID, &hitCount)
-	if err != nil {
-		return "", 0, fmt.Errorf("study store: get gap hit_count: %w", err)
+	defer tx.Rollback()
+
+	var reasonCountsJSON string
+	err = tx.QueryRow(`SELECT gap_id, reason_counts FROM knowledge_gaps WHERE question_terms = ?`, questionTerms).
+		Scan(&gapID, &reasonCountsJSON)
+	switch {
+	case err == sql.ErrNoRows:
+		counts := map[string]int{}
+		if reason != "" {
+			counts[reason] = 1
+		}
+		countsJSON, _ := json.Marshal(counts)
+		gapID = uuid.New().String()
+		if _, err = tx.Exec(`
+			INSERT INTO knowledge_gaps (gap_id, question_terms, question, hit_count, reason_counts, last_reason, last_trace_id)
+			VALUES (?, ?, ?, 1, ?, ?, ?)`,
+			gapID, questionTerms, question, string(countsJSON), reason, traceID); err != nil {
+			return "", 0, fmt.Errorf("study store: insert gap: %w", err)
+		}
+		hitCount = 1
+	case err != nil:
+		return "", 0, fmt.Errorf("study store: get existing gap: %w", err)
+	default:
+		counts := map[string]int{}
+		if reasonCountsJSON != "" {
+			_ = json.Unmarshal([]byte(reasonCountsJSON), &counts)
+		}
+		if reason != "" {
+			counts[reason]++
+		}
+		countsJSON, _ := json.Marshal(counts)
+		if _, err = tx.Exec(`
+			UPDATE knowledge_gaps SET
+				hit_count = hit_count + 1,
+				question = ?,
+				reason_counts = ?,
+				last_reason = ?,
+				last_trace_id = ?,
+				updated_at = CURRENT_TIMESTAMP
+			WHERE gap_id = ?`,
+			question, string(countsJSON), reason, traceID, gapID); err != nil {
+			return "", 0, fmt.Errorf("study store: update gap: %w", err)
+		}
+		if err = tx.QueryRow(`SELECT hit_count FROM knowledge_gaps WHERE gap_id = ?`, gapID).Scan(&hitCount); err != nil {
+			return "", 0, fmt.Errorf("study store: get updated hit_count: %w", err)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return "", 0, fmt.Errorf("study store: upsert gap commit: %w", err)
 	}
 	return gapID, hitCount, nil
 }
@@ -147,16 +275,18 @@ func (s *Store) FetchUnprocessedActivationGapEvents() ([]RawGapEvent, error) {
 // CooccurrenceConfidentCount looks up a single (question_terms, point_id)
 // cooccurrence row's confident_count, for source-B candidate qualification
 // (docs/impl/v1/study.md 步骤 2).
-func (s *Store) CooccurrenceConfidentCount(questionTerms, pointID string) (count int, found bool, err error) {
-	err = s.db.QueryRow(`SELECT confident_count FROM question_kp_cooccurrence
-		WHERE question_terms = ? AND point_id = ?`, questionTerms, pointID).Scan(&count)
-	if err == sql.ErrNoRows {
-		return 0, false, nil
-	}
+// CooccurrenceConfidentCount aggregates confident co-occurrence across all
+// subject labels for the point (2026-07-18 修订，与 ScanCandidates 同因：标签
+// 不稳定会把复现信号打散在多行；来源 B 的"至少再复现一次"看的应是该 KP 的总
+// 复现次数，不是恰好同标签的复现次数)。
+func (s *Store) CooccurrenceConfidentCount(pointID string) (count int, found bool, err error) {
+	var rows int
+	err = s.db.QueryRow(`SELECT COALESCE(SUM(confident_count), 0), COUNT(*)
+		FROM question_kp_cooccurrence WHERE point_id = ?`, pointID).Scan(&count, &rows)
 	if err != nil {
 		return 0, false, fmt.Errorf("study store: cooccurrence confident count: %w", err)
 	}
-	return count, true, nil
+	return count, rows > 0, nil
 }
 
 // LatestConfidentTraceQuadruple fetches the Session four-tuple from the most
@@ -644,7 +774,7 @@ func (s *Store) ListCrossSourceConflicts(limit int) ([]CrossSourceConflict, erro
 
 func (s *Store) TopKnowledgeGaps(limit int) ([]KnowledgeGapRow, error) {
 	rows, err := s.db.Query(`
-		SELECT gap_id, question_terms, question, hit_count
+		SELECT gap_id, question_terms, question, hit_count, reason_counts, last_reason, last_trace_id
 		FROM knowledge_gaps
 		ORDER BY hit_count DESC
 		LIMIT ?`, limit)
@@ -656,7 +786,8 @@ func (s *Store) TopKnowledgeGaps(limit int) ([]KnowledgeGapRow, error) {
 	var results []KnowledgeGapRow
 	for rows.Next() {
 		var r KnowledgeGapRow
-		if err := rows.Scan(&r.GapID, &r.QuestionTerms, &r.Question, &r.HitCount); err != nil {
+		if err := rows.Scan(&r.GapID, &r.QuestionTerms, &r.Question, &r.HitCount,
+			&r.ReasonCountsJSON, &r.LastReason, &r.LastTraceID); err != nil {
 			return nil, fmt.Errorf("study store: scan gap: %w", err)
 		}
 		results = append(results, r)
@@ -754,13 +885,13 @@ func (s *Store) ListCandidatesFiltered(recommendation string, limit int) ([]Link
 	return candidates, nil
 }
 
-func (s *Store) ListGaps(minHitCount, limit int) ([]KnowledgeGapRow, error) {
+func (s *Store) ListGaps(minHitCount, limit int, reason string) ([]KnowledgeGapRow, error) {
 	rows, err := s.db.Query(`
-		SELECT gap_id, question_terms, question, hit_count
+		SELECT gap_id, question_terms, question, hit_count, reason_counts, last_reason, last_trace_id
 		FROM knowledge_gaps
-		WHERE hit_count >= ?
+		WHERE hit_count >= ? AND (? = '' OR last_reason = ?)
 		ORDER BY hit_count DESC
-		LIMIT ?`, minHitCount, limit)
+		LIMIT ?`, minHitCount, reason, reason, limit)
 	if err != nil {
 		return nil, fmt.Errorf("study store: list gaps: %w", err)
 	}
@@ -769,7 +900,8 @@ func (s *Store) ListGaps(minHitCount, limit int) ([]KnowledgeGapRow, error) {
 	var results []KnowledgeGapRow
 	for rows.Next() {
 		var r KnowledgeGapRow
-		if err := rows.Scan(&r.GapID, &r.QuestionTerms, &r.Question, &r.HitCount); err != nil {
+		if err := rows.Scan(&r.GapID, &r.QuestionTerms, &r.Question, &r.HitCount,
+			&r.ReasonCountsJSON, &r.LastReason, &r.LastTraceID); err != nil {
 			return nil, fmt.Errorf("study store: scan gap: %w", err)
 		}
 		results = append(results, r)

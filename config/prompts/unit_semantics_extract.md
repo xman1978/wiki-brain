@@ -1,5 +1,5 @@
 ---
-version: v12
+version: v13
 ---
 
 ## System
@@ -18,8 +18,7 @@ version: v12
       "content_theme": "该知识单元自身内容的主题",
       "intent": "该知识单元的意图（说明/定义/规则/步骤/案例等）",
       "object": "该知识单元描述的对象",
-      "scope": "该知识单元的适用范围",
-      "key_facts": ["关键事实1", "关键事实2"]
+      "scope": "该知识单元的适用范围"
     }
   ]
 }
@@ -27,7 +26,7 @@ version: v12
 
 `results` 是顶层对象的一个数组字段，不要直接输出裸数组。`index` 必须等于该结果对应的知识单元在输入中的编号（从 1 开始）。`content_head` 必须是该知识单元正文开头 10~15 个字符的逐字原文（不要改写、不要加省略号、不要凭记忆复述），用于校验 `index` 有没有指错单元——`index` 和 `content_head` 必须来自同一个知识单元，不要分别拼凑。
 
-以下几类知识单元没有实质内容可供提取语义，遇到时直接跳过该编号（不要在 `results` 里输出，不要勉强编造 `theme`/`intent`/`key_facts` 凑数）：
+以下几类知识单元没有实质内容可供提取语义，遇到时直接跳过该编号（不要在 `results` 里输出，不要勉强编造 `theme`/`intent`/`scope` 凑数）：
 
 1. **空内容或近似空**：正文只有空行、纯空白字符，或去除首尾空白后没有任何实际信息。
 
@@ -61,7 +60,7 @@ version: v12
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["index", "content_head", "source_theme", "content_theme", "intent", "object", "scope", "key_facts"],
+        "required": ["index", "content_head", "source_theme", "content_theme", "intent", "object", "scope"],
         "properties": {
           "index": {"type": "integer"},
           "content_head": {"type": "string"},
@@ -69,11 +68,7 @@ version: v12
           "content_theme": {"type": "string"},
           "intent": {"type": "string"},
           "object": {"type": "string"},
-          "scope": {"type": "string"},
-          "key_facts": {
-            "type": "array",
-            "items": {"type": "string"}
-          }
+          "scope": {"type": "string"}
         }
       }
     }

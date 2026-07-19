@@ -73,23 +73,28 @@ var transitionAction = map[string]map[string]string{
 	StatusWeakened:  {StatusVerified: ActionReverify, StatusDeprecated: ActionDeprecate},
 }
 
-// LinkCondition is the activation condition quadruple, already normalized by
-// the caller (Study, from a confident trace's subject/intent/audience/
-// constraint) — CreateLink stores it as-is (docs/impl/v1/activation.md 数据结构).
+// LinkCondition is the activation condition, already normalized by the
+// caller (Study, from this point's accumulated confident-trace signal) —
+// CreateLink/UpdateConditions store it as-is (docs/impl/v1/activation.md
+// 数据结构). SubjectTerms is a single term string (the cross-phrasing
+// intersection core); IntentTerms/Audience/ConstraintTerms are accumulated
+// whitelist sets (every distinct normalized value observed across this
+// point's confident traces, including "" when a trace's field was blank —
+// see matcher.go's "空值语义" note).
 type LinkCondition struct {
 	SubjectTerms    string
-	IntentTerms     string
-	Audience        string
-	ConstraintTerms string
+	IntentTerms     []string
+	Audience        []string
+	ConstraintTerms []string
 }
 
 type ActivationLink struct {
 	LinkID          string
 	QuestionTerms   string
 	SubjectTerms    string
-	IntentTerms     string
-	Audience        string
-	ConstraintTerms string
+	IntentTerms     []string
+	Audience        []string
+	ConstraintTerms []string
 	Scene           string
 	Goal            string
 	PointID         string

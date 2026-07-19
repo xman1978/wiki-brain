@@ -137,6 +137,36 @@ func TestService_Run_WithData(t *testing.T) {
 	}
 }
 
+func TestGapEntryFromRow_RecommendationByLastReason(t *testing.T) {
+	cases := []struct {
+		lastReason string
+		want       string
+	}{
+		{"no_candidates", "补充材料"},
+		{"judge_filtered", "语义提取待核对"},
+		{"answer_error", "生成异常，需查日志"},
+		{"unspecified", "补充材料"},
+		{"", "补充材料"}, // pre-migration rows
+	}
+	for _, c := range cases {
+		row := KnowledgeGapRow{
+			QuestionTerms:    "q",
+			Question:         "问题",
+			HitCount:         3,
+			ReasonCountsJSON: `{"` + c.lastReason + `":3}`,
+			LastReason:       c.lastReason,
+			LastTraceID:      "tr1",
+		}
+		entry := gapEntryFromRow(row)
+		if entry.Recommendation != c.want {
+			t.Errorf("last_reason=%q: expected recommendation=%q, got %q", c.lastReason, c.want, entry.Recommendation)
+		}
+		if entry.LastTraceID != "tr1" {
+			t.Errorf("expected last_trace_id passed through, got %q", entry.LastTraceID)
+		}
+	}
+}
+
 func TestService_GapThresholdWarning(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)

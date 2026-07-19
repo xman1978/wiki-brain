@@ -508,7 +508,9 @@ LLM 调用失败：记录 warn 日志，当前批次 KU 的 concept_id 保持 nu
 
 每个将被发布为可检索的 KnowledgeUnit 都必须先完成 Rerank 语义提取。程序按 unit 的
 Markdown 行范围读取正文，调用 `config/prompts/unit_semantics_extract.md` 生成并校验以下
-v1 语义：`source_theme`、`content_theme`、`intent`、`object`、`scope`、`key_facts`。
+语义分类字段：`source_theme`、`content_theme`、`intent`、`object`、`scope`。
+（早期版本还抽取 `key_facts`，V1 已废弃——事实点统一由 KP 承载，见
+`docs/impl/v1/semantics-curation.md`。）
 
 ```text
 对候选 KU 批量提取语义；每个 unit_id 必须恰好返回一条语义结果；

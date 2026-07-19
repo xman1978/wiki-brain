@@ -27,8 +27,20 @@ const gapPreviewMaxRunes = 60
 // an extraction_failed placeholder's line range degenerates to the whole
 // segment (see insertFailedUnit), which would otherwise mask a real gap, so
 // its presence is surfaced separately via HasExtractionFailed instead.
+//
+// This also independently diffs the segment list itself against the full
+// document (mdLines) and surfaces any line range no segment covers at all —
+// it does not just trust that BuildSegments produced full coverage. Before
+// 2026-07-16's uncoveredSegments fix, a misdetected heading could make
+// BuildSegments silently drop ~63% of a document's lines from the segment
+// list entirely (Dock Swam 集群部署: segments summed to 74 of 203 lines),
+// and this function had no way to notice — every segment it did receive
+// looked 100% covered, so the report read "no gaps" while most of the
+// document was invisible to it. Diffing against mdLines here means a
+// regression in segmentation surfaces as a gap instead of silently
+// vanishing again, independent of whatever BuildSegments currently does.
 func ComputeCoverage(segments []Segment, units []KnowledgeUnit, mdLines []string) []SegmentCoverage {
-	reports := make([]SegmentCoverage, 0, len(segments))
+	reports := make([]SegmentCoverage, 0, len(segments)+1)
 
 	for _, seg := range segments {
 		total := seg.LineEnd - seg.LineStart + 1
@@ -95,7 +107,74 @@ func ComputeCoverage(segments []Segment, units []KnowledgeUnit, mdLines []string
 		})
 	}
 
+	segRanges := make([]lineRange, len(segments))
+	for i, seg := range segments {
+		segRanges[i] = lineRange{start: seg.LineStart, end: seg.LineEnd}
+	}
+	for _, gap := range findUncoveredRanges(segRanges, len(mdLines)) {
+		reports = append(reports, SegmentCoverage{
+			OutlineTitle: "（不属于任何 segment）",
+			LineStart:    gap.start,
+			LineEnd:      gap.end,
+			TotalLines:   gap.end - gap.start + 1,
+			CoveredLines: 0,
+			Gaps: []CoverageGap{{
+				LineStart: gap.start,
+				LineEnd:   gap.end,
+				Preview:   previewLines(mdLines, gap.start, gap.end),
+			}},
+		})
+	}
+
 	return reports
+}
+
+// lineRange is an inclusive, 1-indexed [start, end] line range.
+type lineRange struct {
+	start, end int
+}
+
+// findUncoveredRanges returns the gaps in [1, totalLines] not covered by any
+// of the given ranges, as contiguous runs. Shared by ComputeCoverage (segment
+// list vs. the whole document) and uncoveredSegments in segment.go (leaf
+// outline nodes vs. the whole document) — same gap-scanning logic, two
+// different "what should already cover everything" assumptions to verify.
+func findUncoveredRanges(ranges []lineRange, totalLines int) []lineRange {
+	if totalLines <= 0 {
+		return nil
+	}
+	covered := make([]bool, totalLines+1) // 1-indexed; index 0 unused
+	for _, r := range ranges {
+		start, end := r.start, r.end
+		if start < 1 {
+			start = 1
+		}
+		if end > totalLines {
+			end = totalLines
+		}
+		for line := start; line <= end; line++ {
+			covered[line] = true
+		}
+	}
+
+	var gaps []lineRange
+	gapStart := -1
+	for line := 1; line <= totalLines; line++ {
+		if !covered[line] {
+			if gapStart == -1 {
+				gapStart = line
+			}
+			continue
+		}
+		if gapStart != -1 {
+			gaps = append(gaps, lineRange{start: gapStart, end: line - 1})
+			gapStart = -1
+		}
+	}
+	if gapStart != -1 {
+		gaps = append(gaps, lineRange{start: gapStart, end: totalLines})
+	}
+	return gaps
 }
 
 func previewLines(mdLines []string, lineStart, lineEnd int) string {

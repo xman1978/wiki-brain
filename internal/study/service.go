@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +13,7 @@ import (
 	"github.com/jxman78/wiki-brain/internal/concept"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/text"
+	"github.com/jxman78/wiki-brain/internal/retrieval"
 	"github.com/jxman78/wiki-brain/internal/wiki"
 )
 
@@ -113,7 +116,7 @@ func (s *Service) aggregateGaps() (int, error) {
 			continue
 		}
 
-		gapID, hitCount, err := s.store.UpsertKnowledgeGap(e.QuestionTerms, e.Question)
+		gapID, hitCount, err := s.store.UpsertKnowledgeGap(e.QuestionTerms, e.Question, e.Reason, e.TraceID)
 		if err != nil {
 			return processed, err
 		}
@@ -415,14 +418,41 @@ func (s *Service) buildGapEntries() ([]KnowledgeGapEntry, error) {
 
 	entries := make([]KnowledgeGapEntry, len(gaps))
 	for i, g := range gaps {
-		entries[i] = KnowledgeGapEntry{
-			QuestionTerms:  g.QuestionTerms,
-			Question:       g.Question,
-			HitCount:       g.HitCount,
-			Recommendation: "补充材料",
-		}
+		entries[i] = gapEntryFromRow(g)
 	}
 	return entries, nil
+}
+
+// gapEntryFromRow implements docs/impl/v1/study.md 步骤 7's recommendation
+// breakdown by last_reason — no_candidates means the pipeline never found a
+// candidate (真缺材料), judge_filtered means candidates existed but rerank
+// judged them all irrelevant (指向 semantics-curation.md 的人工修正流程,
+// 不是缺材料), answer_error means evidence existed but generation failed
+// (系统异常, 不是知识缺口). Empty/unrecognized reason (pre-migration rows,
+// or the "unspecified" fallback) keeps the historical default.
+func gapEntryFromRow(g KnowledgeGapRow) KnowledgeGapEntry {
+	counts := map[string]int{}
+	if g.ReasonCountsJSON != "" {
+		_ = json.Unmarshal([]byte(g.ReasonCountsJSON), &counts)
+	}
+
+	recommendation := "补充材料"
+	switch g.LastReason {
+	case retrieval.GapReasonJudgeFiltered:
+		recommendation = "语义提取待核对"
+	case "answer_error":
+		recommendation = "生成异常，需查日志"
+	}
+
+	return KnowledgeGapEntry{
+		QuestionTerms:  g.QuestionTerms,
+		Question:       g.Question,
+		HitCount:       g.HitCount,
+		ReasonCounts:   counts,
+		LastReason:     g.LastReason,
+		LastTraceID:    g.LastTraceID,
+		Recommendation: recommendation,
+	}
 }
 
 // flagWikiCandidates writes a pending_confirm wiki_candidate learning_result
@@ -542,7 +572,7 @@ func (s *Service) createCandidates(actions *LearningActionsSummary) error {
 			slog.Warn("study: activation_gap payload malformed", "event_id", e.EventID, "error", err)
 		} else {
 			for _, pid := range payload.DirectPointIDs {
-				count, found, err := s.store.CooccurrenceConfidentCount(payload.QuestionTerms, pid)
+				count, found, err := s.store.CooccurrenceConfidentCount(pid)
 				if err != nil {
 					slog.Error("study: cooccurrence lookup failed",
 						"question_terms", payload.QuestionTerms, "point_id", pid, "error", err)
@@ -571,33 +601,40 @@ func (s *Service) createCandidates(actions *LearningActionsSummary) error {
 	return nil
 }
 
-// tryCreateLink creates an ActivationLink candidate for (questionTerms,
-// pointID) unless one already exists (any status — the dedup/idempotency
-// point across source A/B and across cycles), normalizing the latest
-// confident trace's four-tuple into the link's condition fields
-// (docs/impl/v1/study.md 步骤 2, docs/impl/v1/activation.md 数据结构).
+// tryCreateLink creates an ActivationLink candidate for the point unless one
+// already exists for it — dedup is at point level, any status (2026-07-18 修订：
+// 候选达标改为 point 级聚合后，代表标签可能随周期漂移，仅按 (question_terms,
+// point_id) 精确去重会给同一 KP 反复创建仅标签不同的新链接)。当该 point 已有
+// 链接时，不创建第二条，而是用同一套归纳算子刷新它的条件（computeLinkCondition）
+// ——条件不是创建时定死的，会随着更多确证信号持续收敛/扩展；deprecated 是终态，
+// 不再刷新。刷新不算新建、不计入 actions.CreatedCandidates，也不写
+// learning_results（条件收敛是持续性维护动作，不是一次性学习事件）。
 func (s *Service) tryCreateLink(questionTerms, pointID string, createdFrom []string, reason string) (bool, error) {
-	existing, err := s.activationSvc.Store().GetByQuestionAndPoint(questionTerms, pointID)
+	existingForPoint, err := s.activationSvc.Store().ListLinks(activation.ListLinksFilter{PointID: pointID, Limit: 1})
 	if err != nil {
 		return false, err
 	}
-	if existing != nil {
-		return false, nil
+	if len(existingForPoint) > 0 {
+		existing := existingForPoint[0]
+		if existing.Status == activation.StatusDeprecated {
+			return false, nil
+		}
+		cond, err := s.computeLinkCondition(pointID, existing.QuestionTerms)
+		if err != nil || cond == nil {
+			return false, err
+		}
+		if conditionEqual(cond, &existing.ActivationLink) {
+			return false, nil
+		}
+		return false, s.activationSvc.Store().UpdateConditions(existing.LinkID, *cond)
 	}
 
-	subject, intent, audience, constraintText, _, err := s.store.LatestConfidentTraceQuadruple(questionTerms)
-	if err != nil {
+	cond, err := s.computeLinkCondition(pointID, questionTerms)
+	if err != nil || cond == nil {
 		return false, err
 	}
 
-	cond := activation.LinkCondition{
-		SubjectTerms:    text.Terms(text.Normalize(subject)),
-		IntentTerms:     text.Terms(text.Normalize(intent)),
-		Audience:        text.NormalizeCompact(audience),
-		ConstraintTerms: text.Terms(text.Normalize(constraintText)),
-	}
-
-	link, err := s.activationSvc.CreateLink(questionTerms, cond, pointID, createdFrom)
+	link, err := s.activationSvc.CreateLink(questionTerms, *cond, pointID, createdFrom)
 	if err != nil {
 		slog.Info("study: create_candidate skipped", "question_terms", questionTerms, "point_id", pointID, "reason", err.Error())
 		return false, nil
@@ -615,6 +652,130 @@ func (s *Service) tryCreateLink(questionTerms, pointID string, createdFrom []str
 		return false, err
 	}
 	return true, nil
+}
+
+// computeLinkCondition is the single place that turns a point's accumulated
+// confident-trace signal into an activation.LinkCondition — shared by both
+// creation (tryCreateLink, new point) and refresh (tryCreateLink, point
+// already linked), so the two paths can never drift into different
+// normalization rules. Returns (nil, nil) when the point has no confident
+// signal at all (nothing to derive a condition from).
+//
+// subject_terms uses the cross-phrasing label intersection (LabelTermIntersection,
+// unchanged logic) when ≥2 labels share ≥2 terms; otherwise it falls back to
+// fallbackQuestionTerms' own most recent confident trace's subject — on
+// creation that's the triggering question_terms, on refresh it's the link's
+// own stored question_terms (a stand-in label, not a matching key anymore).
+// intent_terms/audience/constraint_terms are the normalized, deduplicated,
+// sorted set of every value observed across *all* of the point's confident
+// traces (ConfidentTraceFieldValues) — not just the latest one.
+func (s *Service) computeLinkCondition(pointID, fallbackQuestionTerms string) (*activation.LinkCondition, error) {
+	labels, err := s.store.CooccurrenceLabelsForPoint(pointID)
+	if err != nil {
+		return nil, err
+	}
+	if len(labels) == 0 {
+		return nil, nil
+	}
+
+	subjectTerms := LabelTermIntersection(labels)
+	if subjectTerms == "" {
+		subject, _, _, _, found, err := s.store.LatestConfidentTraceQuadruple(fallbackQuestionTerms)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			subjectTerms = text.Terms(text.Normalize(subject))
+		}
+	}
+
+	rawIntents, rawAudiences, rawConstraints, err := s.store.ConfidentTraceFieldValues(pointID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &activation.LinkCondition{
+		SubjectTerms: subjectTerms,
+		IntentTerms: normalizeDedupSorted(rawIntents, func(v string) string {
+			return text.Terms(text.Normalize(v))
+		}),
+		Audience: normalizeDedupSorted(rawAudiences, text.NormalizeCompact),
+		ConstraintTerms: normalizeDedupSorted(rawConstraints, func(v string) string {
+			return text.Terms(text.Normalize(v))
+		}),
+	}, nil
+}
+
+// normalizeDedupSorted normalizes every value with norm, deduplicates, and
+// returns the sorted result — the shape computeLinkCondition needs for each
+// of the three accumulated sets (store.go's encodeTermSet sorts again on
+// write, but sorting here too keeps conditionEqual's comparison simple).
+func normalizeDedupSorted(values []string, norm func(string) string) []string {
+	seen := make(map[string]struct{}, len(values))
+	for _, v := range values {
+		seen[norm(v)] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for v := range seen {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// conditionEqual reports whether cond matches link's currently stored
+// condition — computeLinkCondition already returns sorted slices, so plain
+// slice equality suffices (no need to re-sort or use a set comparison).
+func conditionEqual(cond *activation.LinkCondition, link *activation.ActivationLink) bool {
+	return cond.SubjectTerms == link.SubjectTerms &&
+		slicesEqual(cond.IntentTerms, link.IntentTerms) &&
+		slicesEqual(cond.Audience, link.Audience) &&
+		slicesEqual(cond.ConstraintTerms, link.ConstraintTerms)
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// labelTermIntersection derives the cross-phrasing stable core of a point's
+// confident subject labels: the terms every label shares. Returns "" (caller
+// keeps the trace-quadruple subject) unless there are ≥2 labels to intersect
+// and the core keeps ≥2 terms — a 1-term core like "数据库" would make the
+// link's subject condition trivially matchable, which the score threshold
+// alone shouldn't be trusted to contain.
+func LabelTermIntersection(labels []string) string {
+	if len(labels) < 2 {
+		return ""
+	}
+	core := text.TermSet(labels[0])
+	for _, l := range labels[1:] {
+		next := text.TermSet(l)
+		for w := range core {
+			if _, ok := next[w]; !ok {
+				delete(core, w)
+			}
+		}
+		if len(core) == 0 {
+			return ""
+		}
+	}
+	if len(core) < 2 {
+		return ""
+	}
+	terms := make([]string, 0, len(core))
+	for w := range core {
+		terms = append(terms, w)
+	}
+	sort.Strings(terms)
+	return strings.Join(terms, " ")
 }
 
 // aggregateSignals groups a slice of activation_success / activation_failure

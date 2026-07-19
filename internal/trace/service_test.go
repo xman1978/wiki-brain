@@ -2,6 +2,7 @@ package trace
 
 import (
 	"database/sql"
+	"encoding/json"
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/answer"
@@ -78,6 +79,68 @@ func TestProcessTrace_Gap_CreatesLearningEvent(t *testing.T) {
 	events, _ := store.ListLearningEvents("knowledge_gap", 0, 20)
 	if len(events) != 1 {
 		t.Fatalf("expected 1 knowledge_gap event, got %d", len(events))
+	}
+	// GapReason unset on the EvidenceSet and Path != "error" — docs/impl/v1/trace.md's
+	// fallback value for this theoretical-edge-case combination.
+	assertPayloadReason(t, events[0].Payload, "unspecified")
+}
+
+func TestProcessTrace_Gap_ReasonFromEvidenceSet(t *testing.T) {
+	svc, store, db := setupService(t)
+	insertTestAnswer(t, db, "a-002b")
+
+	r := &answer.AnswerResult{
+		AnswerID:  "a-002b",
+		Question:  "未知问题",
+		Citations: []string{},
+		Path:      "deep",
+		EvidenceSet: &retrieval.EvidenceSet{
+			GapReason: retrieval.GapReasonJudgeFiltered,
+		},
+	}
+
+	svc.ProcessTrace(r)
+
+	events, _ := store.ListLearningEvents("knowledge_gap", 0, 20)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 knowledge_gap event, got %d", len(events))
+	}
+	assertPayloadReason(t, events[0].Payload, "judge_filtered")
+}
+
+func TestProcessTrace_Gap_ReasonAnswerErrorTakesPriority(t *testing.T) {
+	svc, store, db := setupService(t)
+	insertTestAnswer(t, db, "a-002c")
+
+	r := &answer.AnswerResult{
+		AnswerID:  "a-002c",
+		Question:  "未知问题",
+		Citations: []string{},
+		Path:      "error",
+		EvidenceSet: &retrieval.EvidenceSet{
+			// Even with a GapReason set, a generation failure isn't really
+			// about missing knowledge — answer_error must win.
+			GapReason: retrieval.GapReasonNoCandidates,
+		},
+	}
+
+	svc.ProcessTrace(r)
+
+	events, _ := store.ListLearningEvents("knowledge_gap", 0, 20)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 knowledge_gap event, got %d", len(events))
+	}
+	assertPayloadReason(t, events[0].Payload, "answer_error")
+}
+
+func assertPayloadReason(t *testing.T, payload, want string) {
+	t.Helper()
+	var p map[string]string
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if p["reason"] != want {
+		t.Errorf("expected reason=%s, got %q (payload=%s)", want, p["reason"], payload)
 	}
 }
 

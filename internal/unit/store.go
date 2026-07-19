@@ -2,7 +2,6 @@ package unit
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -47,6 +46,8 @@ type KnowledgePoint struct {
 	Lifecycle          string
 	LifecycleChangedAt sql.NullTime
 	CreatedAt          time.Time
+	ManuallyEdited     bool
+	EditedAt           sql.NullTime
 }
 
 // Relation scope (docs/impl/v1/kpn.md 数据结构).
@@ -83,8 +84,7 @@ func (s *Store) PublishGeneration(
 	pool []unitCandidate,
 	semantics map[string]rerank.Semantics,
 ) (superseded []KnowledgeUnit, inserted []KnowledgeUnit, points []KnowledgePoint, err error) {
-	semanticJSON, err := validatePublicationSemantics(pool, semantics)
-	if err != nil {
+	if err := validatePublicationSemantics(pool, semantics); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -185,10 +185,10 @@ func (s *Store) PublishGeneration(
 		}
 
 		if _, err := tx.Exec(`INSERT INTO unit_rerank_semantics
-			(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			(unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			unit.UnitID, semantic.SourceTheme, semantic.ContentTheme, semantic.Intent,
-			semantic.Object, semantic.Scope, semanticJSON[unit.UnitID], semantic.PromptVersion); err != nil {
+			semantic.Object, semantic.Scope, semantic.PromptVersion); err != nil {
 			return nil, nil, nil, fmt.Errorf("unit store: publish generation: insert semantics for unit %s: %w", unit.UnitID, err)
 		}
 		inserted = append(inserted, unit)
@@ -205,15 +205,14 @@ func (s *Store) PublishGeneration(
 // (it's simply discarded later, see the loop above) since
 // extractRerankSemantics already gave up on it after every fallback tier;
 // what it does return an entry for must still be well-formed.
-func validatePublicationSemantics(pool []unitCandidate, semantics map[string]rerank.Semantics) (map[string]string, error) {
+func validatePublicationSemantics(pool []unitCandidate, semantics map[string]rerank.Semantics) error {
 	candidateIDs := make(map[string]bool, len(pool))
-	encoded := make(map[string]string, len(pool))
 	for _, candidate := range pool {
 		if candidate.id == "" {
-			return nil, fmt.Errorf("unit store: publish generation: candidate has empty unit_id")
+			return fmt.Errorf("unit store: publish generation: candidate has empty unit_id")
 		}
 		if candidateIDs[candidate.id] {
-			return nil, fmt.Errorf("unit store: publish generation: duplicate candidate unit_id %s", candidate.id)
+			return fmt.Errorf("unit store: publish generation: duplicate candidate unit_id %s", candidate.id)
 		}
 		candidateIDs[candidate.id] = true
 
@@ -221,32 +220,29 @@ func validatePublicationSemantics(pool []unitCandidate, semantics map[string]rer
 		if !ok {
 			continue
 		}
-		keyFacts, err := validateAndEncodeSemantic(candidate.id, semantic)
-		if err != nil {
-			return nil, fmt.Errorf("unit store: publish generation: %w", err)
+		if err := validateSemantic(candidate.id, semantic); err != nil {
+			return fmt.Errorf("unit store: publish generation: %w", err)
 		}
-		encoded[candidate.id] = keyFacts
 	}
 	for unitID := range semantics {
 		if !candidateIDs[unitID] {
-			return nil, fmt.Errorf("unit store: publish generation: extra semantics for unit_id %s", unitID)
+			return fmt.Errorf("unit store: publish generation: extra semantics for unit_id %s", unitID)
 		}
 	}
-	return encoded, nil
+	return nil
 }
 
-// validateAndEncodeSemantic validates one unit's semantics (the same rules
-// validatePublicationSemantics applies per-candidate) and returns its
-// key_facts encoded as a JSON array string, ready for unit_rerank_semantics.
-// Shared by validatePublicationSemantics (a whole generation) and
-// InsertStandaloneUnit (a single manually-fixed unit) so both insert paths
-// enforce identical row well-formedness.
-func validateAndEncodeSemantic(unitID string, semantic rerank.Semantics) (string, error) {
+// validateSemantic validates one unit's semantics (the same rules
+// validatePublicationSemantics applies per-candidate). Shared by
+// validatePublicationSemantics (a whole generation) and InsertStandaloneUnit
+// (a single manually-fixed unit) so both insert paths enforce identical row
+// well-formedness.
+func validateSemantic(unitID string, semantic rerank.Semantics) error {
 	if semantic.UnitID != unitID {
-		return "", fmt.Errorf("semantic unit_id %s does not match %s", semantic.UnitID, unitID)
+		return fmt.Errorf("semantic unit_id %s does not match %s", semantic.UnitID, unitID)
 	}
 	if semantic.PromptVersion != rerank.ExtractPromptVersion {
-		return "", fmt.Errorf("semantic prompt_version for unit %s = %q, want %q",
+		return fmt.Errorf("semantic prompt_version for unit %s = %q, want %q",
 			unitID, semantic.PromptVersion, rerank.ExtractPromptVersion)
 	}
 	for _, field := range []struct {
@@ -260,22 +256,10 @@ func validateAndEncodeSemantic(unitID string, semantic rerank.Semantics) (string
 		{name: "scope", value: semantic.Scope},
 	} {
 		if strings.TrimSpace(field.value) == "" {
-			return "", fmt.Errorf("semantic %s is empty for unit %s", field.name, unitID)
+			return fmt.Errorf("semantic %s is empty for unit %s", field.name, unitID)
 		}
 	}
-	if semantic.KeyFacts == nil {
-		return "", fmt.Errorf("semantic key_facts is null for unit %s", unitID)
-	}
-	for i, fact := range semantic.KeyFacts {
-		if strings.TrimSpace(fact) == "" {
-			return "", fmt.Errorf("semantic key_facts[%d] is empty for unit %s", i, unitID)
-		}
-	}
-	keyFacts, err := json.Marshal(semantic.KeyFacts)
-	if err != nil {
-		return "", fmt.Errorf("marshal semantics for unit %s: %w", unitID, err)
-	}
-	return string(keyFacts), nil
+	return nil
 }
 
 // InsertStandaloneUnit inserts one new current knowledge unit together with
@@ -288,8 +272,7 @@ func (s *Store) InsertStandaloneUnit(ku *KnowledgeUnit, points []KnowledgePoint,
 	if ku.UnitID == "" {
 		return fmt.Errorf("unit store: insert standalone unit: empty unit_id")
 	}
-	keyFactsJSON, err := validateAndEncodeSemantic(ku.UnitID, sem)
-	if err != nil {
+	if err := validateSemantic(ku.UnitID, sem); err != nil {
 		return fmt.Errorf("unit store: insert standalone unit: %w", err)
 	}
 
@@ -321,9 +304,9 @@ func (s *Store) InsertStandaloneUnit(ku *KnowledgeUnit, points []KnowledgePoint,
 	}
 
 	if _, err := tx.Exec(`INSERT INTO unit_rerank_semantics
-		(unit_id, source_theme, content_theme, intent, object, scope, key_facts_json, prompt_version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		ku.UnitID, sem.SourceTheme, sem.ContentTheme, sem.Intent, sem.Object, sem.Scope, keyFactsJSON, sem.PromptVersion); err != nil {
+		(unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		ku.UnitID, sem.SourceTheme, sem.ContentTheme, sem.Intent, sem.Object, sem.Scope, sem.PromptVersion); err != nil {
 		return fmt.Errorf("unit store: insert standalone unit: insert semantics: %w", err)
 	}
 
@@ -466,6 +449,46 @@ func (s *Store) InsertPoint(kp *KnowledgePoint) error {
 		kp.PointID, kp.UnitID, kp.SourceID, kp.Content, kp.PointType)
 	if err != nil {
 		return fmt.Errorf("unit store: insert point: %w", err)
+	}
+	return nil
+}
+
+// InsertManualPoint inserts a human-added KP (docs/impl/v1/semantics-curation.md
+// "KP 人工修正"), setting manually_edited=1/edited_at=now — the same
+// protection UpsertManualRerankSemantics gives hand-edited rerank semantics.
+// lifecycle defaults to current at the schema level.
+func (s *Store) InsertManualPoint(kp *KnowledgePoint) error {
+	if kp.PointID == "" {
+		kp.PointID = uuid.New().String()
+	}
+	_, err := s.db.Exec(`INSERT INTO knowledge_points
+		(point_id, unit_id, source_id, content, point_type, manually_edited, edited_at)
+		VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)`,
+		kp.PointID, kp.UnitID, kp.SourceID, kp.Content, kp.PointType)
+	if err != nil {
+		return fmt.Errorf("unit store: insert manual point: %w", err)
+	}
+	return nil
+}
+
+// UpdateManualPoint edits an existing KP's content/point_type and marks it
+// manually_edited=1/edited_at=now, protecting it from future automated
+// rewrites the same way UpsertManualRerankSemantics protects an edited
+// unit_rerank_semantics row.
+func (s *Store) UpdateManualPoint(pointID, content, pointType string) error {
+	res, err := s.db.Exec(`UPDATE knowledge_points
+		SET content = ?, point_type = ?, manually_edited = 1, edited_at = CURRENT_TIMESTAMP
+		WHERE point_id = ?`,
+		content, pointType, pointID)
+	if err != nil {
+		return fmt.Errorf("unit store: update manual point: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("unit store: update manual point: rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("unit store: update manual point: point %s not found", pointID)
 	}
 	return nil
 }
@@ -818,18 +841,20 @@ func (s *Store) GetUnitByID(unitID string) (*KnowledgeUnit, error) {
 
 func (s *Store) GetPointByID(pointID string) (*KnowledgePoint, error) {
 	kp := &KnowledgePoint{}
-	err := s.db.QueryRow(`SELECT point_id, unit_id, source_id, content, point_type, lifecycle, lifecycle_changed_at, created_at
+	var manuallyEdited int
+	err := s.db.QueryRow(`SELECT point_id, unit_id, source_id, content, point_type, lifecycle, lifecycle_changed_at, created_at, manually_edited, edited_at
 		FROM knowledge_points WHERE point_id = ?`, pointID).Scan(
 		&kp.PointID, &kp.UnitID, &kp.SourceID, &kp.Content, &kp.PointType,
-		&kp.Lifecycle, &kp.LifecycleChangedAt, &kp.CreatedAt)
+		&kp.Lifecycle, &kp.LifecycleChangedAt, &kp.CreatedAt, &manuallyEdited, &kp.EditedAt)
 	if err != nil {
 		return nil, fmt.Errorf("unit store: get point by id: %w", err)
 	}
+	kp.ManuallyEdited = manuallyEdited != 0
 	return kp, nil
 }
 
 func (s *Store) GetPointsByUnitID(unitID string) ([]KnowledgePoint, error) {
-	rows, err := s.db.Query(`SELECT point_id, unit_id, source_id, content, point_type, lifecycle, lifecycle_changed_at, created_at
+	rows, err := s.db.Query(`SELECT point_id, unit_id, source_id, content, point_type, lifecycle, lifecycle_changed_at, created_at, manually_edited, edited_at
 		FROM knowledge_points WHERE unit_id = ? ORDER BY created_at ASC`, unitID)
 	if err != nil {
 		return nil, fmt.Errorf("unit store: get points by unit: %w", err)
@@ -839,10 +864,12 @@ func (s *Store) GetPointsByUnitID(unitID string) ([]KnowledgePoint, error) {
 	var points []KnowledgePoint
 	for rows.Next() {
 		var kp KnowledgePoint
+		var manuallyEdited int
 		if err := rows.Scan(&kp.PointID, &kp.UnitID, &kp.SourceID, &kp.Content, &kp.PointType,
-			&kp.Lifecycle, &kp.LifecycleChangedAt, &kp.CreatedAt); err != nil {
+			&kp.Lifecycle, &kp.LifecycleChangedAt, &kp.CreatedAt, &manuallyEdited, &kp.EditedAt); err != nil {
 			return nil, fmt.Errorf("unit store: scan point: %w", err)
 		}
+		kp.ManuallyEdited = manuallyEdited != 0
 		points = append(points, kp)
 	}
 	return points, rows.Err()
@@ -1021,4 +1048,95 @@ type Concept struct {
 	DomainID    string
 	Name        string
 	Description string
+}
+
+// RerankSemanticsRow is one unit_rerank_semantics row as stored, including
+// the manual-curation columns (docs/impl/v1/semantics-curation.md).
+type RerankSemanticsRow struct {
+	UnitID         string
+	SourceTheme    string
+	ContentTheme   string
+	Intent         string
+	Object         string
+	Scope          string
+	PromptVersion  string
+	ManuallyEdited bool
+	EditedAt       sql.NullTime
+}
+
+// GetRerankSemanticsByUnitID returns the unit's rerank semantics row, or
+// (nil, nil) when the unit has no semantics at all — the "missing" state the
+// curation UI must surface (被召回会触发 retrieval 完整性报错).
+func (s *Store) GetRerankSemanticsByUnitID(unitID string) (*RerankSemanticsRow, error) {
+	row := &RerankSemanticsRow{}
+	var manuallyEdited int
+	err := s.db.QueryRow(`SELECT unit_id, source_theme, content_theme, intent, object, scope, prompt_version, manually_edited, edited_at
+		FROM unit_rerank_semantics WHERE unit_id = ?`, unitID).Scan(
+		&row.UnitID, &row.SourceTheme, &row.ContentTheme, &row.Intent,
+		&row.Object, &row.Scope, &row.PromptVersion,
+		&manuallyEdited, &row.EditedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("unit store: get rerank semantics: %w", err)
+	}
+	row.ManuallyEdited = manuallyEdited != 0
+	return row, nil
+}
+
+// UpsertManualRerankSemantics writes a human-curated semantics row
+// (docs/impl/v1/semantics-curation.md): it sets manually_edited=1 and
+// edited_at=now. On update the stored prompt_version is left untouched (it
+// records the last LLM extraction, which the manual edit doesn't fake); on
+// insert — the unit had no semantics row at all — promptVersion (the current
+// rerank.ExtractPromptVersion) is written so the retrieval integrity check
+// sees a complete row.
+func (s *Store) UpsertManualRerankSemantics(unitID string, sem rerank.Semantics, promptVersion string) error {
+	_, err := s.db.Exec(`INSERT INTO unit_rerank_semantics
+		(unit_id, source_theme, content_theme, intent, object, scope, prompt_version, manually_edited, edited_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+		ON CONFLICT(unit_id) DO UPDATE SET
+			source_theme = excluded.source_theme,
+			content_theme = excluded.content_theme,
+			intent = excluded.intent,
+			object = excluded.object,
+			scope = excluded.scope,
+			manually_edited = 1,
+			edited_at = CURRENT_TIMESTAMP,
+			updated_at = CURRENT_TIMESTAMP`,
+		unitID, sem.SourceTheme, sem.ContentTheme, sem.Intent,
+		sem.Object, sem.Scope, promptVersion)
+	if err != nil {
+		return fmt.Errorf("unit store: upsert manual semantics: %w", err)
+	}
+	return nil
+}
+
+// GetOutlinePath returns the outline chain root→leaf joined with " / " plus
+// the leaf's node_type, for the semantics-curation view（KU 所属目录展示，
+// docs/impl/v1/semantics-curation.md）. It walks parent_id upward with a
+// depth cap to survive accidental cycles.
+func (s *Store) GetOutlinePath(outlineID string) (string, string, error) {
+	var titles []string
+	var leafNodeType string
+	id := outlineID
+	for depth := 0; id != "" && depth < 32; depth++ {
+		var title, nodeType string
+		var parentID sql.NullString
+		err := s.db.QueryRow(`SELECT title, node_type, parent_id FROM source_outlines WHERE outline_id = ?`, id).
+			Scan(&title, &nodeType, &parentID)
+		if err != nil {
+			return "", "", fmt.Errorf("unit store: get outline path: %w", err)
+		}
+		if depth == 0 {
+			leafNodeType = nodeType
+		}
+		titles = append([]string{title}, titles...)
+		if !parentID.Valid {
+			break
+		}
+		id = parentID.String
+	}
+	return strings.Join(titles, " / "), leafNodeType, nil
 }

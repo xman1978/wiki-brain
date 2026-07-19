@@ -47,14 +47,13 @@ type rerankSemanticExtractionResult struct {
 // or mismatched, instead of only knowing the count was short, so a retry
 // only needs to cover the units that still need it.
 type rerankSemanticExtraction struct {
-	Index        int      `json:"index"`
-	ContentHead  string   `json:"content_head"`
-	SourceTheme  string   `json:"source_theme"`
-	ContentTheme string   `json:"content_theme"`
-	Intent       string   `json:"intent"`
-	Object       string   `json:"object"`
-	Scope        string   `json:"scope"`
-	KeyFacts     []string `json:"key_facts"`
+	Index        int    `json:"index"`
+	ContentHead  string `json:"content_head"`
+	SourceTheme  string `json:"source_theme"`
+	ContentTheme string `json:"content_theme"`
+	Intent       string `json:"intent"`
+	Object       string `json:"object"`
+	Scope        string `json:"scope"`
 }
 
 // extractRerankSemantics extracts rerank semantics for every candidate in
@@ -279,7 +278,6 @@ func (s *Service) extractRerankSemanticBatchOnce(ctx context.Context, sourceTitl
 			Intent:        extracted.Intent,
 			Object:        extracted.Object,
 			Scope:         extracted.Scope,
-			KeyFacts:      extracted.KeyFacts,
 			PromptVersion: rerank.ExtractPromptVersion,
 		}
 	}
@@ -309,7 +307,6 @@ func matchSingleCandidateResult(candidate rerankSemanticCandidate, extracted rer
 			Intent:        extracted.Intent,
 			Object:        extracted.Object,
 			Scope:         extracted.Scope,
-			KeyFacts:      extracted.KeyFacts,
 			PromptVersion: rerank.ExtractPromptVersion,
 		},
 	}

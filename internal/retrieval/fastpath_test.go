@@ -85,6 +85,41 @@ func TestRetrieve_FastPath_KPNExpansion(t *testing.T) {
 	}
 }
 
+// TestRetrieve_FastPath_MultipleMatches_FallsBackToSlowPath covers the
+// ambiguity guard added after real-question testing showed the (looser,
+// substring-based) subject core match makes >1 link matching the same query
+// more likely: activation scores are all 1.0 with nothing to rank multiple
+// candidates by, so bundling every matched point's KP as "direct" evidence
+// risks smuggling a wrong-but-plausible fact in alongside the right one.
+// >1 distinct match must fall back to the slow path entirely (which knows
+// how to synthesize across multiple KPs properly) rather than trusting the
+// fast path's un-differentiated evidence — while still recording every
+// matched link in activation_hits so Trace grades them normally.
+func TestRetrieve_FastPath_MultipleMatches_FallsBackToSlowPath(t *testing.T) {
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
+
+	question := "什么是线性方程"
+	qTerms := text.Terms(text.Normalize(question))
+	seedVerifiedLink(t, activationSvc, qTerms, "p1")
+	seedVerifiedLink(t, activationSvc, qTerms, "p2")
+
+	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
+
+	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if es.PathType != PathTypeFull {
+		t.Errorf("path_type = %q, want full (ambiguous activation match must not use the fast path)", es.PathType)
+	}
+	if len(es.ActivationHits) != 2 {
+		t.Fatalf("expected both ambiguous matches recorded in activation_hits, got %+v", es.ActivationHits)
+	}
+}
+
 func TestRetrieve_FastPathDisabled_StillRecordsHitsButUsesSlowPath(t *testing.T) {
 	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
 	svc.cfg.Retrieval.FastPath = false
@@ -172,6 +207,84 @@ func TestRetrieveSlowPathWithProgress_BypassesFastPath(t *testing.T) {
 	}
 	if es.PathType != PathTypeFull {
 		t.Errorf("path_type = %q, want full", es.PathType)
+	}
+}
+
+func TestRetrieve_FastPathVerify_Sufficient_KeepsFastPath(t *testing.T) {
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
+	svc.cfg.Retrieval.FastPathVerify = true
+
+	question := "什么是线性方程"
+	qTerms := text.Terms(text.Normalize(question))
+	seedVerifiedLink(t, activationSvc, qTerms, "p1")
+
+	fake.SetResponse("fast_verify.md", llm.FakeResponse{Output: `{"sufficient": true, "reason": "证据已给出完整定义"}`})
+
+	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if es.PathType != PathTypeFast {
+		t.Fatalf("path_type = %q, want fast (verify judged sufficient)", es.PathType)
+	}
+}
+
+func TestRetrieve_FastPathVerify_Insufficient_FallsBackToSlowPath(t *testing.T) {
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
+	svc.cfg.Retrieval.FastPathVerify = true
+
+	question := "什么是线性方程"
+	qTerms := text.Terms(text.Normalize(question))
+	seedVerifiedLink(t, activationSvc, qTerms, "p1")
+
+	fake.SetResponse("fast_verify.md", llm.FakeResponse{Output: `{"sufficient": false, "reason": "证据未覆盖问题的完整诉求"}`})
+	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
+
+	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if es.PathType != PathTypeFull {
+		t.Errorf("path_type = %q, want full (verify judged insufficient)", es.PathType)
+	}
+	if len(es.ActivationHits) != 1 || es.ActivationHits[0].PointID != "p1" {
+		t.Fatalf("expected original activation_hits preserved on fallback ES, got %+v", es.ActivationHits)
+	}
+}
+
+// TestRetrieve_FastPathVerify_MalformedResponse_FallsBackToSlowPath covers V3
+// from the acceptance test plan's P3 axis 2 (docs/impl/v1/retrieval.md 步骤
+// 2a "保守回落"): a real LLM occasionally times out or returns unparseable
+// output, and this can't be forced deterministically against a real model in
+// the black-box acceptance suite, so it's covered here with FakeClient
+// instead. Any verify-call failure — not just an explicit sufficient=false —
+// must fall back rather than risk answering from unverified evidence.
+func TestRetrieve_FastPathVerify_MalformedResponse_FallsBackToSlowPath(t *testing.T) {
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
+	svc.cfg.Retrieval.FastPathVerify = true
+
+	question := "什么是线性方程"
+	qTerms := text.Terms(text.Normalize(question))
+	seedVerifiedLink(t, activationSvc, qTerms, "p1")
+
+	fake.SetResponse("fast_verify.md", llm.FakeResponse{Output: `not valid json`})
+	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
+
+	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if es.PathType != PathTypeFull {
+		t.Errorf("path_type = %q, want full (malformed verify response must fall back, not error out)", es.PathType)
+	}
+	if len(es.ActivationHits) != 1 || es.ActivationHits[0].PointID != "p1" {
+		t.Fatalf("expected original activation_hits preserved on fallback ES, got %+v", es.ActivationHits)
 	}
 }
 
