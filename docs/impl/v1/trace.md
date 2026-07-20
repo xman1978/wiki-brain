@@ -86,6 +86,26 @@ confident / partial / gap 分级规则、question_hash / question_terms 归一�
 
 片段级证据的影响：证据挖掘后 citations 引用的是片段级 fact_id，但每个片段仍绑定 point_id（继承所属 KU 证据的 point_id，见 evidence.md），因此 `direct_point_ids` 的计算方式不变，精度自然提升——只有片段真正被引用的 KP 才计入。
 
+**约束一致性判定（2026-07-21 新增）**：confident 分级前对每个被引用的直接证据 KP 追加一道确定性守门（不调用 LLM）。背景：问题约束指向的实体（如"神通数据库"）与证据来源（如《达梦数据库优化》）不同的问答仍可能被 rerank 判 direct 并被回答引用，若照常判 confident，学习信号会把跨实体的错误命中固化成 ActivationLink 条件（实测案例：神通问题的 constraint 混入达梦 KP 链接的白名单）。规则：
+
+```text
+适用条件：quality==confident 且 path_type != wiki 且 EvidenceSet.Constraint 非空；
+问题侧：constraint 按 ，,、;； 拆分为独立约束项，每项 TermSet 分词；
+证据侧：该 KP 所属 KU 的 unit_rerank_semantics
+    （source_theme + content_theme + object + scope）合并 TermSet；
+    语义行缺失 → 该 KP 跳过判定（无依据不误杀）；
+冲突判定（单项 vs 单 KP）：约束项与证据词集"有共享词且有多出词"→ 冲突
+    （同维度不同实体，如 神通数据库 vs 达梦语义：共享"数据库"、多出"神通"）；
+    无共享词 → 正交约束（如 生产环境 / Windows环境），不冲突；
+    完全被包含 → 一致，不冲突；
+任一约束项与该 KP 冲突 → 该 KP 从 direct_point_ids 剔除；
+剔除后 direct_point_ids 为空 → 降级 partial（不产生 confident 共现、
+    不产生 activation_gap；命中该 KP 的 activation hit 自然落入
+    activation_failure/not_cited，对污染链接形成降权信号）。
+```
+
+该判定只影响学习信号（分级与共现），不改变回答本身；"库里没有对应实体的资料"由此正确表现为无 confident 信号，而不是固化错误记忆。
+
 `knowledge_gap` 事件 payload 的 `reason` 判定（quality==gap 时，写入事件前）：
 
 ```text

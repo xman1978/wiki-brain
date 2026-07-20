@@ -83,6 +83,33 @@ func TestHandler_Confirm_InvalidCandidate_BadRequest(t *testing.T) {
 	}
 }
 
+func TestHandler_ListConcepts_FiltersByDomainAndExcludesMerged(t *testing.T) {
+	h, _, db := setupHandler(t)
+	seedDomain(t, db, "d2")
+	seedConcept(t, db, "c1", "d1", sql.NullString{})
+	seedConcept(t, db, "c2", "d2", sql.NullString{})
+	seedConcept(t, db, "c3-merged", "d1", sql.NullString{String: "c1", Valid: true})
+
+	req := httptest.NewRequest(http.MethodGet, "/concepts?domain_id=d1", nil)
+	rec := httptest.NewRecorder()
+	h.listConcepts(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var items []struct {
+		ConceptID string `json:"concept_id"`
+		Name      string `json:"name"`
+		DomainID  string `json:"domain_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ConceptID != "c1" {
+		t.Fatalf("expected only c1 (d1, unmerged), got %+v", items)
+	}
+}
+
 func TestHandler_Reject(t *testing.T) {
 	h, store, db := setupHandler(t)
 	seedSource(t, db, "s1", "d1")

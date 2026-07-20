@@ -3,6 +3,7 @@ package source
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -365,6 +366,49 @@ func TestSwapShadowIntoTarget_ReparentsAndCopiesMetadata(t *testing.T) {
 	}
 }
 
+// TestCompleteShadowSwap_EmptyShadowLeavesTargetUntouched guards against a
+// reupload with zero extracted units (e.g. an empty or unparseable file)
+// silently wiping the target's real content: CompleteShadowSwap must refuse
+// the swap and return ErrShadowEmpty instead of superseding the target's KUs.
+func TestCompleteShadowSwap_EmptyShadowLeavesTargetUntouched(t *testing.T) {
+	svc, _ := setupTestService(t)
+	lc := &fakeLifecycleSetter{}
+	svc.SetLifecycleSetter(lc)
+	ctx := context.Background()
+
+	svc.store.Create(&Source{
+		SourceID: "target-2", Title: "T", Format: "markdown", FileName: "old.md",
+		OriginalPath: "o/target-2.md", MarkdownPath: "m/target-2.md", Status: "completed",
+	})
+	insertUnitForSource(t, svc, "target-2", "target-2-u1")
+
+	svc.store.Create(&Source{
+		SourceID: "shadow-2", Title: "T", Format: "markdown", FileName: "new.md",
+		OriginalPath: "o/shadow-2.md", MarkdownPath: "m/shadow-2.md",
+		Status: "completed", ShadowOf: sql.NullString{String: "target-2", Valid: true},
+	})
+	// Deliberately no units inserted for shadow-2 — simulates extraction
+	// producing zero KUs.
+
+	if err := svc.CompleteShadowSwap(ctx, "shadow-2"); !errors.Is(err, ErrShadowEmpty) {
+		t.Fatalf("CompleteShadowSwap error = %v, want ErrShadowEmpty", err)
+	}
+
+	if len(lc.calls) != 0 {
+		t.Errorf("target's units must not be superseded, got lifecycle calls: %v", lc.calls)
+	}
+	if _, err := svc.store.GetByID("shadow-2"); err != nil {
+		t.Errorf("shadow row should still exist (not swapped/deleted): %v", err)
+	}
+	var stillTarget string
+	if err := svc.store.db.QueryRow(`SELECT source_id FROM knowledge_units WHERE unit_id = 'target-2-u1'`).Scan(&stillTarget); err != nil {
+		t.Fatalf("query target unit: %v", err)
+	}
+	if stillTarget != "target-2" {
+		t.Errorf("target's unit source_id = %q, want unchanged target-2", stillTarget)
+	}
+}
+
 // TestCompleteShadowSwap_RecordsVersionSnapshot exercises the full
 // CompleteShadowSwap (unlike the store-level test above) so
 // archiveAndSwapFiles actually moves files on disk, verifying: target's
@@ -399,6 +443,7 @@ func TestCompleteShadowSwap_RecordsVersionSnapshot(t *testing.T) {
 		OriginalPath: "data/sources/original/shadow-1.md", MarkdownPath: "data/sources/markdown/shadow-1.md",
 		Status: "completed", ShadowOf: sql.NullString{String: "target-1", Valid: true},
 	})
+	insertUnitForSource(t, svc, "shadow-1", "shadow-u1")
 
 	if err := svc.CompleteShadowSwap(ctx, "shadow-1"); err != nil {
 		t.Fatalf("CompleteShadowSwap: %v", err)

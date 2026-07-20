@@ -26,14 +26,76 @@ type Config struct {
 	EventWindowDays   int
 }
 
+// KPNRematchNotifier lets the KPN cross-Source matching pipeline
+// (internal/unit) re-run matching for a kind=add candidate's point_ids
+// immediately after confirm gives them a concept_id — before confirm they
+// may have sat with zero cross-Source relations (docs/impl/v1/kpn.md 步骤 6).
+// SetKPNRematchNotifier no-ops when unset.
+type KPNRematchNotifier interface {
+	RematchPoints(conceptID string, pointIDs []string)
+}
+
 type Service struct {
-	store   *Store
-	cfg     Config
-	wikiSvc *wiki.Service // optional: nil-safe, needs_recompile flagging no-ops without it
+	store       *Store
+	cfg         Config
+	wikiSvc     *wiki.Service      // optional: nil-safe, needs_recompile flagging no-ops without it
+	kpnNotifier KPNRematchNotifier // optional: nil-safe, rematch no-ops without it
 }
 
 func NewService(store *Store, cfg Config, wikiSvc *wiki.Service) *Service {
 	return &Service{store: store, cfg: cfg, wikiSvc: wikiSvc}
+}
+
+func (s *Service) SetKPNRematchNotifier(n KPNRematchNotifier) {
+	s.kpnNotifier = n
+}
+
+// ProposeAddCandidate is KPN cross-Source matching's entry point
+// (docs/impl/v1/kpn.md 步骤 3) for concept_id-empty KPs: merges into an
+// existing pending content_driven candidate for the same domain when one
+// exists (matched by evidence.origin, so it never merges into a
+// usage_driven candidate that happens to share a domain), otherwise creates
+// a new one. Unlike scanAddClusters this has no event/question/overlap
+// threshold — KPN calls it once per domain group per import and it always
+// fires, so a document's orphan KPs never sit unprocessed indefinitely.
+func (s *Service) ProposeAddCandidate(domainID, suggestedName, suggestedDescription string, pointIDs []string, sourceID string) (candidateID string, err error) {
+	if domainID == "" || len(pointIDs) == 0 {
+		return "", fmt.Errorf("concept: propose add candidate requires domain_id and point_ids")
+	}
+
+	pending, err := s.store.ListCandidatesByKindStatus(KindAdd, StatusPendingConfirm)
+	if err != nil {
+		return "", err
+	}
+	for _, p := range pending {
+		if !p.DomainID.Valid || p.DomainID.String != domainID {
+			continue
+		}
+		var existing ContentDrivenEvidence
+		if err := json.Unmarshal([]byte(p.Evidence), &existing); err != nil || existing.Origin != "content_driven" {
+			continue
+		}
+		evidence := ContentDrivenEvidence{
+			Origin:      "content_driven",
+			SourceIDs:   dedupStrings(append(existing.SourceIDs, sourceID)),
+			Description: existing.Description, // keep original, don't drift on each new batch
+		}
+		if evidence.Description == "" {
+			evidence.Description = suggestedDescription
+		}
+		if err := s.store.MergeAddCandidatePoints(p.CandidateID, pointIDs, evidence); err != nil {
+			return "", err
+		}
+		return p.CandidateID, nil
+	}
+
+	evidence := ContentDrivenEvidence{Origin: "content_driven", SourceIDs: []string{sourceID}, Description: suggestedDescription}
+	reason := fmt.Sprintf("跨 Source KPN 匹配发现无概念归属的 KP 聚类：建议概念「%s」", suggestedName)
+	candidateID, err = s.store.InsertAddCandidate(sql.NullString{String: domainID, Valid: true}, suggestedName, pointIDs, nil, evidence, reason)
+	if err != nil {
+		return "", err
+	}
+	return candidateID, nil
 }
 
 // Scan runs the two clustering subtasks plus idle expiry
@@ -487,6 +549,33 @@ func (s *Service) Confirm(candidateID string, addReq *ConfirmAddRequest, mergeRe
 }
 
 func (s *Service) confirmAdd(c *CandidateRow, req *ConfirmAddRequest) (*ConfirmResult, error) {
+	var pointIDs []string
+	if err := json.Unmarshal([]byte(c.PointIDs), &pointIDs); err != nil {
+		return nil, fmt.Errorf("concept: confirm add: unmarshal point_ids: %w", err)
+	}
+
+	// "归入已有概念" (docs/impl/v1/kpn.md 步骤 6): skip creating a concept,
+	// assign point_ids to req.ConceptID directly. Mutually exclusive with
+	// the new-concept fields below.
+	if req != nil && req.ConceptID != "" {
+		active, err := s.store.ConceptActive(req.ConceptID)
+		if err != nil {
+			return nil, err
+		}
+		if !active {
+			return nil, fmt.Errorf("concept: confirm add: concept_id %q does not exist or has been merged away", req.ConceptID)
+		}
+		reason := fmt.Sprintf("人工确认归入已有概念：%s", req.ConceptID)
+		migrated, err := s.store.ConfirmAssign(c.CandidateID, req.ConceptID, pointIDs, reason)
+		if err != nil {
+			return nil, err
+		}
+		if s.kpnNotifier != nil {
+			s.kpnNotifier.RematchPoints(req.ConceptID, pointIDs)
+		}
+		return &ConfirmResult{Candidate: *c, ConceptID: req.ConceptID, MigratedKUs: migrated}, nil
+	}
+
 	name := c.SuggestedName.String
 	domainID := ""
 	if c.DomainID.Valid {
@@ -507,16 +596,14 @@ func (s *Service) confirmAdd(c *CandidateRow, req *ConfirmAddRequest) (*ConfirmR
 		return nil, fmt.Errorf("concept: confirm add requires domain_id (candidate has none)")
 	}
 
-	var pointIDs []string
-	if err := json.Unmarshal([]byte(c.PointIDs), &pointIDs); err != nil {
-		return nil, fmt.Errorf("concept: confirm add: unmarshal point_ids: %w", err)
-	}
-
 	conceptID := uuid.New().String()
 	reason := fmt.Sprintf("人工确认新增概念：%s（领域 %s）", name, domainID)
 	migrated, err := s.store.ConfirmAdd(c.CandidateID, conceptID, domainID, name, "", pointIDs, reason)
 	if err != nil {
 		return nil, err
+	}
+	if s.kpnNotifier != nil {
+		s.kpnNotifier.RematchPoints(conceptID, pointIDs)
 	}
 
 	return &ConfirmResult{Candidate: *c, ConceptID: conceptID, MigratedKUs: migrated}, nil
@@ -603,6 +690,13 @@ func (s *Service) ListCandidates(status string) ([]CandidateRow, error) {
 
 func (s *Service) GetCandidate(candidateID string) (*CandidateRow, error) {
 	return s.store.GetCandidate(candidateID)
+}
+
+// ListActiveConcepts is GET /concepts's data source — populates the confirm
+// UI's domain/concept pickers (docs/impl/v1/kpn.md 步骤 6), not consumed by
+// any matching or confirm logic.
+func (s *Service) ListActiveConcepts(domainID string) ([]ConceptInfo, error) {
+	return s.store.ListActiveConcepts(domainID)
 }
 
 // ListCandidateViews is GET /concepts/candidates and the Study report's

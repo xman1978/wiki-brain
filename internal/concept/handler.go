@@ -21,6 +21,29 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /concepts/candidates", h.list)
 	mux.HandleFunc("POST /concepts/candidates/{id}/confirm", h.confirm)
 	mux.HandleFunc("POST /concepts/candidates/{id}/reject", h.reject)
+	mux.HandleFunc("GET /concepts", h.listConcepts)
+}
+
+// listConcepts implements GET /concepts?domain_id=: populates the concept
+// candidate confirm UI's "select an existing concept" picker
+// (docs/impl/v1/kpn.md 步骤 6). Not used by any matching/confirm logic.
+func (h *Handler) listConcepts(w http.ResponseWriter, r *http.Request) {
+	domainID := r.URL.Query().Get("domain_id")
+	concepts, err := h.svc.ListActiveConcepts(domainID)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	type item struct {
+		ConceptID string `json:"concept_id"`
+		Name      string `json:"name"`
+		DomainID  string `json:"domain_id"`
+	}
+	items := make([]item, len(concepts))
+	for i, c := range concepts {
+		items[i] = item{ConceptID: c.ConceptID, Name: c.Name, DomainID: c.DomainID}
+	}
+	foundation.WriteJSON(w, http.StatusOK, items)
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +66,7 @@ type confirmRequestBody struct {
 	SuggestedName string `json:"suggested_name"`
 	DomainID      string `json:"domain_id"`
 	Target        string `json:"target"`
+	ConceptID     string `json:"concept_id"`
 }
 
 type confirmResp struct {
@@ -65,7 +89,7 @@ func (h *Handler) confirm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.svc.Confirm(id,
-		&ConfirmAddRequest{SuggestedName: body.SuggestedName, DomainID: body.DomainID},
+		&ConfirmAddRequest{SuggestedName: body.SuggestedName, DomainID: body.DomainID, ConceptID: body.ConceptID},
 		&ConfirmMergeRequest{Target: body.Target})
 	if err != nil {
 		foundation.WriteError(w, http.StatusBadRequest, err.Error())

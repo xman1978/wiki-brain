@@ -47,6 +47,17 @@ type AddEvidence struct {
 	Overlap       float64 `json:"overlap"`
 }
 
+// ContentDrivenEvidence is the evidence JSON for kind=add candidates
+// produced by KPN's cross-Source matching (docs/impl/v1/kpn.md 步骤 3),
+// as opposed to this module's own usage-driven AddEvidence — Origin is
+// always "content_driven" and lets the UI/report distinguish the two
+// sources sharing the same concept_candidates table.
+type ContentDrivenEvidence struct {
+	Origin      string   `json:"origin"`
+	SourceIDs   []string `json:"source_ids"`
+	Description string   `json:"description"`
+}
+
 // MergeEvidence is the evidence JSON for kind=merge candidates. OverlapRatio
 // is a trace-occurrence overlap coefficient — cooccur_count / |traces citing
 // A or B| — not a KP-set Jaccard: a KP belongs to exactly one concept via
@@ -121,6 +132,11 @@ func toView(c CandidateRow) CandidateView {
 type ConfirmAddRequest struct {
 	SuggestedName string `json:"suggested_name"`
 	DomainID      string `json:"domain_id"`
+	// ConceptID, when set, skips creating a new concept and instead assigns
+	// the candidate's point_ids to this already-existing concept_id
+	// (docs/impl/v1/kpn.md 步骤 6 "归入已有概念") — mutually exclusive with
+	// SuggestedName/DomainID, which are ignored when ConceptID is set.
+	ConceptID string `json:"concept_id"`
 }
 
 // ConfirmMergeRequest is POST /concepts/candidates/:id/confirm's body for

@@ -35,7 +35,7 @@ CREATE TABLE activation_links (
     -- 都会刷新，不是创建时定死
     scene             TEXT NOT NULL DEFAULT '',
     goal              TEXT NOT NULL DEFAULT '',
-    -- V1 不写入，预留 V2 认知路由上下文字段
+    -- V1 不写入，预留 V2 认知化字段（触发条件 / 认知条件，见 docs/impl/v2/readme.md）
     point_id          TEXT NOT NULL REFERENCES knowledge_points(point_id),
     status            TEXT NOT NULL DEFAULT 'candidate',
     -- candidate / verified / weakened / deprecated（conflicted 预留枚举，V1 不产生）

@@ -19,6 +19,45 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
+// ConceptInfo is a concepts row's display-relevant subset — the confirm
+// UI's "归入已有概念" picker (docs/impl/v1/kpn.md 步骤 6) needs id/name/domain
+// only, not the full concept row.
+type ConceptInfo struct {
+	ConceptID string
+	Name      string
+	DomainID  string
+}
+
+// ListActiveConcepts returns concepts with merged_into IS NULL (still a
+// valid entry point), optionally filtered to one domain. Used by the
+// concept candidate confirm UI to populate "select an existing concept"
+// pickers, not by any matching/confirm logic itself.
+func (s *Store) ListActiveConcepts(domainID string) ([]ConceptInfo, error) {
+	query := `SELECT concept_id, name, domain_id FROM concepts WHERE merged_into IS NULL`
+	var args []interface{}
+	if domainID != "" {
+		query += ` AND domain_id = ?`
+		args = append(args, domainID)
+	}
+	query += ` ORDER BY name ASC`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("concept store: list active concepts: %w", err)
+	}
+	defer rows.Close()
+
+	var results []ConceptInfo
+	for rows.Next() {
+		var c ConceptInfo
+		if err := rows.Scan(&c.ConceptID, &c.Name, &c.DomainID); err != nil {
+			return nil, fmt.Errorf("concept store: scan concept: %w", err)
+		}
+		results = append(results, c)
+	}
+	return results, rows.Err()
+}
+
 func placeholders(n int) string {
 	ph := make([]string, n)
 	for i := range ph {
@@ -192,7 +231,7 @@ func (s *Store) GetCandidate(candidateID string) (*CandidateRow, error) {
 // InsertAddCandidate creates a new kind=add row plus its pending_confirm
 // concept_add_candidate learning_result (docs/impl/v1/concept-evolution.md
 // 步骤 2).
-func (s *Store) InsertAddCandidate(domainID sql.NullString, suggestedName string, pointIDs, eventIDs []string, evidence AddEvidence, reason string) (string, error) {
+func (s *Store) InsertAddCandidate(domainID sql.NullString, suggestedName string, pointIDs, eventIDs []string, evidence interface{}, reason string) (string, error) {
 	candidateID := uuid.New().String()
 	now := time.Now().UTC()
 
@@ -256,6 +295,95 @@ func (s *Store) UpdateCandidateSignal(candidateID string, evidence interface{}, 
 		return fmt.Errorf("concept store: update candidate signal: %w", err)
 	}
 	return nil
+}
+
+// MergeAddCandidatePoints appends morePointIDs (deduped) into an existing
+// pending_confirm kind=add candidate's point_ids and refreshes its
+// evidence/last_signal_at/updated_at, without touching suggested_name
+// (docs/impl/v1/kpn.md 步骤 3: "point_ids 并入该候选...不重复建行", extending
+// the same no-duplicate-row principle from usage-driven candidates to
+// content-driven ones).
+func (s *Store) MergeAddCandidatePoints(candidateID string, morePointIDs []string, evidence interface{}) error {
+	existing, err := s.GetCandidate(candidateID)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return fmt.Errorf("concept store: merge add candidate points: candidate not found: %s", candidateID)
+	}
+
+	var pointIDs []string
+	if err := json.Unmarshal([]byte(existing.PointIDs), &pointIDs); err != nil {
+		pointIDs = nil
+	}
+	seen := make(map[string]bool, len(pointIDs))
+	for _, id := range pointIDs {
+		seen[id] = true
+	}
+	for _, id := range morePointIDs {
+		if !seen[id] {
+			pointIDs = append(pointIDs, id)
+			seen[id] = true
+		}
+	}
+
+	_, err = s.db.Exec(`UPDATE concept_candidates SET point_ids = ?, evidence = ?, last_signal_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		WHERE candidate_id = ?`, marshal(pointIDs), marshal(evidence), candidateID)
+	if err != nil {
+		return fmt.Errorf("concept store: merge add candidate points: %w", err)
+	}
+	return nil
+}
+
+// ConceptActive reports whether conceptID exists and has not been merged
+// away (merged_into IS NULL) — the validity check for "归入已有概念"
+// (docs/impl/v1/kpn.md 步骤 6).
+func (s *Store) ConceptActive(conceptID string) (bool, error) {
+	var mergedInto sql.NullString
+	err := s.db.QueryRow(`SELECT merged_into FROM concepts WHERE concept_id = ?`, conceptID).Scan(&mergedInto)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("concept store: concept active: %w", err)
+	}
+	return !mergedInto.Valid, nil
+}
+
+// ConfirmAssign executes a kind=add candidate by assigning its point_ids to
+// an already-existing concept instead of creating a new one
+// (docs/impl/v1/kpn.md 步骤 6 "归入已有概念") — for content_driven candidates
+// that are really a unit_concept_match miss rather than a genuine taxonomy
+// gap, avoiding unnecessary concept-table growth.
+func (s *Store) ConfirmAssign(candidateID, conceptID string, pointIDs []string, reason string) (migratedKUs int, err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("concept store: confirm assign: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	if len(pointIDs) > 0 {
+		q := fmt.Sprintf(`UPDATE knowledge_units SET concept_id = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE concept_id IS NULL AND unit_id IN (
+				SELECT unit_id FROM knowledge_points WHERE point_id IN (%s)
+			)`, placeholders(len(pointIDs)))
+		args := append([]interface{}{conceptID}, toArgs(pointIDs)...)
+		res, err := tx.Exec(q, args...)
+		if err != nil {
+			return 0, fmt.Errorf("concept store: confirm assign: migrate units: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		migratedKUs = int(n)
+	}
+
+	if err := resolveCandidate(tx, candidateID, StatusApplied, reason); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("concept store: confirm assign: commit: %w", err)
+	}
+	return migratedKUs, nil
 }
 
 // InsertMergeCandidate creates a new kind=merge row plus its pending_confirm

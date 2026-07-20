@@ -32,7 +32,7 @@ import v1_common as c
 
 SCRATCH_DIR = Path("/private/tmp/claude-501/-Users-jxu-Code-wiki-brain/fa63b57a-4195-46fb-855c-de7ab5a9d99b/scratchpad")
 
-RELATED_TRIGGER_TITLES = ["项目考核与激励制度", "Oracle 19c RAC 集群安装部署维护环境", "达梦数据库优化"]
+RELATED_TRIGGER_TITLES = ["项目考核与激励制度", "Oracle 19c RAC 集群安装部署维护", "达梦数据库优化"]
 
 CONTRADICTS_FIXTURES = [
     {

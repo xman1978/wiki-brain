@@ -51,7 +51,7 @@ weakened   被降权链接，不作为首选激活路径
 deprecated 已淘汰链接，不再使用
 ```
 
-`conflicted` 状态依赖深想路径的 conflict 槽位处理，推迟到 V2；V1 预留状态枚举值。
+`conflicted` 状态依赖深想路径的 conflict 槽位处理，推迟到 V3（认知系统版，见 docs/impl/v3/readme.md）；V1 预留状态枚举值。
 
 **状态迁移规则**（由 Study 执行，阈值可配置）：
 
@@ -95,7 +95,7 @@ Wiki：    稳定 KP 簇                      -> Wiki 编译候选（见能力 8
 
 **Learning Result 与 Learning Reason**：每个学习动作落库为 Learning Result，附 Learning Reason，说明触发来源（哪些 Learning Event）、影响对象、动作类型、依据和适用边界，支持事后追踪与回滚（`study.md` 第 9 节）。
 
-**人工监督**：candidate 的创建与降权、淘汰全自动执行；**candidate → verified 的晋升在 V1 默认需人工在 Page 上确认**（可配置为自动），因为 verified 直接影响正式召回，V1 需要先建立对信号质量的信心。这是 V1 的谨慎选择，不是设计约束；V2 视数据表现转为全自动。
+**人工监督**：candidate 的创建与降权、淘汰全自动执行；**candidate → verified 的晋升在 V1 默认需人工在 Page 上确认**（可配置为自动），因为 verified 直接影响正式召回，V1 需要先建立对信号质量的信心。这是 V1 的谨慎选择，不是设计约束；V3 视数据表现转为全自动。
 
 **运行方式**：沿用 MVP 的 `time.Ticker` 定时扫描，不走异步队列；报告继续生成，内容扩展为「本周期执行了哪些学习动作及原因」。
 
@@ -134,7 +134,7 @@ Rerank 保留的每个 KU
 
 关键收益与 V1 主线直接相关：**学习信号精度**。activation_success / failure 的判定依据从"这个 KU 被引用"细化为"KU 中哪个片段被采用"，ActivationLink 的强化与降权建立在更准的事实上；"KU 命中但挖不出片段"是一类新信号（主题相关、内容缺失），进入知识缺口清单。
 
-无知识加工模式时按问题摘选；按槽位定向摘选依赖知识加工模式，属 V2。
+无知识加工模式时按问题摘选；按槽位定向摘选依赖知识加工模式的在线执行，属 V3。
 
 ### 6. 跨 Source KPN
 
@@ -142,7 +142,7 @@ MVP 的 KPN 关系在单 Source 内生成。V1 扩展：
 
 - 新 Source 完成 Unit 提取后，将其 KP 与既有同 Concept / 同 Domain 下的 KP 做批量匹配（LLM 批处理，复用 concept match 的批量模式）；
 - 语义等价的 KP 建立跨 Source 关系（related / contradicts，与 MVP 内部关系类型一致，见 unit.md 设计决策），不合并删除原 KP——KP 保留各自来源以维持可追溯；
-- contradicts 关系在 V1 只标记、进入学习报告提示，不做冲突消解（冲突检测是 V2 能力）。
+- contradicts 关系在 V1 只标记、进入学习报告提示，不做冲突消解（冲突检测是 V3 能力）。
 
 ### 7. 生命周期完整版
 
@@ -175,7 +175,7 @@ candidate / needs_verification / conflicted / historical / retracted 均已从�
 - **重编译**：底层 KU/KP 状态变化或新的 wiki_update_candidate 信号时，Study 标记页面「待重编译」，人工确认后执行；每次编译记录触发来源，可追溯到 Learning Event；
 - **检索接入**：已发布 Wiki 页面建立独立 Bleve 索引，作为快路径的直接命中层——同主题问题可直接引用 Wiki 结论并附证据回链（`study.md` 2.5 节所述正向反馈）。
 
-方法页 / 经验页 / 问题页 / 决策页、认知视角差异化页面，推迟到 V2。
+方法页 / 经验页 / 问题页 / 决策页、认知视角差异化页面，推迟到 V3。
 
 ### 9. 用户反馈通道
 
@@ -257,26 +257,35 @@ Bleve
 
 ---
 
-## V1 不做什么（推迟到 V2）
+## V1 不做什么（推迟到 V2 / V3）
+
+后续版本划分：V2 为认知材料构建版（把 V1 成果编译为结构化认知材料，见 docs/impl/v2/readme.md），V3 为认知系统版（在线推理与学习闭环完整化，见 docs/impl/v3/readme.md）。
 
 ```text
+【推迟到 V2：材料与 Schema】
+Claim 层（Wiki 编译双产物）与认知包组装
+KPP 模式库定义与槽位 Schema、RP 输出契约（均只定义不执行）
+认知视角对象与 ActivationLink 多链接化 / 认知化字段
+  （perspective 差异化的 ActivationLink 与防固化要素补齐）
+
+【推迟到 V3：在线执行】
 认知路由三路径（找 / 浅想 / 深想）的完整实现与升级信号
   （V1 只有快/慢路径分叉，不是完整路由；快≈找+浅想，慢≈深想的前身）
 Working Model 临时认知模型（三层结构、槽位状态机、处理上限）
-知识加工模式（KPP）与推理模式（RP）：模式识别、证据槽位、槽位驱动检索扩展
-  （V1 证据挖掘按问题摘选；按槽位定向摘选依赖知识加工模式，属 V2）
+KPP / RP 在线执行：模式识别、槽位驱动检索扩展
+  （V1 证据挖掘按问题摘选；按槽位定向摘选依赖知识加工模式执行，属 V3）
 实践路径（Practice Path）提炼与深想快路径调用
 insufficient 槽位的外部补证（外部证据查找）
 conflict 槽位处理与条件化结论（基于 contradicts 关系的正反证据整理，
   不引入 conflicted 生命周期状态——详见 `lifecycle.md` 第 2 节，
   3 状态已是完整设计，candidate / needs_verification /
   conflicted / historical / retracted 均无独立必要场景，不再规划引入）
-认知视角（perspective 差异化的 ActivationLink 与 Wiki）
+视角在线推断与视角化学习累积、视角化 Wiki 编译
 概念拆分与合并信号的在线产生点 ambiguous_match
   （V1 概念演化只做新增 / 合并，合并信号用离线共同采用统计，
   见 concept-evolution.md「与设计文档的 V1 适配」）
 Domain 层面的新增与合并（门槛与影响面更大，机制同概念演化）
-Wiki 全部六种页面类型与视角化编译
+Wiki 方法 / 经验 / 问题 / 决策页
 Agent 接入层（service / agent 架构对外开放）
 ```
 
@@ -302,4 +311,4 @@ Wiki 初版：   至少一个稳定主题完成「候选 -> 确认 -> 编译 -> 
 反馈生效：    user_correction 能在报告和链接信号中观察到加速作用。
 ```
 
-如果上述标准成立，说明「使用信号 → 长期记忆 → 检索行为」的转化链路工程可行，可进入 V2 实现完整认知系统。
+如果上述标准成立，说明「使用信号 → 长期记忆 → 检索行为」的转化链路工程可行，可进入 V2（认知材料构建），再由 V3 实现完整认知系统。

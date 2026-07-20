@@ -938,6 +938,27 @@ func (s *Store) GetCrossSourcePointsByDomainID(domainID, excludeSourceID string)
 	return scanKnowledgePoints(rows)
 }
 
+// GetPointsByIDs returns lifecycle=current KPs among pointIDs — used by the
+// KPN rematch-after-concept-confirm hook (docs/impl/v1/kpn.md 步骤 6,
+// RematchPoints).
+func (s *Store) GetPointsByIDs(pointIDs []string) ([]KnowledgePoint, error) {
+	if len(pointIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pointIDs)), ",")
+	args := make([]any, len(pointIDs))
+	for i, id := range pointIDs {
+		args[i] = id
+	}
+	rows, err := s.db.Query(fmt.Sprintf(`SELECT point_id, unit_id, source_id, content, point_type, lifecycle, lifecycle_changed_at, created_at
+		FROM knowledge_points WHERE point_id IN (%s) AND lifecycle = 'current'`, placeholders), args...)
+	if err != nil {
+		return nil, fmt.Errorf("unit store: get points by ids: %w", err)
+	}
+	defer rows.Close()
+	return scanKnowledgePoints(rows)
+}
+
 func scanKnowledgePoints(rows *sql.Rows) ([]KnowledgePoint, error) {
 	var points []KnowledgePoint
 	for rows.Next() {

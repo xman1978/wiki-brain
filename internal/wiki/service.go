@@ -79,6 +79,7 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 		Status:         StatusDraft,
 		SourcePointIDs: marshalIDs(compiled.sourcePointIDs),
 		SourceUnitIDs:  marshalIDs(compiled.sourceUnitIDs),
+		SourceLinkIDs:  marshalIDs(compiled.sourceLinkIDs),
 		CompiledFrom:   marshalIDs(nonEmpty(req.ResultID)),
 		PromptVersion:  "v1",
 		ModelName:      "reasoning",
@@ -122,8 +123,8 @@ func (s *Service) Recompile(ctx context.Context, pageID, reason string, compiled
 	}
 
 	if err := s.store.ReplaceContent(pageID, compiled.title, compiled.content,
-		marshalIDs(compiled.sourcePointIDs), marshalIDs(compiled.sourceUnitIDs), marshalIDs(compiledFrom),
-		"v1", "reasoning"); err != nil {
+		marshalIDs(compiled.sourcePointIDs), marshalIDs(compiled.sourceUnitIDs), marshalIDs(compiled.sourceLinkIDs),
+		marshalIDs(compiledFrom), "v1", "reasoning"); err != nil {
 		return nil, err
 	}
 	if err := s.store.InsertRevision(&Revision{PageID: pageID, Content: compiled.content, Reason: reason}); err != nil {
@@ -145,6 +146,7 @@ type compiledContent struct {
 	content        string
 	sourcePointIDs []string
 	sourceUnitIDs  []string
+	sourceLinkIDs  []string
 }
 
 // compileContent implements docs/impl/v1/wiki.md 步骤 3: gather inputs, call
@@ -242,11 +244,16 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 		}
 
 		sourceUnitIDs := sourceUnitsForPoints(citedInContent, qualifying)
+		sourceLinkIDs, err := s.store.VerifiedLinkIDsForPoints(citedInContent)
+		if err != nil {
+			slog.Warn("wiki: lookup verified link ids for cited points failed", "concept_id", conceptID, "error", err)
+		}
 		return &compiledContent{
 			title:          output.Title,
 			content:        filteredContent,
 			sourcePointIDs: citedInContent,
 			sourceUnitIDs:  sourceUnitIDs,
+			sourceLinkIDs:  sourceLinkIDs,
 		}, nil
 	}
 

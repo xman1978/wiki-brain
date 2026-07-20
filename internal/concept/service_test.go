@@ -464,6 +464,220 @@ func TestConfirm_Merge_InvalidTarget_Errors(t *testing.T) {
 	}
 }
 
+// --- KPN content_driven candidates (docs/impl/v1/kpn.md 步骤 3/6) ---
+
+func TestProposeAddCandidate_FirstCall_CreatesContentDrivenCandidate(t *testing.T) {
+	svc, store, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "关注差旅费用报销标准", []string{"p1"}, "s1")
+	if err != nil {
+		t.Fatalf("propose add candidate: %v", err)
+	}
+
+	c, err := store.GetCandidate(candidateID)
+	if err != nil || c == nil {
+		t.Fatalf("get candidate: %v", err)
+	}
+	if c.Kind != KindAdd || c.Status != StatusPendingConfirm {
+		t.Errorf("kind/status = %s/%s, want add/pending_confirm", c.Kind, c.Status)
+	}
+	if c.SuggestedName.String != "差旅报销" {
+		t.Errorf("suggested_name = %q, want 差旅报销", c.SuggestedName.String)
+	}
+	ev := candidateEvidence(t, c)
+	if ev["origin"] != "content_driven" {
+		t.Errorf("evidence.origin = %v, want content_driven", ev["origin"])
+	}
+	if len(candidatePointIDs(t, c)) != 1 {
+		t.Errorf("expected 1 point_id, got %v", candidatePointIDs(t, c))
+	}
+}
+
+func TestProposeAddCandidate_SecondCallSameDomain_MergesIntoExisting(t *testing.T) {
+	svc, store, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic1", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+	seedSource(t, db, "s2", "d1")
+	seedKU(t, db, "u2", "s2", "topic2", sql.NullString{})
+	seedKP(t, db, "p2", "u2", "s2")
+
+	id1, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc1", []string{"p1"}, "s1")
+	if err != nil {
+		t.Fatalf("first propose: %v", err)
+	}
+	id2, err := svc.ProposeAddCandidate("d1", "住宿标准", "desc2", []string{"p2"}, "s2")
+	if err != nil {
+		t.Fatalf("second propose: %v", err)
+	}
+	if id1 != id2 {
+		t.Fatalf("expected second call to merge into the first candidate, got distinct ids %s / %s", id1, id2)
+	}
+
+	c, _ := store.GetCandidate(id1)
+	if c.SuggestedName.String != "差旅报销" {
+		t.Errorf("suggested_name drifted to %q, want it to keep the original 差旅报销", c.SuggestedName.String)
+	}
+	points := candidatePointIDs(t, c)
+	if len(points) != 2 {
+		t.Fatalf("expected merged point_ids from both calls, got %v", points)
+	}
+
+	rows, err := store.ListCandidatesByKindStatus(KindAdd, StatusPendingConfirm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected exactly 1 pending add candidate (no duplicate row), got %d", len(rows))
+	}
+}
+
+func TestProposeAddCandidate_DoesNotMergeIntoUsageDrivenCandidate(t *testing.T) {
+	svc, store, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+
+	// A usage_driven candidate already pending in the same domain.
+	if _, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "既有候选", []string{"pX"}, []string{"evt-1"}, AddEvidence{EventCount: 5}, "seed"); err != nil {
+		t.Fatal(err)
+	}
+
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", []string{"p1"}, "s1")
+	if err != nil {
+		t.Fatalf("propose add candidate: %v", err)
+	}
+
+	rows, err := store.ListCandidatesByKindStatus(KindAdd, StatusPendingConfirm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 distinct pending candidates (usage_driven untouched), got %d", len(rows))
+	}
+	c, _ := store.GetCandidate(candidateID)
+	if c.SuggestedName.String != "差旅报销" {
+		t.Errorf("expected a new content_driven candidate, got merged into 既有候选")
+	}
+}
+
+// fakeKPNRematchNotifier stands in for internal/unit.Service in concept
+// package tests (docs/impl/v1/kpn.md 步骤 6).
+type fakeKPNRematchNotifier struct {
+	calls []fakeRematchCall
+}
+
+type fakeRematchCall struct {
+	conceptID string
+	pointIDs  []string
+}
+
+func (f *fakeKPNRematchNotifier) RematchPoints(conceptID string, pointIDs []string) {
+	f.calls = append(f.calls, fakeRematchCall{conceptID, pointIDs})
+}
+
+func TestConfirmAdd_Assign_MigratesToExistingConceptWithoutCreatingNew(t *testing.T) {
+	svc, store, db := setupService(t)
+	notifier := &fakeKPNRematchNotifier{}
+	svc.SetKPNRematchNotifier(notifier)
+
+	seedSource(t, db, "s1", "d1")
+	seedConcept(t, db, "cExisting", "d1", sql.NullString{})
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", []string{"p1"}, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var conceptCountBefore int
+	db.QueryRow(`SELECT COUNT(*) FROM concepts`).Scan(&conceptCountBefore)
+
+	result, err := svc.Confirm(candidateID, &ConfirmAddRequest{ConceptID: "cExisting"}, nil)
+	if err != nil {
+		t.Fatalf("confirm assign: %v", err)
+	}
+	if result.ConceptID != "cExisting" {
+		t.Errorf("concept_id = %q, want cExisting", result.ConceptID)
+	}
+	if result.MigratedKUs != 1 {
+		t.Errorf("migrated KUs = %d, want 1", result.MigratedKUs)
+	}
+
+	var conceptCountAfter int
+	db.QueryRow(`SELECT COUNT(*) FROM concepts`).Scan(&conceptCountAfter)
+	if conceptCountAfter != conceptCountBefore {
+		t.Errorf("expected no new concept row, before=%d after=%d", conceptCountBefore, conceptCountAfter)
+	}
+
+	var u1Concept sql.NullString
+	db.QueryRow(`SELECT concept_id FROM knowledge_units WHERE unit_id = 'u1'`).Scan(&u1Concept)
+	if !u1Concept.Valid || u1Concept.String != "cExisting" {
+		t.Errorf("u1.concept_id = %+v, want cExisting", u1Concept)
+	}
+
+	c, _ := store.GetCandidate(candidateID)
+	if c.Status != StatusApplied {
+		t.Errorf("candidate status = %q, want applied", c.Status)
+	}
+
+	if len(notifier.calls) != 1 {
+		t.Fatalf("expected 1 RematchPoints call, got %d", len(notifier.calls))
+	}
+	if notifier.calls[0].conceptID != "cExisting" || len(notifier.calls[0].pointIDs) != 1 || notifier.calls[0].pointIDs[0] != "p1" {
+		t.Errorf("unexpected rematch call: %+v", notifier.calls[0])
+	}
+}
+
+func TestConfirmAdd_Assign_RejectsMergedAwayConcept(t *testing.T) {
+	svc, store, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedConcept(t, db, "cTarget", "d1", sql.NullString{})
+	seedConcept(t, db, "cMergedAway", "d1", sql.NullString{String: "cTarget", Valid: true})
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", []string{"p1"}, nil, ContentDrivenEvidence{Origin: "content_driven"}, "seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.Confirm(candidateID, &ConfirmAddRequest{ConceptID: "cMergedAway"}, nil); err == nil {
+		t.Fatal("expected error assigning to a merged-away concept")
+	}
+	if _, err := svc.Confirm(candidateID, &ConfirmAddRequest{ConceptID: "does-not-exist"}, nil); err == nil {
+		t.Fatal("expected error assigning to a nonexistent concept")
+	}
+}
+
+func TestConfirmAdd_New_NotifiesKPNRematch(t *testing.T) {
+	svc, _, db := setupService(t)
+	notifier := &fakeKPNRematchNotifier{}
+	svc.SetKPNRematchNotifier(notifier)
+
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", []string{"p1"}, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.Confirm(candidateID, &ConfirmAddRequest{}, nil)
+	if err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+
+	if len(notifier.calls) != 1 || notifier.calls[0].conceptID != result.ConceptID {
+		t.Fatalf("expected 1 RematchPoints call for the new concept_id, got %+v", notifier.calls)
+	}
+}
+
 func TestReject_MarksRejectedNoStructuralChange(t *testing.T) {
 	svc, store, db := setupService(t)
 	seedSource(t, db, "s1", "d1")

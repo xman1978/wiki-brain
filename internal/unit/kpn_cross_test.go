@@ -110,30 +110,91 @@ func TestCrossSourceKPN_MatchByConcept(t *testing.T) {
 	}
 }
 
-func TestCrossSourceKPN_MatchByDomain_WhenNoConcept(t *testing.T) {
+// fakeConceptNotifier stands in for concept.Service in unit-package tests
+// (docs/impl/v1/kpn.md 步骤 3: orphan KPs are handed to the concept
+// evolution module instead of falling back to a same-domain candidate pool).
+type fakeConceptNotifier struct {
+	calls []fakeConceptProposeCall
+	err   error
+}
+
+type fakeConceptProposeCall struct {
+	domainID, suggestedName, suggestedDescription, sourceID string
+	pointIDs                                                []string
+}
+
+func (f *fakeConceptNotifier) ProposeAddCandidate(domainID, suggestedName, suggestedDescription string, pointIDs []string, sourceID string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	f.calls = append(f.calls, fakeConceptProposeCall{domainID, suggestedName, suggestedDescription, sourceID, pointIDs})
+	return "candidate-1", nil
+}
+
+func TestCrossSourceKPN_OrphanPointsRouteToConceptCandidate_WhenNoConcept(t *testing.T) {
 	svc, fake, db := setupTestService(t)
 	store := NewStore(db)
+	notifier := &fakeConceptNotifier{}
+	svc.SetConceptNotifier(notifier)
 
 	seedDomain(t, db, "d1", "D")
 	seedSourceWithDomain(t, db, "new-src", "d1")
 	seedSourceWithDomain(t, db, "existing-src", "d1")
 
-	// Neither KU has a concept_id — must fall back to domain grouping.
+	// Neither KU has a concept_id — must NOT fall back to domain grouping;
+	// both points route to the concept evolution module instead.
 	seedKUWithConcept(t, store, "ku-new", "new-src", "", "new topic")
 	seedKP(t, store, "kp-new", "ku-new", "new-src", "new content")
 	seedKUWithConcept(t, store, "ku-existing", "existing-src", "", "existing topic")
 	seedKP(t, store, "kp-existing", "ku-existing", "existing-src", "existing content")
 
-	fake.SetResponse("kpn_cross_match.md", llm.FakeResponse{
-		Output: `{"relations": [{"from": "kp-new", "to": "kp-existing", "type": "related"}]}`,
+	fake.SetResponse("kpn_concept_propose.md", llm.FakeResponse{
+		Output: `{"suggested_name": "新主题", "suggested_description": "描述"}`,
 	})
 
 	result, err := svc.CrossSourceKPN(context.Background(), "new-src")
 	if err != nil {
 		t.Fatalf("CrossSourceKPN: %v", err)
 	}
-	if result.RelationsCreated != 1 {
-		t.Fatalf("expected 1 relation created via domain fallback, got %d", result.RelationsCreated)
+	if result.RelationsCreated != 0 || result.Batches != 0 {
+		t.Fatalf("expected no cross-Source relations without concept_id, got %+v", result)
+	}
+	if result.ConceptCandidatesTouched != 1 {
+		t.Fatalf("expected 1 concept candidate touched, got %d", result.ConceptCandidatesTouched)
+	}
+	if len(notifier.calls) != 1 {
+		t.Fatalf("expected 1 ProposeAddCandidate call, got %d", len(notifier.calls))
+	}
+	call := notifier.calls[0]
+	if call.domainID != "d1" {
+		t.Errorf("domain_id = %q, want d1", call.domainID)
+	}
+	if call.sourceID != "new-src" {
+		t.Errorf("source_id = %q, want new-src", call.sourceID)
+	}
+	if len(call.pointIDs) != 1 || call.pointIDs[0] != "kp-new" {
+		t.Errorf("expected only new-src's own orphan point (kp-new), got %v", call.pointIDs)
+	}
+}
+
+func TestCrossSourceKPN_NoOrphanProposal_WhenNoConceptNotifierSet(t *testing.T) {
+	svc, fake, db := setupTestService(t)
+	store := NewStore(db)
+
+	seedDomain(t, db, "d1", "D")
+	seedSourceWithDomain(t, db, "new-src", "d1")
+	seedKUWithConcept(t, store, "ku-new", "new-src", "", "new topic")
+	seedKP(t, store, "kp-new", "ku-new", "new-src", "new content")
+
+	result, err := svc.CrossSourceKPN(context.Background(), "new-src")
+	if err != nil {
+		t.Fatalf("CrossSourceKPN: %v", err)
+	}
+	if result.ConceptCandidatesTouched != 0 {
+		t.Errorf("expected 0 touched without a notifier, got %d", result.ConceptCandidatesTouched)
+	}
+	if len(fake.Calls()) != 0 {
+		t.Errorf("expected no LLM calls, got %d", len(fake.Calls()))
 	}
 }
 
@@ -354,29 +415,20 @@ func TestSplitCrossBatch_HardSplitsOversizedNewPoints(t *testing.T) {
 	}
 }
 
-func TestGroupPointsForCrossMatch_PrioritizesConceptOverDomain(t *testing.T) {
+func TestGroupPointsForCrossMatch_SeparatesOrphans(t *testing.T) {
 	points := []KnowledgePoint{
 		{PointID: "p1", UnitID: "u1"},
 		{PointID: "p2", UnitID: "u2"},
 		{PointID: "p3", UnitID: "u3"},
 	}
 	unitConceptMap := map[string]string{"u1": "c1"} // u2, u3 have no concept
-	groups := groupPointsForCrossMatch(points, unitConceptMap, "d1")
+	groups, orphans := groupPointsForCrossMatch(points, unitConceptMap)
 
-	if len(groups) != 2 {
-		t.Fatalf("expected 2 groups (concept c1, domain d1), got %d: %+v", len(groups), groups)
+	if len(groups) != 1 || groups[0].id != "c1" || len(groups[0].points) != 1 {
+		t.Fatalf("expected 1 concept group (c1, 1 point), got %+v", groups)
 	}
-	var foundConcept, foundDomain bool
-	for _, g := range groups {
-		if g.kind == "concept" && g.id == "c1" && len(g.points) == 1 {
-			foundConcept = true
-		}
-		if g.kind == "domain" && g.id == "d1" && len(g.points) == 2 {
-			foundDomain = true
-		}
-	}
-	if !foundConcept || !foundDomain {
-		t.Errorf("expected concept group (1 point) and domain group (2 points), got %+v", groups)
+	if len(orphans) != 2 {
+		t.Fatalf("expected 2 orphan points (no concept, no domain fallback), got %d: %+v", len(orphans), orphans)
 	}
 }
 

@@ -481,6 +481,7 @@ func (s *Service) flagWikiCandidates() error {
 			ObjectType: activation.ObjectTypeWikiPage,
 			ObjectID:   c.ConceptID,
 			Reason:     c.Reason,
+			EventIDs:   marshalIDs(c.QualifyingPointIDs),
 			Status:     activation.ResultPendingConfirm,
 		}
 		if err := s.activationSvc.Store().InsertLearningResult(lr); err != nil {

@@ -144,7 +144,7 @@ Working Model 槽位数上限；
 深想：     verified 链接提供核心知识起点，KPN 补充上下文；
            candidate 不得决定推理结构，只能作为探索线索；
            conflicted 链接命中时，对应槽位直接标记 conflict
-           （conflicted 状态 V1 预留，V2 启用）；
+           （conflicted 状态随冲突检测能力启用，版本划分见 docs/impl/）；
            weakened / deprecated 链接不作为当前依据。
 ```
 

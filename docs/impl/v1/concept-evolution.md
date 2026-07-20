@@ -4,6 +4,8 @@
 
 消费 `activation_gap`（concept_gap 层级）与采用共现统计，形成概念**新增**与**合并**候选；候选经人工确认后在事务内执行。设计依据：`docs/design/concept-evolution.md`。
 
+`concept_candidates(kind=add)` 还有第二个候选来源：跨 Source KPN 匹配（`docs/impl/v1/kpn.md` 步骤 3）在遇到 concept_id 为空的 KP 时，按 domain 聚类直接写入候选，不依赖任何查询信号——`evidence.origin` 用 `content_driven` 区分于本模块自身产出的 `usage_driven` 候选，两者共用同一套确认/驳回 API，仅确认执行时的下游动作不同：`content_driven` 候选确认后会触发 KPN 侧的定向重新匹配（回调通知，详见 kpn.md 步骤 6），本模块的确认逻辑本身不感知这个差异。
+
 在 V1 实现顺序中位于第 10 位（page 之后）：依赖 trace（事件扩展）、study（周期任务）、wiki（needs_recompile 接口）均已完成。
 
 ## 与设计文档的 V1 适配
@@ -11,7 +13,7 @@
 设计文档描述的是目标架构，以下三点按 V1 实际结构适配，**不是**对设计的推翻：
 
 ```text
-1. 合并信号的在线产生点（Concept 匹配器 ambiguous_match）推迟到 V2：
+1. 合并信号的在线产生点（Concept 匹配器 ambiguous_match）推迟到 V3：
    V1 在线链路没有 Concept 匹配器（只有 Domain 预过滤；Concept 归属
    由导入期 unit_concept_match 单选写入，无匹配分数）。
    V1 合并信号只用离线共同采用统计（设计产生点 3）。
@@ -20,7 +22,7 @@
    V1 链接挂 Session 四元组条件 → point_id，不经 Concept。
    概念迁移只改 knowledge_units.concept_id 和 Wiki 标记。
 
-3. 拆分候选推迟到 V2：
+3. 拆分候选推迟到 V3：
    依赖同一概念下事件的 scene / goal 分布聚类，V1 事件量不足以
    支撑可靠的分布判定，且 V1 概念承载的在线行为有限，收益低。
 ```
@@ -46,7 +48,7 @@ ALTER TABLE concepts ADD COLUMN origin TEXT NOT NULL DEFAULT 'preset';
 CREATE TABLE concept_candidates (
     candidate_id   TEXT PRIMARY KEY,
     kind           TEXT NOT NULL,
-    -- add / merge（split 预留枚举值，V2 启用）
+    -- add / merge（split 预留枚举值，V3 启用）
     domain_id      TEXT REFERENCES domains(domain_id),
     -- kind=add：建议归属领域（可为 NULL，确认时人工指定）
     suggested_name TEXT,

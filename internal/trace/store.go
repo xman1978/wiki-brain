@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jxman78/wiki-brain/internal/foundation/text"
 )
 
 type Store struct {
@@ -231,6 +232,41 @@ func (s *Store) ConceptNullRatio(pointIDs []string) (float64, error) {
 		return 0, nil
 	}
 	return float64(nullCount.Int64) / float64(total), nil
+}
+
+// UnitSemanticTerms returns, per unit_id, the term set built from that unit's
+// precomputed rerank semantics (source_theme/content_theme/object/scope) —
+// the evidence side of the constraint-consistency gate (constraint.go). Units
+// without a semantics row are simply absent from the result (gate skips them).
+func (s *Store) UnitSemanticTerms(unitIDs []string) (map[string]map[string]struct{}, error) {
+	result := make(map[string]map[string]struct{})
+	if len(unitIDs) == 0 {
+		return result, nil
+	}
+
+	placeholders := make([]string, len(unitIDs))
+	args := make([]interface{}, len(unitIDs))
+	for i, uid := range unitIDs {
+		placeholders[i] = "?"
+		args[i] = uid
+	}
+
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT unit_id, source_theme, content_theme, object, scope
+		FROM unit_rerank_semantics WHERE unit_id IN (%s)`, strings.Join(placeholders, ",")), args...)
+	if err != nil {
+		return nil, fmt.Errorf("trace store: unit semantic terms: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var unitID, sourceTheme, contentTheme, object, scope string
+		if err := rows.Scan(&unitID, &sourceTheme, &contentTheme, &object, &scope); err != nil {
+			return nil, fmt.Errorf("trace store: scan unit semantic terms: %w", err)
+		}
+		result[unitID] = text.TermSet(sourceTheme + " " + contentTheme + " " + object + " " + scope)
+	}
+	return result, rows.Err()
 }
 
 func (s *Store) ListCooccurrence(pointID string, minConfidentCount, limit int) ([]Cooccurrence, error) {

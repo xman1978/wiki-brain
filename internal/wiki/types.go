@@ -41,6 +41,7 @@ type Page struct {
 	Status         string
 	SourcePointIDs string // JSON array
 	SourceUnitIDs  string // JSON array
+	SourceLinkIDs  string // JSON array — verified ActivationLink ids covering the cited KPs at compile time
 	CompiledFrom   string // JSON array — learning_result / report ids that triggered this (re)compile
 	PromptVersion  string
 	ModelName      string

@@ -148,7 +148,14 @@ computeLinkCondition(pointID, fallbackQuestionTerms) → LinkCondition：
   intent_terms / audience / constraint_terms：该 point 全部确证信号
     （ConfidentTraceFieldValues，与 CooccurrenceLabelsForPoint 同源但取
     traces 的另外三列）分别归一化、去重、排序，得到累积白名单集合——
-    不是"最近一条 trace 的单值"，是跨全部确证历史的并集，只增不减；
+    不是"最近一条 trace 的单值"，是跨全部确证历史的并集；
+    （2026-07-21 修订）取数必须限定"该 trace 的 direct_point_ids 实际
+    包含该 point"：question_terms 存的是 subject 标签，区分性约束（厂商/
+    产品名）被剥离进 constraint_text，不同实体的问题会共享同一标签，
+    仅按标签 join 会把未引用该 point 的同标签 trace 的约束串扰进白名单
+    （实测：神通问题的 constraint 混入达梦 KP 链接）。原则：标签只用于
+    subject_terms 归纳，"该 point 的确证信号"一律走引用级关联。
+    修复后每轮刷新全量重算并替换写回，存量串扰会在下一轮 Study 自动清除；
   该 point 完全没有确证信号（CooccurrenceLabelsForPoint 为空）时返回
     (nil, nil)，调用方跳过。
 

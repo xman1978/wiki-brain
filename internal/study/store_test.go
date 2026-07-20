@@ -539,3 +539,90 @@ func TestQualifyingKPsByConceptFromCandidates_ExcludesMerged(t *testing.T) {
 		t.Errorf("expected active concept present, got %+v", result)
 	}
 }
+
+// TestQualifyingKPsByConceptFromCandidates_DedupsAndFiltersLifecycle covers
+// two bugs found in V1 P4-P10 testing (见 memory v1-p4-p10-test-findings):
+// a KP with multiple link_candidates rows (different question_terms clusters)
+// must count once per point_id, and a superseded point (e.g. after reupload)
+// must not surface as a qualifying KP — matching wiki.ListQualifyingPoints'
+// existing lifecycle='current' filter.
+func TestQualifyingKPsByConceptFromCandidates_DedupsAndFiltersLifecycle(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+
+	seedDomain(t, db, "d1", "Domain One")
+	seedConcept(t, db, "c1", "d1", "Concept One")
+	seedSource(t, db, "src1")
+	seedKU(t, db, "ku1", "src1", "c1")
+	seedKP(t, db, "kp-dup", "ku1", "src1", "duplicated point")
+	seedKP(t, db, "kp-stale", "ku1", "src1", "superseded point")
+	if _, err := db.Exec(`UPDATE knowledge_points SET lifecycle = 'superseded' WHERE point_id = 'kp-stale'`); err != nil {
+		t.Fatal(err)
+	}
+
+	// kp-dup appears under two different question_terms clusters.
+	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc1', 't1', 'kp-dup', 6, 8)`)
+	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc2', 't2', 'kp-dup', 5, 7)`)
+	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc3', 't3', 'kp-stale', 10, 12)`)
+
+	result, err := store.QualifyingKPsByConceptFromCandidates(5)
+	if err != nil {
+		t.Fatalf("QualifyingKPsByConceptFromCandidates: %v", err)
+	}
+	kps := result["c1"]
+	if len(kps) != 1 {
+		t.Fatalf("expected kp-dup counted once and kp-stale excluded, got %+v", kps)
+	}
+	if kps[0].PointID != "kp-dup" {
+		t.Errorf("expected kp-dup, got %q", kps[0].PointID)
+	}
+	if kps[0].ConfidentCount != 6 {
+		t.Errorf("expected max confident_count 6 across the two rows, got %d", kps[0].ConfidentCount)
+	}
+}
+
+// ========== ConfidentTraceFieldValues：引用级关联（2026-07-21 修订） ==========
+
+// 同一 subject 标签下，未引用该 point 的 confident trace（如神通问题恰与达梦
+// 问题共享"数据库会话监控"标签）不得把自己的 constraint/audience/intent 混入
+// 该 point 的白名单。
+func TestConfidentTraceFieldValues_RequiresCitation(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+
+	seedDomain(t, db, "d1", "domain")
+	seedConcept(t, db, "c1", "d1", "concept")
+	seedSource(t, db, "s1")
+	seedKU(t, db, "u1", "s1", "c1")
+	seedKP(t, db, "p-dm", "u1", "s1", "达梦 ACTIVE 会话")
+	seedKP(t, db, "p-other", "u1", "s1", "其他 KP")
+	seedCooccurrence(t, db, "数据库会话监控", "p-dm", 2, 2)
+
+	seedAnswer(t, db, "a1")
+	seedAnswer(t, db, "a2")
+	insertQuadrupleTrace(t, db, "t-dm", "a1", "数据库会话监控", "查询", "DBA", "达梦数据库", []string{"p-dm"})
+	insertQuadrupleTrace(t, db, "t-st", "a2", "数据库会话监控", "查询", "运维", "神通数据库", []string{"p-other"})
+
+	_, audiences, constraints, err := store.ConfidentTraceFieldValues("p-dm")
+	if err != nil {
+		t.Fatalf("ConfidentTraceFieldValues: %v", err)
+	}
+	if len(constraints) != 1 || constraints[0] != "达梦数据库" {
+		t.Errorf("expected constraints [达梦数据库] from the citing trace only, got %v", constraints)
+	}
+	if len(audiences) != 1 || audiences[0] != "DBA" {
+		t.Errorf("expected audiences [DBA] from the citing trace only, got %v", audiences)
+	}
+}
+
+func insertQuadrupleTrace(t *testing.T, db *sql.DB, traceID, answerID, questionTerms, intent, audience, constraintText string, pointIDs []string) {
+	t.Helper()
+	pidsJSON, _ := json.Marshal(pointIDs)
+	_, err := db.Exec(`INSERT INTO traces (trace_id, answer_id, question, question_hash, question_terms,
+		retrieval_quality, path, intent, audience, constraint_text, direct_point_ids)
+		VALUES (?, ?, 'q', ?, ?, 'confident', 'short', ?, ?, ?, ?)`,
+		traceID, answerID, "hash_"+traceID, questionTerms, intent, audience, constraintText, string(pidsJSON))
+	if err != nil {
+		t.Fatalf("insert quadruple trace: %v", err)
+	}
+}

@@ -4,7 +4,7 @@
 
 实现主题页 / 概念页的最小闭环：Study 产出的 Wiki 候选经人工确认后触发 LLM 编译，生成带证据回链的页面；人工发布后进入独立 Bleve 索引，作为检索的 Wiki 直答层；底层 KU/KP 状态变化时标记待重编译。
 
-方法页 / 经验页 / 问题页 / 决策页与视角化编译推迟到 V2。
+方法页 / 经验页 / 问题页 / 决策页与视角化编译推迟到 V3；Claim 双产物与防固化要素补齐属 V2（见 docs/impl/v2/readme.md）。
 
 ## 数据结构
 
@@ -22,6 +22,11 @@ CREATE TABLE wiki_pages (
     source_point_ids TEXT NOT NULL DEFAULT '[]',
     -- JSON 数组：页面依赖的 KP（编译输入的 qualifying KP）
     source_unit_ids  TEXT NOT NULL DEFAULT '[]',
+    source_link_ids  TEXT NOT NULL DEFAULT '[]',
+    -- JSON 数组：编译时 source_point_ids 上已存在的 verified ActivationLink id
+    -- （migration 028）。纯依赖回链元数据，不进编译输入/prompt——呼应
+    -- docs/design/wiki-compilation.md 防固化要素"依赖的 ActivationLink"，
+    -- 用于页面详情展示和未来生命周期追溯，不驱动重编译判断。
     compiled_from    TEXT NOT NULL DEFAULT '[]',
     -- JSON 数组：触发编译的 learning_result / report 标识
     prompt_version   TEXT NOT NULL,
@@ -131,7 +136,9 @@ content 中的 [point_id] 标注逐一提取，不在白名单内的替换为删
 content 非空且包含四个固定小节标题，缺节 → 编译失败按 LLM 失败处理
   （重试一次，仍失败返回 500，不产生页面）。
 校验通过后：source_point_ids = content 中实际引用的 point_id 并集，
-source_unit_ids 反查填入。
+source_unit_ids 反查填入，source_link_ids = 这些 point_id 中 status=verified
+的 activation_links.link_id 集合（无对应 verified 链接的 point_id 不计入，
+查询失败降级为空数组并记录 warn，不影响编译成功）。
 ```
 
 **调用参数**：reasoning 模型（页面编译是 V1 唯一的长文生成任务），temperature 0.3，记录 prompt_version / model_name。

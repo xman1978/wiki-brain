@@ -102,6 +102,14 @@ func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *sql.DB, bleve.I
 	return svc, fake, db, idxMgr.Wiki
 }
 
+func seedVerifiedLink(t *testing.T, db *sql.DB, linkID, pointID string) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO activation_links (link_id, question_terms, subject_terms, point_id, status)
+		VALUES (?, ?, ?, ?, 'verified')`, linkID, "q_"+pointID, "s_"+pointID, pointID); err != nil {
+		t.Fatalf("seed verified link: %v", err)
+	}
+}
+
 func newTestActivationSvc(db *sql.DB) *activation.Service {
 	store := activation.NewStore(db)
 	return activation.NewService(store, activation.NewMatcher(store))

@@ -17,13 +17,13 @@ func NewStore(db *sql.DB) *Store {
 }
 
 const pageColumns = `page_id, page_type, concept_id, title, content, status,
-	source_point_ids, source_unit_ids, compiled_from, prompt_version, model_name,
+	source_point_ids, source_unit_ids, source_link_ids, compiled_from, prompt_version, model_name,
 	compiled_at, published_at, created_at, updated_at`
 
 func scanPage(row interface{ Scan(...interface{}) error }) (*Page, error) {
 	var p Page
 	err := row.Scan(&p.PageID, &p.PageType, &p.ConceptID, &p.Title, &p.Content, &p.Status,
-		&p.SourcePointIDs, &p.SourceUnitIDs, &p.CompiledFrom, &p.PromptVersion, &p.ModelName,
+		&p.SourcePointIDs, &p.SourceUnitIDs, &p.SourceLinkIDs, &p.CompiledFrom, &p.PromptVersion, &p.ModelName,
 		&p.CompiledAt, &p.PublishedAt, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -40,10 +40,10 @@ func (s *Store) InsertPage(p *Page) error {
 	}
 	_, err := s.db.Exec(`INSERT INTO wiki_pages
 		(page_id, page_type, concept_id, title, content, status, source_point_ids, source_unit_ids,
-		 compiled_from, prompt_version, model_name, compiled_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		 source_link_ids, compiled_from, prompt_version, model_name, compiled_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		p.PageID, p.PageType, p.ConceptID, p.Title, p.Content, p.Status,
-		p.SourcePointIDs, p.SourceUnitIDs, p.CompiledFrom, p.PromptVersion, p.ModelName)
+		p.SourcePointIDs, p.SourceUnitIDs, p.SourceLinkIDs, p.CompiledFrom, p.PromptVersion, p.ModelName)
 	if err != nil {
 		return fmt.Errorf("wiki store: insert page: %w", err)
 	}
@@ -137,12 +137,12 @@ func (s *Store) PublishPage(pageID string) error {
 // ReplaceContent overwrites a page's compiled content (used by both the
 // initial compile and recompile — recompile just re-runs this on an existing
 // page_id) and resets it to draft, ready to be published again.
-func (s *Store) ReplaceContent(pageID, title, content, sourcePointIDsJSON, sourceUnitIDsJSON, compiledFromJSON, promptVersion, modelName string) error {
+func (s *Store) ReplaceContent(pageID, title, content, sourcePointIDsJSON, sourceUnitIDsJSON, sourceLinkIDsJSON, compiledFromJSON, promptVersion, modelName string) error {
 	_, err := s.db.Exec(`UPDATE wiki_pages SET
-		title = ?, content = ?, status = ?, source_point_ids = ?, source_unit_ids = ?,
+		title = ?, content = ?, status = ?, source_point_ids = ?, source_unit_ids = ?, source_link_ids = ?,
 		compiled_from = ?, prompt_version = ?, model_name = ?, compiled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE page_id = ?`,
-		title, content, StatusDraft, sourcePointIDsJSON, sourceUnitIDsJSON, compiledFromJSON, promptVersion, modelName, pageID)
+		title, content, StatusDraft, sourcePointIDsJSON, sourceUnitIDsJSON, sourceLinkIDsJSON, compiledFromJSON, promptVersion, modelName, pageID)
 	if err != nil {
 		return fmt.Errorf("wiki store: replace content: %w", err)
 	}
@@ -275,6 +275,35 @@ func (s *Store) RelationsAmong(pointIDs []string) ([]PointRelation, error) {
 		rels = append(rels, r)
 	}
 	return rels, rows.Err()
+}
+
+// VerifiedLinkIDsForPoints returns the activation_links.link_id of every
+// verified link whose point_id is in pointIDs — the compile-time snapshot of
+// "which ActivationLinks already cover this page's cited KPs", stored as
+// wiki_pages.source_link_ids alongside source_point_ids/source_unit_ids
+// (docs/impl/v1/wiki.md 步骤 3 扩展). point_id is unique per link, so this is
+// at most len(pointIDs) rows.
+func (s *Store) VerifiedLinkIDsForPoints(pointIDs []string) ([]string, error) {
+	if len(pointIDs) == 0 {
+		return nil, nil
+	}
+	ph, args := buildPlaceholders(pointIDs)
+	rows, err := s.db.Query(fmt.Sprintf(
+		`SELECT link_id FROM activation_links WHERE status = 'verified' AND point_id IN (%s)`, ph), args...)
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: verified link ids for points: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("wiki store: scan verified link id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 type PointRelation struct {

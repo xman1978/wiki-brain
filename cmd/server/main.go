@@ -176,6 +176,8 @@ func main() {
 		EventWindowDays:   cfg.Study.ConceptEventWindowDays,
 	}, wikiSvc)
 	studySvc.SetConceptSvc(conceptSvc)
+	unitSvc.SetConceptNotifier(conceptSvc)
+	conceptSvc.SetKPNRematchNotifier(unitSvc)
 
 	// ── Queue handlers ──────────────────────────────────
 	q.RegisterHandler(queue.TaskTypeSourceProcess, func(payload interface{}) {
@@ -201,7 +203,12 @@ func main() {
 		} else if err := sourceSvc.CompleteShadowSwap(context.Background(), task.SourceID); err != nil {
 			// No-op when task.SourceID isn't a shadow; a real failure here means
 			// task.SourceID *is* a shadow but the swap itself failed.
-			slog.Error("shadow swap failed", "source_id", task.SourceID, "error", err)
+			if errors.Is(err, source.ErrShadowEmpty) {
+				slog.Warn("shadow swap skipped: zero units extracted, target left untouched", "source_id", task.SourceID)
+				unitsStatus = "failed"
+			} else {
+				slog.Error("shadow swap failed", "source_id", task.SourceID, "error", err)
+			}
 		}
 		// If task.SourceID was a shadow that swapped successfully, this row is
 		// already deleted by CompleteShadowSwap (which sets the target's own

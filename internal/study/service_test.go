@@ -291,3 +291,47 @@ func TestService_WikiCandidates(t *testing.T) {
 		t.Errorf("expected ready, got %s", w.Recommendation)
 	}
 }
+
+// TestService_FlagWikiCandidates_RecordsEventIDs covers a P10 audit gap
+// found in V1 testing (见 memory v1-p4-p10-test-findings): every Wiki action's
+// learning_result must carry object_id/reason/event_ids, but flagWikiCandidates
+// left event_ids empty.
+func TestService_FlagWikiCandidates_RecordsEventIDs(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	cfg := testConfig()
+	cfg.WikiKPMin = 2
+	cfg.WikiConfidentMin = 5
+	activationSvc := newTestActivationSvc(db)
+	svc := NewService(store, cfg, activationSvc, nil, 0)
+
+	seedSource(t, db, "src1")
+	seedDomain(t, db, "dom1", "D")
+	seedConcept(t, db, "con1", "dom1", "TestConcept")
+	seedKU(t, db, "ku1", "src1", "con1")
+	seedKP(t, db, "kp1", "ku1", "src1", "c1")
+	seedKP(t, db, "kp2", "ku1", "src1", "c2")
+	seedKPRelation(t, db, "kp1", "kp2")
+
+	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc1', 't1', 'kp1', 10, 12)`)
+	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc2', 't2', 'kp2', 8, 10)`)
+
+	if err := svc.flagWikiCandidates(); err != nil {
+		t.Fatalf("flagWikiCandidates: %v", err)
+	}
+
+	results, err := activationSvc.Store().ListLearningResultsByObject("wiki_page", "con1")
+	if err != nil {
+		t.Fatalf("ListLearningResultsByObject: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 learning result, got %d", len(results))
+	}
+	var eventIDs []string
+	if err := json.Unmarshal([]byte(results[0].EventIDs), &eventIDs); err != nil {
+		t.Fatalf("unmarshal event_ids %q: %v", results[0].EventIDs, err)
+	}
+	if len(eventIDs) != 2 {
+		t.Errorf("expected 2 event_ids (kp1, kp2), got %v", eventIDs)
+	}
+}

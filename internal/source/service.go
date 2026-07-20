@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -792,6 +793,14 @@ func (s *Service) ReuploadRetry(ctx context.Context, targetSourceID string) (*So
 	return nil, fmt.Errorf("no failed shadow to retry for source %s", targetSourceID)
 }
 
+// ErrShadowEmpty is returned by CompleteShadowSwap when the shadow's
+// unit_extract produced zero knowledge units — swapping it in would silently
+// wipe the target's existing (real) content, so the swap is skipped and the
+// target is left untouched. Callers should treat this the same as any other
+// unit_extract failure (mark the shadow's units_status failed) rather than
+// log it as an unexpected swap error.
+var ErrShadowEmpty = errors.New("shadow source produced zero knowledge units, swap skipped")
+
 // CompleteShadowSwap performs the one-shot "换血" transaction once a Shadow
 // Source's unit_extract has finished (docs/impl/v1/lifecycle.md 步骤 2, step 3):
 // the target's pre-existing KUs are marked superseded (using their original
@@ -808,6 +817,14 @@ func (s *Service) CompleteShadowSwap(ctx context.Context, shadowSourceID string)
 		return nil
 	}
 	targetID := shadow.ShadowOf.String
+
+	shadowUnitIDs, err := s.store.GetUnitIDs(shadowSourceID)
+	if err != nil {
+		return fmt.Errorf("get shadow unit ids: %w", err)
+	}
+	if len(shadowUnitIDs) == 0 {
+		return ErrShadowEmpty
+	}
 
 	target, err := s.store.GetByID(targetID)
 	if err != nil {

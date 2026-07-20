@@ -147,6 +147,7 @@ type pageDetailResp struct {
 	Content        string         `json:"content"`
 	SourcePointIDs []string       `json:"source_point_ids"`
 	SourceUnitIDs  []string       `json:"source_unit_ids"`
+	SourceLinkIDs  []string       `json:"source_link_ids"`
 	CompiledFrom   []string       `json:"compiled_from"`
 	PromptVersion  string         `json:"prompt_version"`
 	ModelName      string         `json:"model_name"`
@@ -177,9 +178,10 @@ func (h *Handler) getPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var sourcePointIDs, sourceUnitIDs, compiledFrom []string
+	var sourcePointIDs, sourceUnitIDs, sourceLinkIDs, compiledFrom []string
 	json.Unmarshal([]byte(page.SourcePointIDs), &sourcePointIDs)
 	json.Unmarshal([]byte(page.SourceUnitIDs), &sourceUnitIDs)
+	json.Unmarshal([]byte(page.SourceLinkIDs), &sourceLinkIDs)
 	json.Unmarshal([]byte(page.CompiledFrom), &compiledFrom)
 
 	revMeta := make([]revisionMeta, 0, len(revisions))
@@ -196,6 +198,7 @@ func (h *Handler) getPage(w http.ResponseWriter, r *http.Request) {
 		Content:        page.Content,
 		SourcePointIDs: nonNilStrings(sourcePointIDs),
 		SourceUnitIDs:  nonNilStrings(sourceUnitIDs),
+		SourceLinkIDs:  nonNilStrings(sourceLinkIDs),
 		CompiledFrom:   nonNilStrings(compiledFrom),
 		PromptVersion:  page.PromptVersion,
 		ModelName:      page.ModelName,

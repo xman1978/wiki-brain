@@ -3239,12 +3239,21 @@ function renderConceptCandidatesList() {
   if (!S.conceptCandidates.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无候选</div>'; return; }
   list.innerHTML = S.conceptCandidates.map(function(c) {
     var title = c.kind === 'merge' ? (c.merge_from||[]).join(' + ') : (c.suggested_name || '(未命名)');
+    var origin = conceptCandidateOrigin(c);
+    var originBadge = origin ? '<span class="badge" style="margin-left:4px">' + (origin === 'content_driven' ? '导入内容' : '查询信号') + '</span>' : '';
     return '<div class="link-row' + (c.candidate_id === S.conceptSelectedId ? ' active' : '') + '" onclick="selectConceptCandidate(\'' + esc(c.candidate_id) + '\')">\
-      <div class="lr-terms"><span class="badge">' + (c.kind === 'merge' ? '合并' : '新增') + '</span> ' + esc(title) + '</div>\
+      <div class="lr-terms"><span class="badge">' + (c.kind === 'merge' ? '合并' : '新增') + '</span>' + originBadge + ' ' + esc(title) + '</div>\
       <div style="font-size:12px;color:var(--text-2);margin-top:2px">' + (c.point_ids||[]).length + ' 个关联知识点</div>\
       <div class="lr-meta"><span>最近信号 ' + dateStr(c.last_signal_at) + '</span></div>\
     </div>';
   }).join('');
+}
+
+// content_driven（KPN 跨 Source 匹配导入时产生，见 docs/impl/v1/kpn.md 步骤 3）
+// / usage_driven（本模块自身基于查询信号聚类，既有行为）——只用于展示，不影响确认逻辑。
+function conceptCandidateOrigin(c) {
+  if (c.kind !== 'add' || !c.evidence) return '';
+  return c.evidence.origin === 'content_driven' ? 'content_driven' : 'usage_driven';
 }
 
 async function selectConceptCandidate(candidateId) {
@@ -3254,35 +3263,149 @@ async function selectConceptCandidate(candidateId) {
   var detail = document.getElementById('conceptDetailModalContent');
   document.getElementById('conceptDetailModal').classList.remove('hidden');
   if (!c) { detail.innerHTML = '<div style="color:var(--red);padding:20px">未找到候选</div>'; return; }
-  renderConceptCandidateDetail(c);
+
+  detail.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>';
+  var points = await loadConceptCandidatePoints(c.point_ids || []);
+  var conceptNames = c.kind === 'merge' ? await loadConceptNamesByIds(c.merge_from || []) : {};
+  // A candidate may have been re-selected while these async loads were in
+  // flight — bail if the user has since moved on.
+  if (S.conceptSelectedId !== candidateId) return;
+
+  if (c.status === 'pending_confirm' && c.kind === 'add') {
+    var domains = await ensureDomainsLoaded();
+    var initialDomain = c.domain_id || (domains[0] && domains[0].domain_id) || '';
+    var concepts = await loadConceptsForDomain(initialDomain);
+    if (S.conceptSelectedId !== candidateId) return;
+    renderConceptCandidateDetail(c, domains, concepts, initialDomain, points, conceptNames);
+    return;
+  }
+  renderConceptCandidateDetail(c, null, null, null, points, conceptNames);
+}
+
+// 关联 KP 不止要显示数量，还要显示内容和所属文件名——分别取自
+// GET /points/:id（content/source_id）和 GET /sources/:id（title），
+// 数量通常很小（几个到十几个），逐条请求足够，不新增批量端点。
+async function loadConceptCandidatePoints(pointIds) {
+  var results = await Promise.all(pointIds.map(async function(pid) {
+    try {
+      var r = await api('GET', '/points/' + encodeURIComponent(pid));
+      return (r.ok && r.data) ? r.data : null;
+    } catch (e) { return null; }
+  }));
+  var points = results.filter(Boolean);
+
+  var sourceIds = [];
+  var seenSource = {};
+  points.forEach(function(p) {
+    if (p.source_id && !seenSource[p.source_id]) { seenSource[p.source_id] = true; sourceIds.push(p.source_id); }
+  });
+  var titles = {};
+  await Promise.all(sourceIds.map(async function(sid) {
+    try {
+      var r = await api('GET', '/sources/' + encodeURIComponent(sid));
+      titles[sid] = (r.ok && r.data && r.data.title) ? r.data.title : sid;
+    } catch (e) { titles[sid] = sid; }
+  }));
+
+  return points.map(function(p) {
+    return { point_id: p.point_id, content: p.content, source_title: titles[p.source_id] || p.source_id };
+  });
+}
+
+// 合并候选的 merge_from 只有 concept_id，界面上要显示概念名而不是裸 id。
+async function loadConceptNamesByIds(conceptIds) {
+  try {
+    var r = await api('GET', '/concepts');
+    var map = {};
+    (r.ok && Array.isArray(r.data) ? r.data : []).forEach(function(cc) { map[cc.concept_id] = cc.name; });
+    var names = {};
+    conceptIds.forEach(function(cid) { names[cid] = map[cid] || cid; });
+    return names;
+  } catch (e) {
+    var fallback = {};
+    conceptIds.forEach(function(cid) { fallback[cid] = cid; });
+    return fallback;
+  }
+}
+
+// 领域列表复用 GET /sources 已返回的 domains（见 loadSources），避免新增专门端点；
+// 首次打开概念候选确认表单时按需拉取并缓存到 S.allDomains。
+async function ensureDomainsLoaded() {
+  if (S.allDomains && S.allDomains.length) return S.allDomains;
+  try {
+    var r = await api('GET', '/sources?limit=1');
+    if (r.ok && r.data && Array.isArray(r.data.domains)) S.allDomains = r.data.domains;
+  } catch (e) { /* ignore, form falls back to an empty domain list */ }
+  return S.allDomains || [];
+}
+
+async function loadConceptsForDomain(domainId) {
+  if (!domainId) return [];
+  try {
+    var r = await api('GET', '/concepts?domain_id=' + encodeURIComponent(domainId));
+    return (r.ok && Array.isArray(r.data)) ? r.data : [];
+  } catch (e) { return []; }
 }
 
 function closeConceptDetailModal() {
   document.getElementById('conceptDetailModal').classList.add('hidden');
 }
 
-function renderConceptCandidateDetail(c) {
+// 候选状态、依据字段名都来自后端英文枚举/JSON key，这里统一翻成中文再展示。
+var CONCEPT_STATUS_LABELS = { pending_confirm: '待确认', applied: '已执行', rejected: '已驳回', expired: '已过期' };
+var CONCEPT_EVIDENCE_LABELS = {
+  event_count: '事件数', distinct_question_count: '不同问题数', overlap: '重叠度',
+  cooccur_count: '共同采用次数', overlap_ratio: '重叠比例',
+  total_traces_a: 'A 概念问答总数', total_traces_b: 'B 概念问答总数',
+  point_ids_a: 'A 概念关联知识点', point_ids_b: 'B 概念关联知识点',
+  source_ids: '涉及来源', description: '概念描述'
+};
+
+function renderConceptCandidateDetail(c, domains, concepts, selectedDomainId, points, conceptNames) {
+  points = points || [];
+  conceptNames = conceptNames || {};
   var detail = document.getElementById('conceptDetailModalContent');
   var evidence = c.evidence || {};
-  var evidenceHtml = Object.keys(evidence).map(function(k) {
+  // origin 已经在下面的"候选来源"行单独展示过，这里跳过避免重复。
+  var evidenceHtml = Object.keys(evidence).filter(function(k) { return k !== 'origin'; }).map(function(k) {
     var v = evidence[k];
-    return '<div class="detail-row"><span class="dl">' + esc(k) + '</span><span class="dv">' + esc(Array.isArray(v) ? v.join(', ') : String(v)) + '</span></div>';
+    var label = CONCEPT_EVIDENCE_LABELS[k] || k;
+    return '<div class="detail-row"><span class="dl">' + esc(label) + '</span><span class="dv">' + esc(Array.isArray(v) ? v.join(', ') : String(v)) + '</span></div>';
   }).join('');
+
+  var pointsHtml = points.length ? points.map(function(p) {
+    return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">\
+      <div style="font-size:12px;color:var(--text)">' + esc(p.content || '') + '</div>\
+      <div style="font-size:11px;color:var(--text-3);margin-top:4px">来源文件：' + esc(p.source_title || '') + '</div>\
+    </div>';
+  }).join('') : '<div style="font-size:12px;color:var(--text-3);padding:8px 0">暂无数据</div>';
 
   var actionsHtml = '';
   if (c.status === 'pending_confirm') {
     if (c.kind === 'add') {
+      domains = domains || [];
+      concepts = concepts || [];
+      var domainOptions = domains.map(function(d) {
+        return '<option value="' + esc(d.domain_id) + '"' + (d.domain_id === selectedDomainId ? ' selected' : '') + '>' + esc(d.name) + '</option>';
+      }).join('');
+      // S.conceptFormConcepts/SuggestedName back the domain-change reload
+      // and the select<->new-name-input swap below (docs: 概念名称控件与
+      // 领域名称同为原生 select，样式和"点击展开"行为一致；选中
+      // "+ 新建概念..." 时就地换成输入框，不额外加第二个常驻字段).
+      S.conceptFormConcepts = concepts;
+      S.conceptFormSuggestedName = c.suggested_name || '';
+
       actionsHtml = '\
         <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px">\
-          <label style="font-size:12px;color:var(--text-3)">概念名称<input id="conceptConfirmName" type="text" value="' + esc(c.suggested_name||'') + '" style="width:100%;margin-top:4px"></label>\
-          <label style="font-size:12px;color:var(--text-3)">领域 ID' + (c.domain_id ? '' : '（该候选无建议领域，必填）') + '<input id="conceptConfirmDomain" type="text" value="' + esc(c.domain_id||'') + '" placeholder="domain_id" style="width:100%;margin-top:4px"></label>\
+          <label style="font-size:12px;color:var(--text-3)">领域名称<select id="conceptConfirmDomainSelect" style="width:100%;margin-top:4px" onchange="onConceptConfirmDomainChange()">' + domainOptions + '</select></label>\
+          <label style="font-size:12px;color:var(--text-3)">概念名称<span id="conceptConfirmConceptSlot" style="display:block;margin-top:4px">' + buildConceptSlotHtml(concepts, c.suggested_name) + '</span></label>\
           <div class="modal-actions" style="margin-top:0;justify-content:flex-start">\
-            <button class="btn btn-primary btn-sm" onclick="confirmConceptCandidate(\'' + esc(c.candidate_id) + '\')">确认新增</button>\
+            <button class="btn btn-primary btn-sm" onclick="confirmConceptCandidate(\'' + esc(c.candidate_id) + '\')">确认</button>\
             <button class="btn btn-sm" style="color:var(--red)" onclick="rejectConceptCandidate(\'' + esc(c.candidate_id) + '\')">驳回</button>\
           </div>\
         </div>';
     } else {
-      var options = (c.merge_from||[]).map(function(cid) { return '<option value="' + esc(cid) + '">' + esc(cid) + '</option>'; }).join('');
+      var options = (c.merge_from||[]).map(function(cid) { return '<option value="' + esc(cid) + '">' + esc(conceptNames[cid] || cid) + '</option>'; }).join('');
       actionsHtml = '\
         <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px">\
           <label style="font-size:12px;color:var(--text-3)">并入目标概念<select id="conceptConfirmTarget" style="width:100%;margin-top:4px">' + options + '</select></label>\
@@ -3294,25 +3417,96 @@ function renderConceptCandidateDetail(c) {
     }
   }
 
+  var origin = conceptCandidateOrigin(c);
+  var originRow = origin ? '<div class="detail-row"><span class="dl">候选来源</span><span class="dv">' + (origin === 'content_driven' ? '导入内容聚类（跨 Source KPN 匹配）' : '查询信号聚类（Study 概念缺口扫描）') + '</span></div>' : '';
+  var mergeFromNames = (c.merge_from||[]).map(function(cid) { return conceptNames[cid] || cid; });
+
   detail.innerHTML = '\
-    <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">' + (c.kind === 'merge' ? '合并候选：' + esc((c.merge_from||[]).join(' + ')) : '新增候选：' + esc(c.suggested_name||'(未命名)')) + '</h2>\
+    <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">' + (c.kind === 'merge' ? '合并候选：' + esc(mergeFromNames.join(' + ')) : '新增候选：' + esc(c.suggested_name||'(未命名)')) + '</h2>\
     <div class="detail-row"><span class="dl">类型</span><span class="dv"><span class="badge">' + (c.kind === 'merge' ? '合并' : '新增') + '</span></span></div>\
-    <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="badge">' + esc(c.status) + '</span></span></div>\
-    <div class="detail-row"><span class="dl">关联 KP</span><span class="dv">' + (c.point_ids||[]).length + ' 个</span></div>\
+    <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="badge">' + esc(CONCEPT_STATUS_LABELS[c.status] || c.status) + '</span></span></div>\
+    ' + originRow + '\
     <div class="detail-row"><span class="dl">支撑事件</span><span class="dv">' + (c.event_ids||[]).length + ' 条</span></div>\
-    <h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">依据 (Learning Reason)</h3>\
-    ' + evidenceHtml + actionsHtml + '\
+    <h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">依据</h3>\
+    ' + evidenceHtml + '\
+    <h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">关联知识点（' + (c.point_ids||[]).length + ' 个）</h3>\
+    ' + pointsHtml + actionsHtml + '\
     <div class="modal-actions"><button class="btn btn-sm" onclick="closeConceptDetailModal()">关闭</button></div>';
+}
+
+// 概念名称控件是一个"槽位"：默认渲染成和领域名称样式、交互完全一致的原生
+// select——只列出该领域的真实概念，不混入"+ 新建概念..."这种伪选项（会
+// 破坏原生下拉的可点击展开行为，且列表里出现非概念的操作项本身也不合适）。
+// "新建"是 select 之外单独的入口，点击后整个槽位就地换成文本输入框，
+// 不额外常驻第二个字段。
+function conceptSlotSelectHtml(concepts, selectedConceptId) {
+  var options = concepts.map(function(cc) {
+    return '<option value="' + esc(cc.concept_id) + '"' + (cc.concept_id === selectedConceptId ? ' selected' : '') + '>' + esc(cc.name) + '</option>';
+  }).join('');
+  var newLink = '<div style="margin-top:4px"><a href="javascript:void(0)" onclick="switchConceptSlotToNew()" style="font-size:12px;color:var(--text-3);text-decoration:underline">+ 新建概念...</a></div>';
+  return '<select id="conceptConfirmConceptSelect" style="width:100%">' + options + '</select>' + newLink;
+}
+
+// 内联样式复制自全局 `select { ... }` 规则（第 468 行附近），让新概念名
+// 输入框和领域名称/概念名称的原生 select 边框颜色、圆角、内边距、高度
+// 完全一致——文本输入框没有对应的全局 CSS 规则，不手动补上就会退化成
+// 浏览器默认样式。
+var CONCEPT_INPUT_STYLE = 'width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-xs);font-size:13px;background:var(--bg);outline:none;color:var(--text)';
+
+function conceptSlotNewInputHtml(concepts, nameValue) {
+  var backLink = concepts.length ? '<div style="margin-top:4px"><a href="javascript:void(0)" onclick="switchConceptSlotToSelect()" style="font-size:12px;color:var(--text-3);text-decoration:underline">从已有概念中选择</a></div>' : '';
+  return '<input id="conceptConfirmConceptNewInput" type="text" value="' + esc(nameValue||'') + '" placeholder="输入新概念名称" style="' + CONCEPT_INPUT_STYLE + '">' + backLink;
+}
+
+// 建议名称若与该领域下某个已有概念同名，默认展示为已选中该概念的 select——
+// 这正是修正 unit_concept_match 漏判的典型场景；否则（含该领域尚无任何
+// 概念的情况）直接展示为待编辑的新概念名输入框。
+function buildConceptSlotHtml(concepts, suggestedName) {
+  var matched = concepts.find(function(cc) { return cc.name === suggestedName; });
+  if (matched) return conceptSlotSelectHtml(concepts, matched.concept_id);
+  return conceptSlotNewInputHtml(concepts, suggestedName);
+}
+
+function switchConceptSlotToNew() {
+  var slot = document.getElementById('conceptConfirmConceptSlot');
+  if (!slot) return;
+  slot.innerHTML = conceptSlotNewInputHtml(S.conceptFormConcepts || [], S.conceptFormSuggestedName || '');
+  var input = document.getElementById('conceptConfirmConceptNewInput');
+  if (input) input.focus();
+}
+
+function switchConceptSlotToSelect() {
+  var slot = document.getElementById('conceptConfirmConceptSlot');
+  if (!slot) return;
+  slot.innerHTML = conceptSlotSelectHtml(S.conceptFormConcepts || [], null);
+}
+
+// 切换领域后概念槽位必须刷新为该领域下的概念列表，否则会把上一个领域的
+// concept_id 提交给新领域（后端并不校验两者归属一致）。
+async function onConceptConfirmDomainChange() {
+  var domainSel = document.getElementById('conceptConfirmDomainSelect');
+  var slot = document.getElementById('conceptConfirmConceptSlot');
+  if (!domainSel || !slot) return;
+  var concepts = await loadConceptsForDomain(domainSel.value);
+  S.conceptFormConcepts = concepts;
+  slot.innerHTML = buildConceptSlotHtml(concepts, S.conceptFormSuggestedName);
 }
 
 async function confirmConceptCandidate(candidateId) {
   var c = S.conceptCandidates.find(function(x) { return x.candidate_id === candidateId; });
   if (!c) return;
-  if (!(await showConfirm('确认执行该概念候选？这会立即改变概念结构（' + (c.kind === 'merge' ? '合并概念、迁移知识点、标记相关 Wiki 页面重编译' : '创建新概念并迁移知识点') + '）。'))) return;
+  if (!(await showConfirm('确认执行该概念候选？这会立即改变概念结构（' + (c.kind === 'merge' ? '合并概念、迁移知识点、标记相关 Wiki 页面重编译' : '创建新概念并迁移知识点，或归入已选择的已有概念') + '）。'))) return;
   var body = {};
   if (c.kind === 'add') {
-    body.suggested_name = document.getElementById('conceptConfirmName').value;
-    body.domain_id = document.getElementById('conceptConfirmDomain').value;
+    var conceptSelect = document.getElementById('conceptConfirmConceptSelect');
+    if (conceptSelect) {
+      body.concept_id = conceptSelect.value;
+    } else {
+      var domainSel = document.getElementById('conceptConfirmDomainSelect');
+      var newInput = document.getElementById('conceptConfirmConceptNewInput');
+      body.suggested_name = newInput ? newInput.value.trim() : '';
+      body.domain_id = domainSel ? domainSel.value : '';
+    }
   } else {
     body.target = document.getElementById('conceptConfirmTarget').value;
   }

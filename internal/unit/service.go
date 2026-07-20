@@ -33,6 +33,7 @@ type Service struct {
 	broadcaster        *progress.Broadcaster
 	wikiNotifier       WikiNotifier
 	activationNotifier ActivationNotifier
+	conceptNotifier    ConceptNotifier
 
 	// extracting guards against two Extract runs on the same source at once
 	// (double-triggered queue tasks, a retry racing the original) — the second
@@ -61,8 +62,24 @@ type ActivationNotifier interface {
 	InvalidateCache() error
 }
 
+// ConceptNotifier lets cross-Source KPN matching (kpn_cross.go,
+// docs/impl/v1/kpn.md 步骤 3) hand concept_id-empty KP clusters to the
+// concept evolution module instead of falling back to a same-domain
+// candidate pool — satisfied by *concept.Service without a direct import
+// (concept already depends on wiki; keeping unit -> concept one-directional
+// via this interface, like WikiNotifier/ActivationNotifier above, avoids
+// unit's public surface hard-requiring the concept package in tests).
+// SetConceptNotifier no-ops when unset.
+type ConceptNotifier interface {
+	ProposeAddCandidate(domainID, suggestedName, suggestedDescription string, pointIDs []string, sourceID string) (candidateID string, err error)
+}
+
 func (s *Service) SetWikiNotifier(n WikiNotifier) {
 	s.wikiNotifier = n
+}
+
+func (s *Service) SetConceptNotifier(n ConceptNotifier) {
+	s.conceptNotifier = n
 }
 
 func (s *Service) SetActivationNotifier(n ActivationNotifier) {

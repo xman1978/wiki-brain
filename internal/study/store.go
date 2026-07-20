@@ -111,20 +111,29 @@ func (s *Store) CooccurrenceLabelsForPoint(pointID string) ([]string, error) {
 }
 
 // ConfidentTraceFieldValues returns the distinct raw (un-normalized)
-// intent/audience/constraint_text values across every confident trace whose
-// question_terms has ever confidently co-occurred with pointID — the inputs
-// for computeLinkCondition's accumulated whitelist sets (docs/impl/v1/study.md
-// 步骤 2). Same source table as CooccurrenceLabelsForPoint
-// (question_kp_cooccurrence, confident_count > 0), joined to traces for the
-// other three quadruple columns. Normalization/dedup-after-normalization is
-// the caller's job, matching LatestConfidentTraceQuadruple's existing
-// division of responsibility (store returns raw, service normalizes).
+// intent/audience/constraint_text values across every confident trace that
+// actually cited pointID — the inputs for computeLinkCondition's accumulated
+// whitelist sets (docs/impl/v1/study.md 步骤 2). Same source table as
+// CooccurrenceLabelsForPoint (question_kp_cooccurrence, confident_count > 0),
+// joined to traces for the other three quadruple columns.
+//
+// question_terms alone is NOT a sufficient join key: it stores the
+// session-resolved subject label, which strips distinguishing constraints
+// into constraint_text — questions about different vendors ("达梦"/"神通")
+// share one label, so a label-only join would merge their constraints into
+// every same-label point's whitelist (2026-07-21 修订). The direct_point_ids
+// containment check keeps the association at citation level.
+//
+// Normalization/dedup-after-normalization is the caller's job, matching
+// LatestConfidentTraceQuadruple's existing division of responsibility
+// (store returns raw, service normalizes).
 func (s *Store) ConfidentTraceFieldValues(pointID string) (intents, audiences, constraints []string, err error) {
 	rows, err := s.db.Query(`
 		SELECT DISTINCT t.intent, t.audience, t.constraint_text
 		FROM question_kp_cooccurrence c
 		JOIN traces t ON t.question_terms = c.question_terms AND t.retrieval_quality = 'confident'
-		WHERE c.point_id = ? AND c.confident_count > 0`, pointID)
+		WHERE c.point_id = ? AND c.confident_count > 0
+		  AND EXISTS (SELECT 1 FROM json_each(t.direct_point_ids) je WHERE je.value = c.point_id)`, pointID)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("study store: confident trace field values: %w", err)
 	}
@@ -647,12 +656,15 @@ func (s *Store) HasKPNNeighbors(pointID string) (bool, error) {
 // join is a defensive backstop rather than the primary guarantee.
 func (s *Store) QualifyingKPsByConceptFromCandidates(wikiConfidentMin int) (map[string][]QualifyingKP, error) {
 	rows, err := s.db.Query(`
-		SELECT ku.concept_id, lc.point_id, lc.confident_count, kp.content AS point_summary
+		SELECT ku.concept_id, lc.point_id, MAX(lc.confident_count) AS max_confident, kp.content AS point_summary
 		FROM link_candidates lc
 		JOIN knowledge_points kp ON lc.point_id = kp.point_id
 		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
 		JOIN concepts c ON ku.concept_id = c.concept_id
-		WHERE lc.confident_count >= ? AND ku.concept_id IS NOT NULL AND ku.concept_id != '' AND c.merged_into IS NULL`,
+		WHERE ku.concept_id IS NOT NULL AND ku.concept_id != '' AND c.merged_into IS NULL
+			AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
+		GROUP BY lc.point_id
+		HAVING MAX(lc.confident_count) >= ?`,
 		wikiConfidentMin)
 	if err != nil {
 		return nil, fmt.Errorf("study store: qualifying kps: %w", err)

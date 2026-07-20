@@ -31,11 +31,11 @@ think.md          总体思想与核心闭环
 | 文档 | 标题 | 内容简介 |
 | --- | --- | --- |
 | [think.md](./think.md) | 知识大脑总体思想 | 定义知识大脑的目标与边界；说明为何不是普通知识库、Agent 平台或知识图谱；描述从材料进入到 Wiki 沉淀的核心闭环，以及简单/复杂问题分流原则。 |
-| [design.md](./design.md) | 知识大脑系统设计 | 把 `think.md` 的总体思想转化为系统设计；定义核心对象（含 KPN）、完整链路和 Agent 协作边界；是阅读其他专题文档前的总览入口。 |
+| [design.md](./design.md) | 知识大脑系统设计 | 把 `think.md` 的总体思想转化为系统设计；定义核心对象（含 KPN、Claim）与知识表达的五层分层（KU / KP / ActivationLink / Claim / Wiki）及各层对认知系统的消费规则；是阅读其他专题文档前的总览入口。 |
 | [source.md](./source.md) | 外部知识输入 | 描述外部材料如何进入系统、转换为规范化 Markdown 并保留来源；区分文档、对话、网页等不同材料类型及其处理方式。 |
 | [unit.md](./unit.md) | 知识单元 | 定义知识单元与知识点的区别；说明如何从材料形成最小完整知识包，以及如何保留来源位置以支持追溯；定义 KnowledgePoint Network（KPN）作为知识点间的轻量上下文补充层。 |
 | [kpn.md](./kpn.md) | KnowledgePoint Network 设计 | 定义 KPN 的定位、激活边界、扩展边界和停止条件；说明 KPN 与 Concept、KnowledgePoint、ActivationLink 的职责边界。 |
-| [precompile.md](./precompile.md) | 初始激活结构 | 区分导入阶段形成的材料侧知识，与使用阶段形成的认知侧结构；说明领域、概念、ActivationLink 为何来自使用而非导入。 |
+| [precompile.md](./precompile.md) | 初始激活结构 | 区分导入阶段形成的材料侧知识，与使用阶段形成的认知侧结构；说明领域、概念、ActivationLink 为何来自使用而非导入；定义 ActivationLink 的目标形态——认知入口规则（触发条件 + 认知条件 → 知识点及建议槽位角色），以及多链接身份与条件的来源置信约束。 |
 | [cognitive-routing.md](./cognitive-routing.md) | 认知路由 | 定义找 / 浅想 / 深想三条处理路径及其判据；说明"找 -> 浅想 -> 深想"的单向升级链与程序化升级信号；定义约束深想扩展的固定处理上限。 |
 | [knowledge-processing-pattern.md](./knowledge-processing-pattern.md) | 知识加工模式 | 定义领域相关的知识组织模板与证据槽位；说明模式为何前置于检索以跨越词汇鸿沟；说明槽位填充如何承担知识转换、缺口暴露和关系发现；说明模式挂载 Domain/Concept 与库演化。 |
 | [retrieval.md](./retrieval.md) | 知识激活与证据检索 | 描述 ActivationLink、目录结构树、全文检索和外部证据的分层检索路径；说明知识加工模式槽位如何驱动召回扩展；说明 KPN 如何在核心知识点召回后做局部上下文补充；说明认知结构检索与补充查找如何协作。 |
@@ -46,7 +46,7 @@ think.md          总体思想与核心闭环
 | [study.md](./study.md) | 长期记忆学习 | 描述 Study 如何根据 Learning Event 调整长期记忆；说明 ActivationLink 演化主要由检索事件累积驱动、无需依赖用户纠正；区分 KPN 与 ActivationLink 的学习边界；说明 Working Model 结构如何经多次事件提炼为实践路径；区分材料层、认知层和表达层学习。 |
 | [concept-evolution.md](./concept-evolution.md) | 概念演化 | 定义领域下概念的新增、合并与拆分机制：演化信号来自 Learning Event 累积，候选不参与激活，晋升与合并由人工确认；说明合并时 ActivationLink、KPP 挂载和 Wiki 标记的迁移语义，以及与 preset 数据的优先级关系。 |
 | [lifecycle.md](./lifecycle.md) | 记忆生命周期 | 说明知识为何需要状态管理；描述生命周期如何影响激活、ActivationLink 和 Wiki 页面，以及如何区分当前可用与历史解释知识。 |
-| [wiki-compilation.md](./wiki-compilation.md) | Wiki 编译与长期知识沉淀 | 定义 Wiki 页面的定位与类型；说明 Wiki 如何由 Study 根据 Learning Event 判断重编译，而非依赖完整 Trace。 |
+| [wiki-compilation.md](./wiki-compilation.md) | Wiki 编译与长期知识沉淀 | 定义 Wiki 页面的定位与类型；定义编译的同源双产物（面向人的页面 + 面向程序的 Claim 集合）与认知包（组装视图，非独立存储）；说明 Wiki 如何由 Study 根据 Learning Event 判断重编译，而非依赖完整 Trace。 |
 
 ## 文档关系
 
@@ -183,7 +183,7 @@ flowchart TB
 Only if learning value exists:
   -> Learning Event（trace）
   -> Study 根据 Learning Event 调整长期记忆（study）
-  -> 稳定结果可进入 Wiki 编译（wiki-compilation）
+  -> 稳定结果可编译为 Wiki 页面与 Claim 集合（wiki-compilation）
         ↑
   生命周期管理（lifecycle）持续影响激活、学习与 Wiki 有效性
 ```
@@ -191,7 +191,7 @@ Only if learning value exists:
 职责总览：
 
 ```text
-ActivationLink 负责找到知识；
+ActivationLink 负责找到知识，并建议其在 Working Model 中的用途；
 KPN 负责补充上下文；
 Knowledge Processing Pattern 负责给出领域知识结构；
 Evidence Mining 负责摘选证据；
@@ -199,7 +199,8 @@ Working Model 负责承载本次认知工作空间；
 Reasoning Pattern 负责在其上执行推理；
 Learning Event / Trace 负责记录学习相关事件和结果；
 Study 负责根据 Learning Event 修正长期记忆；
-Wiki 负责长期表达沉淀。
+Claim 负责稳定结论的可执行复用；
+Wiki 负责长期表达沉淀，是 Claim 集合的可读投影。
 ```
 
 设计约束：

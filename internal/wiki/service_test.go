@@ -41,6 +41,23 @@ func TestCompile_HappyPath(t *testing.T) {
 	}
 }
 
+func TestCompile_RecordsVerifiedLinkIDs(t *testing.T) {
+	svc, fake, db, _ := setupTestService(t)
+	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: validCompileOutput})
+	seedVerifiedLink(t, db, "link-p1", "p1")
+
+	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	var sourceLinkIDs []string
+	json.Unmarshal([]byte(page.SourceLinkIDs), &sourceLinkIDs)
+	if len(sourceLinkIDs) != 1 || sourceLinkIDs[0] != "link-p1" {
+		t.Errorf("source_link_ids = %v, want [link-p1] (p2 has no link, p1's is verified)", sourceLinkIDs)
+	}
+}
+
 func TestCompile_DuplicateRejected(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
 	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: validCompileOutput})
