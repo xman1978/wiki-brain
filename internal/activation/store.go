@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -18,7 +20,7 @@ func NewStore(db *sql.DB) *Store {
 }
 
 const linkColumns = `link_id, question_terms, subject_terms, intent_terms, audience,
-	constraint_terms, scene, goal, point_id, status, adopt_count, fail_count,
+	constraint_terms, observed_conditions, scene, goal, point_id, status, adopt_count, fail_count,
 	last_used_at, created_from, status_changed_at, created_at, updated_at`
 
 // encodeTermSet sorts and JSON-encodes an accumulated condition set
@@ -55,9 +57,9 @@ func decodeTermSet(raw string) ([]string, error) {
 
 func scanLink(row interface{ Scan(...interface{}) error }) (*ActivationLink, error) {
 	var l ActivationLink
-	var intentRaw, audienceRaw, constraintRaw string
+	var intentRaw, audienceRaw, constraintRaw, observedRaw string
 	err := row.Scan(&l.LinkID, &l.QuestionTerms, &l.SubjectTerms, &intentRaw, &audienceRaw,
-		&constraintRaw, &l.Scene, &l.Goal, &l.PointID, &l.Status, &l.AdoptCount, &l.FailCount,
+		&constraintRaw, &observedRaw, &l.Scene, &l.Goal, &l.PointID, &l.Status, &l.AdoptCount, &l.FailCount,
 		&l.LastUsedAt, &l.CreatedFrom, &l.StatusChangedAt, &l.CreatedAt, &l.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -69,6 +71,9 @@ func scanLink(row interface{ Scan(...interface{}) error }) (*ActivationLink, err
 		return nil, err
 	}
 	if l.ConstraintTerms, err = decodeTermSet(constraintRaw); err != nil {
+		return nil, err
+	}
+	if l.ObservedConditions, err = decodeObservedConditions(observedRaw); err != nil {
 		return nil, err
 	}
 	return &l, nil
@@ -87,6 +92,7 @@ func (s *Store) InsertLink(l *ActivationLink) error {
 	if l.CreatedFrom == "" {
 		l.CreatedFrom = "[]"
 	}
+	applyLegacyProjection(l)
 	intentJSON, err := encodeTermSet(l.IntentTerms)
 	if err != nil {
 		return err
@@ -99,16 +105,31 @@ func (s *Store) InsertLink(l *ActivationLink) error {
 	if err != nil {
 		return err
 	}
+	observedJSON, err := encodeObservedConditions(l.ObservedConditions)
+	if err != nil {
+		return err
+	}
 	_, err = s.db.Exec(`INSERT INTO activation_links
 		(link_id, question_terms, subject_terms, intent_terms, audience, constraint_terms,
-		 point_id, status, created_from)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 observed_conditions, point_id, status, created_from)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		l.LinkID, l.QuestionTerms, l.SubjectTerms, intentJSON, audienceJSON, constraintJSON,
-		l.PointID, l.Status, l.CreatedFrom)
+		observedJSON, l.PointID, l.Status, l.CreatedFrom)
 	if err != nil {
 		return fmt.Errorf("activation store: insert link: %w", err)
 	}
 	return nil
+}
+
+func applyLegacyProjection(l *ActivationLink) {
+	if len(l.ObservedConditions) == 0 {
+		return
+	}
+	subj, intent, aud, cons := ProjectLegacyFields(l.ObservedConditions)
+	l.SubjectTerms = subj
+	l.IntentTerms = intent
+	l.Audience = aud
+	l.ConstraintTerms = cons
 }
 
 // PointUnitInfo resolves a link's target KP into displayable context for the
@@ -186,30 +207,57 @@ func (s *Store) UpdateStatus(linkID, status string) error {
 	return nil
 }
 
-// UpdateConditions overwrites a link's condition fields in place — used by
-// Study's condition refresh (docs/impl/v1/study.md 步骤 2, computeLinkCondition)
-// each time a point with an existing link accumulates new confident signal.
-// Not part of the status lifecycle (see Service.TransitionLink for that).
+// UpdateConditions / ReplaceObservedConditions overwrite a link's observed
+// condition groups in place (Study full rebuild). Legacy columns are projected
+// from the newest group for old UI.
 func (s *Store) UpdateConditions(linkID string, cond LinkCondition) error {
-	intentJSON, err := encodeTermSet(cond.IntentTerms)
+	return s.ReplaceObservedConditions(linkID, cond.EffectiveConditions())
+}
+
+// ReplaceObservedConditions writes the full observed_conditions list and
+// projects legacy fields.
+func (s *Store) ReplaceObservedConditions(linkID string, conds []ObservedCondition) error {
+	if conds == nil {
+		conds = []ObservedCondition{}
+	}
+	subj, intent, aud, cons := ProjectLegacyFields(conds)
+	intentJSON, err := encodeTermSet(intent)
 	if err != nil {
 		return err
 	}
-	audienceJSON, err := encodeTermSet(cond.Audience)
+	audienceJSON, err := encodeTermSet(aud)
 	if err != nil {
 		return err
 	}
-	constraintJSON, err := encodeTermSet(cond.ConstraintTerms)
+	constraintJSON, err := encodeTermSet(cons)
+	if err != nil {
+		return err
+	}
+	observedJSON, err := encodeObservedConditions(conds)
 	if err != nil {
 		return err
 	}
 	_, err = s.db.Exec(`UPDATE activation_links
-		SET subject_terms = ?, intent_terms = ?, audience = ?, constraint_terms = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE link_id = ?`, cond.SubjectTerms, intentJSON, audienceJSON, constraintJSON, linkID)
+		SET subject_terms = ?, intent_terms = ?, audience = ?, constraint_terms = ?,
+		    observed_conditions = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE link_id = ?`, subj, intentJSON, audienceJSON, constraintJSON, observedJSON, linkID)
 	if err != nil {
-		return fmt.Errorf("activation store: update conditions: %w", err)
+		return fmt.Errorf("activation store: replace observed conditions: %w", err)
 	}
 	return nil
+}
+
+// AppendObservedCondition merges one quadruple into the link (slow-path enrichment).
+func (s *Store) AppendObservedCondition(linkID string, add ObservedCondition, max int) error {
+	link, err := s.GetByID(linkID)
+	if err != nil {
+		return err
+	}
+	if link == nil {
+		return fmt.Errorf("activation store: append: link not found: %s", linkID)
+	}
+	merged := MergeObservedConditions(link.ObservedConditions, add, max)
+	return s.ReplaceObservedConditions(linkID, merged)
 }
 
 func (s *Store) UpdateStats(linkID string, adoptDelta, failDelta int) error {
@@ -245,15 +293,43 @@ func (s *Store) TouchLastUsed(linkIDs []string) error {
 }
 
 // ListVerifiedLinksForCurrentKP loads every verified link whose target KP is
-// still lifecycle=current — the Matcher's cache source
-// (docs/impl/v1/activation.md 步骤 2 候选加载).
+// still lifecycle=current. Prefer ListMatchableLinksForCurrentKP for Match —
+// that also includes candidates so Study can accumulate activation_success
+// before promotion.
 func (s *Store) ListVerifiedLinksForCurrentKP() ([]ActivationLink, error) {
+	return s.listLinksForCurrentKP(StatusVerified)
+}
+
+// ListMatchableLinksForCurrentKP loads verified + candidate links whose
+// target KP is lifecycle=current — the Matcher's cache source
+// (docs/impl/v1/activation.md 步骤 2 候选加载). Candidates participate in
+// Match so Trace can grade activation_success/failure; Retrieval only
+// builds the fast path from verified hits.
+func (s *Store) ListMatchableLinksForCurrentKP() ([]ActivationLink, error) {
+	return s.listLinksForCurrentKP(StatusVerified, StatusCandidate)
+}
+
+func (s *Store) listLinksForCurrentKP(statuses ...string) ([]ActivationLink, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	placeholders := ""
+	args := make([]interface{}, 0, len(statuses)+1)
+	for i, st := range statuses {
+		if i > 0 {
+			placeholders += ", "
+		}
+		placeholders += "?"
+		args = append(args, st)
+	}
+	args = append(args, "current")
+
 	rows, err := s.db.Query(`SELECT `+linkColumnsPrefixed("al")+`
 		FROM activation_links al
 		JOIN knowledge_points kp ON kp.point_id = al.point_id
-		WHERE al.status = ? AND kp.lifecycle = 'current'`, StatusVerified)
+		WHERE al.status IN (`+placeholders+`) AND kp.lifecycle = ?`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("activation store: list verified links: %w", err)
+		return nil, fmt.Errorf("activation store: list matchable links: %w", err)
 	}
 	defer rows.Close()
 
@@ -261,7 +337,7 @@ func (s *Store) ListVerifiedLinksForCurrentKP() ([]ActivationLink, error) {
 	for rows.Next() {
 		l, err := scanLink(rows)
 		if err != nil {
-			return nil, fmt.Errorf("activation store: scan verified link: %w", err)
+			return nil, fmt.Errorf("activation store: scan matchable link: %w", err)
 		}
 		links = append(links, *l)
 	}
@@ -270,7 +346,7 @@ func (s *Store) ListVerifiedLinksForCurrentKP() ([]ActivationLink, error) {
 
 func linkColumnsPrefixed(alias string) string {
 	cols := []string{"link_id", "question_terms", "subject_terms", "intent_terms", "audience",
-		"constraint_terms", "scene", "goal", "point_id", "status", "adopt_count", "fail_count",
+		"constraint_terms", "observed_conditions", "scene", "goal", "point_id", "status", "adopt_count", "fail_count",
 		"last_used_at", "created_from", "status_changed_at", "created_at", "updated_at"}
 	out := ""
 	for i, c := range cols {
@@ -323,9 +399,9 @@ func (s *Store) ListLinks(f ListLinksFilter) ([]ActivationLinkListRow, error) {
 	var results []ActivationLinkListRow
 	for rows.Next() {
 		var r ActivationLinkListRow
-		var intentRaw, audienceRaw, constraintRaw string
+		var intentRaw, audienceRaw, constraintRaw, observedRaw string
 		err := rows.Scan(&r.LinkID, &r.QuestionTerms, &r.SubjectTerms, &intentRaw, &audienceRaw,
-			&constraintRaw, &r.Scene, &r.Goal, &r.PointID, &r.Status, &r.AdoptCount, &r.FailCount,
+			&constraintRaw, &observedRaw, &r.Scene, &r.Goal, &r.PointID, &r.Status, &r.AdoptCount, &r.FailCount,
 			&r.LastUsedAt, &r.CreatedFrom, &r.StatusChangedAt, &r.CreatedAt, &r.UpdatedAt,
 			&r.PointSummary, &r.UnitCenter)
 		if err != nil {
@@ -338,6 +414,9 @@ func (s *Store) ListLinks(f ListLinksFilter) ([]ActivationLinkListRow, error) {
 			return nil, err
 		}
 		if r.ConstraintTerms, err = decodeTermSet(constraintRaw); err != nil {
+			return nil, err
+		}
+		if r.ObservedConditions, err = decodeObservedConditions(observedRaw); err != nil {
 			return nil, err
 		}
 		results = append(results, r)
@@ -448,4 +527,93 @@ func (s *Store) ResolvePending(resultID, status, confirmedBy string) error {
 		return fmt.Errorf("activation store: resolve pending: %w", err)
 	}
 	return nil
+}
+
+// LinkQuestion is one original question associated with an ActivationLink
+// (docs/superpowers/specs/2026-07-22-activation-link-questions-ui-design.md).
+type LinkQuestion struct {
+	Question         string `json:"question"`
+	TraceID          string `json:"trace_id"`
+	CreatedAt        string `json:"created_at"`
+	PathType         string `json:"path_type,omitempty"`
+	RetrievalQuality string `json:"retrieval_quality,omitempty"`
+}
+
+// ListMatchedQuestions returns traces whose activation_link_ids contain linkID
+// (candidate signal hits and verified path hits).
+func (s *Store) ListMatchedQuestions(linkID string) ([]LinkQuestion, error) {
+	rows, err := s.db.Query(`
+		SELECT t.trace_id, t.question, t.created_at, t.path_type, t.retrieval_quality
+		FROM traces t, json_each(t.activation_link_ids) AS j
+		WHERE j.value = ?
+		ORDER BY t.created_at ASC`, linkID)
+	if err != nil {
+		return nil, fmt.Errorf("activation store: list matched questions: %w", err)
+	}
+	defer rows.Close()
+	return scanLinkQuestions(rows)
+}
+
+// ListCreatedFromQuestions returns create-time fuel questions for
+// learning_event IDs stored in activation_links.created_from.
+func (s *Store) ListCreatedFromQuestions(eventIDs []string) ([]LinkQuestion, error) {
+	if len(eventIDs) == 0 {
+		return []LinkQuestion{}, nil
+	}
+	placeholders := make([]string, len(eventIDs))
+	args := make([]interface{}, len(eventIDs))
+	for i, id := range eventIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	q := `
+		SELECT t.trace_id, t.question, t.created_at, t.path_type, t.retrieval_quality
+		FROM traces t
+		WHERE t.trace_id IN (
+			SELECT DISTINCT le.trace_id FROM learning_events le
+			WHERE le.event_id IN (` + strings.Join(placeholders, ",") + `)
+		)
+		ORDER BY t.created_at ASC`
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("activation store: list created_from questions: %w", err)
+	}
+	defer rows.Close()
+	return scanLinkQuestions(rows)
+}
+
+// ListConfidentQuestionsForPointBefore returns confident traces that cited
+// pointID and occurred at or before before (link creation time). Covers
+// legacy cooccurrence creates whose created_from held link_candidate IDs
+// instead of learning_event IDs.
+func (s *Store) ListConfidentQuestionsForPointBefore(pointID string, before time.Time) ([]LinkQuestion, error) {
+	rows, err := s.db.Query(`
+		SELECT t.trace_id, t.question, t.created_at, t.path_type, t.retrieval_quality
+		FROM traces t, json_each(t.direct_point_ids) AS pid
+		WHERE t.retrieval_quality = 'confident'
+		  AND pid.value = ?
+		  AND datetime(t.created_at) <= datetime(?)
+		ORDER BY t.created_at ASC`, pointID, before)
+	if err != nil {
+		return nil, fmt.Errorf("activation store: list confident questions for point: %w", err)
+	}
+	defer rows.Close()
+	return scanLinkQuestions(rows)
+}
+
+func scanLinkQuestions(rows *sql.Rows) ([]LinkQuestion, error) {
+	out := make([]LinkQuestion, 0)
+	for rows.Next() {
+		var q LinkQuestion
+		var createdAt time.Time
+		if err := rows.Scan(&q.TraceID, &q.Question, &createdAt, &q.PathType, &q.RetrievalQuality); err != nil {
+			return nil, fmt.Errorf("activation store: scan link question: %w", err)
+		}
+		q.CreatedAt = createdAt.Format("2006-01-02T15:04:05Z07:00")
+		out = append(out, q)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

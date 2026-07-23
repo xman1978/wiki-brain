@@ -2,7 +2,9 @@ package source
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -459,6 +461,58 @@ func (s *Store) GetSourceVersion(sourceID string, version int) (*SourceVersion, 
 		return nil, fmt.Errorf("source store: get source version: %w", err)
 	}
 	return v, nil
+}
+
+// ResolveMarkdownPathForUnit returns the relative markdown path to use when
+// slicing a KU's body. Current/deprecated use sources.markdown_path;
+// superseded uses the earliest source_versions row with archived_at >=
+// lifecycle_changed_at (historical evidence backlink design).
+func (s *Store) ResolveMarkdownPathForUnit(sourceID, lifecycle string, lifecycleChangedAt sql.NullTime) (string, error) {
+	src, err := s.GetByID(sourceID)
+	if err != nil {
+		return "", err
+	}
+	if lifecycle != "superseded" || !lifecycleChangedAt.Valid {
+		return src.MarkdownPath, nil
+	}
+	v, err := s.findArchivedVersionAtOrAfter(sourceID, lifecycleChangedAt.Time)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			slog.Warn("source: no archived markdown for superseded unit; falling back to current",
+				"source_id", sourceID, "lifecycle_changed_at", lifecycleChangedAt.Time)
+			return src.MarkdownPath, nil
+		}
+		return "", err
+	}
+	return v.MarkdownPath, nil
+}
+
+func (s *Store) findArchivedVersionAtOrAfter(sourceID string, at time.Time) (*SourceVersion, error) {
+	v := &SourceVersion{}
+	err := s.db.QueryRow(`SELECT version_id, source_id, version, file_name, original_path, html_path, markdown_path, archived_at
+		FROM source_versions
+		WHERE source_id = ? AND archived_at >= ?
+		ORDER BY archived_at ASC LIMIT 1`,
+		sourceID, at.UTC().Format("2006-01-02 15:04:05")).Scan(
+		&v.VersionID, &v.SourceID, &v.Version, &v.FileName,
+		&v.OriginalPath, &v.HTMLPath, &v.MarkdownPath, &v.ArchivedAt)
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// ResolveMarkdownPathByUnitID looks up the unit's lifecycle fields and
+// resolves the markdown path for slicing/preview.
+func (s *Store) ResolveMarkdownPathByUnitID(unitID string) (string, error) {
+	var sourceID, lifecycle string
+	var changedAt sql.NullTime
+	err := s.db.QueryRow(`SELECT source_id, lifecycle, lifecycle_changed_at
+		FROM knowledge_units WHERE unit_id = ?`, unitID).Scan(&sourceID, &lifecycle, &changedAt)
+	if err != nil {
+		return "", fmt.Errorf("source store: resolve markdown by unit: %w", err)
+	}
+	return s.ResolveMarkdownPathForUnit(sourceID, lifecycle, changedAt)
 }
 
 func (s *Store) UpdateWordCount(sourceID string, wordCount int) error {

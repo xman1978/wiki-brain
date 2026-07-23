@@ -4,15 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/concept"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
-	"github.com/jxman78/wiki-brain/internal/foundation/text"
 	"github.com/jxman78/wiki-brain/internal/retrieval"
 	"github.com/jxman78/wiki-brain/internal/wiki"
 )
@@ -546,7 +543,13 @@ func (s *Service) createCandidates(actions *LearningActionsSummary) error {
 			ratio = float64(c.ConfidentCount) / float64(c.HitCount)
 		}
 		reason := fmt.Sprintf("共现命中：confident_count=%d, hit_count=%d, ratio=%.2f", c.ConfidentCount, c.HitCount, ratio)
-		created, err := s.tryCreateLink(c.QuestionTerms, c.PointID, []string{c.CandidateID}, reason)
+		eventIDs, err := s.store.ActivationGapEventIDsForPoint(c.PointID)
+		if err != nil {
+			slog.Error("study: lookup activation_gap event ids failed",
+				"point_id", c.PointID, "error", err)
+			continue
+		}
+		created, err := s.tryCreateLink(c.QuestionTerms, c.PointID, eventIDs, reason)
 		if err != nil {
 			slog.Error("study: create candidate (cooccurrence) failed",
 				"question_terms", c.QuestionTerms, "point_id", c.PointID, "error", err)
@@ -603,13 +606,9 @@ func (s *Service) createCandidates(actions *LearningActionsSummary) error {
 }
 
 // tryCreateLink creates an ActivationLink candidate for the point unless one
-// already exists for it — dedup is at point level, any status (2026-07-18 修订：
-// 候选达标改为 point 级聚合后，代表标签可能随周期漂移，仅按 (question_terms,
-// point_id) 精确去重会给同一 KP 反复创建仅标签不同的新链接)。当该 point 已有
-// 链接时，不创建第二条，而是用同一套归纳算子刷新它的条件（computeLinkCondition）
-// ——条件不是创建时定死的，会随着更多确证信号持续收敛/扩展；deprecated 是终态，
-// 不再刷新。刷新不算新建、不计入 actions.CreatedCandidates，也不写
-// learning_results（条件收敛是持续性维护动作，不是一次性学习事件）。
+// already exists for it — dedup is at point level. When the point already has
+// a non-deprecated link, rebuild observed_conditions from confident traces
+// (buildObservedConditions) instead of creating a second link.
 func (s *Service) tryCreateLink(questionTerms, pointID string, createdFrom []string, reason string) (bool, error) {
 	existingForPoint, err := s.activationSvc.Store().ListLinks(activation.ListLinksFilter{PointID: pointID, Limit: 1})
 	if err != nil {
@@ -620,22 +619,22 @@ func (s *Service) tryCreateLink(questionTerms, pointID string, createdFrom []str
 		if existing.Status == activation.StatusDeprecated {
 			return false, nil
 		}
-		cond, err := s.computeLinkCondition(pointID, existing.QuestionTerms)
-		if err != nil || cond == nil {
+		conds, err := s.buildObservedConditions(pointID)
+		if err != nil || len(conds) == 0 {
 			return false, err
 		}
-		if conditionEqual(cond, &existing.ActivationLink) {
+		if activation.ConditionsEqual(conds, existing.ObservedConditions) {
 			return false, nil
 		}
-		return false, s.activationSvc.Store().UpdateConditions(existing.LinkID, *cond)
+		return false, s.activationSvc.ReplaceObservedConditions(existing.LinkID, conds)
 	}
 
-	cond, err := s.computeLinkCondition(pointID, questionTerms)
-	if err != nil || cond == nil {
+	conds, err := s.buildObservedConditions(pointID)
+	if err != nil || len(conds) == 0 {
 		return false, err
 	}
 
-	link, err := s.activationSvc.CreateLink(questionTerms, *cond, pointID, createdFrom)
+	link, err := s.activationSvc.CreateLink(questionTerms, activation.LinkCondition{ObservedConditions: conds}, pointID, createdFrom)
 	if err != nil {
 		slog.Info("study: create_candidate skipped", "question_terms", questionTerms, "point_id", pointID, "reason", err.Error())
 		return false, nil
@@ -655,128 +654,26 @@ func (s *Service) tryCreateLink(questionTerms, pointID string, createdFrom []str
 	return true, nil
 }
 
-// computeLinkCondition is the single place that turns a point's accumulated
-// confident-trace signal into an activation.LinkCondition — shared by both
-// creation (tryCreateLink, new point) and refresh (tryCreateLink, point
-// already linked), so the two paths can never drift into different
-// normalization rules. Returns (nil, nil) when the point has no confident
-// signal at all (nothing to derive a condition from).
-//
-// subject_terms uses the cross-phrasing label intersection (LabelTermIntersection,
-// unchanged logic) when ≥2 labels share ≥2 terms; otherwise it falls back to
-// fallbackQuestionTerms' own most recent confident trace's subject — on
-// creation that's the triggering question_terms, on refresh it's the link's
-// own stored question_terms (a stand-in label, not a matching key anymore).
-// intent_terms/audience/constraint_terms are the normalized, deduplicated,
-// sorted set of every value observed across *all* of the point's confident
-// traces (ConfidentTraceFieldValues) — not just the latest one.
-func (s *Service) computeLinkCondition(pointID, fallbackQuestionTerms string) (*activation.LinkCondition, error) {
-	labels, err := s.store.CooccurrenceLabelsForPoint(pointID)
+// buildObservedConditions turns every confident citing trace into an observed
+// condition group (no keyword intersection / whitelist union).
+func (s *Service) buildObservedConditions(pointID string) ([]activation.ObservedCondition, error) {
+	quads, err := s.store.ConfidentTraceQuadruples(pointID)
 	if err != nil {
 		return nil, err
 	}
-	if len(labels) == 0 {
+	if len(quads) == 0 {
 		return nil, nil
 	}
-
-	subjectTerms := LabelTermIntersection(labels)
-	if subjectTerms == "" {
-		subject, _, _, _, found, err := s.store.LatestConfidentTraceQuadruple(fallbackQuestionTerms)
-		if err != nil {
-			return nil, err
-		}
-		if found {
-			subjectTerms = text.Terms(text.Normalize(subject))
-		}
+	max := s.cfg.ObservedConditionsMax
+	if max <= 0 {
+		max = 50
 	}
-
-	rawIntents, rawAudiences, rawConstraints, err := s.store.ConfidentTraceFieldValues(pointID)
-	if err != nil {
-		return nil, err
+	var conds []activation.ObservedCondition
+	for _, q := range quads {
+		add := activation.NormalizeObservedCondition(q.Subject, q.Intent, q.Audience, q.Constraint, q.QuestionTerms, q.CreatedAt)
+		conds = activation.MergeObservedConditions(conds, add, max)
 	}
-
-	return &activation.LinkCondition{
-		SubjectTerms: subjectTerms,
-		IntentTerms: normalizeDedupSorted(rawIntents, func(v string) string {
-			return text.Terms(text.Normalize(v))
-		}),
-		Audience: normalizeDedupSorted(rawAudiences, text.NormalizeCompact),
-		ConstraintTerms: normalizeDedupSorted(rawConstraints, func(v string) string {
-			return text.Terms(text.Normalize(v))
-		}),
-	}, nil
-}
-
-// normalizeDedupSorted normalizes every value with norm, deduplicates, and
-// returns the sorted result — the shape computeLinkCondition needs for each
-// of the three accumulated sets (store.go's encodeTermSet sorts again on
-// write, but sorting here too keeps conditionEqual's comparison simple).
-func normalizeDedupSorted(values []string, norm func(string) string) []string {
-	seen := make(map[string]struct{}, len(values))
-	for _, v := range values {
-		seen[norm(v)] = struct{}{}
-	}
-	out := make([]string, 0, len(seen))
-	for v := range seen {
-		out = append(out, v)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// conditionEqual reports whether cond matches link's currently stored
-// condition — computeLinkCondition already returns sorted slices, so plain
-// slice equality suffices (no need to re-sort or use a set comparison).
-func conditionEqual(cond *activation.LinkCondition, link *activation.ActivationLink) bool {
-	return cond.SubjectTerms == link.SubjectTerms &&
-		slicesEqual(cond.IntentTerms, link.IntentTerms) &&
-		slicesEqual(cond.Audience, link.Audience) &&
-		slicesEqual(cond.ConstraintTerms, link.ConstraintTerms)
-}
-
-func slicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// labelTermIntersection derives the cross-phrasing stable core of a point's
-// confident subject labels: the terms every label shares. Returns "" (caller
-// keeps the trace-quadruple subject) unless there are ≥2 labels to intersect
-// and the core keeps ≥2 terms — a 1-term core like "数据库" would make the
-// link's subject condition trivially matchable, which the score threshold
-// alone shouldn't be trusted to contain.
-func LabelTermIntersection(labels []string) string {
-	if len(labels) < 2 {
-		return ""
-	}
-	core := text.TermSet(labels[0])
-	for _, l := range labels[1:] {
-		next := text.TermSet(l)
-		for w := range core {
-			if _, ok := next[w]; !ok {
-				delete(core, w)
-			}
-		}
-		if len(core) == 0 {
-			return ""
-		}
-	}
-	if len(core) < 2 {
-		return ""
-	}
-	terms := make([]string, 0, len(core))
-	for w := range core {
-		terms = append(terms, w)
-	}
-	sort.Strings(terms)
-	return strings.Join(terms, " ")
+	return conds, nil
 }
 
 // aggregateSignals groups a slice of activation_success / activation_failure

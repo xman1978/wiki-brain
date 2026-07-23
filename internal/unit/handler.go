@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -440,6 +441,7 @@ func (h *Handler) getUnit(w http.ResponseWriter, r *http.Request) {
 		Status             string      `json:"status"`
 		Lifecycle          string      `json:"lifecycle"`
 		LifecycleChangedAt *string     `json:"lifecycle_changed_at,omitempty"`
+		Content            string      `json:"content"`
 		Points             []pointResp `json:"points"`
 	}
 
@@ -452,6 +454,13 @@ func (h *Handler) getUnit(w http.ResponseWriter, r *http.Request) {
 		Status:    ku.Status,
 		Lifecycle: ku.Lifecycle,
 		Points:    make([]pointResp, 0, len(points)),
+	}
+	if h.svc.sourceStore != nil {
+		if content, err := h.svc.readUnitContent(ku); err != nil {
+			slog.Warn("unit: get unit content failed", "unit_id", unitID, "error", err)
+		} else {
+			resp.Content = content
+		}
 	}
 	if ku.OutlineID.Valid {
 		resp.OutlineID = ku.OutlineID.String

@@ -76,6 +76,10 @@ func TestCreateCandidates_SourceA_Cooccurrence(t *testing.T) {
 	seedCooccurrence(t, db, "并发 问题", "kp1", 10, 8)
 	seedAnswer(t, db, "ans1")
 	seedTrace(t, db, "tr1", "ans1", "并发问题是什么", "并发 问题", "confident", "short", []string{"kp1"})
+	seedActivationGapEvent(t, db, "gap-evt-1", "tr1", "并发 问题", []string{"kp1"})
+	seedAnswer(t, db, "ans2")
+	seedTrace(t, db, "tr2", "ans2", "并发怎么处理", "并发 问题", "confident", "short", []string{"kp1"})
+	seedActivationGapEvent(t, db, "gap-evt-2", "tr2", "并发 问题", []string{"kp1"})
 
 	// Step 1 scan first so link_candidates has the row.
 	if _, err := svc.store.ScanCandidates(5, 0.6, 200); err != nil {
@@ -101,6 +105,27 @@ func TestCreateCandidates_SourceA_Cooccurrence(t *testing.T) {
 	results, err := activationSvc.ListLearningResults(link.LinkID)
 	if err != nil || len(results) != 1 || results[0].Action != activation.ActionCreateCandidate {
 		t.Fatalf("expected 1 create_candidate learning result, got %+v (err=%v)", results, err)
+	}
+
+	var eventIDs []string
+	if err := json.Unmarshal([]byte(results[0].EventIDs), &eventIDs); err != nil {
+		t.Fatalf("unmarshal event_ids: %v", err)
+	}
+	if len(eventIDs) == 0 {
+		t.Fatal("expected create_candidate event_ids to list supporting activation_gap events, got empty")
+	}
+	for _, eid := range eventIDs {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM learning_events WHERE event_id = ?`, eid).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("event_id %q must exist in learning_events (n=%d err=%v)", eid, n, err)
+		}
+		var candN int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM link_candidates WHERE candidate_id = ?`, eid).Scan(&candN); err != nil {
+			t.Fatalf("lookup link_candidates: %v", err)
+		}
+		if candN != 0 {
+			t.Fatalf("event_ids must not contain link_candidates.candidate_id %q", eid)
+		}
 	}
 }
 
@@ -167,9 +192,8 @@ func TestCreateCandidates_RejectsRecreateOfDeprecated(t *testing.T) {
 // TestCreateCandidates_SourceA_AggregatesAcrossLabels covers the 2026-07-18
 // point-level aggregation fix: the same KP hit confidently under several
 // subject labels (each below candidate_confident_min on its own) must still
-// qualify on the aggregated total, produce ONE link for the point under the
-// representative label, and take the labels' shared term core as the link's
-// subject condition.
+// qualify on the aggregated total and produce ONE link for the point.
+// Observed conditions are per-trace quadruples (not label-term intersection).
 func TestCreateCandidates_SourceA_AggregatesAcrossLabels(t *testing.T) {
 	svc, _, activationSvc, db := setupStudyWithActivation(t)
 
@@ -184,6 +208,10 @@ func TestCreateCandidates_SourceA_AggregatesAcrossLabels(t *testing.T) {
 	seedCooccurrence(t, db, "数据库 句柄 上限", "kp1", 2, 2)
 	seedAnswer(t, db, "ans1")
 	seedTrace(t, db, "tr1", "ans1", "句柄数超限怎么办", "数据库 句柄 限制", "confident", "short", []string{"kp1"})
+	seedAnswer(t, db, "ans2")
+	seedTrace(t, db, "tr2", "ans2", "句柄怎么管理", "数据库 句柄 管理", "confident", "short", []string{"kp1"})
+	seedAnswer(t, db, "ans3")
+	seedTrace(t, db, "tr3", "ans3", "句柄上限多少", "数据库 句柄 上限", "confident", "short", []string{"kp1"})
 
 	if _, err := svc.store.ScanCandidates(5, 0.6, 200); err != nil {
 		t.Fatalf("scan: %v", err)
@@ -215,9 +243,8 @@ func TestCreateCandidates_SourceA_AggregatesAcrossLabels(t *testing.T) {
 	if err != nil || len(links) != 1 {
 		t.Fatalf("expected exactly 1 link for point, got %d (err=%v)", len(links), err)
 	}
-	// subject 条件应为三个标签的词项交集 {句柄, 数据库}，而不是某一个标签的原文。
-	if links[0].SubjectTerms != "句柄 数据库" {
-		t.Errorf("subject_terms = %q, want 交集 \"句柄 数据库\"", links[0].SubjectTerms)
+	if len(links[0].ObservedConditions) != 3 {
+		t.Fatalf("observed_conditions = %d, want 3 quadruples (one per confident trace)", len(links[0].ObservedConditions))
 	}
 
 	// 再跑一轮：同一 point 不得因代表标签或来源不同再建第二条链接。

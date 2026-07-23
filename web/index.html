@@ -134,17 +134,14 @@
     }
     .welcome-input {
       width:100%; border:1px solid var(--border); border-radius:var(--radius); padding:16px 56px 16px 20px;
-      font-size:15px; font-family:inherit; resize:none; outline:none; min-height:56px; max-height:200px;
+      font-size:15px; font-family:inherit; resize:none; outline:none; min-height:56px;
+      overflow:hidden; scrollbar-width:none;
       background:var(--surface); color:var(--text); line-height:1.5; box-shadow:var(--shadow);
-      transition:.15s;
+      transition:border-color .15s, box-shadow .15s;
     }
     .welcome-input::placeholder { color:var(--text-3); }
     .welcome-input:focus { border-color:#c0bfba; box-shadow:0 0 0 1px rgba(0,0,0,.05), var(--shadow-md); }
-    .welcome-input { scrollbar-width:none; }
-    .welcome-input:hover, .welcome-input:focus { scrollbar-width:thin; }
-    .welcome-input::-webkit-scrollbar { width:6px; }
-    .welcome-input::-webkit-scrollbar-thumb { background:transparent; border-radius:3px; }
-    .welcome-input:hover::-webkit-scrollbar-thumb, .welcome-input:focus::-webkit-scrollbar-thumb { background:var(--border); }
+    .welcome-input::-webkit-scrollbar { display:none; }
 
     .welcome-input-box { position:relative; }
     .welcome-send {
@@ -302,16 +299,14 @@
     .input-bar-inner { max-width:720px; margin:0 auto; position:relative; }
     .input-bar textarea {
       width:100%; padding:14px 52px 14px 18px; border:1px solid var(--border); border-radius:var(--radius);
-      font-size:15px; font-family:inherit; resize:none; outline:none; min-height:52px; max-height:180px;
-      background:var(--surface); color:var(--text); line-height:1.5; box-shadow:var(--shadow); transition:.15s;
+      font-size:15px; font-family:inherit; resize:none; outline:none; min-height:52px;
+      overflow:hidden; scrollbar-width:none;
+      background:var(--surface); color:var(--text); line-height:1.5; box-shadow:var(--shadow);
+      transition:border-color .15s, box-shadow .15s;
     }
     .input-bar textarea::placeholder { color:var(--text-3); }
     .input-bar textarea:focus { border-color:#c0bfba; box-shadow:0 0 0 1px rgba(0,0,0,.05), var(--shadow-md); }
-    .input-bar textarea { scrollbar-width:none; }
-    .input-bar textarea:hover, .input-bar textarea:focus { scrollbar-width:thin; }
-    .input-bar textarea::-webkit-scrollbar { width:6px; }
-    .input-bar textarea::-webkit-scrollbar-thumb { background:transparent; border-radius:3px; }
-    .input-bar textarea:hover::-webkit-scrollbar-thumb, .input-bar textarea:focus::-webkit-scrollbar-thumb { background:var(--border); }
+    .input-bar textarea::-webkit-scrollbar { display:none; }
     .input-bar .send-btn {
       position:absolute; right:10px; bottom:10px; width:32px; height:32px; border-radius:50%;
       border:none; background:var(--text); color:#fff; cursor:pointer; display:flex;
@@ -503,6 +498,19 @@
     .nav-badge { position:absolute; top:3px; right:6px; min-width:15px; height:15px; padding:0 3px; border-radius:8px; background:var(--accent); color:#fff; font-size:9px; font-weight:700; display:flex; align-items:center; justify-content:center; line-height:1; }
     .sidebar.expanded .nav-badge { position:static; margin-left:auto; }
     .timeline-event { padding:8px 10px; border-radius:var(--radius-sm); background:var(--bg-alt); margin-bottom:6px; font-size:12px; }
+    .lazy-section { margin-top:14px; border:1px solid var(--border-lt); border-radius:var(--radius-sm); overflow:hidden; }
+    .lazy-section-head { display:flex; align-items:center; justify-content:space-between; width:100%; padding:10px 12px; background:var(--bg-alt); border:0; cursor:pointer; font-size:13px; font-weight:600; color:var(--text-1); text-align:left; }
+    .lazy-section-head:hover { background:var(--bg-2); }
+    .lazy-section-head .chev { color:var(--text-3); font-size:12px; font-weight:400; }
+    .lazy-section-body { padding:10px 12px; display:none; }
+    .lazy-section.open .lazy-section-body { display:block; }
+    .lazy-section.open .chev { transform:rotate(180deg); display:inline-block; }
+    .lazy-subhead { font-size:11px; color:var(--text-3); text-transform:uppercase; letter-spacing:.04em; margin:10px 0 6px; }
+    .lazy-subhead:first-child { margin-top:0; }
+    .q-item { padding:6px 0; border-bottom:1px solid var(--border-lt); font-size:13px; }
+    .q-item:last-child { border-bottom:0; }
+    .q-item .q-meta { font-size:11px; color:var(--text-3); margin-top:2px; }
+
     .wiki-page-content a[href^="point:"] { color:var(--accent); text-decoration:none; border-bottom:1px dotted var(--accent); cursor:pointer; }
     .wiki-page-content a[href^="point:"]:hover { background:var(--accent-lt); }
     .needs-recompile-card { border-left:3px solid var(--yellow) !important; background:var(--yellow-lt); }
@@ -764,6 +772,7 @@
   <div class="drawer-header">
     <span>概念演化</span>
     <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-sm" onclick="openManualConceptDraft()">新增</button>
       <button class="btn btn-sm" onclick="loadConceptCandidates()">刷新</button>
       <button class="btn-ghost" onclick="closeConceptView()">✕</button>
     </div>
@@ -831,6 +840,8 @@ const S = {
   conceptStatus:       'pending_confirm',
   conceptCandidates:   [],
   conceptSelectedId:   null,
+  conceptDraftActive:  false,
+  conceptDraftCandidate: null,
   allDomains:          [],
 };
 
@@ -1697,7 +1708,7 @@ function evidenceCardHtml(e, role) {
     <div class="ev-content">' + renderMarkdown((e.content||'').slice(0,200) + ((e.content||'').length > 200 ? '…' : '')) + '</div>\
     <div id="ku-ctx-' + esc(e.unit_id||'') + '-' + esc(fid) + '"></div>\
     <div style="margin-top:8px;display:flex;gap:6px">\
-      ' + (sourceId ? '<button class="btn btn-sm" onclick="event.stopPropagation();viewSource(\'' + esc(sourceId) + '\')">查看来源</button>' : '') + '\
+      ' + (sourceId ? '<button class="btn btn-sm" onclick="event.stopPropagation();viewSource(\'' + esc(sourceId) + '\'' + (e.unit_id ? ', \'' + esc(e.unit_id) + '\'' : '') + ')">查看来源</button>' : '') + '\
       ' + (e.unit_id ? '<button class="btn btn-sm" onclick="event.stopPropagation();toggleUnitContext(\'' + esc(e.unit_id) + '\',\'' + esc(fid) + '\')">展开上下文</button>' : '') + '\
       ' + (fid ? '<button class="copy-btn" onclick="event.stopPropagation();copy(\'' + esc(fid) + '\',this)">复制 fact_id</button>' : '') + '\
     </div></div>';
@@ -1713,7 +1724,10 @@ async function toggleUnitContext(unitId, fid) {
     if (!r.ok || !r.data) { el.innerHTML = '<div class="ku-context">加载失败</div>'; return; }
     var u = r.data;
     var pts = (u.points || []).map(function(p) { return '<div style="margin-top:4px">· ' + esc(p.content) + '</div>'; }).join('');
-    el.innerHTML = '<div class="ku-context"><b>' + esc(u.center || '') + '</b> (L' + u.line_start + '-L' + u.line_end + ')' + pts + '</div>';
+    var body = u.content ? '<pre style="white-space:pre-wrap;margin-top:6px;font-size:12px;max-height:240px;overflow-y:auto;background:var(--bg-2);padding:8px;border-radius:6px">' + esc(u.content) + '</pre>' : '';
+    el.innerHTML = '<div class="ku-context"><b>' + esc(u.center || '') + '</b> (L' + u.line_start + '-L' + u.line_end + ')'
+      + (u.lifecycle && u.lifecycle !== 'current' ? ' ' + lifecycleBadgeHtml(u.lifecycle) : '')
+      + body + pts + '</div>';
   } catch(ex) { el.innerHTML = '<div class="ku-context">加载失败</div>'; }
 }
 
@@ -2208,7 +2222,7 @@ async function loadSources() {
   } catch(e) { list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--red);font-size:12px">加载失败</div>'; }
 }
 
-async function viewSource(sourceId) {
+async function viewSource(sourceId, citedUnitId) {
   var modal = document.getElementById('sourceDetailModal');
   var content = document.getElementById('sourceDetailContent');
   content.innerHTML = '<h2>来源详情</h2><div style="color:var(--text-3)">加载中...</div>';
@@ -2217,17 +2231,19 @@ async function viewSource(sourceId) {
     var r = await api('GET', '/sources/' + sourceId);
     if (r.ok && r.data) {
       var d = r.data;
+      var previewUrl = S.baseUrl + '/sources/' + d.source_id + '/preview';
+      if (citedUnitId) previewUrl += '?unit_id=' + encodeURIComponent(citedUnitId);
       content.innerHTML = '<h2>来源详情</h2>\
         <div class="detail-row"><span class="dl">source_id</span><span class="dv"><code style="font-size:11px">' + esc(d.source_id) + '</code> <button class="copy-btn" onclick="copy(\'' + esc(d.source_id) + '\',this)">复制</button></span></div>\
         <div class="detail-row"><span class="dl">标题</span><span class="dv">' + esc(d.title || '') + '</span></div>\
         <div class="detail-row"><span class="dl">格式</span><span class="dv">' + esc(d.format || '') + '</span></div>\
         <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="status-chip status-' + (sourceDisplayStatus(d)||'') + '">' + statusLabel(sourceDisplayStatus(d)) + '</span> <span class="badge">v' + (d.version || 1) + '</span></span></div>\
-        ' + (d.summary ? '<div class="detail-row"><span class="dl">摘要</span><span class="dv">' + esc(d.summary) + '</span></div>' : '') + '\
+        <div class="detail-row" id="sourceSummaryRow"><span class="dl">摘要</span><span class="dv" id="sourceSummaryView">' + esc(d.summary || '') + ' <button class="btn btn-sm" onclick="editSourceSummary(\'' + esc(d.source_id) + '\')">编辑</button></span></div>\
         ' + (d.word_count ? '<div class="detail-row"><span class="dl">字数</span><span class="dv">' + d.word_count + '</span></div>' : '') + '\
         ' + (d.error_msg ? '<div class="detail-row"><span class="dl">错误</span><span class="dv" style="color:var(--red)">' + esc(d.error_msg) + '</span></div>' : '') + '\
         <div class="detail-row"><span class="dl">创建时间</span><span class="dv">' + dateStr(d.created_at) + '</span></div>\
         <div class="modal-actions">\
-          ' + (d.status==='completed' ? '<button class="btn btn-sm" onclick="window.open(S.baseUrl+\'/sources/' + esc(d.source_id) + '/preview\',\'_blank\')">预览</button>' : '') + '\
+          ' + (d.status==='completed' ? '<button class="btn btn-sm" onclick="window.open(\'' + esc(previewUrl) + '\',\'_blank\')">预览</button>' : '') + '\
           ' + (sourceDisplayStatus(d)==='completed' ? '<button class="btn btn-sm" onclick="reuploadSource(\'' + esc(d.source_id) + '\')">重新上传</button>' : '') + '\
           ' + (d.status==='completed' ? '<button class="btn btn-sm" onclick="verifyCoverage(\'' + esc(d.source_id) + '\')">验证</button>' : '') + '\
           ' + (sourceDisplayStatus(d)==='completed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteSource(\'' + esc(d.source_id) + '\',false);closeSourceDetail()">删除</button>' : '') + '\
@@ -2240,11 +2256,37 @@ async function viewSource(sourceId) {
         ' + (d.status==='completed' ? '<div id="sourceCoverageResult"></div>' : '') + '\
         ' + (d.status==='completed' ? '<h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">历史版本</h3><div id="sourceVersionsList" style="margin-top:8px"><div style="font-size:12px;color:var(--text-3)">加载中...</div></div>' : '') + '\
         <details style="margin-top:14px"><summary style="font-size:11px;cursor:pointer;color:var(--text-3)">原始 JSON</summary><div class="raw-json" style="margin-top:6px">' + esc(JSON.stringify(d,null,2)) + '</div></details>';
-      if (d.status === 'completed') { loadSourceUnits(d.source_id); loadSourceVersions(d.source_id); }
+      if (d.status === 'completed') { loadSourceUnits(d.source_id, citedUnitId); loadSourceVersions(d.source_id); }
     } else content.innerHTML = '<h2>来源详情</h2><div style="color:var(--red)">加载失败</div><div class="modal-actions"><button class="btn" onclick="closeSourceDetail()">关闭</button></div>';
   } catch(e) { content.innerHTML = '<h2>来源详情</h2><div style="color:var(--red)">' + esc(e.message) + '</div><div class="modal-actions"><button class="btn" onclick="closeSourceDetail()">关闭</button></div>'; }
 }
 function closeSourceDetail() { document.getElementById('sourceDetailModal').classList.add('hidden'); }
+
+// 来源摘要人工修正：source_filter 粗筛只看 title/summary，摘要遗漏产品名/角色会导致
+// 该来源整体在候选池阶段被漏掉（比 KU 语义纠偏更早一层），故单独给摘要提供编辑入口。
+function editSourceSummary(sourceId) {
+  var row = document.getElementById('sourceSummaryRow');
+  if (!row) return;
+  var current = row.querySelector('#sourceSummaryView');
+  var currentText = current ? current.firstChild.textContent.trim() : '';
+  row.innerHTML = '<span class="dl">摘要</span><div class="dv" style="display:flex;flex-direction:column;gap:6px;flex:1">\
+    <textarea id="sourceSummaryInput" rows="3" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">' + esc(currentText) + '</textarea>\
+    <div style="font-size:11px;color:var(--text-3)">用于来源粗筛（source_filter）：写清楚该文档覆盖的产品/角色/场景，避免因摘要未提及而被漏选。</div>\
+    <div style="display:flex;gap:6px">\
+      <button class="btn btn-sm btn-primary" onclick="saveSourceSummary(\'' + esc(sourceId) + '\')">保存</button>\
+      <button class="btn btn-sm" onclick="viewSource(\'' + esc(sourceId) + '\')">取消</button>\
+    </div>\
+  </div>';
+}
+
+async function saveSourceSummary(sourceId) {
+  var input = document.getElementById('sourceSummaryInput');
+  var summary = input ? input.value.trim() : '';
+  if (!summary) { alert('摘要不能为空'); return; }
+  var r = await api('PATCH', '/sources/' + sourceId + '/summary', { summary: summary });
+  if (r.ok) { viewSource(sourceId); }
+  else { alert('保存失败：' + ((r.data && r.data.error) || r.status)); }
+}
 
 // KU lifecycle 徽标（docs/impl/v1/page.md 步骤 5，current 之外的状态标灰/标黄）。
 function lifecycleBadgeHtml(lifecycle) {
@@ -2253,15 +2295,20 @@ function lifecycleBadgeHtml(lifecycle) {
   return '<span class="badge ' + cls + '">' + esc(lifecycle) + '</span>';
 }
 
-async function loadSourceUnits(sourceId) {
+async function loadSourceUnits(sourceId, citedUnitId) {
   var el = document.getElementById('sourceKUList');
   if (!el) return;
   try {
-    var r = await api('GET', '/sources/' + sourceId + '/units?lifecycle=current');
+    // 历史证据回链时带 citedUnitId：拉 all，确保 superseded KU 可见。
+    var qs = citedUnitId ? '?lifecycle=all' : '?lifecycle=current';
+    var r = await api('GET', '/sources/' + sourceId + '/units' + qs);
     var units = Array.isArray(r.data) ? r.data : [];
     if (!units.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text-3)">暂无知识单元</div>'; return; }
     el.innerHTML = units.map(function(u) {
-      return '<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border-lt);font-size:12px">\
+      var highlight = citedUnitId && u.unit_id === citedUnitId
+        ? 'background:var(--accent-lt);border-radius:4px;padding:5px 6px;'
+        : 'padding:5px 0;';
+      return '<div style="display:flex;align-items:center;gap:6px;' + highlight + 'border-bottom:1px solid var(--border-lt);font-size:12px">\
         <span style="flex:1">' + esc(u.center || '') + ' <span style="color:var(--text-3)">(L' + u.line_start + '-L' + u.line_end + ')</span></span>\
         ' + lifecycleBadgeHtml(u.lifecycle) + '\
         <button class="btn btn-sm" onclick="openKuSemantics(\'' + esc(u.unit_id) + '\')">编辑</button>\
@@ -2861,7 +2908,7 @@ function renderActivationLinksList() {
   list.innerHTML = S.activationLinks.map(function(l) {
     // 约束词是链接的产品/对象归属（audience 同理），同标签链接靠它区分——
     // 三条"数据库会话监控"哪条是达梦哪条是神通，只有这里能看出来。
-    var scopeTags = [l.constraint_terms, l.audience].filter(Boolean).map(function(t) {
+    var scopeTags = [formatTermSet(l.constraint_terms), formatTermSet(l.audience)].filter(Boolean).map(function(t) {
       return '<span style="background:var(--bg-2);border-radius:4px;padding:0 6px;font-size:11px">' + esc(t) + '</span>';
     }).join(' ');
     return '<div class="link-row' + (l.link_id === S.activationSelectedId ? ' active' : '') + '" onclick="selectActivationLink(\'' + esc(l.link_id) + '\')">\
@@ -2891,12 +2938,25 @@ async function selectActivationLink(linkId) {
 
 function closeActivationLinkModal() {
   document.getElementById('activationLinkModal').classList.add('hidden');
+  S.linkDetailCache = null;
+}
+
+function linkActionLabel(a) {
+  return ({ create_candidate:'创建候选', promote:'晋升', weaken:'降权', reverify:'重新验证', deprecate:'淘汰' })[a] || a || '';
+}
+function linkStatusLabel(s) {
+  return ({ applied:'已应用', pending_confirm:'待确认', rejected:'已驳回', expired:'已过期' })[s] || s || '';
+}
+function linkReasonLabel(r) {
+  if (!r) return '';
+  if (r === 'manual_confirm') return '人工确认';
+  if (r === 'manual_reject') return '人工驳回';
+  return r;
 }
 
 function renderActivationLinkDetail(d) {
   var detail = document.getElementById('activationLinkModalContent');
-  var results = d.learning_results || [];
-  var pendingPromote = results.find(function(r) { return r.Action === 'promote' && r.Status === 'pending_confirm'; });
+  S.linkDetailCache = { linkId: d.link_id, questions: null, results: null };
   var actionsHtml = '<div class="modal-actions" style="margin-top:14px;justify-content:flex-start">';
   if (d.status === 'candidate') {
     actionsHtml += '\
@@ -2904,12 +2964,9 @@ function renderActivationLinkDetail(d) {
       <button class="btn btn-sm" style="color:var(--red)" onclick="rejectActivationLink(\'' + esc(d.link_id) + '\')">驳回</button>';
   }
   actionsHtml += '<button class="btn btn-sm" onclick="closeActivationLinkModal()">关闭</button></div>';
-  if (d.status === 'candidate' && pendingPromote) actionsHtml += '<div style="font-size:12px;color:var(--text-3);margin-top:8px">Learning Reason：' + esc(pendingPromote.Reason || '') + '</div>';
-  var timelineHtml = results.length
-    ? results.map(function(r) {
-        return '<div class="timeline-event"><b>' + esc(r.Action) + '</b> · <span class="badge">' + esc(r.Status) + '</span> · ' + dateStr(r.CreatedAt) + '<div style="color:var(--text-2);margin-top:2px">' + esc(r.Reason || '') + '</div></div>';
-      }).join('')
-    : '<div style="font-size:12px;color:var(--text-3)">暂无状态迁移记录</div>';
+  if (d.status === 'candidate' && d.pending_promote_reason) {
+    actionsHtml += '<div style="font-size:12px;color:var(--text-3);margin-top:8px">待确认原因：' + esc(d.pending_promote_reason) + '</div>';
+  }
   var kpHtml = d.point_summary
     ? '<span class="dv" style="cursor:pointer" title="点击展开所属知识单元内容" onclick="toggleLinkUnitContent(\'' + esc(d.unit_id || '') + '\')">' + esc(d.point_summary) + ' <span style="color:var(--accent);font-size:12px">▾ 展开单元</span></span>'
     : '<span class="dv" style="color:var(--text-3)">' + esc(d.point_id || '') + '（知识点已不存在）</span>';
@@ -2920,12 +2977,88 @@ function renderActivationLinkDetail(d) {
     <div class="detail-row"><span class="dl">知识点</span>' + kpHtml + '</div>\
     <div id="linkUnitContent"></div>\
     <div class="detail-row"><span class="dl">所属单元</span><span class="dv">' + esc(d.unit_center || '') + '</span></div>\
-    <div class="detail-row"><span class="dl">主体/意图</span><span class="dv">' + esc(d.subject_terms || '-') + ' / ' + esc(d.intent_terms || '-') + '</span></div>\
-    <div class="detail-row"><span class="dl">约束/受众</span><span class="dv">' + esc(d.constraint_terms || '-') + ' / ' + esc(d.audience || '-') + '</span></div>\
+    <div class="detail-row"><span class="dl">观测条件</span><span class="dv">' + formatObservedConditions(d.observed_conditions) + '</span></div>\
     <div class="detail-row"><span class="dl">采纳/失败</span><span class="dv">' + (d.adopt_count||0) + ' / ' + (d.fail_count||0) + '</span></div>\
     ' + actionsHtml + '\
-    <h3 style="margin-top:16px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">状态迁移史</h3>\
-    <div style="margin-top:8px">' + timelineHtml + '</div>';
+    <div class="lazy-section" id="linkQuestionsSection">\
+      <button type="button" class="lazy-section-head" onclick="toggleLinkQuestionsSection(\'' + esc(d.link_id) + '\')">\
+        <span>问法列表</span><span class="chev">▾</span>\
+      </button>\
+      <div class="lazy-section-body" id="linkQuestionsBody"><div style="color:var(--text-3);font-size:12px">点击展开后加载</div></div>\
+    </div>\
+    <div class="lazy-section" id="linkHistorySection">\
+      <button type="button" class="lazy-section-head" onclick="toggleLinkHistorySection(\'' + esc(d.link_id) + '\')">\
+        <span>状态迁移史</span><span class="chev">▾</span>\
+      </button>\
+      <div class="lazy-section-body" id="linkHistoryBody"><div style="color:var(--text-3);font-size:12px">点击展开后加载</div></div>\
+    </div>';
+}
+
+async function toggleLinkQuestionsSection(linkId) {
+  var section = document.getElementById('linkQuestionsSection');
+  var body = document.getElementById('linkQuestionsBody');
+  if (!section || !body) return;
+  if (section.classList.contains('open')) { section.classList.remove('open'); return; }
+  section.classList.add('open');
+  if (S.linkDetailCache && S.linkDetailCache.linkId === linkId && S.linkDetailCache.questions) {
+    body.innerHTML = renderLinkQuestionsHtml(S.linkDetailCache.questions);
+    return;
+  }
+  body.innerHTML = '<div style="color:var(--text-3);font-size:12px">加载中...</div>';
+  try {
+    var r = await api('GET', '/activation-links/' + linkId + '/questions');
+    if (!r.ok || !r.data) { body.innerHTML = '<div style="color:var(--red);font-size:12px">加载失败</div>'; return; }
+    if (S.linkDetailCache && S.linkDetailCache.linkId === linkId) S.linkDetailCache.questions = r.data;
+    body.innerHTML = renderLinkQuestionsHtml(r.data);
+  } catch (e) {
+    body.innerHTML = '<div style="color:var(--red);font-size:12px">加载失败：' + esc(e.message) + '</div>';
+  }
+}
+
+function renderLinkQuestionsHtml(data) {
+  function items(list) {
+    if (!list || !list.length) return '<div style="font-size:12px;color:var(--text-3)">暂无</div>';
+    return list.map(function(q) {
+      return '<div class="q-item"><div>' + esc(q.question || '') + '</div>\
+        <div class="q-meta">' + dateStr(q.created_at) + (q.path_type ? ' · ' + esc(q.path_type) : '') + (q.retrieval_quality ? ' · ' + esc(q.retrieval_quality) : '') + '</div></div>';
+    }).join('');
+  }
+  return '<div class="lazy-subhead">匹配命中</div>' + items(data.matched)
+    + '<div class="lazy-subhead">创建依据</div>' + items(data.created_from);
+}
+
+async function toggleLinkHistorySection(linkId) {
+  var section = document.getElementById('linkHistorySection');
+  var body = document.getElementById('linkHistoryBody');
+  if (!section || !body) return;
+  if (section.classList.contains('open')) { section.classList.remove('open'); return; }
+  section.classList.add('open');
+  if (S.linkDetailCache && S.linkDetailCache.linkId === linkId && S.linkDetailCache.results) {
+    body.innerHTML = renderLinkHistoryHtml(S.linkDetailCache.results);
+    return;
+  }
+  body.innerHTML = '<div style="color:var(--text-3);font-size:12px">加载中...</div>';
+  try {
+    var r = await api('GET', '/activation-links/' + linkId + '/learning-results');
+    if (!r.ok || !r.data) { body.innerHTML = '<div style="color:var(--red);font-size:12px">加载失败</div>'; return; }
+    var results = Array.isArray(r.data) ? r.data : [];
+    if (S.linkDetailCache && S.linkDetailCache.linkId === linkId) S.linkDetailCache.results = results;
+    body.innerHTML = renderLinkHistoryHtml(results);
+  } catch (e) {
+    body.innerHTML = '<div style="color:var(--red);font-size:12px">加载失败：' + esc(e.message) + '</div>';
+  }
+}
+
+function renderLinkHistoryHtml(results) {
+  if (!results.length) return '<div style="font-size:12px;color:var(--text-3)">暂无状态迁移记录</div>';
+  return results.map(function(r) {
+    var action = r.action || r.Action || '';
+    var status = r.status || r.Status || '';
+    var reason = r.reason || r.Reason || '';
+    var created = r.created_at || r.CreatedAt || '';
+    return '<div class="timeline-event"><b>' + esc(linkActionLabel(action)) + '</b> · <span class="badge">' + esc(linkStatusLabel(status)) + '</span> · ' + dateStr(created)
+      + '<div style="color:var(--text-2);margin-top:2px">' + esc(linkReasonLabel(reason)) + '</div></div>';
+  }).join('');
 }
 
 // toggleLinkUnitContent expands the link dialog's KP row into its owning KU's
@@ -2941,15 +3074,13 @@ async function toggleLinkUnitContent(unitId) {
     var r = await api('GET', '/units/' + unitId);
     if (!r.ok || !r.data) { el.innerHTML = '<div class="ku-context">单元加载失败</div>'; return; }
     var u = r.data;
-    var body = '';
-    if (u.source_id && u.line_start) {
-      var mr = await api('GET', '/sources/' + u.source_id + '/markdown');
-      var md = mr.ok && mr.data && typeof mr.data.raw === 'string' ? mr.data.raw : '';
-      if (md) body = md.split('\n').slice(u.line_start - 1, u.line_end).join('\n');
-    }
+    var body = u.content
+      ? '<pre style="white-space:pre-wrap;margin-top:6px;font-size:12px;max-height:240px;overflow-y:auto;background:var(--bg-2);padding:8px;border-radius:6px">' + esc(u.content) + '</pre>'
+      : '';
     var pts = (u.points || []).map(function(p) { return '<div style="margin-top:4px;font-size:12px;color:var(--text-2)">· ' + esc(p.content) + '</div>'; }).join('');
     el.innerHTML = '<div class="ku-context"><b>' + esc(u.center || '') + '</b> (L' + u.line_start + '-L' + u.line_end + ')'
-      + (body ? '<pre style="white-space:pre-wrap;margin-top:6px;font-size:12px;max-height:240px;overflow-y:auto;background:var(--bg-2);padding:8px;border-radius:6px">' + esc(body) + '</pre>' : '')
+      + (u.lifecycle && u.lifecycle !== 'current' ? ' ' + lifecycleBadgeHtml(u.lifecycle) : '')
+      + body
       + (pts ? '<div style="margin-top:6px;font-size:11px;color:var(--text-3)">单元内知识点：</div>' + pts : '')
       + '</div>';
   } catch(ex) { el.innerHTML = '<div class="ku-context">加载失败：' + esc(ex.message) + '</div>'; }
@@ -3218,6 +3349,64 @@ function closeConceptView() {
   document.getElementById('conceptOverlay').classList.add('hidden');
 }
 
+// "新增"：只在前端开一个草稿表单，不调用后端、不落库——复用既有的候选
+// 确认对话框 UI（选领域/填名字/加 KP），但候选行本身要等草稿的"确认"或
+// "驳回"按钮点击后才真正创建，避免用户中途关闭也在待确认列表里留下一条
+// 空记录。
+async function openManualConceptDraft() {
+  var domains = await ensureDomainsLoaded();
+  var initialDomain = (domains[0] && domains[0].domain_id) || '';
+  var draft = { candidate_id: null, kind: 'add', status: 'draft', domain_id: initialDomain, suggested_name: '', point_ids: [], evidence: { origin: 'manual' }, event_ids: [] };
+  S.conceptDraftActive = true;
+  S.conceptDraftCandidate = draft;
+  S.conceptSelectedId = null;
+  renderConceptCandidatesList();
+
+  document.getElementById('conceptDetailModal').classList.remove('hidden');
+  S.conceptFormSelectedDomain = initialDomain;
+  S.conceptFormPointIds = [];
+  S.conceptFormShowAddPicker = false;
+  S.conceptFormAvailablePoints = null;
+
+  var concepts = await loadConceptsForDomain(initialDomain);
+  if (!S.conceptDraftActive) return; // closed while domains/concepts were loading
+  renderConceptCandidateDetail(draft, domains, concepts, initialDomain, [], {});
+}
+
+function readManualConceptDraftForm() {
+  var domainSel = document.getElementById('conceptConfirmDomainSelect');
+  var nameInput = document.getElementById('conceptConfirmConceptNewInput');
+  return {
+    domain_id: domainSel ? domainSel.value : '',
+    suggested_name: nameInput ? nameInput.value.trim() : '',
+    point_ids: (S.conceptFormPointIds || []).map(function(p) { return p.point_id; })
+  };
+}
+
+async function saveManualConceptDraft() {
+  var body = readManualConceptDraftForm();
+  try {
+    var r = await api('POST', '/concepts/candidates', body);
+    if (!r.ok) { alert('保存失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data))); return; }
+    closeConceptDetailModal();
+    if (S.conceptStatus === 'pending_confirm') { loadConceptCandidates(); } else { switchConceptStatus('pending_confirm'); }
+    pollConceptPendingCount();
+  } catch(e) { alert('保存出错：' + e.message); }
+}
+
+async function rejectManualConceptDraft() {
+  var body = readManualConceptDraftForm();
+  try {
+    var r = await api('POST', '/concepts/candidates', body);
+    if (!r.ok) { alert('保存失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data))); return; }
+    var r2 = await api('POST', '/concepts/candidates/' + r.data.candidate_id + '/reject');
+    if (!r2.ok) { alert('驳回失败：' + (r2.data && r2.data.message ? r2.data.message : JSON.stringify(r2.data))); return; }
+    closeConceptDetailModal();
+    if (S.conceptStatus === 'rejected') { loadConceptCandidates(); }
+    pollConceptPendingCount();
+  } catch(e) { alert('操作出错：' + e.message); }
+}
+
 function switchConceptStatus(status) {
   S.conceptStatus = status;
   document.querySelectorAll('#conceptStatusTabs .panel-tab').forEach(function(t) { t.classList.toggle('active', t.dataset.conceptStatus === status); });
@@ -3240,7 +3429,7 @@ function renderConceptCandidatesList() {
   list.innerHTML = S.conceptCandidates.map(function(c) {
     var title = c.kind === 'merge' ? (c.merge_from||[]).join(' + ') : (c.suggested_name || '(未命名)');
     var origin = conceptCandidateOrigin(c);
-    var originBadge = origin ? '<span class="badge" style="margin-left:4px">' + (origin === 'content_driven' ? '导入内容' : '查询信号') + '</span>' : '';
+    var originBadge = origin ? '<span class="badge" style="margin-left:4px">' + (origin === 'content_driven' ? '导入内容' : origin === 'manual' ? '人工新增' : '查询信号') + '</span>' : '';
     return '<div class="link-row' + (c.candidate_id === S.conceptSelectedId ? ' active' : '') + '" onclick="selectConceptCandidate(\'' + esc(c.candidate_id) + '\')">\
       <div class="lr-terms"><span class="badge">' + (c.kind === 'merge' ? '合并' : '新增') + '</span>' + originBadge + ' ' + esc(title) + '</div>\
       <div style="font-size:12px;color:var(--text-2);margin-top:2px">' + (c.point_ids||[]).length + ' 个关联知识点</div>\
@@ -3250,13 +3439,18 @@ function renderConceptCandidatesList() {
 }
 
 // content_driven（KPN 跨 Source 匹配导入时产生，见 docs/impl/v1/kpn.md 步骤 3）
-// / usage_driven（本模块自身基于查询信号聚类，既有行为）——只用于展示，不影响确认逻辑。
+// / usage_driven（本模块自身基于查询信号聚类，既有行为）/ manual（"新增"按钮
+// 手动创建）——只用于展示，不影响确认逻辑。
 function conceptCandidateOrigin(c) {
   if (c.kind !== 'add' || !c.evidence) return '';
-  return c.evidence.origin === 'content_driven' ? 'content_driven' : 'usage_driven';
+  if (c.evidence.origin === 'content_driven') return 'content_driven';
+  if (c.evidence.origin === 'manual') return 'manual';
+  return 'usage_driven';
 }
 
 async function selectConceptCandidate(candidateId) {
+  S.conceptDraftActive = false;
+  S.conceptDraftCandidate = null;
   S.conceptSelectedId = candidateId;
   renderConceptCandidatesList();
   var c = S.conceptCandidates.find(function(x) { return x.candidate_id === candidateId; });
@@ -3276,6 +3470,10 @@ async function selectConceptCandidate(candidateId) {
     var initialDomain = c.domain_id || (domains[0] && domains[0].domain_id) || '';
     var concepts = await loadConceptsForDomain(initialDomain);
     if (S.conceptSelectedId !== candidateId) return;
+    S.conceptFormSelectedDomain = initialDomain;
+    S.conceptFormPointIds = points.slice();
+    S.conceptFormShowAddPicker = false;
+    S.conceptFormAvailablePoints = null;
     renderConceptCandidateDetail(c, domains, concepts, initialDomain, points, conceptNames);
     return;
   }
@@ -3349,10 +3547,12 @@ async function loadConceptsForDomain(domainId) {
 
 function closeConceptDetailModal() {
   document.getElementById('conceptDetailModal').classList.add('hidden');
+  S.conceptDraftActive = false;
+  S.conceptDraftCandidate = null;
 }
 
 // 候选状态、依据字段名都来自后端英文枚举/JSON key，这里统一翻成中文再展示。
-var CONCEPT_STATUS_LABELS = { pending_confirm: '待确认', applied: '已执行', rejected: '已驳回', expired: '已过期' };
+var CONCEPT_STATUS_LABELS = { draft: '草稿（未保存）', pending_confirm: '待确认', applied: '已执行', rejected: '已驳回', expired: '已过期' };
 var CONCEPT_EVIDENCE_LABELS = {
   event_count: '事件数', distinct_question_count: '不同问题数', overlap: '重叠度',
   cooccur_count: '共同采用次数', overlap_ratio: '重叠比例',
@@ -3361,27 +3561,117 @@ var CONCEPT_EVIDENCE_LABELS = {
   source_ids: '涉及来源', description: '概念描述'
 };
 
+// 关联知识点区块：pending_confirm 的新增候选可增删 KP（S.conceptFormPointIds
+// 是编辑中的工作副本，只在点击"确认"时随请求体一次性提交，不逐次调用后端）；
+// 其余状态/kind=merge 保持只读，直接展示传入的 points 快照。单独抽成函数是
+// 因为增删/切换添加面板只需要替换 #conceptFormPointsSection 这一小块 DOM，
+// 不能整卡重渲染——那样会打断用户正在概念名输入框里敲的字。
+function buildConceptPointsSectionHtml(c, points) {
+  var editable = (c.status === 'pending_confirm' || c.status === 'draft') && c.kind === 'add';
+  var list = editable ? (S.conceptFormPointIds || []) : (points || []);
+  var pointsHtml = list.length ? list.map(function(p) {
+    return '<div style="padding:8px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;gap:8px">\
+      <div style="flex:1;min-width:0">\
+        <div style="font-size:12px;color:var(--text)">' + esc(p.content || '') + '</div>\
+        <div style="font-size:11px;color:var(--text-3);margin-top:4px">来源文件：' + esc(p.source_title || '') + '</div>\
+      </div>' + (editable ? '<button class="btn btn-sm" style="color:var(--red);flex-shrink:0" onclick="removeConceptFormPoint(\'' + esc(p.point_id) + '\')">移除</button>' : '') + '\
+    </div>';
+  }).join('') : '<div style="font-size:12px;color:var(--text-3);padding:8px 0">暂无数据</div>';
+
+  var addHtml = '';
+  if (editable) {
+    addHtml = S.conceptFormShowAddPicker ? renderConceptAddPointsPicker() :
+      '<div style="margin-top:8px"><button class="btn btn-sm" onclick="openConceptAddPointsPicker()">+ 添加知识点</button></div>';
+  }
+
+  return '<h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">关联知识点（' + list.length + ' 个）</h3>' + pointsHtml + addHtml;
+}
+
+// 添加面板：列出所选领域下尚无 concept 的 KP（GET /concepts/points，与
+// ConfirmAdd/ConfirmAssign 迁移查询同一条件），已加入工作副本的排除掉。
+function renderConceptAddPointsPicker() {
+  var avail = S.conceptFormAvailablePoints;
+  if (avail == null) {
+    return '<div style="margin-top:8px;font-size:12px;color:var(--text-3)">加载中...</div>';
+  }
+  var includedIds = {};
+  (S.conceptFormPointIds || []).forEach(function(p) { includedIds[p.point_id] = true; });
+  var candidates = avail.filter(function(p) { return !includedIds[p.point_id]; });
+  var listHtml = candidates.length ? candidates.map(function(p) {
+    return '<div style="padding:6px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;gap:8px">\
+      <div style="flex:1;min-width:0">\
+        <div style="font-size:12px;color:var(--text)">' + esc(p.content || '') + '</div>\
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px">来源文件：' + esc(p.source_title || '') + '</div>\
+      </div>\
+      <button class="btn btn-sm" style="flex-shrink:0" onclick="addConceptFormPoint(\'' + esc(p.point_id) + '\')">添加</button>\
+    </div>';
+  }).join('') : '<div style="font-size:12px;color:var(--text-3);padding:6px 0">该领域下没有其他待归类知识点</div>';
+  return '<div style="margin-top:8px;border:1px solid var(--border);border-radius:var(--radius-xs);padding:8px;max-height:220px;overflow-y:auto">\
+    <div style="font-size:11px;color:var(--text-3);margin-bottom:6px">该领域下尚无概念的知识点：</div>' + listHtml + '\
+    <div style="margin-top:6px"><a href="javascript:void(0)" onclick="closeConceptAddPointsPicker()" style="font-size:12px;color:var(--text-3);text-decoration:underline">收起</a></div>\
+  </div>';
+}
+
+function refreshConceptFormPointsSection() {
+  var el = document.getElementById('conceptFormPointsSection');
+  var c = S.conceptDraftActive ? S.conceptDraftCandidate : S.conceptCandidates.find(function(x) { return x.candidate_id === S.conceptSelectedId; });
+  if (!el || !c) return;
+  el.innerHTML = buildConceptPointsSectionHtml(c, null);
+}
+
+function removeConceptFormPoint(pointId) {
+  S.conceptFormPointIds = (S.conceptFormPointIds || []).filter(function(p) { return p.point_id !== pointId; });
+  refreshConceptFormPointsSection();
+}
+
+function addConceptFormPoint(pointId) {
+  var p = (S.conceptFormAvailablePoints || []).find(function(x) { return x.point_id === pointId; });
+  if (!p) return;
+  S.conceptFormPointIds = (S.conceptFormPointIds || []).concat([p]);
+  refreshConceptFormPointsSection();
+}
+
+async function openConceptAddPointsPicker() {
+  S.conceptFormShowAddPicker = true;
+  S.conceptFormAvailablePoints = null;
+  refreshConceptFormPointsSection();
+  var domainId = S.conceptFormSelectedDomain;
+  if (!domainId) { S.conceptFormAvailablePoints = []; refreshConceptFormPointsSection(); return; }
+  try {
+    var r = await api('GET', '/concepts/points?domain_id=' + encodeURIComponent(domainId));
+    S.conceptFormAvailablePoints = (r.ok && Array.isArray(r.data)) ? r.data : [];
+  } catch (e) { S.conceptFormAvailablePoints = []; }
+  refreshConceptFormPointsSection();
+}
+
+function closeConceptAddPointsPicker() {
+  S.conceptFormShowAddPicker = false;
+  refreshConceptFormPointsSection();
+}
+
 function renderConceptCandidateDetail(c, domains, concepts, selectedDomainId, points, conceptNames) {
   points = points || [];
   conceptNames = conceptNames || {};
   var detail = document.getElementById('conceptDetailModalContent');
   var evidence = c.evidence || {};
   // origin 已经在下面的"候选来源"行单独展示过，这里跳过避免重复。
-  var evidenceHtml = Object.keys(evidence).filter(function(k) { return k !== 'origin'; }).map(function(k) {
+  var evidenceHtml = Object.keys(evidence).filter(function(k) {
+    if (k === 'origin') return false;
+    var v = evidence[k];
+    return v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0);
+  }).map(function(k) {
     var v = evidence[k];
     var label = CONCEPT_EVIDENCE_LABELS[k] || k;
     return '<div class="detail-row"><span class="dl">' + esc(label) + '</span><span class="dv">' + esc(Array.isArray(v) ? v.join(', ') : String(v)) + '</span></div>';
   }).join('');
 
-  var pointsHtml = points.length ? points.map(function(p) {
-    return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">\
-      <div style="font-size:12px;color:var(--text)">' + esc(p.content || '') + '</div>\
-      <div style="font-size:11px;color:var(--text-3);margin-top:4px">来源文件：' + esc(p.source_title || '') + '</div>\
-    </div>';
-  }).join('') : '<div style="font-size:12px;color:var(--text-3);padding:8px 0">暂无数据</div>';
-
-  var actionsHtml = '';
-  if (c.status === 'pending_confirm') {
+  // formHtml holds the editable fields (domain/concept-name selects, merge
+  // target select); footerButtons holds every action button, all rendered
+  // together in one bottom-right row alongside 取消 — no separate 关闭.
+  var isDraft = c.status === 'draft';
+  var formHtml = '';
+  var footerButtons = [];
+  if (isDraft || c.status === 'pending_confirm') {
     if (c.kind === 'add') {
       domains = domains || [];
       concepts = concepts || [];
@@ -3395,30 +3685,46 @@ function renderConceptCandidateDetail(c, domains, concepts, selectedDomainId, po
       S.conceptFormConcepts = concepts;
       S.conceptFormSuggestedName = c.suggested_name || '';
 
-      actionsHtml = '\
+      // 草稿（"新增"按钮打开的、还没有候选行的表单）没有"归入已有概念"
+      // 入口——那是确认执行时才做的决策，草稿此刻只是在保存一条候选，
+      // 所以概念名称永远是纯文本输入，不提供选已有概念的 select/切换。
+      var conceptFieldHtml = isDraft ? conceptSlotNewInputHtml([], c.suggested_name) : buildConceptSlotHtml(concepts, c.suggested_name);
+
+      formHtml = '\
         <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px">\
           <label style="font-size:12px;color:var(--text-3)">领域名称<select id="conceptConfirmDomainSelect" style="width:100%;margin-top:4px" onchange="onConceptConfirmDomainChange()">' + domainOptions + '</select></label>\
-          <label style="font-size:12px;color:var(--text-3)">概念名称<span id="conceptConfirmConceptSlot" style="display:block;margin-top:4px">' + buildConceptSlotHtml(concepts, c.suggested_name) + '</span></label>\
-          <div class="modal-actions" style="margin-top:0;justify-content:flex-start">\
-            <button class="btn btn-primary btn-sm" onclick="confirmConceptCandidate(\'' + esc(c.candidate_id) + '\')">确认</button>\
-            <button class="btn btn-sm" style="color:var(--red)" onclick="rejectConceptCandidate(\'' + esc(c.candidate_id) + '\')">驳回</button>\
-          </div>\
+          <label style="font-size:12px;color:var(--text-3)">概念名称<span id="conceptConfirmConceptSlot" style="display:block;margin-top:4px">' + conceptFieldHtml + '</span></label>\
         </div>';
+
+      if (isDraft) {
+        footerButtons.push('<button class="btn btn-primary btn-sm" onclick="saveManualConceptDraft()">确认</button>');
+        footerButtons.push('<button class="btn btn-sm" style="color:var(--red)" onclick="rejectManualConceptDraft()">驳回</button>');
+      } else {
+        footerButtons.push('<button class="btn btn-primary btn-sm" onclick="confirmConceptCandidate(\'' + esc(c.candidate_id) + '\')">确认</button>');
+        footerButtons.push('<button class="btn btn-sm" style="color:var(--red)" onclick="rejectConceptCandidate(\'' + esc(c.candidate_id) + '\')">驳回</button>');
+        footerButtons.push('<button class="btn btn-sm" style="color:var(--red)" onclick="deleteConceptCandidate(\'' + esc(c.candidate_id) + '\')">删除</button>');
+      }
     } else {
       var options = (c.merge_from||[]).map(function(cid) { return '<option value="' + esc(cid) + '">' + esc(conceptNames[cid] || cid) + '</option>'; }).join('');
-      actionsHtml = '\
+      formHtml = '\
         <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px">\
           <label style="font-size:12px;color:var(--text-3)">并入目标概念<select id="conceptConfirmTarget" style="width:100%;margin-top:4px">' + options + '</select></label>\
-          <div class="modal-actions" style="margin-top:0;justify-content:flex-start">\
-            <button class="btn btn-primary btn-sm" onclick="confirmConceptCandidate(\'' + esc(c.candidate_id) + '\')">确认合并</button>\
-            <button class="btn btn-sm" style="color:var(--red)" onclick="rejectConceptCandidate(\'' + esc(c.candidate_id) + '\')">驳回</button>\
-          </div>\
         </div>';
+      footerButtons.push('<button class="btn btn-primary btn-sm" onclick="confirmConceptCandidate(\'' + esc(c.candidate_id) + '\')">确认合并</button>');
+      footerButtons.push('<button class="btn btn-sm" style="color:var(--red)" onclick="rejectConceptCandidate(\'' + esc(c.candidate_id) + '\')">驳回</button>');
+      footerButtons.push('<button class="btn btn-sm" style="color:var(--red)" onclick="deleteConceptCandidate(\'' + esc(c.candidate_id) + '\')">删除</button>');
     }
+  } else if (c.status === 'rejected' || (c.status === 'applied' && c.restorable)) {
+    // 已驳回：纯状态翻转，随时可恢复。已执行：仅"新建概念"的 add 候选可
+    // 恢复（后端会撤销概念创建+知识点迁移），c.restorable 由后端算好，
+    // 前端不重复判断 kind/created_new_concept 这些细节。
+    footerButtons.push('<button class="btn btn-sm" onclick="restoreConceptCandidate(\'' + esc(c.candidate_id) + '\')">待确认</button>');
   }
+  footerButtons.push('<button class="btn btn-sm" onclick="closeConceptDetailModal()">取消</button>');
 
   var origin = conceptCandidateOrigin(c);
-  var originRow = origin ? '<div class="detail-row"><span class="dl">候选来源</span><span class="dv">' + (origin === 'content_driven' ? '导入内容聚类（跨 Source KPN 匹配）' : '查询信号聚类（Study 概念缺口扫描）') + '</span></div>' : '';
+  var originLabels = { content_driven: '导入内容聚类（跨 Source KPN 匹配）', manual: '人工手动新增', usage_driven: '查询信号聚类（Study 概念缺口扫描）' };
+  var originRow = origin ? '<div class="detail-row"><span class="dl">候选来源</span><span class="dv">' + (originLabels[origin] || origin) + '</span></div>' : '';
   var mergeFromNames = (c.merge_from||[]).map(function(cid) { return conceptNames[cid] || cid; });
 
   detail.innerHTML = '\
@@ -3429,9 +3735,9 @@ function renderConceptCandidateDetail(c, domains, concepts, selectedDomainId, po
     <div class="detail-row"><span class="dl">支撑事件</span><span class="dv">' + (c.event_ids||[]).length + ' 条</span></div>\
     <h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">依据</h3>\
     ' + evidenceHtml + '\
-    <h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">关联知识点（' + (c.point_ids||[]).length + ' 个）</h3>\
-    ' + pointsHtml + actionsHtml + '\
-    <div class="modal-actions"><button class="btn btn-sm" onclick="closeConceptDetailModal()">关闭</button></div>';
+    <div id="conceptFormPointsSection">' + buildConceptPointsSectionHtml(c, points) + '</div>\
+    ' + formHtml + '\
+    <div class="modal-actions" style="justify-content:flex-end">' + footerButtons.join('') + '</div>';
 }
 
 // 概念名称控件是一个"槽位"：默认渲染成和领域名称样式、交互完全一致的原生
@@ -3487,9 +3793,23 @@ async function onConceptConfirmDomainChange() {
   var domainSel = document.getElementById('conceptConfirmDomainSelect');
   var slot = document.getElementById('conceptConfirmConceptSlot');
   if (!domainSel || !slot) return;
+  S.conceptFormSelectedDomain = domainSel.value;
+  // 添加面板的候选池按领域取数，换领域后旧的一批不再适用，收起并清空缓存
+  // （不自动重新拉取——等用户再次点开"+ 添加知识点"时按新领域重新请求）。
+  S.conceptFormShowAddPicker = false;
+  S.conceptFormAvailablePoints = null;
+  if (S.conceptDraftActive) {
+    // 草稿模式没有"归入已有概念"入口（还没有候选行，这个决策留到真正
+    // 确认执行时），换领域只保留用户已输入的名字，不必拉取该领域概念列表。
+    var typedName = document.getElementById('conceptConfirmConceptNewInput');
+    slot.innerHTML = conceptSlotNewInputHtml([], typedName ? typedName.value : S.conceptFormSuggestedName);
+    refreshConceptFormPointsSection();
+    return;
+  }
   var concepts = await loadConceptsForDomain(domainSel.value);
   S.conceptFormConcepts = concepts;
   slot.innerHTML = buildConceptSlotHtml(concepts, S.conceptFormSuggestedName);
+  refreshConceptFormPointsSection();
 }
 
 async function confirmConceptCandidate(candidateId) {
@@ -3498,6 +3818,8 @@ async function confirmConceptCandidate(candidateId) {
   if (!(await showConfirm('确认执行该概念候选？这会立即改变概念结构（' + (c.kind === 'merge' ? '合并概念、迁移知识点、标记相关 Wiki 页面重编译' : '创建新概念并迁移知识点，或归入已选择的已有概念') + '）。'))) return;
   var body = {};
   if (c.kind === 'add') {
+    var pointIds = (S.conceptFormPointIds || []).map(function(p) { return p.point_id; });
+    if (!pointIds.length) { alert('至少需要保留一个关联知识点'); return; }
     var conceptSelect = document.getElementById('conceptConfirmConceptSelect');
     if (conceptSelect) {
       body.concept_id = conceptSelect.value;
@@ -3507,6 +3829,7 @@ async function confirmConceptCandidate(candidateId) {
       body.suggested_name = newInput ? newInput.value.trim() : '';
       body.domain_id = domainSel ? domainSel.value : '';
     }
+    body.point_ids = pointIds;
   } else {
     body.target = document.getElementById('conceptConfirmTarget').value;
   }
@@ -3521,6 +3844,28 @@ async function rejectConceptCandidate(candidateId) {
   if (!(await showConfirm('确认驳回该概念候选？'))) return;
   try {
     var r = await api('POST', '/concepts/candidates/' + candidateId + '/reject');
+    if (r.ok) { loadConceptCandidates(); pollConceptPendingCount(); closeConceptDetailModal(); }
+    else alert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+  } catch(e) { alert('操作出错：' + e.message); }
+}
+
+async function deleteConceptCandidate(candidateId) {
+  if (!(await showConfirm('确认删除该候选？这会彻底删除记录，不会像驳回那样留在已驳回列表里，无法恢复。'))) return;
+  try {
+    var r = await api('DELETE', '/concepts/candidates/' + candidateId);
+    if (r.ok) { loadConceptCandidates(); pollConceptPendingCount(); closeConceptDetailModal(); }
+    else alert('删除失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+  } catch(e) { alert('操作出错：' + e.message); }
+}
+
+async function restoreConceptCandidate(candidateId) {
+  var c = S.conceptCandidates.find(function(x) { return x.candidate_id === candidateId; });
+  var msg = c && c.status === 'applied'
+    ? '确认将该候选恢复到待确认？这会撤销已新建的概念，并把关联知识点迁回未归类状态。'
+    : '确认将该候选恢复到待确认？';
+  if (!(await showConfirm(msg))) return;
+  try {
+    var r = await api('POST', '/concepts/candidates/' + candidateId + '/restore');
     if (r.ok) { loadConceptCandidates(); pollConceptPendingCount(); closeConceptDetailModal(); }
     else alert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
   } catch(e) { alert('操作出错：' + e.message); }
@@ -3737,6 +4082,24 @@ function chatInner()    { return document.getElementById('chatInner'); }
 function scrollThread() { var t = document.getElementById('chatThread'); t.scrollTop = t.scrollHeight; }
 function div(cls)       { var el = document.createElement('div'); el.className = cls; return el; }
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+// ActivationLink 条件集合（intent_terms / audience / constraint_terms）含合法空串
+// 成员 ""；展示时去掉空成员再拼接，避免 Array.toString() 出现前导逗号。
+function formatTermSet(v) {
+  if (v == null || v === '') return '';
+  if (Array.isArray(v)) {
+    return v.map(function(x) { return String(x == null ? '' : x).trim(); }).filter(Boolean).join(', ');
+  }
+  return String(v).trim();
+}
+function formatObservedConditions(conds) {
+  if (!conds || !conds.length) return '<span style="color:var(--text-3)">暂无（回退 question_terms）</span>';
+  return '<div style="display:flex;flex-direction:column;gap:6px">' + conds.map(function(c, i) {
+    return '<div style="font-size:12px;padding:6px 8px;background:var(--bg-2);border-radius:6px">' +
+      '<div style="color:var(--text-3);margin-bottom:2px">#' + (i + 1) + (c.hit_count ? ' · ' + c.hit_count + '次' : '') + '</div>' +
+      '<div>主体 ' + esc(c.subject || '-') + ' · 意图 ' + esc(c.intent || '-') + '</div>' +
+      '<div>受众 ' + esc(c.audience || '-') + ' · 约束 ' + esc(c.constraint || '-') + '</div></div>';
+  }).join('') + '</div>';
+}
 function dateStr(s) { if (!s) return ''; try { return new Date(s).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}); } catch(e) { return s||''; } }
 function qualityLabel(q) { return {confident:'置信',partial:'部分',gap:'缺口'}[q] || q || '未知'; }
 function pathLabel(p) { return {short:'简洁模式',deep:'深度推理',none:'无法回答',error:'出错'}[p] || p || '未知'; }
@@ -3795,13 +4158,23 @@ async function copy(text, el) {
   catch(e) { console.warn('Copy failed'); }
 }
 
-function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; }
+function autoResize(el) {
+  var maxH = Math.floor(window.innerHeight * 0.4);
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, maxH) + 'px';
+}
 
 function inputKeydown(e) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     if (S.chatMode) submitQuestion();
     else submitFromWelcome();
+    return;
+  }
+  if (e.key === 'Enter' && e.shiftKey) {
+    // 换行后按内容增高；下一帧再量 scrollHeight，避免量到插入前的高度
+    var el = e.target;
+    requestAnimationFrame(function() { autoResize(el); });
   }
 }
 

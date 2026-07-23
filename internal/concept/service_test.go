@@ -466,6 +466,73 @@ func TestConfirm_Merge_InvalidTarget_Errors(t *testing.T) {
 
 // --- KPN content_driven candidates (docs/impl/v1/kpn.md 步骤 3/6) ---
 
+func TestCreateManualCandidate_BlankThenConfirmable(t *testing.T) {
+	svc, store, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+
+	// Blank args model the never-touched "新增" draft form — nothing to
+	// persist yet until the user actually fills something in.
+	candidateID, err := svc.CreateManualCandidate("", "", nil)
+	if err != nil {
+		t.Fatalf("create manual candidate: %v", err)
+	}
+
+	c, err := store.GetCandidate(candidateID)
+	if err != nil || c == nil {
+		t.Fatalf("get candidate: %v", err)
+	}
+	if c.Kind != KindAdd || c.Status != StatusPendingConfirm {
+		t.Errorf("kind/status = %s/%s, want add/pending_confirm", c.Kind, c.Status)
+	}
+	if c.DomainID.Valid || c.SuggestedName.String != "" || c.PointIDs != "[]" {
+		t.Errorf("expected blank domain/name/point_ids, got domain=%+v name=%q point_ids=%q", c.DomainID, c.SuggestedName.String, c.PointIDs)
+	}
+	ev := candidateEvidence(t, c)
+	if ev["origin"] != "manual" {
+		t.Errorf("evidence.origin = %v, want manual", ev["origin"])
+	}
+
+	// The same dialog/API used for every other add candidate must be able
+	// to fill in the blanks and confirm it — no separate creation path.
+	result, err := svc.Confirm(candidateID, &ConfirmAddRequest{DomainID: "d1", SuggestedName: "新概念", PointIDs: []string{"p1"}}, nil)
+	if err != nil {
+		t.Fatalf("confirm manual candidate: %v", err)
+	}
+	if result.ConceptID == "" || result.MigratedKUs != 1 {
+		t.Errorf("unexpected confirm result: %+v", result)
+	}
+}
+
+func TestCreateManualCandidate_FilledFromDraft(t *testing.T) {
+	svc, store, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+
+	// The draft dialog's own "确认" (保存到待确认) sends whatever the user
+	// filled in — this is what CreateManualCandidate now actually receives.
+	candidateID, err := svc.CreateManualCandidate("d1", "并发编程", []string{"p1"})
+	if err != nil {
+		t.Fatalf("create manual candidate: %v", err)
+	}
+
+	c, err := store.GetCandidate(candidateID)
+	if err != nil || c == nil {
+		t.Fatalf("get candidate: %v", err)
+	}
+	if !c.DomainID.Valid || c.DomainID.String != "d1" {
+		t.Errorf("domain_id = %+v, want d1", c.DomainID)
+	}
+	if c.SuggestedName.String != "并发编程" {
+		t.Errorf("suggested_name = %q, want 并发编程", c.SuggestedName.String)
+	}
+	if len(candidatePointIDs(t, c)) != 1 {
+		t.Errorf("expected 1 point_id, got %v", candidatePointIDs(t, c))
+	}
+}
+
 func TestProposeAddCandidate_FirstCall_CreatesContentDrivenCandidate(t *testing.T) {
 	svc, store, db := setupService(t)
 	seedSource(t, db, "s1", "d1")
@@ -567,7 +634,8 @@ func TestProposeAddCandidate_DoesNotMergeIntoUsageDrivenCandidate(t *testing.T) 
 // fakeKPNRematchNotifier stands in for internal/unit.Service in concept
 // package tests (docs/impl/v1/kpn.md 步骤 6).
 type fakeKPNRematchNotifier struct {
-	calls []fakeRematchCall
+	calls             []fakeRematchCall
+	returnRelationIDs []string
 }
 
 type fakeRematchCall struct {
@@ -575,8 +643,9 @@ type fakeRematchCall struct {
 	pointIDs  []string
 }
 
-func (f *fakeKPNRematchNotifier) RematchPoints(conceptID string, pointIDs []string) {
+func (f *fakeKPNRematchNotifier) RematchPoints(conceptID string, pointIDs []string) []string {
 	f.calls = append(f.calls, fakeRematchCall{conceptID, pointIDs})
+	return f.returnRelationIDs
 }
 
 func TestConfirmAdd_Assign_MigratesToExistingConceptWithoutCreatingNew(t *testing.T) {
@@ -706,5 +775,270 @@ func TestReject_MarksRejectedNoStructuralChange(t *testing.T) {
 
 	if err := svc.Reject(candidateID); err == nil {
 		t.Error("expected error rejecting an already-rejected candidate")
+	}
+}
+
+func TestDelete_RemovesPendingCandidateAndLearningResult(t *testing.T) {
+	svc, store, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Delete(candidateID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	c, _ := store.GetCandidate(candidateID)
+	if c != nil {
+		t.Errorf("expected candidate row gone, got %+v", c)
+	}
+
+	var lrCount int
+	db.QueryRow(`SELECT COUNT(*) FROM learning_results WHERE object_type = 'concept_candidate' AND object_id = ?`, candidateID).Scan(&lrCount)
+	if lrCount != 0 {
+		t.Errorf("expected learning_result row gone, got %d", lrCount)
+	}
+
+	if err := svc.Delete(candidateID); err == nil {
+		t.Error("expected error deleting an already-deleted candidate")
+	}
+}
+
+func TestDelete_RejectsNonPendingCandidate(t *testing.T) {
+	svc, store, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Reject(candidateID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Delete(candidateID); err == nil {
+		t.Error("expected error deleting a rejected candidate")
+	}
+}
+
+func TestRestore_Rejected_ReturnsToPendingConfirm(t *testing.T) {
+	svc, store, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Reject(candidateID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Restore(candidateID); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	c, _ := store.GetCandidate(candidateID)
+	if c.Status != StatusPendingConfirm {
+		t.Errorf("status = %q, want pending_confirm", c.Status)
+	}
+
+	var lrStatus string
+	db.QueryRow(`SELECT status FROM learning_results WHERE object_type = 'concept_candidate' AND object_id = ?`, candidateID).Scan(&lrStatus)
+	if lrStatus != "pending_confirm" {
+		t.Errorf("learning_result status = %q, want pending_confirm", lrStatus)
+	}
+
+	if err := svc.Restore(candidateID); err == nil {
+		t.Error("expected error restoring an already-pending candidate")
+	}
+}
+
+func TestRestore_AppliedNewConcept_DeletesConceptAndRevertsKUs(t *testing.T) {
+	svc, store, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+
+	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", []string{"p1"}, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.Confirm(candidateID, &ConfirmAddRequest{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conceptID := result.ConceptID
+
+	if err := svc.Restore(candidateID); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	c, _ := store.GetCandidate(candidateID)
+	if c.Status != StatusPendingConfirm {
+		t.Errorf("status = %q, want pending_confirm", c.Status)
+	}
+	if c.ResolvedConceptID.Valid || c.CreatedNewConcept {
+		t.Errorf("expected resolved_concept_id cleared and created_new_concept=false, got %+v/%v", c.ResolvedConceptID, c.CreatedNewConcept)
+	}
+
+	var conceptCount int
+	db.QueryRow(`SELECT COUNT(*) FROM concepts WHERE concept_id = ?`, conceptID).Scan(&conceptCount)
+	if conceptCount != 0 {
+		t.Errorf("expected concept row deleted, still found %d", conceptCount)
+	}
+
+	var u1Concept sql.NullString
+	db.QueryRow(`SELECT concept_id FROM knowledge_units WHERE unit_id = 'u1'`).Scan(&u1Concept)
+	if u1Concept.Valid {
+		t.Errorf("expected u1.concept_id reverted to NULL, got %+v", u1Concept)
+	}
+
+	var lrStatus string
+	db.QueryRow(`SELECT status FROM learning_results WHERE object_type = 'concept_candidate' AND object_id = ?`, candidateID).Scan(&lrStatus)
+	if lrStatus != "pending_confirm" {
+		t.Errorf("learning_result status = %q, want pending_confirm", lrStatus)
+	}
+}
+
+func TestRestore_AppliedNewConcept_DeletesOnlyThisConfirmsKPNRelations(t *testing.T) {
+	svc, store, db := setupService(t)
+	notifier := &fakeKPNRematchNotifier{returnRelationIDs: []string{"rel-1"}}
+	svc.SetKPNRematchNotifier(notifier)
+
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+	seedSource(t, db, "s2", "d1")
+	seedKU(t, db, "u2", "s2", "topic2", sql.NullString{})
+	seedKP(t, db, "p2", "u2", "s2")
+
+	// rel-1 stands in for what RematchPoints would have actually inserted
+	// (the fake just returns the id, doesn't insert it, so the row is seeded
+	// directly). rel-unrelated has a different relation_type on the same
+	// pair so it doesn't collide with idx_kp_relations_uniq, and represents
+	// a relation this candidate's confirm did NOT create (e.g. a later,
+	// unrelated Source import) — restore must leave it alone.
+	if _, err := db.Exec(`INSERT INTO knowledge_point_relations (relation_id, source_point_id, target_point_id, relation_type, direction, prompt_version, scope) VALUES ('rel-1', 'p1', 'p2', 'related', 'bidirectional', 'v1', 'cross')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO knowledge_point_relations (relation_id, source_point_id, target_point_id, relation_type, direction, prompt_version, scope) VALUES ('rel-unrelated', 'p1', 'p2', 'contradicts', 'bidirectional', 'v1', 'cross')`); err != nil {
+		t.Fatal(err)
+	}
+
+	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", []string{"p1"}, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Confirm(candidateID, &ConfirmAddRequest{}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	c, _ := store.GetCandidate(candidateID)
+	if c.KPNRelationIDs != `["rel-1"]` {
+		t.Errorf("kpn_relation_ids = %q, want [\"rel-1\"]", c.KPNRelationIDs)
+	}
+
+	if err := svc.Restore(candidateID); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	var count int
+	db.QueryRow(`SELECT COUNT(*) FROM knowledge_point_relations WHERE relation_id = 'rel-1'`).Scan(&count)
+	if count != 0 {
+		t.Error("expected rel-1 (recorded on this candidate) deleted by restore")
+	}
+	db.QueryRow(`SELECT COUNT(*) FROM knowledge_point_relations WHERE relation_id = 'rel-unrelated'`).Scan(&count)
+	if count != 1 {
+		t.Error("expected rel-unrelated (not recorded on this candidate) to survive restore")
+	}
+
+	c, _ = store.GetCandidate(candidateID)
+	if c.KPNRelationIDs != "[]" {
+		t.Errorf("kpn_relation_ids after restore = %q, want []", c.KPNRelationIDs)
+	}
+}
+
+func TestRestore_AppliedAssignToExisting_NotRestorable(t *testing.T) {
+	svc, _, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedConcept(t, db, "cExisting", "d1", sql.NullString{})
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", []string{"p1"}, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Confirm(candidateID, &ConfirmAddRequest{ConceptID: "cExisting"}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Restore(candidateID); err == nil {
+		t.Error("expected error restoring an assign-to-existing-concept candidate")
+	}
+}
+
+func TestRestore_AppliedNewConcept_RefusesWhenLaterConfirmAssignedMoreKUs(t *testing.T) {
+	svc, store, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+	seedKU(t, db, "u2", "s1", "topic2", sql.NullString{})
+	seedKP(t, db, "p2", "u2", "s1")
+
+	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", []string{"p1"}, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.Confirm(candidateID, &ConfirmAddRequest{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	otherCandidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "并发编程2", []string{"p2"}, nil, ContentDrivenEvidence{Origin: "content_driven"}, "seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Confirm(otherCandidateID, &ConfirmAddRequest{ConceptID: result.ConceptID}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Restore(candidateID); err == nil {
+		t.Error("expected error restoring while another KU still references the concept")
+	}
+}
+
+func TestRestore_AppliedNewConcept_RefusesWhenActiveWikiPageExists(t *testing.T) {
+	svc, store, db, _ := setupServiceWithWiki(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+
+	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", []string{"p1"}, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.Confirm(candidateID, &ConfirmAddRequest{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertWikiPage(t, db, "page-1", result.ConceptID)
+
+	if err := svc.Restore(candidateID); err == nil {
+		t.Error("expected error restoring while an active wiki page references the concept")
+	}
+
+	c, _ := store.GetCandidate(candidateID)
+	if c.Status != StatusApplied {
+		t.Errorf("status should remain applied when restore is refused, got %q", c.Status)
 	}
 }

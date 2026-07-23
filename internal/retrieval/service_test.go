@@ -256,6 +256,58 @@ func TestRRFMerge(t *testing.T) {
 	}
 }
 
+func TestRRFMergeIncludesTuplePath(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	svc.cfg.Retrieval.RerankTopN = 3
+
+	// Question-FTS ranks reward-keyword units first; tuple-FTS ranks the
+	// subject-aligned unit first. With three-way RRF, the subject-aligned
+	// unit that also appears in outline should surface in top-N.
+	outline := []candidate{
+		{unitID: "incentive", pointID: "p1", sourceID: "s-ar", score: 1.0, sourcePaths: []string{"outline"}},
+	}
+	ftsQuestion := []candidate{
+		{unitID: "sales-reward", pointID: "p2", sourceID: "s-wx", score: 5.0, sourcePaths: []string{"fts"}},
+		{unitID: "process", pointID: "p3", sourceID: "s-ar", score: 4.0, sourcePaths: []string{"fts"}},
+		{unitID: "incentive", pointID: "p1", sourceID: "s-ar", score: 1.0, sourcePaths: []string{"fts"}},
+	}
+	ftsTuple := []candidate{
+		{unitID: "incentive", pointID: "p1", sourceID: "s-ar", score: 5.0, sourcePaths: []string{"fts_tuple"}},
+		{unitID: "process", pointID: "p3", sourceID: "s-ar", score: 2.0, sourcePaths: []string{"fts_tuple"}},
+	}
+
+	merged := svc.rrfMerge(outline, ftsQuestion, ftsTuple)
+	if len(merged) != 3 {
+		t.Fatalf("merged len=%d, want 3", len(merged))
+	}
+	if merged[0].unitID != "incentive" {
+		t.Fatalf("top candidate=%s, want incentive (lifted by outline+fts_tuple)", merged[0].unitID)
+	}
+	paths := map[string]bool{}
+	for _, p := range merged[0].sourcePaths {
+		paths[p] = true
+	}
+	if !paths["outline"] || !paths["fts"] || !paths["fts_tuple"] {
+		t.Fatalf("incentive paths=%v, want outline+fts+fts_tuple", merged[0].sourcePaths)
+	}
+}
+
+func TestQueryTupleText(t *testing.T) {
+	got := queryTupleText(QueryContext{
+		Subject:    "回款激励",
+		Intent:     "查询回款奖励",
+		Audience:   "销售人员",
+		Constraint: "",
+	})
+	want := "回款激励 查询回款奖励 销售人员"
+	if got != want {
+		t.Fatalf("queryTupleText=%q, want %q", got, want)
+	}
+	if queryTupleText(QueryContext{}) != "" {
+		t.Fatal("empty quadruple should yield empty tuple text")
+	}
+}
+
 func TestRerankPreservesCandidateOrderAndFiltersIrrelevant(t *testing.T) {
 	svc, fake, _ := setupTestService(t)
 
@@ -295,6 +347,74 @@ func TestRerankPreservesCandidateOrderAndFiltersIrrelevant(t *testing.T) {
 	}
 	if filtered[0].Content == "" {
 		t.Error("expected filtered evidence to carry the candidate's KU content")
+	}
+}
+
+// TestRerankJudgeIncludeAnalysisDefaultUsesAnalysisPrompt confirms that
+// leaving RerankJudgeIncludeAnalysis unset (nil) in config keeps calling
+// rerank_judge.md — the pre-existing behavior — rather than silently
+// switching to the no-analysis variant just because the zero value of a
+// plain bool would be false.
+func TestRerankJudgeIncludeAnalysisDefaultUsesAnalysisPrompt(t *testing.T) {
+	svc, fake, _ := setupTestService(t)
+
+	candidates := []candidate{
+		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25, score: 1.0},
+	}
+
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "matches"}]}`,
+	})
+
+	if _, _, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := fake.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 judge call, got %d", len(calls))
+	}
+	if calls[0].PromptFile != "rerank_judge.md" {
+		t.Errorf("expected default prompt rerank_judge.md, got %q", calls[0].PromptFile)
+	}
+}
+
+// TestRerankJudgeIncludeAnalysisFalseUsesNoAnalysisPrompt confirms that
+// setting RerankJudgeIncludeAnalysis=false switches the judge call to
+// rerank_judge_no_analysis.md, and that a response without an `analysis`
+// field (the whole point of the variant) still parses and assigns roles
+// correctly — the field was already unread by decision logic, only logged.
+func TestRerankJudgeIncludeAnalysisFalseUsesNoAnalysisPrompt(t *testing.T) {
+	svc, fake, _ := setupTestService(t)
+	includeAnalysis := false
+	svc.cfg.Retrieval.RerankJudgeIncludeAnalysis = &includeAnalysis
+
+	candidates := []candidate{
+		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25, score: 1.0},
+		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50, score: 0.5},
+	}
+
+	fake.SetResponse("rerank_judge_no_analysis.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "role": "direct"}, {"candidate_id": "c2", "role": "irrelevant"}]}`,
+	})
+
+	kept, filtered, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 1 || kept[0].unitID != "u1" {
+		t.Fatalf("expected only u1 kept as direct, got %+v", kept)
+	}
+	if len(filtered) != 1 || filtered[0].UnitID != "u2" {
+		t.Fatalf("expected u2 filtered as irrelevant, got %+v", filtered)
+	}
+
+	calls := fake.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 judge call, got %d", len(calls))
+	}
+	if calls[0].PromptFile != "rerank_judge_no_analysis.md" {
+		t.Errorf("expected rerank_judge_no_analysis.md, got %q", calls[0].PromptFile)
 	}
 }
 

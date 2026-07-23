@@ -38,6 +38,17 @@ type CandidateRow struct {
 	LastSignalAt  time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	// ResolvedConceptID/CreatedNewConcept are set on confirm (kind=add only)
+	// and record whether this confirm created a brand-new concept row —
+	// the only case RestoreApplied can safely undo (assign-to-existing and
+	// merge confirms touch a concept this candidate didn't create).
+	ResolvedConceptID sql.NullString
+	CreatedNewConcept bool
+	// KPNRelationIDs is the JSON array of knowledge_point_relations.relation_id
+	// rows RematchPoints created for this candidate's confirm (kind=add only;
+	// '[]' otherwise) — RestoreAppliedNewConcept deletes exactly these on
+	// restore.
+	KPNRelationIDs string
 }
 
 // AddEvidence is the evidence JSON for kind=add candidates.
@@ -101,6 +112,11 @@ type CandidateView struct {
 	LastSignalAt  time.Time       `json:"last_signal_at"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
+	// Restorable: true when this is an applied kind=add candidate that
+	// created a brand-new concept — the confirm dialog's "恢复到待确认"
+	// button only shows for these (docs/impl/v1/concept-evolution.md has no
+	// restore design; scope intentionally limited to the new-concept path).
+	Restorable bool `json:"restorable"`
 }
 
 func toView(c CandidateRow) CandidateView {
@@ -122,6 +138,7 @@ func toView(c CandidateRow) CandidateView {
 	json.Unmarshal([]byte(c.MergeFrom), &v.MergeFrom)
 	json.Unmarshal([]byte(c.PointIDs), &v.PointIDs)
 	json.Unmarshal([]byte(c.EventIDs), &v.EventIDs)
+	v.Restorable = c.Status == StatusApplied && c.Kind == KindAdd && c.CreatedNewConcept
 	return v
 }
 
@@ -137,6 +154,12 @@ type ConfirmAddRequest struct {
 	// (docs/impl/v1/kpn.md 步骤 6 "归入已有概念") — mutually exclusive with
 	// SuggestedName/DomainID, which are ignored when ConceptID is set.
 	ConceptID string `json:"concept_id"`
+	// PointIDs, when non-nil, replaces the candidate's own point_ids
+	// wholesale (add/remove KPs via the confirm dialog's picker). Applies to
+	// both the new-concept and "归入已有概念" execution paths. Nil (vs. an
+	// explicit empty array) means "use the candidate's own suggestion,
+	// unchanged" — distinguished via JSON decode, see the handler.
+	PointIDs []string `json:"point_ids"`
 }
 
 // ConfirmMergeRequest is POST /concepts/candidates/:id/confirm's body for

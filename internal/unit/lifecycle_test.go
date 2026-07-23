@@ -88,8 +88,9 @@ func TestSetUnitLifecycle_CascadesAndReindexes(t *testing.T) {
 // TestReindexSource_RewritesStaleSourceID covers the shadow-swap repair path:
 // documents indexed while a KU/KP still belonged to a shadow source keep the
 // shadow's source_id in Bleve after the 换血事务 rewrites SQLite. ReindexSource
-// must replace them (same doc ids) with the DB rows' actual source_id and
-// preserve each row's own lifecycle value.
+// must replace current rows (same doc ids) with the DB rows' actual source_id.
+// Superseded rows are intentionally skipped — they were reindexed against the
+// old markdown in SetUnitLifecycle before the file swap.
 func TestReindexSource_RewritesStaleSourceID(t *testing.T) {
 	svc, _, db := setupTestService(t)
 	tmpDir := t.TempDir()
@@ -101,13 +102,24 @@ func TestReindexSource_RewritesStaleSourceID(t *testing.T) {
 	if err := svc.store.InsertUnit(ku); err != nil {
 		t.Fatalf("insert unit: %v", err)
 	}
-	if err := svc.store.UpdateUnitsLifecycle([]string{ku.UnitID}, LifecycleSuperseded); err != nil {
-		t.Fatalf("seed unit lifecycle: %v", err)
-	}
 	kp := &KnowledgePoint{UnitID: ku.UnitID, SourceID: "src-1", Content: "知识管理的定义", PointType: "definition"}
 	if err := svc.store.InsertPoint(kp); err != nil {
 		t.Fatalf("insert point: %v", err)
 	}
+
+	oldKU := &KnowledgeUnit{SourceID: "src-1", Center: "旧单元", LineStart: 1, LineEnd: 2, Status: "completed", PromptVersion: "v1"}
+	if err := svc.store.InsertUnit(oldKU); err != nil {
+		t.Fatalf("insert old unit: %v", err)
+	}
+	if err := svc.store.UpdateUnitsLifecycle([]string{oldKU.UnitID}, LifecycleSuperseded); err != nil {
+		t.Fatalf("seed old unit lifecycle: %v", err)
+	}
+	// Seed Bleve for the superseded unit with correct target source_id and
+	// a distinctive center — ReindexSource must leave it alone.
+	seededOld := *oldKU
+	seededOld.Lifecycle = LifecycleSuperseded
+	seededOld.Center = "不应被新文件重切"
+	svc.indexUnit(&seededOld, []string{"旧正文一行", "旧正文二行"})
 
 	// Seed Bleve the way the shadow pipeline would have: same doc ids, but
 	// source_id still pointing at the (since-deleted) shadow source.
@@ -126,11 +138,14 @@ func TestReindexSource_RewritesStaleSourceID(t *testing.T) {
 	if sid, ok := bleveField(t, svc.unitsIndex, ku.UnitID, "source_id"); !ok || sid != "src-1" {
 		t.Errorf("bleve unit source_id = %q (found=%v), want src-1", sid, ok)
 	}
-	if lc, ok := bleveField(t, svc.unitsIndex, ku.UnitID, "lifecycle"); !ok || lc != LifecycleSuperseded {
-		t.Errorf("bleve unit lifecycle = %q (found=%v), want %q (must keep the row's own value)", lc, ok, LifecycleSuperseded)
+	if lc, ok := bleveField(t, svc.unitsIndex, ku.UnitID, "lifecycle"); !ok || lc != LifecycleCurrent {
+		t.Errorf("bleve unit lifecycle = %q (found=%v), want %q", lc, ok, LifecycleCurrent)
 	}
 	if sid, ok := bleveField(t, svc.pointsIndex, kp.PointID, "source_id"); !ok || sid != "src-1" {
 		t.Errorf("bleve point source_id = %q (found=%v), want src-1", sid, ok)
+	}
+	if center, ok := bleveField(t, svc.unitsIndex, oldKU.UnitID, "center"); !ok || center != "不应被新文件重切" {
+		t.Errorf("superseded bleve center = %q (found=%v), want unchanged pre-swap index content", center, ok)
 	}
 }
 

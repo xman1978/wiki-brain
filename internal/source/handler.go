@@ -28,6 +28,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /sources/{id}", h.deleteSource)
 	mux.HandleFunc("POST /sources/{id}/restore", h.restoreSource)
 	mux.HandleFunc("PATCH /sources/{id}/domain", h.setSourceDomain)
+mux.HandleFunc("PATCH /sources/{id}/summary", h.setSourceSummary)
 	mux.HandleFunc("POST /sources/{id}/retry", h.retrySource)
 	mux.HandleFunc("POST /sources/{id}/reupload", h.reuploadSource)
 	mux.HandleFunc("POST /sources/{id}/reupload/retry", h.reuploadRetry)
@@ -351,6 +352,40 @@ func (h *Handler) setSourceDomain(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// setSourceSummary implements PATCH /sources/:id/summary, letting a human
+// correct the auto-generated summary that source_filter's title+summary
+// pre-screen relies on.
+func (h *Handler) setSourceSummary(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var body struct {
+		Summary string `json:"summary"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if strings.TrimSpace(body.Summary) == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "summary is required")
+		return
+	}
+
+	if err := h.svc.SetSummary(id, body.Summary); err != nil {
+		if strings.Contains(err.Error(), "source not found") {
+			foundation.WriteError(w, http.StatusNotFound, "source not found")
+			return
+		}
+		slog.Error("set source summary failed", "error", err)
+		foundation.WriteError(w, http.StatusInternalServerError, "set summary failed")
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"source_id": id,
+		"summary":   body.Summary,
+	})
+}
+
 // reuploadSource implements POST /sources/:id/reupload (docs/impl/v1/lifecycle.md
 // 步骤 2): the new file is processed through a hidden Shadow Source; the target
 // itself is untouched until the shadow's unit_extract finishes successfully.
@@ -457,7 +492,24 @@ func (h *Handler) getOutlines(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) getMarkdown(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	md, err := h.svc.GetMarkdown(id)
+	unitID := r.URL.Query().Get("unit_id")
+	versionStr := r.URL.Query().Get("version")
+
+	var md string
+	var err error
+	switch {
+	case unitID != "":
+		md, err = h.svc.GetMarkdownForUnit(id, unitID)
+	case versionStr != "":
+		version, perr := strconv.Atoi(versionStr)
+		if perr != nil {
+			foundation.WriteError(w, http.StatusBadRequest, "invalid version")
+			return
+		}
+		md, err = h.svc.GetMarkdownForVersion(id, version)
+	default:
+		md, err = h.svc.GetMarkdown(id)
+	}
 	if err != nil {
 		foundation.WriteError(w, http.StatusNotFound, "source not found or markdown unavailable")
 		return
@@ -468,10 +520,24 @@ func (h *Handler) getMarkdown(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) getPreview(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	html, err := h.svc.GetHTMLPreview(id)
-	if err != nil {
-		foundation.WriteError(w, http.StatusNotFound, "source not found")
-		return
+	unitID := r.URL.Query().Get("unit_id")
+	var html string
+	var err error
+	if unitID != "" {
+		md, merr := h.svc.GetMarkdownForUnit(id, unitID)
+		if merr != nil {
+			foundation.WriteError(w, http.StatusNotFound, "source not found")
+			return
+		}
+		escaped := strings.ReplaceAll(md, "<", "&lt;")
+		escaped = strings.ReplaceAll(escaped, ">", "&gt;")
+		html = "<pre>" + escaped + "</pre>"
+	} else {
+		html, err = h.svc.GetHTMLPreview(id)
+		if err != nil {
+			foundation.WriteError(w, http.StatusNotFound, "source not found")
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	io.WriteString(w, html)

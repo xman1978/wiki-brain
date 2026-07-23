@@ -30,9 +30,12 @@ type Config struct {
 // (internal/unit) re-run matching for a kind=add candidate's point_ids
 // immediately after confirm gives them a concept_id — before confirm they
 // may have sat with zero cross-Source relations (docs/impl/v1/kpn.md 步骤 6).
-// SetKPNRematchNotifier no-ops when unset.
+// SetKPNRematchNotifier no-ops when unset. Returns the created relation_ids
+// so the caller can record them on the candidate row — restoring an applied
+// candidate cleans up exactly these relations, not anything a later,
+// unrelated Source import creates once these points have a concept_id.
 type KPNRematchNotifier interface {
-	RematchPoints(conceptID string, pointIDs []string)
+	RematchPoints(conceptID string, pointIDs []string) []string
 }
 
 type Service struct {
@@ -96,6 +99,28 @@ func (s *Service) ProposeAddCandidate(domainID, suggestedName, suggestedDescript
 		return "", err
 	}
 	return candidateID, nil
+}
+
+// CreateManualCandidate implements the "新增" button in the concept
+// evolution UI: the button itself only opens a client-side draft form (no
+// server call, nothing persisted) — this is what actually runs when the
+// user clicks that draft's own "确认" (save as pending_confirm) or "驳回"
+// (save then immediately reject) button, with whatever domain/name/point_ids
+// they'd filled in by then. Either way it inserts a kind=add candidate
+// exactly like any other; the concept itself is still only ever created
+// later through the normal Confirm path when that saved candidate is
+// opened from the 待确认 list — evidence.origin="manual" is audit-only, no
+// design doc defines a bypass of the human-confirm step.
+func (s *Service) CreateManualCandidate(domainID, suggestedName string, pointIDs []string) (candidateID string, err error) {
+	var domain sql.NullString
+	if domainID != "" {
+		domain = sql.NullString{String: domainID, Valid: true}
+	}
+	if pointIDs == nil {
+		pointIDs = []string{}
+	}
+	evidence := ContentDrivenEvidence{Origin: "manual"}
+	return s.store.InsertAddCandidate(domain, suggestedName, pointIDs, nil, evidence, "人工手动新增概念候选")
 }
 
 // Scan runs the two clustering subtasks plus idle expiry
@@ -553,6 +578,16 @@ func (s *Service) confirmAdd(c *CandidateRow, req *ConfirmAddRequest) (*ConfirmR
 	if err := json.Unmarshal([]byte(c.PointIDs), &pointIDs); err != nil {
 		return nil, fmt.Errorf("concept: confirm add: unmarshal point_ids: %w", err)
 	}
+	// The confirm dialog's KP picker may add/remove points from the
+	// candidate's original suggestion — when present, PointIDs replaces it
+	// wholesale (not a delta). Migration still only touches concept_id-NULL
+	// KUs (store layer), so a stale/already-claimed id is silently skipped.
+	if req != nil && req.PointIDs != nil {
+		pointIDs = req.PointIDs
+	}
+	if len(pointIDs) == 0 {
+		return nil, fmt.Errorf("concept: confirm add requires at least one point_id")
+	}
 
 	// "归入已有概念" (docs/impl/v1/kpn.md 步骤 6): skip creating a concept,
 	// assign point_ids to req.ConceptID directly. Mutually exclusive with
@@ -571,7 +606,8 @@ func (s *Service) confirmAdd(c *CandidateRow, req *ConfirmAddRequest) (*ConfirmR
 			return nil, err
 		}
 		if s.kpnNotifier != nil {
-			s.kpnNotifier.RematchPoints(req.ConceptID, pointIDs)
+			relationIDs := s.kpnNotifier.RematchPoints(req.ConceptID, pointIDs)
+			s.recordKPNRelationIDs(c.CandidateID, relationIDs)
 		}
 		return &ConfirmResult{Candidate: *c, ConceptID: req.ConceptID, MigratedKUs: migrated}, nil
 	}
@@ -603,10 +639,25 @@ func (s *Service) confirmAdd(c *CandidateRow, req *ConfirmAddRequest) (*ConfirmR
 		return nil, err
 	}
 	if s.kpnNotifier != nil {
-		s.kpnNotifier.RematchPoints(conceptID, pointIDs)
+		relationIDs := s.kpnNotifier.RematchPoints(conceptID, pointIDs)
+		s.recordKPNRelationIDs(c.CandidateID, relationIDs)
 	}
 
 	return &ConfirmResult{Candidate: *c, ConceptID: conceptID, MigratedKUs: migrated}, nil
+}
+
+// recordKPNRelationIDs persists the relation_ids RematchPoints just created
+// onto the candidate row, so a later restore can clean up precisely those
+// relations. Best-effort like RematchPoints itself: the confirm already
+// committed, a failure here only means a future restore leaves these
+// relations behind rather than blocking anything now.
+func (s *Service) recordKPNRelationIDs(candidateID string, relationIDs []string) {
+	if len(relationIDs) == 0 {
+		return
+	}
+	if err := s.store.SetCandidateKPNRelationIDs(candidateID, relationIDs); err != nil {
+		slog.Warn("concept: record kpn relation ids failed", "candidate_id", candidateID, "error", err)
+	}
 }
 
 func (s *Service) confirmMerge(c *CandidateRow, req *ConfirmMergeRequest) (*ConfirmResult, error) {
@@ -684,6 +735,76 @@ func (s *Service) Reject(candidateID string) error {
 	return s.store.Reject(candidateID)
 }
 
+// Delete implements DELETE /concepts/candidates/:id: hard-removes a
+// pending_confirm candidate (and its learning_result) — for discarding a
+// candidate entirely rather than keeping an audit trail in 已驳回 (that's
+// what Reject is for). Only pending_confirm candidates qualify: applied
+// candidates have already created real concept/KU structure (Restore is the
+// path for those), and rejected/expired ones are already out of the active
+// list.
+func (s *Service) Delete(candidateID string) error {
+	c, err := s.store.GetCandidate(candidateID)
+	if err != nil {
+		return err
+	}
+	if c == nil {
+		return fmt.Errorf("concept: candidate not found: %s", candidateID)
+	}
+	if c.Status != StatusPendingConfirm {
+		return fmt.Errorf("concept: delete only valid for pending_confirm candidates, %s is %s", candidateID, c.Status)
+	}
+	return s.store.DeleteCandidate(candidateID)
+}
+
+// Restore implements POST /concepts/candidates/:id/restore: moves a
+// rejected or applied candidate back to pending_confirm. Rejected candidates
+// restore unconditionally (reject never mutated data). Applied candidates
+// only restore when this candidate created a brand-new concept (kind=add,
+// CreatedNewConcept) — assign-to-existing and merge confirms touch a concept
+// this candidate didn't create, so undoing them isn't this candidate's to
+// do (no design doc defines that scope; agreed with the user to bound
+// restore this way for now).
+func (s *Service) Restore(candidateID string) error {
+	c, err := s.store.GetCandidate(candidateID)
+	if err != nil {
+		return err
+	}
+	if c == nil {
+		return fmt.Errorf("concept: candidate not found: %s", candidateID)
+	}
+
+	switch c.Status {
+	case StatusRejected:
+		return s.store.RestoreRejected(candidateID)
+	case StatusApplied:
+		if c.Kind != KindAdd || !c.CreatedNewConcept || !c.ResolvedConceptID.Valid {
+			return fmt.Errorf("concept: restore not supported for this applied candidate (only new-concept kind=add confirms are restorable)")
+		}
+		conceptID := c.ResolvedConceptID.String
+		if s.wikiSvc != nil {
+			page, err := s.wikiSvc.GetActivePageByConceptID(conceptID)
+			if err != nil {
+				return fmt.Errorf("concept: restore: check wiki page: %w", err)
+			}
+			if page != nil {
+				return fmt.Errorf("concept: restore: concept %s still has an active wiki page (%s) — archive or reassign it first", conceptID, page.PageID)
+			}
+		}
+		var pointIDs []string
+		if err := json.Unmarshal([]byte(c.PointIDs), &pointIDs); err != nil {
+			return fmt.Errorf("concept: restore: unmarshal point_ids: %w", err)
+		}
+		var relationIDs []string
+		if err := json.Unmarshal([]byte(c.KPNRelationIDs), &relationIDs); err != nil {
+			return fmt.Errorf("concept: restore: unmarshal kpn_relation_ids: %w", err)
+		}
+		reason := fmt.Sprintf("人工从已执行恢复至待确认：撤销新建概念 %s", conceptID)
+		return s.store.RestoreAppliedNewConcept(candidateID, conceptID, pointIDs, relationIDs, reason)
+	default:
+		return fmt.Errorf("concept: restore only valid for applied/rejected candidates, %s is %s", candidateID, c.Status)
+	}
+}
+
 func (s *Service) ListCandidates(status string) ([]CandidateRow, error) {
 	return s.store.ListCandidates(status)
 }
@@ -697,6 +818,12 @@ func (s *Service) GetCandidate(candidateID string) (*CandidateRow, error) {
 // any matching or confirm logic.
 func (s *Service) ListActiveConcepts(domainID string) ([]ConceptInfo, error) {
 	return s.store.ListActiveConcepts(domainID)
+}
+
+// AvailablePoints is GET /concepts/points's data source — populates the
+// concept candidate confirm dialog's "add KP" picker.
+func (s *Service) AvailablePoints(domainID string) ([]AvailablePointOption, error) {
+	return s.store.AvailablePoints(domainID)
 }
 
 // ListCandidateViews is GET /concepts/candidates and the Study report's

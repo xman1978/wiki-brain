@@ -73,39 +73,38 @@ var transitionAction = map[string]map[string]string{
 	StatusWeakened:  {StatusVerified: ActionReverify, StatusDeprecated: ActionDeprecate},
 }
 
-// LinkCondition is the activation condition, already normalized by the
-// caller (Study, from this point's accumulated confident-trace signal) —
-// CreateLink/UpdateConditions store it as-is (docs/impl/v1/activation.md
-// 数据结构). SubjectTerms is a single term string (the cross-phrasing
-// intersection core); IntentTerms/Audience/ConstraintTerms are accumulated
-// whitelist sets (every distinct normalized value observed across this
-// point's confident traces, including "" when a trace's field was blank —
-// see matcher.go's "空值语义" note).
+// LinkCondition is what Study / CreateLink pass in. ObservedConditions is the
+// Match truth source (docs/superpowers/specs/2026-07-22-activation-observed-conditions-design.md).
+// Legacy SubjectTerms / IntentTerms / Audience / ConstraintTerms are only used
+// when ObservedConditions is empty (transitional callers / tests) via
+// EffectiveConditions(), then projected back onto the link row for old UI.
 type LinkCondition struct {
-	SubjectTerms    string
-	IntentTerms     []string
-	Audience        []string
-	ConstraintTerms []string
+	ObservedConditions []ObservedCondition
+	SubjectTerms       string
+	IntentTerms        []string
+	Audience           []string
+	ConstraintTerms    []string
 }
 
 type ActivationLink struct {
-	LinkID          string
-	QuestionTerms   string
-	SubjectTerms    string
-	IntentTerms     []string
-	Audience        []string
-	ConstraintTerms []string
-	Scene           string
-	Goal            string
-	PointID         string
-	Status          string
-	AdoptCount      int
-	FailCount       int
-	LastUsedAt      sql.NullTime
-	CreatedFrom     string
-	StatusChangedAt sql.NullTime
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	LinkID              string
+	QuestionTerms       string
+	SubjectTerms        string
+	IntentTerms         []string
+	Audience            []string
+	ConstraintTerms     []string
+	ObservedConditions  []ObservedCondition
+	Scene               string
+	Goal                string
+	PointID             string
+	Status              string
+	AdoptCount          int
+	FailCount           int
+	LastUsedAt          sql.NullTime
+	CreatedFrom         string
+	StatusChangedAt     sql.NullTime
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // ActivationLinkListRow is ActivationLink plus the KP/KU join fields the

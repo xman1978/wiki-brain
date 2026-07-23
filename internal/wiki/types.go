@@ -33,22 +33,24 @@ const (
 )
 
 type Page struct {
-	PageID         string
-	PageType       string
-	ConceptID      sql.NullString
-	Title          string
-	Content        string
-	Status         string
-	SourcePointIDs string // JSON array
-	SourceUnitIDs  string // JSON array
-	SourceLinkIDs  string // JSON array — verified ActivationLink ids covering the cited KPs at compile time
-	CompiledFrom   string // JSON array — learning_result / report ids that triggered this (re)compile
-	PromptVersion  string
-	ModelName      string
-	CompiledAt     sql.NullTime
-	PublishedAt    sql.NullTime
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	PageID           string
+	PageType         string
+	ConceptID        sql.NullString
+	Title            string
+	Content          string
+	Status           string
+	SourcePointIDs   string // JSON array
+	SourceUnitIDs    string // JSON array
+	SourceLinkIDs    string // JSON array — verified ActivationLink ids covering the cited KPs at compile time
+	Aliases          string // JSON array — concept aliases/abbreviations, index-only (not citable content)
+	TriggerQuestions string // JSON array — typical questions this page answers, index-only (not citable content)
+	CompiledFrom     string // JSON array — learning_result / report ids that triggered this (re)compile
+	PromptVersion    string
+	ModelName        string
+	CompiledAt       sql.NullTime
+	PublishedAt      sql.NullTime
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type Revision struct {

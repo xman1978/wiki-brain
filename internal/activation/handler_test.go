@@ -97,7 +97,7 @@ func TestHandler_Get_NotFound(t *testing.T) {
 	}
 }
 
-func TestHandler_Get_IncludesLearningResults(t *testing.T) {
+func TestHandler_Get_OmitsLearningResults(t *testing.T) {
 	handler, svc := setupHandler(t)
 	db := setupDBFromSvc(t, svc)
 	seedKPFull(t, db, "kp1")
@@ -121,15 +121,29 @@ func TestHandler_Get_IncludesLearningResults(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
 
-	var resp linkDetailResp
+	var resp map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(resp.LearningResults) != 1 {
-		t.Errorf("expected 1 learning result, got %d", len(resp.LearningResults))
+	if _, ok := resp["learning_results"]; ok {
+		t.Error("GET detail must not embed learning_results (lazy endpoint)")
 	}
-	if resp.CreatedFrom == nil {
-		t.Error("expected created_from to be present (even if empty array)")
+	if resp["created_from"] == nil {
+		t.Error("expected created_from to be present")
+	}
+
+	req = httptest.NewRequest("GET", "/activation-links/"+l.LinkID+"/learning-results", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("learning-results status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var results []learningResultResp
+	if err := json.Unmarshal(w.Body.Bytes(), &results); err != nil {
+		t.Fatalf("unmarshal learning-results: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("expected 1 learning result, got %d", len(results))
 	}
 }
 

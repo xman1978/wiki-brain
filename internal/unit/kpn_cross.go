@@ -86,7 +86,7 @@ groupLoop:
 					"source_id", sourceID, "max_batches", maxBatches)
 				break groupLoop
 			}
-			created, err := s.crossKPNBatch(ctx, sourceID, chunk.newPoints, chunk.oppositePoints, unitCenterMap)
+			created, _, err := s.crossKPNBatch(ctx, sourceID, chunk.newPoints, chunk.oppositePoints, unitCenterMap)
 			if err != nil {
 				slog.Warn("unit: cross kpn batch failed", "source_id", sourceID, "error", err)
 			}
@@ -223,9 +223,13 @@ func splitCrossBatch(newPoints, opposite []KnowledgePoint, maxSize int) []crossB
 // crossKPNBatch runs one LLM call for a (new, opposite) pairing and writes
 // the resulting relations (docs/impl/v1/kpn.md 步骤 3-4). Returns the number
 // of relations actually inserted (excludes duplicates INSERT OR IGNORE skipped).
-func (s *Service) crossKPNBatch(ctx context.Context, sourceID string, newPoints, opposite []KnowledgePoint, unitCenterMap map[string]string) (int, error) {
+// crossKPNBatch returns the created relation count and the relation_ids that
+// were actually inserted (not the IDs of pairs that were no-ops against
+// idx_kp_relations_uniq) — RematchPoints needs the latter to let a concept
+// candidate restore clean up exactly the relations its own confirm created.
+func (s *Service) crossKPNBatch(ctx context.Context, sourceID string, newPoints, opposite []KnowledgePoint, unitCenterMap map[string]string) (int, []string, error) {
 	if len(newPoints) == 0 || len(opposite) == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 
 	oppositeUnitIDs := make([]string, 0, len(opposite))
@@ -238,7 +242,7 @@ func (s *Service) crossKPNBatch(ctx context.Context, sourceID string, newPoints,
 	}
 	oppositeUnits, err := s.store.GetUnitsByIDs(oppositeUnitIDs)
 	if err != nil {
-		return 0, fmt.Errorf("unit: cross kpn: get opposite units: %w", err)
+		return 0, nil, fmt.Errorf("unit: cross kpn: get opposite units: %w", err)
 	}
 	oppositeCenterMap := make(map[string]string, len(oppositeUnits))
 	for _, u := range oppositeUnits {
@@ -266,15 +270,16 @@ func (s *Service) crossKPNBatch(ctx context.Context, sourceID string, newPoints,
 
 	data, err := s.llmClient.CompleteJSON(ctx, "kpn_cross_match.md", vars, "extraction")
 	if err != nil {
-		return 0, fmt.Errorf("unit: cross kpn llm call: %w", err)
+		return 0, nil, fmt.Errorf("unit: cross kpn llm call: %w", err)
 	}
 
 	var output kpnOutput
 	if err := json.Unmarshal(data, &output); err != nil {
-		return 0, fmt.Errorf("unit: cross kpn parse: %w", err)
+		return 0, nil, fmt.Errorf("unit: cross kpn parse: %w", err)
 	}
 
 	created, contradicts := 0, 0
+	var relationIDs []string
 	for _, rel := range output.Relations {
 		// direction constraint: cross-Source relations always run new→existing.
 		if !newPointIDs[rel.From] || !oppositePointIDs[rel.To] {
@@ -302,6 +307,7 @@ func (s *Service) crossKPNBatch(ctx context.Context, sourceID string, newPoints,
 		}
 		if inserted {
 			created++
+			relationIDs = append(relationIDs, r.RelationID)
 			if rel.Type == "contradicts" {
 				contradicts++
 			}
@@ -311,7 +317,7 @@ func (s *Service) crossKPNBatch(ctx context.Context, sourceID string, newPoints,
 	slog.Info("unit: cross kpn batch done",
 		"source_id", sourceID, "new_points", len(newPoints), "opposite_points", len(opposite),
 		"relations_created", created, "contradicts", contradicts)
-	return created, nil
+	return created, relationIDs, nil
 }
 
 // RematchPoints implements concept.KPNRematchNotifier (docs/impl/v1/kpn.md
@@ -323,19 +329,24 @@ func (s *Service) crossKPNBatch(ctx context.Context, sourceID string, newPoints,
 // each point's own source_id so matching never pairs points from the same
 // Source against each other. Best-effort: failures are logged, not
 // returned — the concept confirm that triggered this already committed.
-func (s *Service) RematchPoints(conceptID string, pointIDs []string) {
+// Returns the created relation_ids so the caller can record exactly which
+// relations this confirm produced (needed to clean them up precisely if the
+// candidate is later restored to pending_confirm — restoring must not touch
+// relations some unrelated later Source import happened to create once
+// these points had a concept_id).
+func (s *Service) RematchPoints(conceptID string, pointIDs []string) []string {
 	if len(pointIDs) == 0 {
-		return
+		return nil
 	}
 	ctx := context.Background()
 
 	points, err := s.store.GetPointsByIDs(pointIDs)
 	if err != nil {
 		slog.Warn("unit: kpn rematch get points failed", "concept_id", conceptID, "error", err)
-		return
+		return nil
 	}
 	if len(points) == 0 {
-		return
+		return nil
 	}
 
 	bySource := make(map[string][]KnowledgePoint)
@@ -351,7 +362,7 @@ func (s *Service) RematchPoints(conceptID string, pointIDs []string) {
 	units, err := s.store.GetUnitsByIDs(unitIDs)
 	if err != nil {
 		slog.Warn("unit: kpn rematch get units failed", "concept_id", conceptID, "error", err)
-		return
+		return nil
 	}
 	unitCenterMap := make(map[string]string, len(units))
 	for _, u := range units {
@@ -359,6 +370,7 @@ func (s *Service) RematchPoints(conceptID string, pointIDs []string) {
 	}
 
 	totalCreated, totalBatches := 0, 0
+	var allRelationIDs []string
 	for sourceID, srcPoints := range bySource {
 		opposite, err := s.store.GetCrossSourcePointsByConceptID(conceptID, sourceID)
 		if err != nil {
@@ -370,16 +382,18 @@ func (s *Service) RematchPoints(conceptID string, pointIDs []string) {
 		}
 		opposite = s.trimOppositeByConfidence(opposite, len(srcPoints))
 		for _, chunk := range splitCrossBatch(srcPoints, opposite, crossBatchMaxSize) {
-			created, err := s.crossKPNBatch(ctx, sourceID, chunk.newPoints, chunk.oppositePoints, unitCenterMap)
+			created, relationIDs, err := s.crossKPNBatch(ctx, sourceID, chunk.newPoints, chunk.oppositePoints, unitCenterMap)
 			if err != nil {
 				slog.Warn("unit: kpn rematch batch failed", "concept_id", conceptID, "source_id", sourceID, "error", err)
 				continue
 			}
 			totalCreated += created
 			totalBatches++
+			allRelationIDs = append(allRelationIDs, relationIDs...)
 		}
 	}
 
 	slog.Info("unit: kpn rematch after concept confirm done",
 		"concept_id", conceptID, "point_count", len(points), "batches", totalBatches, "relations_created", totalCreated)
+	return allRelationIDs
 }

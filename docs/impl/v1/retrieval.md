@@ -6,7 +6,8 @@
 
 ```text
 Wiki 直答层   已发布 Wiki 页面命中 → 直接基于页面回答（见 wiki.md）
-激活层        verified ActivationLink 命中 → 跳过过滤与召回，直达证据（快路径）
+激活层        verified ActivationLink 命中 → 跳过过滤与召回，直达证据（快路径）；
+              candidate 命中只记 activation_hits，仍走慢路径（供晋升信号）
 完整链路      未命中时回落 MVP 链路：Domain → Source → Outline/FTS → RRF → Rerank（慢路径）
 ```
 
@@ -18,8 +19,13 @@ Wiki 直答层   已发布 Wiki 页面命中 → 直接基于页面回答（见 
 
 ```text
 问题（经 Session 补全，沿用 MVP）
-  ├─ 第 0 层：Wiki 索引查询（不调 LLM）
-  │    命中分 ≥ wiki_min_score → Wiki 直答路径（path_type=wiki，见 wiki.md）
+  ├─ 第 0 层：Wiki 直答候选采集（不调 LLM，两个入口，见 wiki.md 步骤 4）
+  │    a. 词法：wiki index 查询（title/content/aliases/trigger_questions），
+  │       分数 ≥ wiki_min_score；
+  │    b. 概念：问题分词与概念名称词法匹配 → 该概念的 published 页面直接入候选；
+  │    合并去重取前 wiki_max_candidates 个，按序直答尝试，
+  │    某页 sufficient=true → Wiki 直答路径（path_type=wiki）；
+  │    候选耗尽或为空 → 落入第 1 层
   ├─ 第 1 层：激活层 Match（不调 LLM，四元组完全匹配，见 activation.md 步骤 2）
   │    命中 → 快路径：
   │      链接目标 KP → 反查 KU（lifecycle=current）→ 直接构建 direct 候选
@@ -49,6 +55,8 @@ retrieval:
                                   # 仅灰度/评估用，生产不建议关闭）
   fast_path_fallback:     true   # 快路径回答失败时自动回落慢路径
   wiki_min_score:         2.0    # Wiki 直答的 Bleve 最低分（BM25，需评估集校准）
+  wiki_max_candidates:    3      # 直答候选序列长度上限（依次尝试，
+                                  # 首个 sufficient=true 即停；设 1 退化为原 top-1 行为）
 ```
 
 ## 实现步骤
@@ -77,16 +85,19 @@ EvidenceItem 新增：
    输入是 Session 产出的完整 ExpandedQuery（expanded_question + 四元组），
    不是用户原始输入——匹配含 audience / constraint 硬性守门与
    subject / intent 计分，规则见 activation.md 步骤 2；
+   Match 返回 verified + candidate（均要求 KP lifecycle=current）；
    为空 → 慢路径；fast_path=false → 记录命中日志后仍走慢路径
    （activation_hits 照常写入 EvidenceSet，供灰度期观察命中质量）；
-   命中 >1 条不同链接 → 视为歧义，同样回落慢路径（2026-07-19
+   全部命中均为 candidate → 记录 activation_hits 后回落慢路径
+   （candidate 只记信号、不直答；2026-07-22）；
+   其中 verified 命中 >1 条不同链接 → 视为歧义，同样回落慢路径（2026-07-19
    实测发现：命中分数恒为 1.0，没有排序依据取舍，若不管直接把
    多个 point 的 KP 都当 direct 证据塞入，等于让一条不相关但读起来
    沾边的证据免检直接进答案；慢路径的 rerank + 证据挖掘本就能正确
    处理"一个问题需要综合多个 KP"的情况，交给它比在快路径里无差别
    打包更安全）；此时 TouchLastUsed 不触发（这些链接没有被真正用于
-   回答），但 activation_hits 仍照常写入，Trace 按普通快路径未命中
-   一样评分；
+   回答），但 activation_hits 仍照常写入（含 candidate），Trace 按普通
+   快路径未命中一样评分；
 
 2. 取命中链接的 point_id → 反查所属 KU：
      SELECT ... FROM knowledge_points p JOIN knowledge_units u ...
@@ -103,7 +114,7 @@ EvidenceItem 新增：
 4. KPN 扩展沿用 MVP 步骤 8（对 direct KU 查邻居 KP，role=supporting，
    邻居 KP 及其 KU 均要求 lifecycle=current）；
 
-5. 异步 TouchLastUsed(命中 link_ids)，不阻塞请求。
+5. 异步 TouchLastUsed(本次用于快路径的 verified link_ids)，不阻塞请求。
 ```
 
 ### 步骤 2a：快路径校验（fast_path_verify）
@@ -218,7 +229,8 @@ POST /answer（既有，见 answer 模块）
 慢路径（MVP + 挖掘）：domain(1) + source(1) + outline(0~N) + rerank(1)
                       + mining(1) + answer(1)               ≈ 5~6 次
 快路径：              mining(1) + verify(1) + answer(1)      = 3 次
-Wiki 直答：           answer(1)                              = 1 次
+Wiki 直答：           answer(1~wiki_max_candidates)          典型 1 次，最坏 3 次
+                      （sufficient=false 换下一候选页重试，见 wiki.md 步骤 4）
 ```
 
 ## 依赖

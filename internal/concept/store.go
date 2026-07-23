@@ -58,6 +58,49 @@ func (s *Store) ListActiveConcepts(domainID string) ([]ConceptInfo, error) {
 	return results, rows.Err()
 }
 
+// AvailablePointOption is a knowledge_point row offered by the "add KP" picker
+// in the concept candidate confirm dialog — content and source title so the
+// UI doesn't need a second round trip per point (mirrors the shape the
+// candidate detail view already builds client-side via GET /points/:id +
+// GET /sources/:id).
+type AvailablePointOption struct {
+	PointID     string
+	Content     string
+	SourceID    string
+	SourceTitle string
+}
+
+// AvailablePoints lists knowledge_points still eligible for a kind=add
+// candidate's point_ids: concept_id IS NULL on their KU (the same
+// precondition ConfirmAdd/ConfirmAssign's migration query enforces), current
+// lifecycle on both KU and KP, in the given domain, excluding shadow Sources.
+// Capped at 200 — the confirm UI is a manual curation aid, not a full browse.
+func (s *Store) AvailablePoints(domainID string) ([]AvailablePointOption, error) {
+	rows, err := s.db.Query(`
+		SELECT kp.point_id, kp.content, s.source_id, s.title
+		FROM knowledge_points kp
+		JOIN knowledge_units ku ON ku.unit_id = kp.unit_id
+		JOIN sources s ON s.source_id = kp.source_id
+		WHERE ku.concept_id IS NULL AND ku.lifecycle = 'current' AND kp.lifecycle = 'current'
+		  AND s.domain_id = ? AND s.shadow_of IS NULL
+		ORDER BY kp.created_at DESC
+		LIMIT 200`, domainID)
+	if err != nil {
+		return nil, fmt.Errorf("concept store: available points: %w", err)
+	}
+	defer rows.Close()
+
+	var results []AvailablePointOption
+	for rows.Next() {
+		var p AvailablePointOption
+		if err := rows.Scan(&p.PointID, &p.Content, &p.SourceID, &p.SourceTitle); err != nil {
+			return nil, fmt.Errorf("concept store: scan available point: %w", err)
+		}
+		results = append(results, p)
+	}
+	return results, rows.Err()
+}
+
 func placeholders(n int) string {
 	ph := make([]string, n)
 	for i := range ph {
@@ -162,14 +205,16 @@ func (s *Store) SeenAddEventIDs() (map[string]bool, error) {
 func scanCandidate(row interface{ Scan(...interface{}) error }) (*CandidateRow, error) {
 	var c CandidateRow
 	if err := row.Scan(&c.CandidateID, &c.Kind, &c.DomainID, &c.SuggestedName, &c.MergeFrom,
-		&c.PointIDs, &c.Evidence, &c.EventIDs, &c.Status, &c.LastSignalAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		&c.PointIDs, &c.Evidence, &c.EventIDs, &c.Status, &c.LastSignalAt, &c.CreatedAt, &c.UpdatedAt,
+		&c.ResolvedConceptID, &c.CreatedNewConcept, &c.KPNRelationIDs); err != nil {
 		return nil, err
 	}
 	return &c, nil
 }
 
 const candidateColumns = `candidate_id, kind, domain_id, suggested_name, merge_from,
-	point_ids, evidence, event_ids, status, last_signal_at, created_at, updated_at`
+	point_ids, evidence, event_ids, status, last_signal_at, created_at, updated_at,
+	resolved_concept_id, created_new_concept, kpn_relation_ids`
 
 func (s *Store) ListCandidatesByKindStatus(kind, status string) ([]CandidateRow, error) {
 	rows, err := s.db.Query(`SELECT `+candidateColumns+` FROM concept_candidates
@@ -376,6 +421,18 @@ func (s *Store) ConfirmAssign(candidateID, conceptID string, pointIDs []string, 
 		migratedKUs = int(n)
 	}
 
+	// Keep the candidate row's own point_ids in sync — the confirm request
+	// may have added/removed KPs from the original suggestion (concept
+	// candidate confirm dialog's KP picker), and the candidate list/detail
+	// view reads this column, not a live migration query.
+	// created_new_concept stays 0: this candidate didn't create conceptID,
+	// so it isn't eligible for the "restore applied to pending" rollback
+	// (that only undoes a candidate's own new-concept creation).
+	if _, err := tx.Exec(`UPDATE concept_candidates SET point_ids = ?, resolved_concept_id = ? WHERE candidate_id = ?`,
+		marshal(pointIDs), conceptID, candidateID); err != nil {
+		return 0, fmt.Errorf("concept store: confirm assign: sync point_ids: %w", err)
+	}
+
 	if err := resolveCandidate(tx, candidateID, StatusApplied, reason); err != nil {
 		return 0, err
 	}
@@ -504,6 +561,152 @@ func (s *Store) Reject(candidateID string) error {
 	return tx.Commit()
 }
 
+// DeleteCandidate hard-deletes a pending_confirm candidate and its
+// learning_result row — unlike Reject, nothing is kept around to show up in
+// any tab afterward. Safe because a pending_confirm candidate has never
+// touched concept/KU data (that only happens on Confirm), so there is
+// nothing structural to undo.
+func (s *Store) DeleteCandidate(candidateID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("concept store: delete candidate: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`DELETE FROM concept_candidates WHERE candidate_id = ? AND status = ?`, candidateID, StatusPendingConfirm)
+	if err != nil {
+		return fmt.Errorf("concept store: delete candidate: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("concept store: delete candidate: %s not pending_confirm", candidateID)
+	}
+
+	if _, err := tx.Exec(`DELETE FROM learning_results WHERE object_type = ? AND object_id = ?`,
+		activation.ObjectTypeConceptCandidate, candidateID); err != nil {
+		return fmt.Errorf("concept store: delete candidate learning result: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// RestoreRejected flips a rejected candidate back to pending_confirm. Reject
+// never mutated concept/KU data, so this is a pure status flip — safe for
+// either kind (add or merge).
+func (s *Store) RestoreRejected(candidateID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("concept store: restore rejected: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`UPDATE concept_candidates SET status = ?, last_signal_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		WHERE candidate_id = ? AND status = ?`, StatusPendingConfirm, candidateID, StatusRejected)
+	if err != nil {
+		return fmt.Errorf("concept store: restore rejected: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("concept store: restore rejected: candidate %s not rejected", candidateID)
+	}
+
+	if _, err := tx.Exec(`UPDATE learning_results SET status = ?, confirmed_by = 'manual', reason = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE object_type = ? AND object_id = ? AND status = ?`,
+		activation.ResultPendingConfirm, "人工从已驳回恢复至待确认", activation.ObjectTypeConceptCandidate, candidateID, activation.ResultRejected); err != nil {
+		return fmt.Errorf("concept store: restore rejected learning result: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// RestoreAppliedNewConcept undoes an applied kind=add candidate that created
+// a brand-new concept: reverts pointIDs' KUs to concept_id=NULL, deletes the
+// KPN cross-Source relations this candidate's own directed rematch created
+// (relationIDs — see RematchPoints/recordKPNRelationIDs; a later, unrelated
+// Source import's own relations are never touched, since only this
+// candidate's own recorded ids are targeted), then deletes the concept row
+// — refusing if any other KU still references it (e.g. a later "归入已有概念"
+// confirm assigned more KPs onto it after creation), since deleting would
+// then orphan that reference.
+func (s *Store) RestoreAppliedNewConcept(candidateID, conceptID string, pointIDs, relationIDs []string, reason string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("concept store: restore applied: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	if len(pointIDs) > 0 {
+		q := fmt.Sprintf(`UPDATE knowledge_units SET concept_id = NULL, updated_at = CURRENT_TIMESTAMP
+			WHERE concept_id = ? AND unit_id IN (
+				SELECT unit_id FROM knowledge_points WHERE point_id IN (%s)
+			)`, placeholders(len(pointIDs)))
+		args := append([]interface{}{conceptID}, toArgs(pointIDs)...)
+		if _, err := tx.Exec(q, args...); err != nil {
+			return fmt.Errorf("concept store: restore applied: revert units: %w", err)
+		}
+	}
+
+	var remaining int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE concept_id = ?`, conceptID).Scan(&remaining); err != nil {
+		return fmt.Errorf("concept store: restore applied: check remaining units: %w", err)
+	}
+	if remaining > 0 {
+		return fmt.Errorf("concept store: restore applied: concept %s still has %d knowledge unit(s) referencing it (likely assigned by a later confirm) — resolve those first", conceptID, remaining)
+	}
+
+	if len(relationIDs) > 0 {
+		q := fmt.Sprintf(`DELETE FROM knowledge_point_relations WHERE relation_id IN (%s)`, placeholders(len(relationIDs)))
+		if _, err := tx.Exec(q, toArgs(relationIDs)...); err != nil {
+			return fmt.Errorf("concept store: restore applied: delete kpn relations: %w", err)
+		}
+	}
+
+	// Clear the candidate's own FK reference before deleting the concept row
+	// it points to — concept_candidates.resolved_concept_id REFERENCES
+	// concepts(concept_id), so this must happen first.
+	res, err := tx.Exec(`UPDATE concept_candidates SET status = ?, resolved_concept_id = NULL, created_new_concept = 0, kpn_relation_ids = '[]',
+		last_signal_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		WHERE candidate_id = ? AND status = ?`, StatusPendingConfirm, candidateID, StatusApplied)
+	if err != nil {
+		return fmt.Errorf("concept store: restore applied: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("concept store: restore applied: candidate %s not applied", candidateID)
+	}
+
+	if _, err := tx.Exec(`DELETE FROM concepts WHERE concept_id = ?`, conceptID); err != nil {
+		return fmt.Errorf("concept store: restore applied: delete concept: %w", err)
+	}
+
+	if _, err := tx.Exec(`UPDATE learning_results SET status = ?, confirmed_by = 'manual', reason = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE object_type = ? AND object_id = ? AND status = ?`,
+		activation.ResultPendingConfirm, reason, activation.ObjectTypeConceptCandidate, candidateID, activation.ResultApplied); err != nil {
+		return fmt.Errorf("concept store: restore applied learning result: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// SetCandidateKPNRelationIDs records the relation_ids RematchPoints created
+// for a candidate's confirm, appending to whatever was already recorded
+// (RematchPoints can run in multiple source-grouped batches per confirm —
+// see recordKPNRelationIDs, called once per confirm with that call's full
+// result, so in practice this always overwrites '[]' with the complete set,
+// but appends defensively rather than assuming call order).
+func (s *Store) SetCandidateKPNRelationIDs(candidateID string, relationIDs []string) error {
+	var existing string
+	if err := s.db.QueryRow(`SELECT kpn_relation_ids FROM concept_candidates WHERE candidate_id = ?`, candidateID).Scan(&existing); err != nil {
+		return fmt.Errorf("concept store: set kpn relation ids: read existing: %w", err)
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(existing), &ids); err != nil {
+		return fmt.Errorf("concept store: set kpn relation ids: unmarshal existing: %w", err)
+	}
+	ids = append(ids, relationIDs...)
+	if _, err := s.db.Exec(`UPDATE concept_candidates SET kpn_relation_ids = ? WHERE candidate_id = ?`, marshal(ids), candidateID); err != nil {
+		return fmt.Errorf("concept store: set kpn relation ids: %w", err)
+	}
+	return nil
+}
+
 // ConfirmAdd executes a kind=add candidate in a single transaction
 // (docs/impl/v1/concept-evolution.md 步骤 3): create the concept
 // (origin=evolved), migrate every concept_id-NULL KU behind pointIDs onto it,
@@ -518,6 +721,18 @@ func (s *Store) ConfirmAdd(candidateID, conceptID, domainID, name, description s
 	if _, err := tx.Exec(`INSERT INTO concepts (concept_id, domain_id, name, description, origin) VALUES (?, ?, ?, ?, 'evolved')`,
 		conceptID, domainID, name, description); err != nil {
 		return 0, fmt.Errorf("concept store: confirm add: insert concept: %w", err)
+	}
+
+	// Keep the candidate row's own suggested_name/point_ids in sync with what
+	// was actually used to create the concept — the confirm request may have
+	// overridden the LLM's original suggestion and/or added/removed KPs via
+	// the confirm dialog's picker, and the candidate list/detail view reads
+	// these columns, not concepts.name or a live migration query.
+	// created_new_concept = 1: this confirm is the one that created conceptID,
+	// so it's the only path eligible for RestoreApplied's rollback.
+	if _, err := tx.Exec(`UPDATE concept_candidates SET suggested_name = ?, point_ids = ?, resolved_concept_id = ?, created_new_concept = 1 WHERE candidate_id = ?`,
+		name, marshal(pointIDs), conceptID, candidateID); err != nil {
+		return 0, fmt.Errorf("concept store: confirm add: sync suggested_name/point_ids: %w", err)
 	}
 
 	if len(pointIDs) > 0 {

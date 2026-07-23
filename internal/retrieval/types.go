@@ -80,6 +80,14 @@ type Evidence struct {
 	SourceRef   json.RawMessage `json:"source_ref"`
 	Role        string          `json:"role"`
 	Origin      string          `json:"origin"`
+	// Attribution fields are carried to Answer so its final citation selection
+	// can distinguish otherwise similar evidence from different sources,
+	// products, systems, or rule scopes.
+	SourceTitle  string `json:"source_title,omitempty"`
+	SourceTheme  string `json:"source_theme,omitempty"`
+	ContentTheme string `json:"content_theme,omitempty"`
+	Object       string `json:"object,omitempty"`
+	Scope        string `json:"scope,omitempty"`
 	// rerank（Rerank 直接分类产出，direct 恒为此值）/ kpn_expansion（KPN 邻居扩展补充的 supporting）
 	// 供 Trace 计算 KPN 引用采纳率（study.md summary.kpn_citation_rate）
 	Mined bool `json:"mined"`

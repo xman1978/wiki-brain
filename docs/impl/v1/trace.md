@@ -150,6 +150,13 @@ activation_gap 判定（activation_hits 为空时）：
       这是 candidate 链接最直接的来源信号；
   其余情况不产生 activation_gap（partial / gap 已由既有机制覆盖）。
 
+observed_conditions enrichment（与 gap 并行，不写 learning_results）：
+  path_type == "full" 且 retrieval_quality == "confident"
+  且 direct_point_ids 非空：
+    对每个 point 若已有非 deprecated ActivationLink →
+    AppendObservedCondition（本轮 Session 四元组）；
+    使创建/慢路径采用过的问法下次可 Match，无需等 Study。
+
 path_type == "wiki" 的问答不产生激活类事件（Wiki 直答不经过激活层，
 见 wiki.md）；knowledge_gap / user_correction 事件规则不变。
 ```

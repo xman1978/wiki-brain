@@ -93,15 +93,20 @@ retrieval:
   rerank_extract_concurrency:     2     # 语义抽取 batch 并发数
   rerank_judge_batch_max_chars:   4000  # 单次 rerank 判断传给模型的候选语义字符预算
   rerank_judge_concurrency:       4     # rerank 判断 batch 并发数
+  rerank_judge_include_analysis:  false # false 时 rerank judge 不再要求逐条输出 analysis
+                                         # 说明文字（仅用于 debug 日志，不参与判断逻辑），
+                                         # 用于 A/B 测试是否能降低 rerank 阶段延迟；
+                                         # 省略该键等价于 true（保留现有行为）
   activation_match_top:          5     # 匹配结果保留条数（四元组完全匹配，无阈值可调）
   fast_path:              true   # false 时激活层只记录命中、不走快路径（灰度开关）
   fast_path_verify:       true   # 快路径证据充分性校验开关（false 时跳过校验，仅灰度/评估用）
   fast_path_fallback:     true   # 快路径回答失败时自动回落慢路径
   wiki_min_score:         2.0    # Wiki 直答的 Bleve 最低分（Wiki 模块未实现前不生效）
+  wiki_max_candidates:    3      # 直答候选序列长度上限（词法+概念入口合并去重后依次尝试，首个 sufficient=true 即停；设 1 退化为原 top-1 行为）
 
 # Evidence 模块
 evidence:
-  enabled:              true
+  enabled:              false
   batch_max_chars:      6000   # 单次 LLM 调用携带的 KU 正文字符数上限（rune）
   max_fragments_per_ku: 5      # 单 KU 最多保留片段数（超出按输出顺序截断）
   min_fragment_chars:   8      # 短于该长度的片段丢弃（无信息量）
@@ -113,8 +118,9 @@ kpn:
 
 # Wiki 模块
 wiki:
-  compile_max_chars:    12000  # 单页编译输入合计上限（rune），超出按 confident_count 降序截取 KP
-  recompile_new_kp_min: 2      # 已发布页面依赖概念新增 qualifying KP 达到该数量触发重编译标记
+  compile_max_chars:      12000  # 单页编译输入合计上限（rune），超出按 confident_count 降序截取 KP
+  recompile_new_kp_min:   2      # 已发布页面依赖概念新增 qualifying KP 达到该数量触发重编译标记
+  trigger_questions_max:  10     # aliases / trigger_questions 各自条数上限，超出截断保留前 N 条
 
 # Study 模块
 study:
@@ -138,6 +144,7 @@ study:
   candidate_idle_days:     30     # candidate 无新信号自动淘汰
   deprecate_idle_days:     60     # weakened 无有效使用自动淘汰
   correction_weight:       2      # user_correction 关联链接时按 N 次 failure 计
+  observed_conditions_max: 50     # ActivationLink 观测条件组上限
   # —— 概念演化（V1 新增）——
   concept_null_ratio_min:      0.7   # concept_gap 判定：无概念归属 KP 占比下限
   concept_add_event_min:       5     # 新增候选：簇内 concept_gap 事件数下限

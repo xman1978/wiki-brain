@@ -877,16 +877,22 @@ func (s *Service) reindexLifecycle(units []KnowledgeUnit, points []KnowledgePoin
 	s.reindexUnitsAndPoints(units, points)
 }
 
-// ReindexSource rewrites every one of a source's KU/KP Bleve documents from
-// their current DB rows. CompleteShadowSwap calls this (via LifecycleSetter)
-// after the 换血事务 reparents the shadow's rows onto the target source_id
+// ReindexSource rewrites a source's current KU/KP Bleve documents from their
+// current DB rows. CompleteShadowSwap calls this (via LifecycleSetter) after
+// the 换血事务 reparents the shadow's rows onto the target source_id
 // (docs/impl/v1/lifecycle.md 步骤 2): the swap only updates SQLite, while the
 // Bleve documents written during the shadow's own pipeline still carry the
 // shadow source_id — a value Retrieval's source filter can never match once
 // the shadow row is deleted. Document IDs are unit_id/point_id, so indexing
-// replaces those stale documents in place.
+// replaces those stale documents in place. Superseded units are skipped so
+// their Bleve body (indexed from the pre-swap markdown) is not overwritten
+// by the new file.
 func (s *Service) ReindexSource(sourceID string) error {
-	units, err := s.store.GetUnitsBySourceID(sourceID)
+	// Only current KUs need rewrite after a shadow swap: they were indexed
+	// under the shadow source_id. Superseded target KUs were already
+	// reindexed with the old markdown in SetUnitLifecycle before the file
+	// swap; re-slicing them against the new file would pollute Bleve.
+	units, err := s.store.GetUnitsBySourceIDFiltered(sourceID, LifecycleCurrent)
 	if err != nil {
 		return fmt.Errorf("unit: reindex source: get units: %w", err)
 	}
@@ -894,9 +900,6 @@ func (s *Service) ReindexSource(sourceID string) error {
 	for i, u := range units {
 		unitIDs[i] = u.UnitID
 	}
-	// GetPointsByUnitIDs rather than GetPointsBySourceID: the latter filters
-	// to current-lifecycle rows, but every document must be rewritten here —
-	// superseded ones included — since they all still carry the stale source_id.
 	points, err := s.store.GetPointsByUnitIDs(unitIDs)
 	if err != nil {
 		return fmt.Errorf("unit: reindex source: get points: %w", err)

@@ -110,23 +110,47 @@ func (s *Store) CooccurrenceLabelsForPoint(pointID string) ([]string, error) {
 	return labels, rows.Err()
 }
 
+// ConfidentTraceQuadruple is one confident citation of a point — the unit of
+// observed_conditions induction (replaces per-field unions).
+type ConfidentTraceQuadruple struct {
+	Subject       string
+	Intent        string
+	Audience      string
+	Constraint    string
+	QuestionTerms string
+	CreatedAt     time.Time
+}
+
+// ConfidentTraceQuadruples returns every confident trace that actually cited
+// pointID (citation-level, not label-only join — same guard as
+// ConfidentTraceFieldValues, 2026-07-21). Used by buildObservedConditions.
+func (s *Store) ConfidentTraceQuadruples(pointID string) ([]ConfidentTraceQuadruple, error) {
+	rows, err := s.db.Query(`
+		SELECT t.subject, t.intent, t.audience, t.constraint_text, t.question_terms, t.created_at
+		FROM traces t
+		WHERE t.retrieval_quality = 'confident'
+		  AND EXISTS (SELECT 1 FROM json_each(t.direct_point_ids) je WHERE je.value = ?)
+		ORDER BY t.created_at`, pointID)
+	if err != nil {
+		return nil, fmt.Errorf("study store: confident trace quadruples: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ConfidentTraceQuadruple
+	for rows.Next() {
+		var q ConfidentTraceQuadruple
+		if err := rows.Scan(&q.Subject, &q.Intent, &q.Audience, &q.Constraint, &q.QuestionTerms, &q.CreatedAt); err != nil {
+			return nil, fmt.Errorf("study store: confident trace quadruples scan: %w", err)
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
 // ConfidentTraceFieldValues returns the distinct raw (un-normalized)
 // intent/audience/constraint_text values across every confident trace that
-// actually cited pointID — the inputs for computeLinkCondition's accumulated
-// whitelist sets (docs/impl/v1/study.md 步骤 2). Same source table as
-// CooccurrenceLabelsForPoint (question_kp_cooccurrence, confident_count > 0),
-// joined to traces for the other three quadruple columns.
-//
-// question_terms alone is NOT a sufficient join key: it stores the
-// session-resolved subject label, which strips distinguishing constraints
-// into constraint_text — questions about different vendors ("达梦"/"神通")
-// share one label, so a label-only join would merge their constraints into
-// every same-label point's whitelist (2026-07-21 修订). The direct_point_ids
-// containment check keeps the association at citation level.
-//
-// Normalization/dedup-after-normalization is the caller's job, matching
-// LatestConfidentTraceQuadruple's existing division of responsibility
-// (store returns raw, service normalizes).
+// actually cited pointID. Retained for tests / diagnostics; Match induction
+// now uses ConfidentTraceQuadruples instead.
 func (s *Store) ConfidentTraceFieldValues(pointID string) (intents, audiences, constraints []string, err error) {
 	rows, err := s.db.Query(`
 		SELECT DISTINCT t.intent, t.audience, t.constraint_text
@@ -279,6 +303,33 @@ func (s *Store) FetchUnprocessedActivationGapEvents() ([]RawGapEvent, error) {
 		events = append(events, e)
 	}
 	return events, rows.Err()
+}
+
+// ActivationGapEventIDsForPoint returns learning_events.event_id values for
+// activation_gap rows whose payload.direct_point_ids contains pointID.
+// Used by Source A (cooccurrence) create_candidate so learning_results.event_ids
+// stays a list of real learning_event ids (docs/impl/v1/study.md), not
+// link_candidates.candidate_id.
+func (s *Store) ActivationGapEventIDsForPoint(pointID string) ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT le.event_id
+		FROM learning_events le, json_each(json_extract(le.payload, '$.direct_point_ids')) AS pid
+		WHERE le.event_type = 'activation_gap' AND pid.value = ?
+		ORDER BY le.created_at`, pointID)
+	if err != nil {
+		return nil, fmt.Errorf("study store: activation_gap event ids for point: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("study store: scan activation_gap event id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // CooccurrenceConfidentCount looks up a single (question_terms, point_id)

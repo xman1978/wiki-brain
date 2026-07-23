@@ -3,6 +3,7 @@ package answer
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
@@ -188,6 +189,37 @@ func TestAnswer_CitationValidation(t *testing.T) {
 	for _, c := range result.Citations {
 		if c == "hallucinated_id" {
 			t.Error("hallucinated fact_id should have been filtered")
+		}
+	}
+}
+
+func TestBuildPromptVarsIncludesEvidenceAttribution(t *testing.T) {
+	es := makeEvidenceSet("short",
+		[]retrieval.Evidence{{
+			FactID:       "f1",
+			Content:      "回款提成按履约时间分档计提。",
+			SourceTitle:  "应收账款管理制度",
+			SourceTheme:  "应收账款管理制度",
+			ContentTheme: "销售回款绩效考核与提成规则",
+			Object:       "销售人员",
+			Scope:        "销售自签合同及公司分配的回款项目",
+		}},
+		nil,
+	)
+
+	vars := buildPromptVars(es)
+	got := vars["direct_evidence_list"]
+	for _, want := range []string{
+		"[f1]",
+		"来源标题：应收账款管理制度",
+		"来源主题：应收账款管理制度",
+		"内容主题：销售回款绩效考核与提成规则",
+		"对象：销售人员",
+		"范围：销售自签合同及公司分配的回款项目",
+		"回款提成按履约时间分档计提。",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("direct evidence prompt missing %q:\n%s", want, got)
 		}
 	}
 }

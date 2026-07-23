@@ -17,13 +17,13 @@ func NewStore(db *sql.DB) *Store {
 }
 
 const pageColumns = `page_id, page_type, concept_id, title, content, status,
-	source_point_ids, source_unit_ids, source_link_ids, compiled_from, prompt_version, model_name,
+	source_point_ids, source_unit_ids, source_link_ids, aliases, trigger_questions, compiled_from, prompt_version, model_name,
 	compiled_at, published_at, created_at, updated_at`
 
 func scanPage(row interface{ Scan(...interface{}) error }) (*Page, error) {
 	var p Page
 	err := row.Scan(&p.PageID, &p.PageType, &p.ConceptID, &p.Title, &p.Content, &p.Status,
-		&p.SourcePointIDs, &p.SourceUnitIDs, &p.SourceLinkIDs, &p.CompiledFrom, &p.PromptVersion, &p.ModelName,
+		&p.SourcePointIDs, &p.SourceUnitIDs, &p.SourceLinkIDs, &p.Aliases, &p.TriggerQuestions, &p.CompiledFrom, &p.PromptVersion, &p.ModelName,
 		&p.CompiledAt, &p.PublishedAt, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -38,12 +38,18 @@ func (s *Store) InsertPage(p *Page) error {
 	if p.Status == "" {
 		p.Status = StatusDraft
 	}
+	if p.Aliases == "" {
+		p.Aliases = "[]"
+	}
+	if p.TriggerQuestions == "" {
+		p.TriggerQuestions = "[]"
+	}
 	_, err := s.db.Exec(`INSERT INTO wiki_pages
 		(page_id, page_type, concept_id, title, content, status, source_point_ids, source_unit_ids,
-		 source_link_ids, compiled_from, prompt_version, model_name, compiled_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		 source_link_ids, aliases, trigger_questions, compiled_from, prompt_version, model_name, compiled_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		p.PageID, p.PageType, p.ConceptID, p.Title, p.Content, p.Status,
-		p.SourcePointIDs, p.SourceUnitIDs, p.SourceLinkIDs, p.CompiledFrom, p.PromptVersion, p.ModelName)
+		p.SourcePointIDs, p.SourceUnitIDs, p.SourceLinkIDs, p.Aliases, p.TriggerQuestions, p.CompiledFrom, p.PromptVersion, p.ModelName)
 	if err != nil {
 		return fmt.Errorf("wiki store: insert page: %w", err)
 	}
@@ -137,12 +143,14 @@ func (s *Store) PublishPage(pageID string) error {
 // ReplaceContent overwrites a page's compiled content (used by both the
 // initial compile and recompile — recompile just re-runs this on an existing
 // page_id) and resets it to draft, ready to be published again.
-func (s *Store) ReplaceContent(pageID, title, content, sourcePointIDsJSON, sourceUnitIDsJSON, sourceLinkIDsJSON, compiledFromJSON, promptVersion, modelName string) error {
+func (s *Store) ReplaceContent(pageID, title, content, sourcePointIDsJSON, sourceUnitIDsJSON, sourceLinkIDsJSON, aliasesJSON, triggerQuestionsJSON, compiledFromJSON, promptVersion, modelName string) error {
 	_, err := s.db.Exec(`UPDATE wiki_pages SET
 		title = ?, content = ?, status = ?, source_point_ids = ?, source_unit_ids = ?, source_link_ids = ?,
+		aliases = ?, trigger_questions = ?,
 		compiled_from = ?, prompt_version = ?, model_name = ?, compiled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE page_id = ?`,
-		title, content, StatusDraft, sourcePointIDsJSON, sourceUnitIDsJSON, sourceLinkIDsJSON, compiledFromJSON, promptVersion, modelName, pageID)
+		title, content, StatusDraft, sourcePointIDsJSON, sourceUnitIDsJSON, sourceLinkIDsJSON,
+		aliasesJSON, triggerQuestionsJSON, compiledFromJSON, promptVersion, modelName, pageID)
 	if err != nil {
 		return fmt.Errorf("wiki store: replace content: %w", err)
 	}
@@ -349,6 +357,41 @@ func (s *Store) GetSourceTitle(sourceID string) (string, error) {
 		return "", fmt.Errorf("wiki store: get source title: %w", err)
 	}
 	return title, nil
+}
+
+// PublishedConceptPage is one (concept name, page_id) pair for a published
+// page tied to a concept — the concept entry's candidate source
+// (docs/impl/v1/wiki.md 步骤 4b, retrieval.md 第 0 层): the question is
+// matched against concept names in Go (word-lexical contains, not a DB
+// query) since it needs the shared foundation/text normalizer.
+type PublishedConceptPage struct {
+	ConceptID string
+	Name      string
+	PageID    string
+}
+
+// ListPublishedConceptPages backs the concept entry: every published page
+// with a non-null concept_id, joined to its concept name.
+func (s *Store) ListPublishedConceptPages() ([]PublishedConceptPage, error) {
+	rows, err := s.db.Query(`
+		SELECT c.concept_id, c.name, w.page_id
+		FROM wiki_pages w
+		JOIN concepts c ON c.concept_id = w.concept_id
+		WHERE w.status = ?`, StatusPublished)
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: list published concept pages: %w", err)
+	}
+	defer rows.Close()
+
+	var out []PublishedConceptPage
+	for rows.Next() {
+		var p PublishedConceptPage
+		if err := rows.Scan(&p.ConceptID, &p.Name, &p.PageID); err != nil {
+			return nil, fmt.Errorf("wiki store: scan published concept page: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) GetConceptInfo(conceptID string) (name, description, domainID string, err error) {

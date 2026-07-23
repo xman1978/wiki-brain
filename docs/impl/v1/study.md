@@ -137,33 +137,30 @@ candidate 永远无法形成；KP 才是跨问法稳定的锚点。
   只是创建走 CreateLink+写 learning_results，刷新走 UpdateConditions+不写
   learning_results（条件收敛是持续性维护动作，不是一次性学习事件）。
 
-computeLinkCondition(pointID, fallbackQuestionTerms) → LinkCondition：
-  subject_terms：该 point 的 confident 共现标签（CooccurrenceLabelsForPoint）
-    ≥2 个且词项交集 ≥2 个词时用交集——交集是跨问法稳定的语义核心，激活匹配
-    改用 overlap（linkCore ⊆ 问题词，见 activation.md 步骤 2），交集越短
-    越容易命中，不再需要"分数阈值兜底"这层顾虑；交集不满足条件时退回
-    fallbackQuestionTerms 对应的最近一条 confident trace 的 subject
-    （创建时传入触发本次创建的 question_terms；刷新时传入链接自己存的
-    question_terms，仅作展示性代表标签，不再是匹配键）；
-  intent_terms / audience / constraint_terms：该 point 全部确证信号
-    （ConfidentTraceFieldValues，与 CooccurrenceLabelsForPoint 同源但取
-    traces 的另外三列）分别归一化、去重、排序，得到累积白名单集合——
-    不是"最近一条 trace 的单值"，是跨全部确证历史的并集；
-    （2026-07-21 修订）取数必须限定"该 trace 的 direct_point_ids 实际
-    包含该 point"：question_terms 存的是 subject 标签，区分性约束（厂商/
-    产品名）被剥离进 constraint_text，不同实体的问题会共享同一标签，
-    仅按标签 join 会把未引用该 point 的同标签 trace 的约束串扰进白名单
-    （实测：神通问题的 constraint 混入达梦 KP 链接）。原则：标签只用于
-    subject_terms 归纳，"该 point 的确证信号"一律走引用级关联。
-    修复后每轮刷新全量重算并替换写回，存量串扰会在下一轮 Study 自动清除；
-  该 point 完全没有确证信号（CooccurrenceLabelsForPoint 为空）时返回
-    (nil, nil)，调用方跳过。
+computeLinkCondition → buildObservedConditions(pointID) → []ObservedCondition：
+  取 ConfidentTraceQuadruples(pointID)（确证且 direct_point_ids 含该 point）；
+  每条 trace → 一组归一化四元组；按四元组去重合并 hit_count；
+  上限 study.observed_conditions_max（默认 50），超限按 last_seen_at 淘汰最旧；
+  **不再** LabelTermIntersection / 并集白名单 / 代表标签 fallback。
+  空结果 → 跳过创建。
+
+创建：CreateLink(..., ObservedConditions=conds, ...)；
+刷新：ReplaceObservedConditions（全量重建）；集合相等则跳过。
+
+慢路径 enrichment（Trace，非 Study）：
+  path=full ∧ confident ∧ 引用已有非 deprecated link 的 point
+  → AppendObservedCondition（本轮四元组）；不必等下一轮 Study。
+
 
 创建路径：
-  CreateLink(question_terms, cond, point_id, created_from=事件/候选标识)；
+  CreateLink(question_terms, cond, point_id, created_from=支撑事件 id 列表)；
   幂等（UNIQUE(point_id) 冲突时返回已存在链接，见 activation.md 数据结构）；
   写 learning_results(action=create_candidate, status=applied,
-    reason 含 confident_count / ratio / 触发来源)；
+    reason 含 confident_count / ratio / 触发来源，
+    event_ids = 支撑本动作的 learning_event event_id 列表)：
+    来源 A：该 point 关联的 activation_gap 事件 id（不得写入
+      link_candidates.candidate_id——candidate_id 不是 learning_event）；
+    来源 B：触发本次创建的 activation_gap 事件 id；
 
 刷新路径：
   cond 与链接当前存储条件逐字段比较（conditionEqual：subject_terms 字符串

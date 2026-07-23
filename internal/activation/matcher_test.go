@@ -2,6 +2,7 @@ package activation
 
 import (
 	"testing"
+	"time"
 
 	"github.com/jxman78/wiki-brain/internal/foundation/text"
 	"github.com/jxman78/wiki-brain/internal/session"
@@ -208,16 +209,44 @@ func TestMatcher_FallbackWhenQuadrupleMissing(t *testing.T) {
 	}
 }
 
-func TestMatcher_ExcludesNonVerifiedAndNonCurrentKP(t *testing.T) {
+func TestMatcher_IncludesCandidateExcludesWeakenedDeprecatedAndNonCurrentKP(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
 	svc := NewService(store, matcher)
-	seedKPFull(t, db, "kp1")
+	seedKPFull(t, db, "kp-cand")
+	seedKPFull(t, db, "kp-weak")
+	seedKPFull(t, db, "kp-dep")
+	seedKPFull(t, db, "kp-stale")
+	setLifecycle(t, db, "kp-stale", "superseded")
 
-	// candidate link never verified — must not match.
-	if _, err := svc.CreateLink("t1", LinkCondition{SubjectTerms: "住宿"}, "kp1", nil); err != nil {
-		t.Fatalf("create link: %v", err)
+	cand, err := svc.CreateLink("t-cand", LinkCondition{SubjectTerms: "住宿"}, "kp-cand", nil)
+	if err != nil {
+		t.Fatalf("create candidate: %v", err)
+	}
+	weak, err := svc.CreateLink("t-weak", LinkCondition{SubjectTerms: "住宿"}, "kp-weak", nil)
+	if err != nil {
+		t.Fatalf("create weak link: %v", err)
+	}
+	if _, err := svc.TransitionLink(weak.LinkID, StatusVerified, "test", nil); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if _, err := svc.TransitionLink(weak.LinkID, StatusWeakened, "test", nil); err != nil {
+		t.Fatalf("weaken: %v", err)
+	}
+	dep, err := svc.CreateLink("t-dep", LinkCondition{SubjectTerms: "住宿"}, "kp-dep", nil)
+	if err != nil {
+		t.Fatalf("create dep link: %v", err)
+	}
+	if _, err := svc.TransitionLink(dep.LinkID, StatusDeprecated, "test", nil); err != nil {
+		t.Fatalf("deprecate: %v", err)
+	}
+	stale, err := svc.CreateLink("t-stale", LinkCondition{SubjectTerms: "住宿"}, "kp-stale", nil)
+	if err != nil {
+		t.Fatalf("create stale: %v", err)
+	}
+	if _, err := svc.TransitionLink(stale.LinkID, StatusVerified, "test", nil); err != nil {
+		t.Fatalf("verify stale: %v", err)
 	}
 
 	query := session.ExpandedQuery{Subject: "住宿", ExpandedQuestion: "住宿标准"}
@@ -225,8 +254,14 @@ func TestMatcher_ExcludesNonVerifiedAndNonCurrentKP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if len(matches) != 0 {
-		t.Errorf("candidate link should not participate in matching, got %+v", matches)
+	if len(matches) != 1 {
+		t.Fatalf("expected only candidate (current KP) to match for signal recording, got %+v", matches)
+	}
+	if matches[0].Link.LinkID != cand.LinkID {
+		t.Errorf("expected candidate link %s, got %s", cand.LinkID, matches[0].Link.LinkID)
+	}
+	if matches[0].Link.Status != StatusCandidate {
+		t.Errorf("status = %q, want candidate", matches[0].Link.Status)
 	}
 }
 
@@ -247,19 +282,21 @@ func TestMatcher_CacheInvalidatesOnTransition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if len(matches) != 0 {
-		t.Fatalf("expected no matches before promotion, got %+v", matches)
+	if len(matches) != 1 || matches[0].Link.Status != StatusCandidate {
+		t.Fatalf("expected candidate match after CreateLink invalidates cache, got %+v", matches)
 	}
 
 	// TransitionLink goes through Service, which calls matcher.InvalidateCache().
-	verifyLink(t, svc, l)
+	if _, err := svc.TransitionLink(l.LinkID, StatusDeprecated, "test", nil); err != nil {
+		t.Fatalf("deprecate: %v", err)
+	}
 
 	matches, err = matcher.Match(query, MatchConfig{})
 	if err != nil {
-		t.Fatalf("match after promotion: %v", err)
+		t.Fatalf("match after deprecate: %v", err)
 	}
-	if len(matches) != 1 {
-		t.Errorf("expected cache to reload and find the newly verified link, got %+v", matches)
+	if len(matches) != 0 {
+		t.Errorf("expected cache to reload and drop deprecated link, got %+v", matches)
 	}
 }
 
@@ -363,20 +400,23 @@ func TestMatcher_SubjectOverlap_CoreWordMissingFromQuery_Excluded(t *testing.T) 
 	}
 }
 
-// TestMatcher_AudienceSetMembership_EitherAccumulatedValueMatches covers the
-// intent/audience/constraint whitelist: once Study has accumulated two
-// distinct confident-observed values for a point (from two different
-// confident traces), a query matching *either* value must activate the
-// link — this is what lets the same KP be reached through phrasings that
-// differ only in which of the two audiences they name.
-func TestMatcher_AudienceSetMembership_EitherAccumulatedValueMatches(t *testing.T) {
+// TestMatcher_AudienceEitherObservedGroupMatches: two historically observed
+// audiences are stored as separate condition groups (not a whitelist union);
+// a query matching either group's audience activates the link.
+func TestMatcher_AudienceEitherObservedGroupMatches(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
 	svc := NewService(store, matcher)
 	seedKPFull(t, db, "kp1")
 
-	l, err := svc.CreateLink("t1", LinkCondition{SubjectTerms: "住宿", Audience: []string{"hr", "行政"}}, "kp1", nil)
+	now := time.Now().UTC()
+	l, err := svc.CreateLink("t1", LinkCondition{
+		ObservedConditions: []ObservedCondition{
+			{Subject: "住宿", Intent: "", Audience: "hr", Constraint: "", FirstSeenAt: now, LastSeenAt: now, HitCount: 1},
+			{Subject: "住宿", Intent: "", Audience: text.NormalizeCompact("行政"), Constraint: "", FirstSeenAt: now, LastSeenAt: now, HitCount: 1},
+		},
+	}, "kp1", nil)
 	if err != nil {
 		t.Fatalf("create link: %v", err)
 	}
@@ -394,7 +434,7 @@ func TestMatcher_AudienceSetMembership_EitherAccumulatedValueMatches(t *testing.
 				t.Fatalf("match: %v", err)
 			}
 			if len(matches) != 1 {
-				t.Errorf("expected accumulated audience %q to match, got %+v", audience, matches)
+				t.Errorf("expected observed audience %q to match, got %+v", audience, matches)
 			}
 		})
 	}
@@ -406,6 +446,52 @@ func TestMatcher_AudienceSetMembership_EitherAccumulatedValueMatches(t *testing.
 	}
 	if len(matches) != 0 {
 		t.Errorf("expected an audience never observed for this point to still be excluded, got %+v", matches)
+	}
+}
+
+// TestMatcher_NoCrossProductAcrossGroups: subject from group A + intent from
+// group B must NOT match (observed combinations only).
+func TestMatcher_NoCrossProductAcrossGroups(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	matcher := NewMatcher(store)
+	svc := NewService(store, matcher)
+	seedKPFull(t, db, "kp1")
+
+	now := time.Now().UTC()
+	qiA := text.Terms(text.Normalize("查询期限"))
+	qiB := text.Terms(text.Normalize("查询标准"))
+	l, err := svc.CreateLink("t1", LinkCondition{
+		ObservedConditions: []ObservedCondition{
+			{Subject: "招待费报销", Intent: qiA, Audience: "", Constraint: "", FirstSeenAt: now, LastSeenAt: now, HitCount: 1},
+			{Subject: "差旅报销", Intent: qiB, Audience: "", Constraint: "", FirstSeenAt: now, LastSeenAt: now, HitCount: 1},
+		},
+	}, "kp1", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	verifyLink(t, svc, l)
+
+	// Cross: subject of A + intent of B
+	matches, err := matcher.Match(session.ExpandedQuery{
+		Subject: "招待费报销", Intent: "查询标准", ExpandedQuestion: "x",
+	}, MatchConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("cross-product must not match, got %+v", matches)
+	}
+
+	// Exact group A
+	matches, err = matcher.Match(session.ExpandedQuery{
+		Subject: "招待费报销", Intent: "查询期限", ExpandedQuestion: "x",
+	}, MatchConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Errorf("exact group A should match, got %+v", matches)
 	}
 }
 

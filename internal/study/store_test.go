@@ -83,9 +83,9 @@ func seedAnswer(t *testing.T, db *sql.DB, answerID string) {
 func seedTrace(t *testing.T, db *sql.DB, traceID, answerID, question, questionTerms, quality, path string, pointIDs []string) {
 	t.Helper()
 	pidsJSON, _ := json.Marshal(pointIDs)
-	_, err := db.Exec(`INSERT INTO traces (trace_id, answer_id, question, question_hash, question_terms, retrieval_quality, path, direct_point_ids)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		traceID, answerID, question, "hash_"+traceID, questionTerms, quality, path, string(pidsJSON))
+	_, err := db.Exec(`INSERT INTO traces (trace_id, answer_id, question, question_hash, question_terms, retrieval_quality, path, direct_point_ids, subject, intent, audience, constraint_text)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '')`,
+		traceID, answerID, question, "hash_"+traceID, questionTerms, quality, path, string(pidsJSON), questionTerms)
 	if err != nil {
 		t.Fatalf("seed trace: %v", err)
 	}

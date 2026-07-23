@@ -45,8 +45,12 @@ candidate Tab 行内操作：
   （GET /activation-links/:id 中关联的 learning_results）；
 
 详情侧栏（GET /activation-links/:id）：
-  完整字段、created_from、状态迁移史（learning_results 时间线，
-  每条含 action / reason / status / created_at）。
+  完整字段、created_from、pending_promote_reason（若有）；
+  问法列表懒加载：GET /activation-links/:id/questions
+    （matched = traces.activation_link_ids 命中；
+     created_from = created_from 事件关联 traces）；
+  状态迁移史懒加载：GET /activation-links/:id/learning-results
+    （前端中文映射 action/status/常见 reason）。
 
 待确认徽标：导航入口显示 pending_confirm 的 promote 数量
   （GET /study/results?action=promote&status=pending_confirm 计数），

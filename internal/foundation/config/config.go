@@ -138,6 +138,21 @@ type RetrievalConfig struct {
 	FastPathVerify   bool    `yaml:"fast_path_verify"`
 	FastPathFallback bool    `yaml:"fast_path_fallback"`
 	WikiMinScore     float64 `yaml:"wiki_min_score"`
+	// WikiMaxCandidates caps how many wiki-index/concept-matched candidate
+	// pages TryDirectAnswer tries in order before falling through
+	// (docs/impl/v1/wiki.md 步骤 4; <=0 defaults to 3, 1 reproduces the
+	// original top-1-only behavior).
+	WikiMaxCandidates int `yaml:"wiki_max_candidates"`
+	// RerankJudgeIncludeAnalysis toggles whether the rerank judge LLM call
+	// is asked to also produce a per-candidate `analysis` explanation
+	// (used only for debug logging, not decision logic — see
+	// internal/retrieval/service.go judgeExtractedEvidence). A *bool
+	// (rather than plain bool) so an absent key in config.yml is
+	// distinguishable from an explicit false: nil means "unset" and keeps
+	// the historical behavior (include analysis), matching how
+	// rerankJudgeIncludeAnalysis() resolves it. Set to false to A/B test
+	// whether dropping the analysis field speeds up rerank latency.
+	RerankJudgeIncludeAnalysis *bool `yaml:"rerank_judge_include_analysis"`
 }
 
 // EvidenceConfig — docs/impl/v1/evidence.md 配置项.
@@ -158,6 +173,9 @@ type KPNConfig struct {
 type WikiConfig struct {
 	CompileMaxChars   int `yaml:"compile_max_chars"`
 	RecompileNewKPMin int `yaml:"recompile_new_kp_min"`
+	// TriggerQuestionsMax caps aliases and trigger_questions each (<=0
+	// defaults to 10; docs/impl/v1/wiki.md 步骤 3).
+	TriggerQuestionsMax int `yaml:"trigger_questions_max"`
 }
 
 type StudyConfig struct {
@@ -181,6 +199,9 @@ type StudyConfig struct {
 	CandidateIdleDays  int     `yaml:"candidate_idle_days"`
 	DeprecateIdleDays  int     `yaml:"deprecate_idle_days"`
 	CorrectionWeight   int     `yaml:"correction_weight"`
+	// ObservedConditionsMax caps ActivationLink observed_conditions groups
+	// (docs/superpowers/specs/2026-07-22-activation-observed-conditions-design.md).
+	ObservedConditionsMax int `yaml:"observed_conditions_max"`
 	// —— 概念演化（V1 新增，docs/impl/v1/concept-evolution.md 配置项）——
 	ConceptNullRatioMin      float64 `yaml:"concept_null_ratio_min"`
 	ConceptAddEventMin       int     `yaml:"concept_add_event_min"`

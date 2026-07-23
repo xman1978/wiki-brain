@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jxman78/wiki-brain/internal/session"
 )
@@ -61,20 +62,58 @@ func (s *Service) CreateLink(questionTerms string, cond LinkCondition, pointID s
 		return nil, fmt.Errorf("activation: marshal created_from: %w", err)
 	}
 
-	link := &ActivationLink{
-		QuestionTerms:   questionTerms,
-		SubjectTerms:    cond.SubjectTerms,
-		IntentTerms:     cond.IntentTerms,
-		Audience:        cond.Audience,
-		ConstraintTerms: cond.ConstraintTerms,
-		PointID:         pointID,
-		Status:          StatusCandidate,
-		CreatedFrom:     string(createdFromJSON),
+	conds := cond.EffectiveConditions()
+	if conds == nil {
+		conds = []ObservedCondition{}
 	}
+	link := &ActivationLink{
+		QuestionTerms:      questionTerms,
+		ObservedConditions: conds,
+		PointID:            pointID,
+		Status:             StatusCandidate,
+		CreatedFrom:        string(createdFromJSON),
+	}
+	applyLegacyProjection(link)
 	if err := s.store.InsertLink(link); err != nil {
 		return nil, err
 	}
+	if s.matcher != nil {
+		s.matcher.InvalidateCache()
+	}
 	return s.store.GetByID(link.LinkID)
+}
+
+// AppendObservedCondition merges one quadruple into an existing link (Trace
+// slow-path enrichment). max<=0 defaults to 50. Skips deprecated links.
+func (s *Service) AppendObservedCondition(linkID string, add ObservedCondition, max int) error {
+	link, err := s.store.GetByID(linkID)
+	if err != nil {
+		return err
+	}
+	if link == nil {
+		return fmt.Errorf("activation: link not found: %s", linkID)
+	}
+	if link.Status == StatusDeprecated {
+		return nil
+	}
+	if err := s.store.AppendObservedCondition(linkID, add, max); err != nil {
+		return err
+	}
+	if s.matcher != nil {
+		s.matcher.InvalidateCache()
+	}
+	return nil
+}
+
+// ReplaceObservedConditions is Study's full rebuild write path.
+func (s *Service) ReplaceObservedConditions(linkID string, conds []ObservedCondition) error {
+	if err := s.store.ReplaceObservedConditions(linkID, conds); err != nil {
+		return err
+	}
+	if s.matcher != nil {
+		s.matcher.InvalidateCache()
+	}
+	return nil
 }
 
 // TransitionLink is the single entry point for status changes
@@ -131,6 +170,54 @@ func (s *Service) ListLinks(f ListLinksFilter) ([]ActivationLinkListRow, error) 
 
 func (s *Service) ListLearningResults(linkID string) ([]LearningResult, error) {
 	return s.store.ListLearningResultsByObject(ObjectTypeActivationLink, linkID)
+}
+
+// LinkQuestions groups create-time fuel and Match-hit questions for the
+// detail dialog's lazy 问法列表.
+type LinkQuestions struct {
+	Matched     []LinkQuestion `json:"matched"`
+	CreatedFrom []LinkQuestion `json:"created_from"`
+}
+
+func (s *Service) ListLinkQuestions(linkID string) (*LinkQuestions, error) {
+	link, err := s.store.GetByID(linkID)
+	if err != nil {
+		return nil, err
+	}
+	if link == nil {
+		return nil, nil
+	}
+
+	matched, err := s.store.ListMatchedQuestions(linkID)
+	if err != nil {
+		return nil, err
+	}
+	if matched == nil {
+		matched = []LinkQuestion{}
+	}
+
+	var createdIDs []string
+	if err := json.Unmarshal([]byte(link.CreatedFrom), &createdIDs); err != nil {
+		createdIDs = nil
+	}
+	createdFrom, err := s.store.ListCreatedFromQuestions(createdIDs)
+	if err != nil {
+		return nil, err
+	}
+	// Legacy cooccurrence rows stored candidate_id (or empty) — if still
+	// empty, fall back to confident traces that cited this point before the
+	// link was created (the fuel that made ScanCandidates fire).
+	if len(createdFrom) == 0 {
+		createdFrom, err = s.store.ListConfidentQuestionsForPointBefore(link.PointID, link.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if createdFrom == nil {
+		createdFrom = []LinkQuestion{}
+	}
+
+	return &LinkQuestions{Matched: matched, CreatedFrom: createdFrom}, nil
 }
 
 // Confirm implements POST /activation-links/:id/confirm: only valid for
@@ -222,6 +309,29 @@ func (s *Service) pendingPromoteEventIDs(linkID string) ([]string, *LearningResu
 func (s *Service) InvalidateCache() error {
 	if s.matcher != nil {
 		s.matcher.InvalidateCache()
+	}
+	return nil
+}
+
+// EnrichFromConfidentFullPath appends the current Session quadruple onto every
+// non-deprecated ActivationLink whose point was confidently cited on a full
+// (slow) path — so the next identical ask can Match without waiting for Study.
+func (s *Service) EnrichFromConfidentFullPath(pointIDs []string, subject, intent, audience, constraint, questionTerms string, max int) error {
+	if len(pointIDs) == 0 {
+		return nil
+	}
+	add := NormalizeObservedCondition(subject, intent, audience, constraint, questionTerms, time.Now().UTC())
+	for _, pid := range pointIDs {
+		link, err := s.store.GetByPointID(pid)
+		if err != nil {
+			return err
+		}
+		if link == nil || link.Status == StatusDeprecated {
+			continue
+		}
+		if err := s.AppendObservedCondition(link.LinkID, add, max); err != nil {
+			return err
+		}
 	}
 	return nil
 }

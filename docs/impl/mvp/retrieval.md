@@ -127,25 +127,15 @@ LLM 调用失败：记录 warn 日志，不做 domain 过滤，所有 source 进
 
 文件级过滤是整个检索链的最窄漏斗，遗漏意味着答案永久丢失，因此使用 LLM 语义判断而非 FTS 或向量搜索。
 
-**输入**：步骤 2 确定的候选 source 列表（title + summary，summary 为空时只用 title）。
+**输入**：步骤 2 确定的候选 source 列表（title + summary，summary 为空时只用 title）+ 问题与四元组（subject/intent/audience/constraint）。
 
 **Prompt 文件**：`config/prompts/source_filter.md`
 
-```
-以下是知识库中的所有文档，每条包含编号、标题和内容概述。
+筛选原则：
 
-文档列表：
-{{source_list}}
-
-问题：{{question}}
-
-请列出与问题可能相关的文档编号（source_id）。只选择有可能包含答案的文档，宁多勿漏。若无相关文档，返回空列表。
-
-按以下格式输出：
-{"source_ids": ["id1", "id2"]}
-```
-
-`{{source_list}}` 每行格式：`[source_id] 标题：xxx / 概述：xxx`
+- 文档与问题同一规则归属，或可解释地提供回答所需前提/关联规则 → 可保留；
+- 仅词面相近、规则归属不同 → 排除；
+- 是否相关仍不清楚时宁多勿漏；规则归属已能区分无关时不得保留。
 
 **结果处理**：
 ```text
@@ -201,31 +191,34 @@ LLM 调用失败：记录 warn 日志，不做 domain 过滤，所有 source 进
 
 ### 步骤 5：FTS 召回
 
-对过滤后 source 范围内的 units index 和 points index 分别发起 Bleve 查询：
+对过滤后 source 范围内的 units index 和 points index 分别发起 Bleve 查询。慢路径跑**两路**独立 FTS（各自成榜，不在 BM25 层合并），再与步骤 4 一并进入步骤 6 RRF：
 
 ```text
-对问题分词后构建 Bleve 查询，限定 source_id 范围；
-units index 返回 unit_id + BM25 分，直接作为候选；
-points index 返回 point_id + BM25 分，需转换为 unit_id：
-  SELECT unit_id FROM knowledge_points WHERE point_id = ?
-  同一 unit 被多个 point 命中时，取各 point 中最高的 BM25 分作为该 unit 的 FTS 分；
-units 和 points 两路在 unit_id 粒度归并后，作为"FTS 召回"一路进入步骤 6 RRF 融合；
-归并后若同一 unit_id 来自 units 路和 points 路，取两路得分中较高者。
-同时保留候选的代表 point_id：
-  - points 路命中时，使用得分最高的命中 point_id；
-  - units 路命中但没有 points 路命中时，查询该 unit 下第一条 KnowledgePoint 作为代表 point_id；
-  - 若该 unit 下不存在 KnowledgePoint，丢弃该候选并记录 warn。
+一路 fts：查询文本 = 原始问题（expanded_question）；
+一路 fts_tuple：查询文本 = subject + intent + audience + constraint（空字段跳过；
+  拼接结果为空，或与问题文本完全相同，则跳过本路，行为退化为改前单路 FTS）；
+每路内部：
+  units index 返回 unit_id + BM25 分，直接作为候选；
+  points index 返回 point_id + BM25 分，需转换为 unit_id：
+    SELECT unit_id FROM knowledge_points WHERE point_id = ?
+    同一 unit 被多个 point 命中时，取各 point 中最高的 BM25 分作为该 unit 的 FTS 分；
+  units 和 points 两路在 unit_id 粒度归并后，作为该 FTS 路的排名列表；
+  归并后若同一 unit_id 来自 units 路和 points 路，取两路得分中较高者。
+  同时保留候选的代表 point_id：
+    - points 路命中时，使用得分最高的命中 point_id；
+    - units 路命中但没有 points 路命中时，查询该 unit 下第一条 KnowledgePoint 作为代表 point_id；
+    - 若该 unit 下不存在 KnowledgePoint，丢弃该候选并记录 warn。
 ```
 
 ### 步骤 6：多路召回合并（RRF）
 
-将目录结构召回（步骤 4）和 FTS 召回（步骤 5）的结果用 RRF（Reciprocal Rank Fusion）融合：
+将目录结构召回（步骤 4）、FTS 问题路、FTS 四元组路（若启用）的结果用 RRF（Reciprocal Rank Fusion）融合：
 
 ```text
 各路候选按来源赋予排名；
 RRF 公式：score = Σ 1 / (k + rank_i)，k 默认取 60；
 按 unit_id 去重，同一 unit 来自多路时累加各路 RRF 分；
-保留每条候选的来源路径（目录 / FTS / 两者都有），用于 Trace 记录；
+保留每条候选的来源路径（outline / fts / fts_tuple 及其组合），用于 Trace 记录；
 按 RRF 分数降序排列，截取 Top N（默认 20，可通过 config.yml: retrieval.rerank_top_n 配置）；
 截断后进入 Rerank，避免候选过多导致 Rerank prompt token 超限。
 ```

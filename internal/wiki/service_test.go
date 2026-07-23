@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -345,7 +346,7 @@ func TestTryDirectAnswer_Sufficient(t *testing.T) {
 
 	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答内容 [p1]","citations":["p1"],"sufficient":true}`})
 
-	result, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", 0)
+	result, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -366,7 +367,7 @@ func TestTryDirectAnswer_HallucinatedCitationFiltered(t *testing.T) {
 
 	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答内容","citations":["p1","p999"],"sufficient":true}`})
 
-	result, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", 0)
+	result, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -386,7 +387,7 @@ func TestTryDirectAnswer_InsufficientFallsBack(t *testing.T) {
 
 	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"","citations":[],"sufficient":false}`})
 
-	_, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", 0)
+	_, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -399,7 +400,7 @@ func TestTryDirectAnswer_NoHitBelowMinScoreSkipsLLM(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
 	publishedPage(t, svc, fake)
 
-	_, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", 1000)
+	_, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", 1000, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -415,11 +416,176 @@ func TestTryDirectAnswer_NoHitBelowMinScoreSkipsLLM(t *testing.T) {
 
 func TestTryDirectAnswer_NoPublishedPagesNoHit(t *testing.T) {
 	svc, _, _, _ := setupTestService(t)
-	_, ok, err := svc.TryDirectAnswer(context.Background(), "anything", 0)
+	_, ok, err := svc.TryDirectAnswer(context.Background(), "anything", 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
 	if ok {
 		t.Fatal("expected no hit with an empty wiki index")
+	}
+}
+
+const compileOutputWithTriggers = `{
+	"title": "Concept One 知识页",
+	"content": "## 稳定结论\n[p1] 内容一\n\n## 展开说明\n详细说明。\n\n## 待验证点\n暂无。\n\n## 依赖来源\n见引用。\n",
+	"cited_point_ids": ["p1"],
+	"aliases": ["别名一", "C1"],
+	"trigger_questions": ["这是一个专属触发问法"]
+}`
+
+func TestCompile_PersistsAliasesAndTriggerQuestions(t *testing.T) {
+	svc, fake, _, _ := setupTestService(t)
+	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: compileOutputWithTriggers})
+
+	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	var aliases, triggers []string
+	json.Unmarshal([]byte(page.Aliases), &aliases)
+	json.Unmarshal([]byte(page.TriggerQuestions), &triggers)
+	if len(aliases) != 2 || aliases[0] != "别名一" {
+		t.Errorf("aliases = %v, want [别名一 C1]", aliases)
+	}
+	if len(triggers) != 1 || triggers[0] != "这是一个专属触发问法" {
+		t.Errorf("trigger_questions = %v, want [这是一个专属触发问法]", triggers)
+	}
+}
+
+func TestCompile_TruncatesAliasesAndTriggerQuestionsAtMax(t *testing.T) {
+	svc, fake, _, _ := setupTestService(t)
+
+	var aliases, triggers []string
+	for i := 0; i < 15; i++ {
+		aliases = append(aliases, fmt.Sprintf("alias%d", i))
+		triggers = append(triggers, fmt.Sprintf("trigger%d", i))
+	}
+	out, err := json.Marshal(map[string]interface{}{
+		"title":             "Concept One 知识页",
+		"content":           "## 稳定结论\n[p1] 内容一\n\n## 展开说明\n详细说明。\n\n## 待验证点\n暂无。\n\n## 依赖来源\n见引用。\n",
+		"cited_point_ids":   []string{"p1"},
+		"aliases":           aliases,
+		"trigger_questions": triggers,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: string(out)})
+
+	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	var gotAliases, gotTriggers []string
+	json.Unmarshal([]byte(page.Aliases), &gotAliases)
+	json.Unmarshal([]byte(page.TriggerQuestions), &gotTriggers)
+	if len(gotAliases) != 10 {
+		t.Errorf("aliases len = %d, want 10 (default trigger_questions_max)", len(gotAliases))
+	}
+	if len(gotTriggers) != 10 {
+		t.Errorf("trigger_questions len = %d, want 10 (default trigger_questions_max)", len(gotTriggers))
+	}
+}
+
+func TestTryDirectAnswer_TriggerQuestionRoutesWithoutContentOverlap(t *testing.T) {
+	svc, fake, _, _ := setupTestService(t)
+	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: compileOutputWithTriggers})
+	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if _, err := svc.Publish(page.PageID); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"sufficient":true}`})
+
+	// The question exactly echoes the compiled trigger_questions entry, which
+	// shares no vocabulary with the page's title/content — only the trigger
+	// index field can produce a lexical hit here.
+	result, ok, err := svc.TryDirectAnswer(context.Background(), "这是一个专属触发问法", 0, 3)
+	if err != nil {
+		t.Fatalf("try direct answer: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected trigger_questions to route this question to the page")
+	}
+	if result.PageID != page.PageID {
+		t.Errorf("page_id = %q, want %q", result.PageID, page.PageID)
+	}
+}
+
+func TestTryDirectAnswer_ConceptEntryBypassesMinScore(t *testing.T) {
+	svc, fake, _, _ := setupTestService(t)
+	page := publishedPage(t, svc, fake) // title "Concept One 知识页", concept name "Concept One"
+
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"sufficient":true}`})
+
+	// minScore is set unreachably high so no lexical hit could clear it; only
+	// the concept entry (question contains the concept name "Concept One",
+	// scored independently of Bleve) should surface this page as a candidate.
+	result, ok, err := svc.TryDirectAnswer(context.Background(), "Concept One 该注意什么", 1e9, 3)
+	if err != nil {
+		t.Fatalf("try direct answer: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected concept entry to surface the page despite the unreachable min score")
+	}
+	if result.PageID != page.PageID {
+		t.Errorf("page_id = %q, want %q", result.PageID, page.PageID)
+	}
+}
+
+func TestTryDirectAnswer_TopNRetriesNextCandidateOnInsufficient(t *testing.T) {
+	svc, fake, db, _ := setupTestService(t)
+	publishedPage(t, svc, fake) // c1, title "Concept One 知识页" — first candidate
+
+	seedConcept(t, db, "c2", "d1", "Concept Two")
+	seedKU(t, db, "u3", "s1", "c2", "Topic C", 1, 5)
+	seedKP(t, db, "p3", "u3", "s1", "point three content")
+	seedLinkCandidate(t, db, "lc3", "t3", "p3", 10)
+
+	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: `{
+		"title": "Concept One 知识页 相关补充",
+		"content": "## 稳定结论\n[p3] 内容三\n\n## 展开说明\n详细说明。\n\n## 待验证点\n暂无。\n\n## 依赖来源\n见引用。\n",
+		"cited_point_ids": ["p3"]
+	}`})
+	page2, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c2", PageType: PageTypeConcept})
+	if err != nil {
+		t.Fatalf("compile c2: %v", err)
+	}
+	if _, err := svc.Publish(page2.PageID); err != nil {
+		t.Fatalf("publish c2: %v", err)
+	}
+
+	// Both pages' titles share "Concept One 知识页", so a question built from
+	// that phrase lexically hits both, giving TryDirectAnswer two candidates
+	// to try in order.
+	fake.SetResponseSequence("answer_wiki.md", []llm.FakeResponse{
+		{Output: `{"content":"","citations":[],"sufficient":false}`},
+		{Output: `{"content":"来自第二个候选页的回答","citations":[],"sufficient":true}`},
+	})
+
+	result, ok, err := svc.TryDirectAnswer(context.Background(), "Concept One 知识页", 0, 3)
+	if err != nil {
+		t.Fatalf("try direct answer: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected the second candidate to answer sufficiently after the first declined")
+	}
+	if result.Content != "来自第二个候选页的回答" {
+		t.Errorf("content = %q, want the second candidate's answer", result.Content)
+	}
+
+	var answerCalls int
+	for _, c := range fake.Calls() {
+		if c.PromptFile == "answer_wiki.md" {
+			answerCalls++
+		}
+	}
+	if answerCalls != 2 {
+		t.Errorf("answer_wiki.md calls = %d, want 2 (first declined, second retried)", answerCalls)
 	}
 }

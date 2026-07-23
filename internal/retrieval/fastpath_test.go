@@ -297,7 +297,7 @@ func TestRetrieve_FastPath_NoCurrentKP_FallsBackToSlowPath(t *testing.T) {
 
 	// KP superseded after Match() would have found it verified, but before
 	// GetCurrentUnitsByPointIDs resolves it — the matcher itself already
-	// excludes non-current-KP links (ListVerifiedLinksForCurrentKP), so this
+	// excludes non-current-KP links (ListMatchableLinksForCurrentKP), so this
 	// also verifies Match() returns nothing once p1 is no longer current.
 	store.db.Exec(`UPDATE knowledge_points SET lifecycle = 'superseded' WHERE point_id = 'p1'`)
 
@@ -311,5 +311,41 @@ func TestRetrieve_FastPath_NoCurrentKP_FallsBackToSlowPath(t *testing.T) {
 	}
 	if es.PathType != PathTypeFull {
 		t.Errorf("path_type = %q, want full (matched link's KP no longer current)", es.PathType)
+	}
+}
+
+// TestRetrieve_CandidateMatch_RecordsHitsButNotFastPath: candidate links
+// participate in Match so Trace can grade activation_success/failure, but
+// must never take the fast path (only verified links answer directly).
+func TestRetrieve_CandidateMatch_RecordsHitsButNotFastPath(t *testing.T) {
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
+
+	question := "什么是线性方程"
+	qTerms := text.Terms(text.Normalize(question))
+	link, err := activationSvc.CreateLink(qTerms, activation.LinkCondition{}, "p1", nil)
+	if err != nil {
+		t.Fatalf("create candidate: %v", err)
+	}
+	if link.Status != activation.StatusCandidate {
+		t.Fatalf("status = %q, want candidate", link.Status)
+	}
+
+	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "matches"}]}`})
+
+	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if es.PathType != PathTypeFull {
+		t.Fatalf("path_type = %q, want full (candidate must not take fast path)", es.PathType)
+	}
+	if len(es.ActivationHits) != 1 {
+		t.Fatalf("expected 1 activation hit from candidate match, got %+v", es.ActivationHits)
+	}
+	if es.ActivationHits[0].LinkID != link.LinkID || es.ActivationHits[0].PointID != "p1" {
+		t.Errorf("unexpected hit: %+v", es.ActivationHits[0])
 	}
 }

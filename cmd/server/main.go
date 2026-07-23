@@ -164,6 +164,7 @@ func main() {
 	retrievalSvc := retrieval.NewService(retrievalStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, activationSvc, evidenceSvc, wikiSvc)
 	answerSvc := answer.NewService(answerStore, llmClient, q, retrievalSvc)
 	traceSvc := trace.NewService(traceStore, cfg.Study.ConceptNullRatioMin)
+	traceSvc.SetObservedConditionEnricher(activationSvc, cfg.Study.ObservedConditionsMax)
 	studySvc := study.NewService(studyStore, cfg.Study, activationSvc, wikiSvc, cfg.Wiki.RecompileNewKPMin)
 
 	conceptSvc := concept.NewService(conceptStore, concept.Config{

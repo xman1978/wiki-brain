@@ -11,8 +11,16 @@ import (
 )
 
 type Service struct {
-	store               *Store
-	conceptNullRatioMin float64
+	store                   *Store
+	conceptNullRatioMin     float64
+	enricher                ObservedConditionEnricher
+	observedConditionsMax   int
+}
+
+// ObservedConditionEnricher is implemented by activation.Service — optional so
+// trace tests without activation still run.
+type ObservedConditionEnricher interface {
+	EnrichFromConfidentFullPath(pointIDs []string, subject, intent, audience, constraint, questionTerms string, max int) error
 }
 
 // conceptNullRatioMin is docs/impl/v1/concept-evolution.md's
@@ -21,6 +29,12 @@ type Service struct {
 // lives and is consumed in the study package.
 func NewService(store *Store, conceptNullRatioMin float64) *Service {
 	return &Service{store: store, conceptNullRatioMin: conceptNullRatioMin}
+}
+
+// SetObservedConditionEnricher wires slow-path Append onto existing links.
+func (s *Service) SetObservedConditionEnricher(e ObservedConditionEnricher, max int) {
+	s.enricher = e
+	s.observedConditionsMax = max
 }
 
 func (s *Service) ProcessTrace(r *answer.AnswerResult) {
@@ -106,12 +120,33 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 
 	s.generateActivationEvents(t, r, grade)
 	s.updateCooccurrence(t, r)
+	s.enrichObservedConditions(t)
 	s.generateLearningEvents(t, r)
 
 	slog.Debug("trace: process complete",
 		"trace_id", t.TraceID,
 		"quality", t.RetrievalQuality,
 		"duration_ms", time.Since(start).Milliseconds())
+}
+
+// enrichObservedConditions appends this turn's Session quadruple onto links
+// for confidently cited points on the full path (slow path / fast fallback).
+func (s *Service) enrichObservedConditions(t *Trace) {
+	if s.enricher == nil {
+		return
+	}
+	if t.RetrievalQuality != QualityConfident || t.PathType != retrieval.PathTypeFull {
+		return
+	}
+	if len(t.DirectPointIDs) == 0 {
+		return
+	}
+	if err := s.enricher.EnrichFromConfidentFullPath(
+		t.DirectPointIDs, t.Subject, t.Intent, t.Audience, t.ConstraintText, t.QuestionTerms,
+		s.observedConditionsMax,
+	); err != nil {
+		slog.Error("trace: observed condition enrich failed", "trace_id", t.TraceID, "error", err)
+	}
 }
 
 // applyConstraintGate enforces 约束一致性判定 (constraint.go) on a confident

@@ -73,16 +73,18 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 	}
 
 	page := &Page{
-		PageType:       req.PageType,
-		Title:          compiled.title,
-		Content:        compiled.content,
-		Status:         StatusDraft,
-		SourcePointIDs: marshalIDs(compiled.sourcePointIDs),
-		SourceUnitIDs:  marshalIDs(compiled.sourceUnitIDs),
-		SourceLinkIDs:  marshalIDs(compiled.sourceLinkIDs),
-		CompiledFrom:   marshalIDs(nonEmpty(req.ResultID)),
-		PromptVersion:  "v1",
-		ModelName:      "reasoning",
+		PageType:         req.PageType,
+		Title:            compiled.title,
+		Content:          compiled.content,
+		Status:           StatusDraft,
+		SourcePointIDs:   marshalIDs(compiled.sourcePointIDs),
+		SourceUnitIDs:    marshalIDs(compiled.sourceUnitIDs),
+		SourceLinkIDs:    marshalIDs(compiled.sourceLinkIDs),
+		Aliases:          marshalIDs(compiled.aliases),
+		TriggerQuestions: marshalIDs(compiled.triggerQuestions),
+		CompiledFrom:     marshalIDs(nonEmpty(req.ResultID)),
+		PromptVersion:    "v1",
+		ModelName:        "reasoning",
 	}
 	page.ConceptID = nullableString(req.ConceptID)
 
@@ -124,6 +126,7 @@ func (s *Service) Recompile(ctx context.Context, pageID, reason string, compiled
 
 	if err := s.store.ReplaceContent(pageID, compiled.title, compiled.content,
 		marshalIDs(compiled.sourcePointIDs), marshalIDs(compiled.sourceUnitIDs), marshalIDs(compiled.sourceLinkIDs),
+		marshalIDs(compiled.aliases), marshalIDs(compiled.triggerQuestions),
 		marshalIDs(compiledFrom), "v1", "reasoning"); err != nil {
 		return nil, err
 	}
@@ -142,11 +145,13 @@ func (s *Service) Recompile(ctx context.Context, pageID, reason string, compiled
 }
 
 type compiledContent struct {
-	title          string
-	content        string
-	sourcePointIDs []string
-	sourceUnitIDs  []string
-	sourceLinkIDs  []string
+	title            string
+	content          string
+	sourcePointIDs   []string
+	sourceUnitIDs    []string
+	sourceLinkIDs    []string
+	aliases          []string
+	triggerQuestions []string
 }
 
 // compileContent implements docs/impl/v1/wiki.md 步骤 3: gather inputs, call
@@ -205,9 +210,11 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 		}
 
 		var output struct {
-			Title         string   `json:"title"`
-			Content       string   `json:"content"`
-			CitedPointIDs []string `json:"cited_point_ids"`
+			Title            string   `json:"title"`
+			Content          string   `json:"content"`
+			CitedPointIDs    []string `json:"cited_point_ids"`
+			Aliases          []string `json:"aliases"`
+			TriggerQuestions []string `json:"trigger_questions"`
 		}
 		if err := json.Unmarshal(raw, &output); err != nil {
 			lastErr = fmt.Errorf("parse: %w", err)
@@ -248,12 +255,24 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 		if err != nil {
 			slog.Warn("wiki: lookup verified link ids for cited points failed", "concept_id", conceptID, "error", err)
 		}
+
+		triggerMax := s.cfg.TriggerQuestionsMax
+		if triggerMax <= 0 {
+			triggerMax = 10
+		}
+		if len(output.Aliases) == 0 || len(output.TriggerQuestions) == 0 {
+			slog.Warn("wiki: compile output missing aliases/trigger_questions, storing empty",
+				"concept_id", conceptID, "aliases", len(output.Aliases), "trigger_questions", len(output.TriggerQuestions))
+		}
+
 		return &compiledContent{
-			title:          output.Title,
-			content:        filteredContent,
-			sourcePointIDs: citedInContent,
-			sourceUnitIDs:  sourceUnitIDs,
-			sourceLinkIDs:  sourceLinkIDs,
+			title:            output.Title,
+			content:          filteredContent,
+			sourcePointIDs:   citedInContent,
+			sourceUnitIDs:    sourceUnitIDs,
+			sourceLinkIDs:    sourceLinkIDs,
+			aliases:          truncateStrings(output.Aliases, triggerMax),
+			triggerQuestions: truncateStrings(output.TriggerQuestions, triggerMax),
 		}, nil
 	}
 
@@ -561,33 +580,117 @@ func (s *Service) NotifyPointsLifecycleChanged(pointIDs []string) error {
 }
 
 // TryDirectAnswer implements docs/impl/v1/wiki.md 步骤 4 (retrieval.md 第 0
-// 层's callee): search the wiki index, and if the best hit clears minScore,
-// ask the page itself whether it can answer the question. minScore is
-// retrieval.RetrievalConfig.WikiMinScore, passed in by the caller since Wiki
-// doesn't depend on the retrieval package's config section.
-func (s *Service) TryDirectAnswer(ctx context.Context, question string, minScore float64) (*DirectAnswerResult, bool, error) {
+// 层's callee): gather up to maxCandidates direct-answer candidates from two
+// entries — lexical (wiki index, score >= minScore) and concept (question
+// text contains a published page's concept name) — and try them in order,
+// stopping at the first page that reports sufficient=true. minScore and
+// maxCandidates are retrieval.RetrievalConfig.WikiMinScore/WikiMaxCandidates,
+// passed in by the caller since Wiki doesn't depend on the retrieval
+// package's config section. maxCandidates<=0 defaults to 3.
+func (s *Service) TryDirectAnswer(ctx context.Context, question string, minScore float64, maxCandidates int) (*DirectAnswerResult, bool, error) {
+	if maxCandidates <= 0 {
+		maxCandidates = 3
+	}
+
+	candidates, err := s.gatherDirectAnswerCandidates(question, minScore, maxCandidates)
+	if err != nil {
+		return nil, false, err
+	}
+
+	for _, pageID := range candidates {
+		page, err := s.store.GetPage(pageID)
+		if err != nil {
+			return nil, false, fmt.Errorf("wiki: get page: %w", err)
+		}
+		if page == nil || page.Status != StatusPublished {
+			// Index/DB momentarily out of sync (e.g. mid recompile) — skip.
+			continue
+		}
+
+		result, ok, err := s.answerFromPage(ctx, question, page)
+		if err != nil {
+			return nil, false, err
+		}
+		if ok {
+			return result, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+// gatherDirectAnswerCandidates implements docs/impl/v1/wiki.md 步骤 4's two
+// direct-answer entries, merged and deduped: lexical hits (wiki index,
+// including aliases/trigger_questions fields, score >= minScore) ordered
+// first, then concept-name hits not already present, truncated to
+// maxCandidates. Neither entry calls the LLM.
+func (s *Service) gatherDirectAnswerCandidates(question string, minScore float64, maxCandidates int) ([]string, error) {
 	q := bleve.NewMatchQuery(question)
 	req := bleve.NewSearchRequest(q)
-	req.Size = 1
+	req.Size = maxCandidates
 
 	results, err := s.wikiIndex.Search(req)
 	if err != nil {
-		return nil, false, fmt.Errorf("wiki: search: %w", err)
+		return nil, fmt.Errorf("wiki: search: %w", err)
 	}
-	if len(results.Hits) == 0 || results.Hits[0].Score < minScore {
-		return nil, false, nil
-	}
-	pageID := results.Hits[0].ID
 
-	page, err := s.store.GetPage(pageID)
+	seen := make(map[string]bool)
+	var candidates []string
+	for _, hit := range results.Hits {
+		if hit.Score < minScore || seen[hit.ID] {
+			continue
+		}
+		seen[hit.ID] = true
+		candidates = append(candidates, hit.ID)
+	}
+
+	conceptHits, err := s.matchConceptEntry(question)
 	if err != nil {
-		return nil, false, fmt.Errorf("wiki: get page: %w", err)
+		slog.Warn("wiki: concept entry lookup failed, continuing with lexical candidates only", "error", err)
 	}
-	if page == nil || page.Status != StatusPublished {
-		// Index/DB momentarily out of sync (e.g. mid recompile) — fall through.
-		return nil, false, nil
+	for _, pageID := range conceptHits {
+		if seen[pageID] {
+			continue
+		}
+		seen[pageID] = true
+		candidates = append(candidates, pageID)
 	}
 
+	if len(candidates) > maxCandidates {
+		candidates = candidates[:maxCandidates]
+	}
+	return candidates, nil
+}
+
+// matchConceptEntry implements docs/impl/v1/wiki.md 步骤 4's concept入口:
+// word-lexical containment (not embedding, not LLM) between the question and
+// every published page's concept name, so a question mentioning the concept
+// but not the page's wording (or the wiki index's aliases/trigger_questions)
+// still finds the page.
+func (s *Service) matchConceptEntry(question string) ([]string, error) {
+	pages, err := s.store.ListPublishedConceptPages()
+	if err != nil {
+		return nil, fmt.Errorf("wiki: list published concept pages: %w", err)
+	}
+	if len(pages) == 0 {
+		return nil, nil
+	}
+
+	qCompact := text.NormalizeCompact(question)
+	var pageIDs []string
+	for _, p := range pages {
+		nameCompact := text.NormalizeCompact(p.Name)
+		if nameCompact == "" || !strings.Contains(qCompact, nameCompact) {
+			continue
+		}
+		pageIDs = append(pageIDs, p.PageID)
+	}
+	return pageIDs, nil
+}
+
+// answerFromPage implements docs/impl/v1/wiki.md 步骤 4's per-candidate direct
+// answer: ask the page whether it can answer the question, and if so,
+// citation-whitelist the result against the page's source_point_ids.
+func (s *Service) answerFromPage(ctx context.Context, question string, page *Page) (*DirectAnswerResult, bool, error) {
 	vars := map[string]string{
 		"question": question,
 		"title":    page.Title,
@@ -626,22 +729,28 @@ func (s *Service) TryDirectAnswer(ctx context.Context, question string, minScore
 		}
 	}
 	if len(hallucinated) > 0 {
-		slog.Warn("wiki: filtered hallucinated citations from direct answer", "page_id", pageID, "hallucinated", hallucinated)
+		slog.Warn("wiki: filtered hallucinated citations from direct answer", "page_id", page.PageID, "hallucinated", hallucinated)
 	}
 
-	return &DirectAnswerResult{PageID: pageID, Content: output.Content, CitedPointIDs: cited}, true, nil
+	return &DirectAnswerResult{PageID: page.PageID, Content: output.Content, CitedPointIDs: cited}, true, nil
 }
 
 // indexPage writes the fields retrieval.md 第 0 层's search relies on — only
 // called for status=published pages (docs/impl/v1/wiki.md 数据结构, "只索引
 // status=published 的页面").
 func (s *Service) indexPage(page *Page) error {
+	var aliases, triggerQuestions []string
+	json.Unmarshal([]byte(page.Aliases), &aliases)
+	json.Unmarshal([]byte(page.TriggerQuestions), &triggerQuestions)
+
 	doc := map[string]interface{}{
-		"page_id":    page.PageID,
-		"title":      page.Title,
-		"content":    page.Content,
-		"concept_id": page.ConceptID.String,
-		"status":     StatusPublished,
+		"page_id":           page.PageID,
+		"title":             page.Title,
+		"content":           page.Content,
+		"aliases":           strings.Join(aliases, " "),
+		"trigger_questions": strings.Join(triggerQuestions, " "),
+		"concept_id":        page.ConceptID.String,
+		"status":            StatusPublished,
 	}
 	return s.wikiIndex.Index(page.PageID, doc)
 }
@@ -667,6 +776,16 @@ func (s *Service) readUnitContent(sourceID string, lineStart, lineEnd int) (stri
 		return "", nil
 	}
 	return strings.Join(lines[start-1:end], "\n"), nil
+}
+
+// truncateStrings implements wiki.trigger_questions_max ("超出条数上限截断保
+// 留前 N 条", docs/impl/v1/wiki.md 步骤 3) — applied identically to aliases
+// and trigger_questions.
+func truncateStrings(items []string, max int) []string {
+	if len(items) <= max {
+		return items
+	}
+	return items[:max]
 }
 
 func marshalIDs(ids []string) string {

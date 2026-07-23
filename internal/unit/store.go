@@ -609,8 +609,9 @@ func (s *Store) GetUnitsBySourceID(sourceID string) ([]KnowledgeUnit, error) {
 
 // GetUnitsBySourceIDFiltered is like GetUnitsBySourceID but restricts to a
 // single lifecycle state when lifecycle is non-empty (GET /sources/:id/units?lifecycle=...).
+// lifecycle=all (or empty) returns every row for the source.
 func (s *Store) GetUnitsBySourceIDFiltered(sourceID, lifecycle string) ([]KnowledgeUnit, error) {
-	if lifecycle == "" {
+	if lifecycle == "" || lifecycle == "all" {
 		return s.GetUnitsBySourceID(sourceID)
 	}
 	rows, err := s.db.Query(`SELECT unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at

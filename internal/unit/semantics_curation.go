@@ -117,17 +117,18 @@ func (s *Service) UpdateUnitSemantics(unitID string, sem rerank.Semantics) error
 	return s.store.UpsertManualRerankSemantics(unitID, sem, rerank.ExtractPromptVersion)
 }
 
-// readUnitContent slices the unit's verbatim content out of its source's
-// markdown by line range (1-based, inclusive — the project-wide position
-// convention).
+// readUnitContent slices the unit's verbatim content out of the markdown
+// that belongs to this unit's lifecycle version (current path, or archived
+// path for superseded — historical evidence backlink design). Line range is
+// 1-based inclusive.
 func (s *Service) readUnitContent(ku *KnowledgeUnit) (string, error) {
-	src, err := s.sourceStore.GetByID(ku.SourceID)
+	relPath, err := s.sourceStore.ResolveMarkdownPathForUnit(ku.SourceID, ku.Lifecycle, ku.LifecycleChangedAt)
 	if err != nil {
-		return "", fmt.Errorf("unit: semantics view: get source: %w", err)
+		return "", fmt.Errorf("unit: read content: resolve markdown: %w", err)
 	}
-	mdBytes, err := os.ReadFile(src.MarkdownPath)
+	mdBytes, err := os.ReadFile(relPath)
 	if err != nil {
-		return "", fmt.Errorf("unit: semantics view: read markdown: %w", err)
+		return "", fmt.Errorf("unit: read content: read markdown: %w", err)
 	}
 	lines := strings.Split(string(mdBytes), "\n")
 

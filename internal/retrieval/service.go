@@ -103,7 +103,7 @@ func (s *Service) tryWikiAnswer(ctx context.Context, qc QueryContext) (*Evidence
 	if s.wikiSvc == nil {
 		return nil, false
 	}
-	result, ok, err := s.wikiSvc.TryDirectAnswer(ctx, qc.Question, s.cfg.Retrieval.WikiMinScore)
+	result, ok, err := s.wikiSvc.TryDirectAnswer(ctx, qc.Question, s.cfg.Retrieval.WikiMinScore, s.cfg.Retrieval.WikiMaxCandidates)
 	if err != nil {
 		slog.Warn("wiki direct-answer failed, falling back", "error", err)
 		return nil, false
@@ -165,35 +165,46 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 	}
 
 	activationHits := make([]ActivationHit, len(matches))
-	linkIDs := make([]string, len(matches))
-	pointIDs := make([]string, len(matches))
+	allLinkIDs := make([]string, len(matches))
 	for i, m := range matches {
 		activationHits[i] = ActivationHit{LinkID: m.Link.LinkID, PointID: m.Link.PointID, MatchScore: m.Score}
+		allLinkIDs[i] = m.Link.LinkID
+	}
+	slog.Info("retrieval: activation layer matched", "link_count", len(matches), "link_ids", allLinkIDs)
+
+	// Candidates match for signal recording (activation_success/failure) but
+	// never answer on the fast path — only verified links may.
+	var verified []activation.LinkMatch
+	for _, m := range matches {
+		if m.Link.Status == activation.StatusVerified {
+			verified = append(verified, m)
+		}
+	}
+	if len(verified) == 0 {
+		slog.Info("retrieval: activation matched candidate-only, recording hits and falling back to slow path",
+			"link_ids", allLinkIDs)
+		return nil, activationHits, false
+	}
+
+	linkIDs := make([]string, len(verified))
+	pointIDs := make([]string, len(verified))
+	for i, m := range verified {
 		linkIDs[i] = m.Link.LinkID
 		pointIDs[i] = m.Link.PointID
 	}
-	slog.Info("retrieval: activation layer matched", "link_count", len(matches), "link_ids", linkIDs)
 
 	// A precise-hit cache only means something when there's exactly one
-	// candidate — every activation score is 1.0 (exact match, no similarity
-	// ranking), so >1 distinct link matching the same query is ambiguity,
-	// not precision: there's no signal to tell which one is actually right.
-	// Bundling every matched point's KP as "direct" evidence (the loop below
-	// does exactly that with no filtering) would risk smuggling an unrelated
-	// fact into the answer alongside the correct one. Fall back to the slow
-	// path instead, which already knows how to synthesize an answer across
-	// multiple KPs when a question genuinely needs more than one — this
-	// still returns activationHits so Trace grades these links same as any
-	// other fast-path miss, it just skips TouchLastUsed since none of them
-	// were actually used to answer.
-	if len(matches) > 1 {
-		slog.Info("retrieval: activation matched more than one link, ambiguous, falling back to slow path",
+	// verified link — every activation score is 1.0 (exact match, no
+	// similarity ranking), so >1 distinct verified link matching the same
+	// query is ambiguity, not precision. Fall back to the slow path, still
+	// returning every ActivationHit (including candidates) for Trace.
+	if len(verified) > 1 {
+		slog.Info("retrieval: activation matched more than one verified link, ambiguous, falling back to slow path",
 			"link_ids", linkIDs)
 		return nil, activationHits, false
 	}
 
-	// Async, non-blocking — Retrieval's own failure/success handling doesn't
-	// depend on this having completed.
+	// Async, non-blocking — only touch the verified link that may answer.
 	go func() {
 		if err := s.activationSvc.TouchLastUsed(linkIDs); err != nil {
 			slog.Warn("retrieval: touch last used failed", "error", err)
@@ -430,19 +441,29 @@ func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, source
 	slog.Info("retrieval: step4 outline recall done", "candidates", len(outlineCandidates))
 	emit("outline", "done", fmt.Sprintf("%d 条", len(outlineCandidates)), time.Since(outlineStart).Milliseconds())
 
-	// Step 5: 全文检索（FTS recall）
+	// Step 5: 全文检索（FTS recall）— question 一路 + 四元组一路，各自成榜后进 RRF
 	emit("fts", "start", "", 0)
 	ftsStart := time.Now()
-	ftsCandidates, err := s.ftsRecall(question, sourceIDs)
+	ftsQuestion, err := s.ftsRecall(question, sourceIDs, "fts")
 	if err != nil {
 		emit("fts", "error", err.Error(), time.Since(ftsStart).Milliseconds())
 		return nil, fmt.Errorf("retrieval: fts recall: %w", err)
 	}
-	slog.Info("retrieval: step5 fts recall done", "candidates", len(ftsCandidates))
-	emit("fts", "done", fmt.Sprintf("%d 条", len(ftsCandidates)), time.Since(ftsStart).Milliseconds())
+	tupleText := queryTupleText(qc)
+	var ftsTuple []candidate
+	if tupleText != "" && tupleText != question {
+		ftsTuple, err = s.ftsRecall(tupleText, sourceIDs, "fts_tuple")
+		if err != nil {
+			emit("fts", "error", err.Error(), time.Since(ftsStart).Milliseconds())
+			return nil, fmt.Errorf("retrieval: fts tuple recall: %w", err)
+		}
+	}
+	slog.Info("retrieval: step5 fts recall done",
+		"fts", len(ftsQuestion), "fts_tuple", len(ftsTuple), "tuple_query", tupleText)
+	emit("fts", "done", fmt.Sprintf("%d+%d 条", len(ftsQuestion), len(ftsTuple)), time.Since(ftsStart).Milliseconds())
 
-	// Step 6: RRF merge
-	merged := s.rrfMerge(outlineCandidates, ftsCandidates)
+	// Step 6: RRF merge（outline + fts(question) + fts(四元组)）
+	merged := s.rrfMerge(outlineCandidates, ftsQuestion, ftsTuple)
 	slog.Info("retrieval: step6 rrf merge done", "merged", len(merged))
 
 	if len(merged) == 0 {
@@ -582,11 +603,21 @@ func (s *Service) sourceSemanticFilter(ctx context.Context, qc QueryContext, can
 	if intent == "" {
 		intent = "（未提取）"
 	}
+	audience := qc.Audience
+	if audience == "" {
+		audience = "（未提取）"
+	}
+	constraint := qc.Constraint
+	if constraint == "" {
+		constraint = "（无）"
+	}
 
 	resp, err := s.llmClient.CompleteJSON(ctx, "source_filter.md", map[string]string{
 		"question":    qc.Question,
 		"subject":     subject,
 		"intent":      intent,
+		"audience":    audience,
+		"constraint":  constraint,
 		"source_list": sourceList.String(),
 	}, "classification")
 	if err != nil {
@@ -827,10 +858,27 @@ func (s *Service) outlineLLMFallback(ctx context.Context, qc QueryContext, sourc
 	return allIDs, nil
 }
 
-// Step 5: FTS recall
-func (s *Service) ftsRecall(question string, sourceIDs []string) ([]candidate, error) {
-	if len(sourceIDs) == 0 {
+// queryTupleText joins non-empty subject/intent/audience/constraint for the
+// second FTS path. Empty result means skip fts_tuple (fall back to question-only).
+func queryTupleText(qc QueryContext) string {
+	parts := make([]string, 0, 4)
+	for _, p := range []string{qc.Subject, qc.Intent, qc.Audience, qc.Constraint} {
+		if t := strings.TrimSpace(p); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// Step 5: FTS recall against units + points indexes for one query string.
+// path labels the RRF list (e.g. "fts" for the raw question, "fts_tuple" for
+// the parsed quadruple).
+func (s *Service) ftsRecall(queryText string, sourceIDs []string, path string) ([]candidate, error) {
+	if len(sourceIDs) == 0 || strings.TrimSpace(queryText) == "" {
 		return nil, nil
+	}
+	if path == "" {
+		path = "fts"
 	}
 
 	sourceIDSet := make(map[string]bool, len(sourceIDs))
@@ -842,14 +890,14 @@ func (s *Service) ftsRecall(question string, sourceIDs []string) ([]candidate, e
 	unitMap := make(map[string]*candidate)
 
 	// Search units index
-	uq := lifecycleCurrentQuery(bleve.NewMatchQuery(question))
+	uq := lifecycleCurrentQuery(bleve.NewMatchQuery(queryText))
 	uReq := bleve.NewSearchRequest(uq)
 	uReq.Size = 100
 	uReq.Fields = []string{"unit_id", "source_id", "line_start", "line_end"}
 
 	uResults, err := s.unitsIndex.Search(uReq)
 	if err != nil {
-		slog.Warn("retrieval: units fts failed", "error", err)
+		slog.Warn("retrieval: units fts failed", "path", path, "error", err)
 	} else {
 		for _, hit := range uResults.Hits {
 			sid, _ := hit.Fields["source_id"].(string)
@@ -871,14 +919,14 @@ func (s *Service) ftsRecall(question string, sourceIDs []string) ([]candidate, e
 					lineStart:   lineStart,
 					lineEnd:     lineEnd,
 					score:       hit.Score,
-					sourcePaths: []string{"fts"},
+					sourcePaths: []string{path},
 				}
 			}
 		}
 	}
 
 	// Search points index
-	pq := lifecycleCurrentQuery(bleve.NewMatchQuery(question))
+	pq := lifecycleCurrentQuery(bleve.NewMatchQuery(queryText))
 	pReq := bleve.NewSearchRequest(pq)
 	pReq.Size = 100
 	pReq.Fields = []string{"point_id", "unit_id", "source_id"}
@@ -892,7 +940,7 @@ func (s *Service) ftsRecall(question string, sourceIDs []string) ([]candidate, e
 
 	pResults, err := s.pointsIndex.Search(pReq)
 	if err != nil {
-		slog.Warn("retrieval: points fts failed", "error", err)
+		slog.Warn("retrieval: points fts failed", "path", path, "error", err)
 	} else {
 		for _, hit := range pResults.Hits {
 			sid, _ := hit.Fields["source_id"].(string)
@@ -926,7 +974,7 @@ func (s *Service) ftsRecall(question string, sourceIDs []string) ([]candidate, e
 					lineStart:   u.LineStart,
 					lineEnd:     u.LineEnd,
 					score:       hit.Score,
-					sourcePaths: []string{"fts"},
+					sourcePaths: []string{path},
 				}
 			}
 		}
@@ -950,17 +998,11 @@ func (s *Service) ftsRecall(question string, sourceIDs []string) ([]candidate, e
 	return result, nil
 }
 
-// Step 6: RRF merge
-func (s *Service) rrfMerge(outlineCandidates, ftsCandidates []candidate) []candidate {
+// Step 6: RRF merge across any number of ranked lists (outline, fts, fts_tuple, …).
+// Nil/empty lists are skipped. Path label is taken from each list's candidates'
+// sourcePaths[0], falling back to "fts".
+func (s *Service) rrfMerge(lists ...[]candidate) []candidate {
 	const k = 60
-
-	// Rank each list by score descending
-	sort.Slice(outlineCandidates, func(i, j int) bool {
-		return outlineCandidates[i].score > outlineCandidates[j].score
-	})
-	sort.Slice(ftsCandidates, func(i, j int) bool {
-		return ftsCandidates[i].score > ftsCandidates[j].score
-	})
 
 	type mergedCandidate struct {
 		candidate
@@ -970,7 +1012,11 @@ func (s *Service) rrfMerge(outlineCandidates, ftsCandidates []candidate) []candi
 	merged := make(map[string]*mergedCandidate)
 
 	addRanked := func(candidates []candidate, pathName string) {
-		for rank, c := range candidates {
+		sorted := append([]candidate(nil), candidates...)
+		sort.Slice(sorted, func(i, j int) bool {
+			return sorted[i].score > sorted[j].score
+		})
+		for rank, c := range sorted {
 			rrfScore := 1.0 / float64(k+rank+1)
 			if m, ok := merged[c.unitID]; ok {
 				m.rrfScore += rrfScore
@@ -988,8 +1034,16 @@ func (s *Service) rrfMerge(outlineCandidates, ftsCandidates []candidate) []candi
 		}
 	}
 
-	addRanked(outlineCandidates, "outline")
-	addRanked(ftsCandidates, "fts")
+	for _, list := range lists {
+		if len(list) == 0 {
+			continue
+		}
+		pathName := "fts"
+		if len(list[0].sourcePaths) > 0 && list[0].sourcePaths[0] != "" {
+			pathName = list[0].sourcePaths[0]
+		}
+		addRanked(list, pathName)
+	}
 
 	var result []candidate
 	for _, m := range merged {
@@ -1170,6 +1224,9 @@ func (s *Service) judgeRerankBatches(ctx context.Context, qc QueryContext, candi
 	if len(batches) == 0 {
 		return nil, nil
 	}
+	// Resolved once per request (not per batch) since it's the same choice
+	// for every batch of this call — see rerankJudgePromptFile.
+	promptFile := s.rerankJudgePromptFile()
 	subject := qc.Subject
 	if subject == "" {
 		subject = "（未提取）"
@@ -1210,7 +1267,7 @@ launchBatches:
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			batchRoles, err := s.judgeExtractedEvidence(ctx, qc, subject, intent, audience, constraint, batch)
+			batchRoles, err := s.judgeExtractedEvidence(ctx, qc, promptFile, subject, intent, audience, constraint, batch)
 			if err != nil {
 				errOnce.Do(func() {
 					firstErr = err
@@ -1235,13 +1292,13 @@ launchBatches:
 	return roles, nil
 }
 
-func (s *Service) judgeExtractedEvidence(ctx context.Context, qc QueryContext, subject, intent, audience, constraint string, candidates []rerankJudgeCandidate) (map[string]string, error) {
+func (s *Service) judgeExtractedEvidence(ctx context.Context, qc QueryContext, promptFile, subject, intent, audience, constraint string, candidates []rerankJudgeCandidate) (map[string]string, error) {
 	payload, err := json.Marshal(candidates)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: rerank judge payload: %w", err)
 	}
 	slog.Debug("retrieval: rerank judge payload", "payload", string(payload))
-	resp, err := s.llmClient.CompleteJSON(ctx, "rerank_judge.md", map[string]string{
+	resp, err := s.llmClient.CompleteJSON(ctx, promptFile, map[string]string{
 		"question":   qc.Question,
 		"subject":    subject,
 		"intent":     intent,
@@ -1288,6 +1345,29 @@ func (s *Service) rerankJudgeConcurrency() int {
 		return s.cfg.Retrieval.RerankJudgeConcurrency
 	}
 	return defaultRerankJudgeConcurrency
+}
+
+// rerankJudgeIncludeAnalysis resolves config.Retrieval.RerankJudgeIncludeAnalysis.
+// nil (key absent from config.yml) means "unset", which keeps the historical
+// behavior (true / include analysis) rather than silently flipping to false —
+// a plain bool couldn't distinguish "absent" from "explicitly false" here.
+func (s *Service) rerankJudgeIncludeAnalysis() bool {
+	if s.cfg == nil || s.cfg.Retrieval.RerankJudgeIncludeAnalysis == nil {
+		return true
+	}
+	return *s.cfg.Retrieval.RerankJudgeIncludeAnalysis
+}
+
+// rerankJudgePromptFile picks between the two rerank_judge prompt variants
+// based on rerankJudgeIncludeAnalysis: rerank_judge_no_analysis.md drops the
+// per-candidate `analysis` explanation (debug-log-only, not decision logic)
+// from both the model's output contract and the local Schema validation, to
+// A/B test whether the extra generated text is a meaningful latency cost.
+func (s *Service) rerankJudgePromptFile() string {
+	if s.rerankJudgeIncludeAnalysis() {
+		return "rerank_judge.md"
+	}
+	return "rerank_judge_no_analysis.md"
 }
 
 func splitRerankJudgeBatches(candidates []rerankJudgeCandidate, maxChars int) [][]rerankJudgeCandidate {
@@ -1471,6 +1551,31 @@ func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, inten
 		Supporting:     []Evidence{},
 	}
 
+	unitSourceIDs := make(map[string]string, len(direct)+len(supporting))
+	for _, c := range append(append([]candidate{}, direct...), supporting...) {
+		unitSourceIDs[c.unitID] = c.sourceID
+	}
+	unitIDs := make([]string, 0, len(unitSourceIDs))
+	for unitID := range unitSourceIDs {
+		unitIDs = append(unitIDs, unitID)
+	}
+	sort.Strings(unitIDs)
+	semantics, err := s.store.GetUnitRerankSemantics(unitIDs)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval: get evidence semantics: %w", err)
+	}
+	sourceTitles := make(map[string]string)
+	for _, sourceID := range unitSourceIDs {
+		if _, ok := sourceTitles[sourceID]; ok {
+			continue
+		}
+		title, err := s.store.GetSourceTitle(sourceID)
+		if err != nil {
+			return nil, fmt.Errorf("retrieval: get evidence source title: %w", err)
+		}
+		sourceTitles[sourceID] = title
+	}
+
 	var items []evidence.EvidenceItem
 	appendItems := func(cands []candidate, role string) {
 		for _, c := range cands {
@@ -1510,15 +1615,21 @@ func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, inten
 	for _, item := range mined {
 		ref := SourceRef{SourceID: item.SourceID, LineStart: item.LineStart, LineEnd: item.LineEnd}
 		refJSON, _ := json.Marshal(ref)
+		semantic := semantics[item.UnitID]
 		ev := Evidence{
-			FactID:    uuid.New().String(),
-			UnitID:    item.UnitID,
-			PointID:   item.PointID,
-			Content:   item.Content,
-			SourceRef: refJSON,
-			Role:      item.Role,
-			Origin:    item.Origin,
-			Mined:     item.Mined,
+			FactID:       uuid.New().String(),
+			UnitID:       item.UnitID,
+			PointID:      item.PointID,
+			Content:      item.Content,
+			SourceRef:    refJSON,
+			Role:         item.Role,
+			Origin:       item.Origin,
+			SourceTitle:  sourceTitles[item.SourceID],
+			SourceTheme:  semantic.SourceTheme,
+			ContentTheme: semantic.ContentTheme,
+			Object:       semantic.Object,
+			Scope:        semantic.Scope,
+			Mined:        item.Mined,
 		}
 		switch item.Role {
 		case evidence.RoleDirect:

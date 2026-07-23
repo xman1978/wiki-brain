@@ -27,6 +27,12 @@ CREATE TABLE wiki_pages (
     -- （migration 028）。纯依赖回链元数据，不进编译输入/prompt——呼应
     -- docs/design/wiki-compilation.md 防固化要素"依赖的 ActivationLink"，
     -- 用于页面详情展示和未来生命周期追溯，不驱动重编译判断。
+    aliases          TEXT NOT NULL DEFAULT '[]',
+    -- JSON 数组：概念别名/缩写/口语叫法（migration 029，编译时 LLM 生成，
+    -- 只进 wiki index 作检索字段，不属于正文，不参与 citation 白名单）
+    trigger_questions TEXT NOT NULL DEFAULT '[]',
+    -- JSON 数组：该页面能回答的典型问法（migration 029，同上，5-10 条），
+    -- 用于弥合用户措辞与页面用词的词汇鸿沟（Wiki = Answer + Retrieval Index）
     compiled_from    TEXT NOT NULL DEFAULT '[]',
     -- JSON 数组：触发编译的 learning_result / report 标识
     prompt_version   TEXT NOT NULL,
@@ -56,7 +62,9 @@ CREATE INDEX idx_wiki_rev_page ON wiki_revisions(page_id);
 Bleve 新增 `wiki` 索引（使用 `wiki_brain` analyzer）：
 
 ```text
-写入字段：page_id、title、content、concept_id、status
+写入字段：page_id、title、content、aliases、trigger_questions、concept_id、status
+（aliases / trigger_questions 拼接为文本参与分词检索，放宽召回入口；
+  误命中由直答阶段的 sufficient 判断兜底，见步骤 4）
 只索引 status=published 的页面；发布时写入，archived / needs_recompile 时删除。
 ```
 
@@ -110,7 +118,10 @@ knowledge_gaps：question_terms 与该 concept 名称/KP 内容有词项重合�
 3. 稳定结论中每条论断末尾以 [point_id] 标注依据的知识点，
    只能使用材料中出现的 point_id；
 4. 材料之间存在张力或 gap 列表非空时，写入"待验证点"，不要强行调和；
-5. "依赖来源"列出所用知识点所属的知识单元主题。
+5. "依赖来源"列出所用知识点所属的知识单元主题；
+6. 额外输出检索触发信息：aliases（该概念的别名、缩写、常见口语叫法）
+   与 trigger_questions（这个页面能够直接回答的 5-10 个典型问法，
+   用提问者的自然措辞而非页面正文用词，覆盖不同问法角度）。
 
 概念：{{concept_name}}（{{concept_description}}）
 知识点与原文材料：
@@ -125,7 +136,8 @@ knowledge_gaps：question_terms 与该 concept 名称/KP 内容有词项重合�
 示例 JSON：
 
 ```json
-{ "title": "页面标题", "content": "Markdown 正文", "cited_point_ids": ["..."] }
+{ "title": "页面标题", "content": "Markdown 正文", "cited_point_ids": ["..."],
+  "aliases": ["..."], "trigger_questions": ["..."] }
 ```
 
 **编译后校验**（程序执行，同 citation 校验思想）：
@@ -134,7 +146,10 @@ knowledge_gaps：question_terms 与该 concept 名称/KP 内容有词项重合�
 cited_point_ids ⊆ 输入 KP 集合，越界的剔除并记录 warn；
 content 中的 [point_id] 标注逐一提取，不在白名单内的替换为删除并 warn；
 content 非空且包含四个固定小节标题，缺节 → 编译失败按 LLM 失败处理
-  （重试一次，仍失败返回 500，不产生页面）。
+  （重试一次，仍失败返回 500，不产生页面）；
+aliases / trigger_questions 为空或缺失不算失败（记录 warn，存空数组）——
+  它们只影响召回宽度，不影响页面正确性；条数超过 wiki.trigger_questions_max
+  截断保留前 N 条。重编译时随正文一起重新生成、整体覆盖。
 校验通过后：source_point_ids = content 中实际引用的 point_id 并集，
 source_unit_ids 反查填入，source_link_ids = 这些 point_id 中 status=verified
 的 activation_links.link_id 集合（无对应 verified 链接的 point_id 不计入，
@@ -153,22 +168,40 @@ POST /wiki/pages/:id/publish
   published_at=now()、写入 wiki index。
   响应：{ page_id, status: "published" }
 
-检索接入（retrieval.md 第 0 层）：
-  对问题分词后查询 wiki index（TermQuery status=published 已由
-  索引写入策略保证）；最高分 ≥ retrieval.wiki_min_score → Wiki 直答：
+检索接入（retrieval.md 第 0 层）——直答候选采集，两个入口，均不调 LLM：
+
+  a. 词法入口：对问题分词后查询 wiki index（title/content/aliases/
+     trigger_questions 均参与打分；TermQuery status=published 已由索引
+     写入策略保证），取分数 ≥ retrieval.wiki_min_score 的页面按分数降序；
+  b. 概念入口：问题分词结果与 concepts 表的概念名称做词法匹配
+     （精确/包含，不调 LLM），命中概念存在 published 页面
+     （wiki_pages.concept_id）→ 该页面直接进入候选，不看 Bleve 分数。
+
+  两入口合并去重：词法命中按分数排序在前，仅概念命中的页面追加在后；
+  截取前 retrieval.wiki_max_candidates 个（默认 3）作为直答候选序列。
+
+  直答尝试（按候选顺序逐个执行，最多 wiki_max_candidates 次）：
 
   Prompt 文件：config/prompts/answer_wiki.md
     输入：question + 页面 title/content；
     要求：只依据页面内容回答，引用页面中的 [point_id] 标注作为 citations；
     输出：{ "content": "...", "citations": ["point_id..."], "sufficient": true|false }
 
-  sufficient=false（页面覆盖不了该问题）→ 回落激活层/慢路径继续；
-  sufficient=true → 组装 AnswerResult：path_type=wiki，
-    citations 经页面 source_point_ids 白名单校验，
+  sufficient=false（该页面覆盖不了此问题）→ 尝试下一候选页面；
+    全部候选耗尽仍 false → 回落激活层/慢路径继续；
+  sufficient=true → 停止尝试，组装 AnswerResult：path_type=wiki，
+    citations 经该页面 source_point_ids 白名单校验，
     evidence_snapshot 记录 { wiki_page_id, cited_point_ids }
     （point_id 可继续反查 KU 与 source_ref，证据回链完整）；
-  Wiki 直答共 1 次 LLM 调用；trace 照常写入（path_type=wiki），
-  不产生激活类事件（见 trace.md 步骤 3）。
+  Wiki 直答典型 1 次 LLM 调用，最坏 wiki_max_candidates 次
+    （召回加宽后"正确页面排第二被首名挡住"是主要漏答模式，
+    多试代价是轻量调用，漏答代价是整条慢路径，取前者）；
+  trace 照常写入（path_type=wiki），不产生激活类事件（见 trace.md 步骤 3）。
+
+  设计取向（对应本方案的准确率分工）：路由层（trigger/概念入口）只负责
+  召回宽度，允许误召；准确率由三道既有闸门保证——编译输入的 qualifying KP
+  口径（事实层）、sufficient 弃权判断（覆盖层）、citation 白名单（回链层）。
+  放宽召回不得以削弱任何一道闸门为交换。
 ```
 
 ### 步骤 5：重编译
@@ -209,8 +242,9 @@ GET  /wiki/pages/:id/revisions/:rev  单版本正文
 
 ```yaml
 wiki:
-  compile_max_chars:     12000
-  recompile_new_kp_min:  2
+  compile_max_chars:      12000
+  recompile_new_kp_min:   2
+  trigger_questions_max:  10   # trigger_questions / aliases 各自的条数上限
 ```
 
 ## 依赖
@@ -229,9 +263,13 @@ Unit / Trace：编译输入的 KP / KU / 共现 / gap 数据（只读）
 ```text
 候选确认 → 编译 → draft 的链路可走通，页面含四个固定小节；
 cited_point_ids 白名单校验生效，越界标注被剔除并记录；
-publish 后页面进入 wiki index，同主题问题走 Wiki 直答（1 次 LLM 调用），
+publish 后页面进入 wiki index（含 aliases / trigger_questions 字段），
+  同主题问题走 Wiki 直答（典型 1 次 LLM 调用），
   citations 可经 point_id 反查 KU 与来源位置；
-sufficient=false 时正确回落后续检索层；
+措辞与页面正文不重合、但命中 trigger_questions 或概念名的问题
+  也能进入直答候选（词汇鸿沟场景）；
+首个候选 sufficient=false 时正确尝试下一候选，
+  全部候选耗尽后正确回落后续检索层；
 依赖 KP 被 superseded 后页面自动 needs_recompile 并退出索引，
   同主题问题回落慢路径；
 recompile → 新 revision → 再 publish 的完整生命周期可走通，

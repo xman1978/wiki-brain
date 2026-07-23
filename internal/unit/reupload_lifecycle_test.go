@@ -209,6 +209,24 @@ func TestReuploadLifecycle_HappyPathSwap(t *testing.T) {
 		t.Errorf("new unit center = %q, want 新版政策", newUnit.Center)
 	}
 
+	oldContent, err := unitSvc.readUnitContent(oldAfter)
+	if err != nil {
+		t.Fatalf("readUnitContent old: %v", err)
+	}
+	if !strings.Contains(oldContent, "旧版内容第一行") {
+		t.Errorf("superseded unit content = %q, want archived old markdown slice", oldContent)
+	}
+	if strings.Contains(oldContent, "新版内容第一行") {
+		t.Errorf("superseded unit content must not be sliced from the new markdown: %q", oldContent)
+	}
+	newContent, err := unitSvc.readUnitContent(newUnit)
+	if err != nil {
+		t.Fatalf("readUnitContent new: %v", err)
+	}
+	if !strings.Contains(newContent, "新版内容第一行") {
+		t.Errorf("current unit content = %q, want new markdown slice", newContent)
+	}
+
 	// Shadow row is gone.
 	if _, err := sourceSvc.Store().GetByID(shadow.SourceID); err == nil {
 		t.Error("shadow row should be deleted after swap")

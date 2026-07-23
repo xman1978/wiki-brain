@@ -512,17 +512,37 @@ func buildPromptVars(es *retrieval.EvidenceSet) map[string]string {
 
 	var directLines []string
 	for _, e := range es.DirectEvidence {
-		directLines = append(directLines, fmt.Sprintf("[%s] %s", e.FactID, e.Content))
+		directLines = append(directLines, formatPromptEvidence(e))
 	}
 	vars["direct_evidence_list"] = strings.Join(directLines, "\n")
 
 	var supportLines []string
 	for _, e := range es.Supporting {
-		supportLines = append(supportLines, fmt.Sprintf("[%s] %s", e.FactID, e.Content))
+		supportLines = append(supportLines, formatPromptEvidence(e))
 	}
 	vars["supporting_evidence_list"] = strings.Join(supportLines, "\n")
 
 	return vars
+}
+
+func formatPromptEvidence(e retrieval.Evidence) string {
+	return fmt.Sprintf(
+		"[%s]\n来源标题：%s\n来源主题：%s\n内容主题：%s\n对象：%s\n范围：%s\n证据：%s",
+		e.FactID,
+		valueOrUnspecified(e.SourceTitle),
+		valueOrUnspecified(e.SourceTheme),
+		valueOrUnspecified(e.ContentTheme),
+		valueOrUnspecified(e.Object),
+		valueOrUnspecified(e.Scope),
+		e.Content,
+	)
+}
+
+func valueOrUnspecified(value string) string {
+	if value == "" {
+		return "（未提取）"
+	}
+	return value
 }
 
 func validateCitations(citations []string, es *retrieval.EvidenceSet) []string {

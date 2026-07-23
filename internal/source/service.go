@@ -552,6 +552,16 @@ func (s *Service) SetDomain(sourceID, domainID string) error {
 	return nil
 }
 
+// SetSummary lets a human correct the auto-generated summary (e.g. when it
+// omits a product/role name that source_filter's title+summary pre-screen
+// relies on to keep the source in the candidate pool for a question).
+func (s *Service) SetSummary(sourceID, summary string) error {
+	if _, err := s.store.GetByID(sourceID); err != nil {
+		return fmt.Errorf("source not found")
+	}
+	return s.store.UpdateSummary(sourceID, summary)
+}
+
 func (s *Service) indexOutlines(outlines []Outline) {
 	batch := s.outlineIdx.NewBatch()
 	for _, o := range outlines {
@@ -1077,6 +1087,41 @@ func (s *Service) GetMarkdown(sourceID string) (string, error) {
 	}
 	mdPath := filepath.Join(s.baseDir, src.MarkdownPath)
 	data, err := os.ReadFile(mdPath)
+	if err != nil {
+		return "", fmt.Errorf("read markdown: %w", err)
+	}
+	return string(data), nil
+}
+
+// GetMarkdownForUnit returns the markdown body that belongs to the given
+// unit's lifecycle version (archived file when the unit is superseded).
+func (s *Service) GetMarkdownForUnit(sourceID, unitID string) (string, error) {
+	var unitSourceID string
+	err := s.store.db.QueryRow(`SELECT source_id FROM knowledge_units WHERE unit_id = ?`, unitID).Scan(&unitSourceID)
+	if err != nil {
+		return "", fmt.Errorf("get unit source: %w", err)
+	}
+	if unitSourceID != sourceID {
+		return "", fmt.Errorf("unit %s does not belong to source %s", unitID, sourceID)
+	}
+	relPath, err := s.store.ResolveMarkdownPathByUnitID(unitID)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(filepath.Join(s.baseDir, relPath))
+	if err != nil {
+		return "", fmt.Errorf("read markdown: %w", err)
+	}
+	return string(data), nil
+}
+
+// GetMarkdownForVersion returns an archived source version's markdown.
+func (s *Service) GetMarkdownForVersion(sourceID string, version int) (string, error) {
+	v, err := s.store.GetSourceVersion(sourceID, version)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(filepath.Join(s.baseDir, v.MarkdownPath))
 	if err != nil {
 		return "", fmt.Errorf("read markdown: %w", err)
 	}

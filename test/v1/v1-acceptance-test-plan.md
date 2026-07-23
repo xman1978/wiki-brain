@@ -308,7 +308,7 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
    - M6 精确复现：用该链接培养时的原始问句原样重问 → 应命中（`path_type=fast`）；
    - M7 改写不命中：同一链接，问题换一种表述重问 → 不命中（`path_type=full`）——回退分支不再有包含度阈值兜底改写，这是新行为；
    - 收尾：测试后如需保留该链接供后续阶段使用，需手工把四个字段改回原值（或重新培养）。
-7. M8 状态过滤（沿用不变）：未晋升的 A2、T13 问题仍走 `path_type=full`；candidate/weakened/deprecated 或目标 KP 非 current 的链接不参与匹配（与 P2/P5 的验证点呼应，本阶段不重复造场景，仅复核一次现状）。
+7. M8 状态过滤（2026-07-22 修订）：未晋升的 A2、T13 问题仍走 `path_type=full`（candidate 可 Match 记信号，但不走快路径）；weakened/deprecated 或目标 KP 非 current 的链接不参与匹配（与 P2/P5 的验证点呼应，本阶段不重复造场景，仅复核一次现状）。
 
 **轴二：证据充分性校验（步骤 2a，`fast_path_verify`）**
 
