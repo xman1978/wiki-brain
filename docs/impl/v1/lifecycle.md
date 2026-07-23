@@ -81,7 +81,9 @@ POST /sources/:id/reupload
          b. 对 :id 下换血前**仍为 current** 的 KU（即真正被替代的旧版本）
             调用 SetUnitLifecycle 标记为 superseded；已经是
             superseded/deprecated 的历史版本不再重复调用——避免刷新其
-            lifecycle_changed_at，抹掉"这版是被哪一次 reupload 替代"的记录；
+            lifecycle_changed_at，破坏「归档 Markdown 回链」按
+            lifecycle_changed_at 对齐 source_versions.archived_at 的匹配
+            （见 docs/superpowers/specs/2026-07-22-historical-evidence-backlink-design.md）；
          c. 原始文件与规范化 Markdown 按 :id 覆盖写入，旧文件移动到
             data/sources/archived/<:id>/<timestamp>/ 保留追溯；
             sources.file_name 更新为新文件名（reupload 允许改文件名，

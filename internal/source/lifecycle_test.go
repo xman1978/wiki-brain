@@ -493,8 +493,8 @@ func TestCompleteShadowSwap_RecordsVersionSnapshot(t *testing.T) {
 // target already holds a unit superseded by the *first* reupload alongside
 // its current unit. The swap must only pass the still-current unit to
 // SetUnitLifecycle — re-touching the already-superseded one would overwrite
-// its lifecycle_changed_at, destroying the record of which reupload actually
-// superseded it.
+// its lifecycle_changed_at and break the archived-Markdown version alignment
+// documented in docs/superpowers/specs/2026-07-22-historical-evidence-backlink-design.md.
 func TestCompleteShadowSwap_SecondReuploadSkipsAlreadySupersededUnits(t *testing.T) {
 	svc, _ := setupTestService(t)
 	lc := &fakeLifecycleSetter{}

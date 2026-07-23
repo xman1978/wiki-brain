@@ -573,8 +573,11 @@ func (s *Store) GetUnitIDs(sourceID string) ([]string, error) {
 // CompleteShadowSwap uses this instead of GetUnitIDs: reupload marks the
 // target's pre-swap KUs as superseded, but on a *second* reupload the target
 // also already holds KUs superseded by the first reupload — re-running
-// SetUnitLifecycle on those would overwrite their lifecycle_changed_at,
-// destroying the record of which reupload actually superseded each version.
+// SetUnitLifecycle on those would overwrite their lifecycle_changed_at and
+// break the archived-Markdown version alignment in
+// docs/superpowers/specs/2026-07-22-historical-evidence-backlink-design.md
+// (which matches a superseded unit to its archived source_versions row via
+// lifecycle_changed_at).
 func (s *Store) GetCurrentUnitIDs(sourceID string) ([]string, error) {
 	rows, err := s.db.Query(`SELECT unit_id FROM knowledge_units WHERE source_id = ? AND lifecycle = 'current'`, sourceID)
 	if err != nil {
