@@ -78,8 +78,10 @@ POST /sources/:id/reupload
        执行一次性"换血"事务：
          a. 将影子的 knowledge_units / knowledge_points / source_outlines
             批量 UPDATE source_id 从影子 ID 改为 :id（重新挂靠到原 Source）；
-         b. 对 :id 下换血前就存在的全部 KU（即真正的旧版本）调用
-            SetUnitLifecycle 标记为 superseded；
+         b. 对 :id 下换血前**仍为 current** 的 KU（即真正被替代的旧版本）
+            调用 SetUnitLifecycle 标记为 superseded；已经是
+            superseded/deprecated 的历史版本不再重复调用——避免刷新其
+            lifecycle_changed_at，抹掉"这版是被哪一次 reupload 替代"的记录；
          c. 原始文件与规范化 Markdown 按 :id 覆盖写入，旧文件移动到
             data/sources/archived/<:id>/<timestamp>/ 保留追溯；
             sources.file_name 更新为新文件名（reupload 允许改文件名，
@@ -193,8 +195,14 @@ reupload 处理全程（含影子的 source_process、unit_extract、KPN、Conce
 影子放弃重试、改用新文件重新 reupload 时，旧影子被丢弃，原 :id 仍不受影响；
 影子的 unit_extract 阶段完成（含部分分段失败，不算失败）后，
              换血事务原子执行：影子 KU/KP/outlines 重新挂靠到 :id、
-             原 :id 的旧 KU 一次性转 superseded、旧文件归档、影子行删除；
+             原 :id 下仍为 current 的旧 KU 一次性转 superseded（已是
+             superseded/deprecated 的历史版本不重复触碰、
+             lifecycle_changed_at 不被覆盖）、旧文件归档、影子行删除；
              事务失败时原 :id 状态不受影响，等同换血未发生；
+多次 reupload：仅本轮真正被替代（原本 current）的 KU 转 superseded，
+             更早轮次已 superseded 的 KU 的 lifecycle_changed_at 保持首次
+             变更时间不变，供归档 Markdown 回链按该时间对齐
+             source_versions.archived_at；
 删除 Source 后：该 source 全部 KU/KP（含此前已 superseded 的）为 deprecated，
              outlines 节点从索引移除，historical answers 的
              evidence_snapshot 仍可反查原文；

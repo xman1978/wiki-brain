@@ -831,7 +831,11 @@ func (s *Service) CompleteShadowSwap(ctx context.Context, shadowSourceID string)
 		return fmt.Errorf("get target source: %w", err)
 	}
 
-	oldUnitIDs, err := s.store.GetUnitIDs(targetID)
+	// Only current-lifecycle KUs are the "old version" this swap replaces —
+	// on a second+ reupload the target may already hold KUs superseded by an
+	// earlier reupload, and re-marking those would overwrite their
+	// lifecycle_changed_at (see GetCurrentUnitIDs doc comment).
+	oldUnitIDs, err := s.store.GetCurrentUnitIDs(targetID)
 	if err != nil {
 		return fmt.Errorf("get target unit ids: %w", err)
 	}

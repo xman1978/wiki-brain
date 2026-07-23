@@ -569,6 +569,27 @@ func (s *Store) GetUnitIDs(sourceID string) ([]string, error) {
 	return ids, rows.Err()
 }
 
+// GetCurrentUnitIDs returns only lifecycle='current' unit_ids for a source.
+// CompleteShadowSwap uses this instead of GetUnitIDs: reupload marks the
+// target's pre-swap KUs as superseded, but on a *second* reupload the target
+// also already holds KUs superseded by the first reupload — re-running
+// SetUnitLifecycle on those would overwrite their lifecycle_changed_at,
+// destroying the record of which reupload actually superseded each version.
+func (s *Store) GetCurrentUnitIDs(sourceID string) ([]string, error) {
+	rows, err := s.db.Query(`SELECT unit_id FROM knowledge_units WHERE source_id = ? AND lifecycle = 'current'`, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (s *Store) GetPointIDs(sourceID string) ([]string, error) {
 	rows, err := s.db.Query(`SELECT point_id FROM knowledge_points WHERE source_id = ?`, sourceID)
 	if err != nil {

@@ -488,6 +488,77 @@ func TestCompleteShadowSwap_RecordsVersionSnapshot(t *testing.T) {
 	}
 }
 
+// TestCompleteShadowSwap_SecondReuploadSkipsAlreadySupersededUnits is the
+// regression test for the double-reupload bug: on a second reupload, the
+// target already holds a unit superseded by the *first* reupload alongside
+// its current unit. The swap must only pass the still-current unit to
+// SetUnitLifecycle — re-touching the already-superseded one would overwrite
+// its lifecycle_changed_at, destroying the record of which reupload actually
+// superseded it.
+func TestCompleteShadowSwap_SecondReuploadSkipsAlreadySupersededUnits(t *testing.T) {
+	svc, _ := setupTestService(t)
+	lc := &fakeLifecycleSetter{}
+	svc.SetLifecycleSetter(lc)
+	ctx := context.Background()
+
+	writeFile := func(rel, content string) {
+		full := filepath.Join(svc.baseDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	writeFile("data/sources/original/target-3.md", "v2 原文")
+	writeFile("data/sources/markdown/target-3.md", "v2 原文")
+	svc.store.Create(&Source{
+		SourceID: "target-3", Title: "T", Format: "markdown", FileName: "old.md",
+		OriginalPath: "data/sources/original/target-3.md", MarkdownPath: "data/sources/markdown/target-3.md",
+		Status: "completed",
+	})
+	// v1, already superseded by an earlier reupload — its lifecycle_changed_at
+	// must survive untouched.
+	insertUnitForSource(t, svc, "target-3", "target-3-v1")
+	if _, err := svc.store.db.Exec(`UPDATE knowledge_units SET lifecycle = 'superseded', lifecycle_changed_at = '2026-01-01 00:00:00' WHERE unit_id = 'target-3-v1'`); err != nil {
+		t.Fatalf("seed superseded unit: %v", err)
+	}
+	// v2, the version this (second) reupload actually replaces.
+	insertUnitForSource(t, svc, "target-3", "target-3-v2")
+
+	writeFile("data/sources/original/shadow-3.md", "v3 原文")
+	writeFile("data/sources/markdown/shadow-3.md", "v3 原文")
+	svc.store.Create(&Source{
+		SourceID: "shadow-3", Title: "T", Format: "markdown", FileName: "new.md",
+		OriginalPath: "data/sources/original/shadow-3.md", MarkdownPath: "data/sources/markdown/shadow-3.md",
+		Status: "completed", ShadowOf: sql.NullString{String: "target-3", Valid: true},
+	})
+	insertUnitForSource(t, svc, "shadow-3", "shadow-3-u1")
+
+	if err := svc.CompleteShadowSwap(ctx, "shadow-3"); err != nil {
+		t.Fatalf("CompleteShadowSwap: %v", err)
+	}
+
+	if len(lc.calls) != 1 {
+		t.Fatalf("expected 1 SetUnitLifecycle call, got %d: %+v", len(lc.calls), lc.calls)
+	}
+	if lc.calls[0].lifecycle != "superseded" {
+		t.Errorf("lifecycle = %q, want superseded", lc.calls[0].lifecycle)
+	}
+	if len(lc.calls[0].unitIDs) != 1 || lc.calls[0].unitIDs[0] != "target-3-v2" {
+		t.Errorf("superseded unitIDs = %v, want exactly [target-3-v2] (v1 was already superseded and must not be re-touched)", lc.calls[0].unitIDs)
+	}
+
+	var changedAt string
+	if err := svc.store.db.QueryRow(`SELECT lifecycle_changed_at FROM knowledge_units WHERE unit_id = 'target-3-v1'`).Scan(&changedAt); err != nil {
+		t.Fatalf("query v1 lifecycle_changed_at: %v", err)
+	}
+	if !strings.HasPrefix(changedAt, "2026-01-01") {
+		t.Errorf("v1 lifecycle_changed_at = %q, want unchanged (2026-01-01, not refreshed by the second reupload)", changedAt)
+	}
+}
+
 // TestSwapShadowIntoTarget_ReplacesOutlinesInsteadOfDuplicating is the
 // regression test for a real incident: outlines have no lifecycle field
 // (unlike units/points, filtered purely by deletion per
