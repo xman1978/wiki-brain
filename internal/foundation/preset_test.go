@@ -156,6 +156,109 @@ func TestLoadPresetData_DoesNotReviveMergedConcept_OrRewriteOrigin(t *testing.T)
 	}
 }
 
+// TestLoadPresetData_AliasesFeedSubjectSynonyms covers
+// docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md:
+// concept aliases in domains.json should load as active, source=preset
+// rows in subject_synonyms with no additional authoring effort.
+func TestLoadPresetData_AliasesFeedSubjectSynonyms(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := fdb.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	presetJSON := `{
+		"domains": [
+			{
+				"id": "finance_stocks",
+				"name": "金融股票",
+				"description": "",
+				"concepts": [
+					{"id": "stock_market", "name": "股票市场", "aliases": ["证券市场", "二级市场"], "description": ""}
+				]
+			}
+		]
+	}`
+	presetPath := filepath.Join(t.TempDir(), "domains.json")
+	os.WriteFile(presetPath, []byte(presetJSON), 0644)
+
+	if err := LoadPresetData(db, presetPath); err != nil {
+		t.Fatalf("LoadPresetData: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM subject_synonyms WHERE status = 'active' AND source = 'preset'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Errorf("active preset synonyms = %d, want 2", count)
+	}
+
+	var canonical string
+	if err := db.QueryRow(`SELECT canonical FROM subject_synonyms WHERE term = '证券市场'`).Scan(&canonical); err != nil {
+		t.Fatalf("query canonical for 证券市场: %v", err)
+	}
+	if canonical != "股票市场" {
+		t.Errorf("canonical = %q, want 股票市场", canonical)
+	}
+}
+
+// TestLoadPresetData_AliasReloadRefreshesButDoesNotClobberGapMined covers the
+// re-run/protect rule: replaying preset refreshes its own rows' canonical,
+// but never overwrites a term that a gap-mined/manual active row already owns.
+func TestLoadPresetData_AliasReloadRefreshesButDoesNotClobberGapMined(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := fdb.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	presetJSON := `{
+		"domains": [
+			{
+				"id": "d1", "name": "D1", "description": "",
+				"concepts": [
+					{"id": "c1", "name": "规范名称", "aliases": ["别名词"], "description": ""}
+				]
+			}
+		]
+	}`
+	presetPath := filepath.Join(t.TempDir(), "domains.json")
+	os.WriteFile(presetPath, []byte(presetJSON), 0644)
+
+	if err := LoadPresetData(db, presetPath); err != nil {
+		t.Fatalf("initial LoadPresetData: %v", err)
+	}
+
+	// A human has since confirmed a gap-mined mapping for the same term to a
+	// different canonical — preset replay must not clobber it.
+	if _, err := db.Exec(
+		`UPDATE subject_synonyms SET source = 'gap_mined', canonical = '人工确认规范' WHERE term = '别名词'`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := LoadPresetData(db, presetPath); err != nil {
+		t.Fatalf("second LoadPresetData: %v", err)
+	}
+
+	var canonical, source string
+	if err := db.QueryRow(`SELECT canonical, source FROM subject_synonyms WHERE term = '别名词'`).Scan(&canonical, &source); err != nil {
+		t.Fatal(err)
+	}
+	if source != "gap_mined" || canonical != "人工确认规范" {
+		t.Errorf("got source=%q canonical=%q, want gap_mined / 人工确认规范 (preset must not clobber)", source, canonical)
+	}
+
+	var count int
+	db.QueryRow(`SELECT COUNT(*) FROM subject_synonyms WHERE term = '别名词'`).Scan(&count)
+	if count != 1 {
+		t.Errorf("count = %d, want 1 (no duplicate row)", count)
+	}
+}
+
 func TestLoadPresetDataFileNotFound(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	db, err := fdb.Open(dbPath)

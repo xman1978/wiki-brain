@@ -18,6 +18,13 @@ V1 验收测试方案（test/v1/v1-acceptance-test-plan.md）P2：学习转化 c
   同理 F1 前置问题（不在任何表格）默认给了 3 个内置问法（1 主 + 2 变体，见
   F1_PRE_DEFAULT_VARIANTS），如需替换请用同一个 JSON 文件覆盖 "F1_PRE" 键。
 
+  注意（2026-07-24）：distinct_n 统计的是字面 question_hash，不受 subject_synonyms
+  归一化影响——同义词只在 Matcher.Match 的 subject 比较阶段生效，不改变本阶段
+  candidate/promote 的计数口径，所以上面这条缺口依旧成立。subject_synonyms
+  影响的是"不同措辞能否落到同一条已有链接上"这件事，验收见
+  test/v1/v1_p11_synonym_test.py（P11，依赖本脚本培养出的 F1_PRE 链接，
+  不要在 P11 之前手工改动 F1_PRE 的四元组字段）。
+
 流程（严格对应方案 P2 步骤 1-6）：
   1. 对培养清单每题问一轮全部已知变体问法；
   2. POST /study/run，核对 candidate 创建 + learning_result(action=create_candidate)

@@ -280,6 +280,22 @@ def db_learning_results_for_object(conn, object_id):
     return [dict(r) for r in rows]
 
 
+def db_learning_events_by_type(conn, event_type, since_created_at=None):
+    """跨 trace 扫描某类型 learning_events（P11 用于观察 subject_synonym_gap 是否
+    自然产生）。event_id 是 TEXT（非自增），增量轮询按 created_at 过滤。"""
+    if since_created_at:
+        rows = conn.execute(
+            "SELECT * FROM learning_events WHERE event_type = ? AND created_at > ? ORDER BY created_at",
+            (event_type, since_created_at),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM learning_events WHERE event_type = ? ORDER BY created_at",
+            (event_type,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def db_links_for_source(conn, source_id, status=None):
     """找出 point 属于某 source 的 activation_links（P5/P6 判断"依赖旧 KP 的链接"用）。"""
     q = (

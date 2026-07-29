@@ -11,6 +11,15 @@ cooccurrence 数"（不是求和），配合 wiki_kp_min=4（至少 4 个这样�
 真正跑的时候大概率需要用 --extra-phrasing-file 追加更多问法、或多跑几轮
 --rounds 才能达到阈值——这是真实 LLM 语义解析的不确定性，不是脚本要回避的东西。
 
+注意（2026-07-24）：wiki_confident_min 统计的是 question_kp_cooccurrence（按
+point_id 聚合），不是 activation_links 的 subject 条件组，所以本阶段的收敛
+成本不会被 subject_synonyms 直接降低——同义词归一化只作用于 Matcher.Match
+按 activation_links 找已有链接这条路径，不改变 Study 侧 cooccurrence 计数。
+上面这段"问法数量可能远超 8 种"的预期依旧成立，不要因为 subject_synonyms
+已实现就假设本阶段成本会下降；subject_synonyms 收敛效果的验收是独立的
+P11（见 test/v1/v1_p11_synonym_test.py），针对的是 ActivationLink 快路径命中，
+不是 Wiki 候选门槛。
+
 流程（严格对应方案 P8 步骤 1-6）：
   1. 探测 A9/A10/A11（制度域「销售回款管理」）与 T10/T11/T18/B4（技术域「Oracle RAC」）
      各自命中的 KP 及其 concept_id，围绕这些概念密集问答；

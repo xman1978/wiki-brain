@@ -202,6 +202,11 @@ type StudyConfig struct {
 	// ObservedConditionsMax caps ActivationLink observed_conditions groups
 	// (docs/superpowers/specs/2026-07-22-activation-observed-conditions-design.md).
 	ObservedConditionsMax int `yaml:"observed_conditions_max"`
+	// —— subject 同义词挖掘（V1 新增，
+	// docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md）——
+	SynonymGapMin         int  `yaml:"synonym_gap_min"`
+	SynonymGapDistinctMin int  `yaml:"synonym_gap_distinct_min"`
+	SynonymAutoPromote    bool `yaml:"synonym_auto_promote"`
 	// —— 概念演化（V1 新增，docs/impl/v1/concept-evolution.md 配置项）——
 	ConceptNullRatioMin      float64 `yaml:"concept_null_ratio_min"`
 	ConceptAddEventMin       int     `yaml:"concept_add_event_min"`

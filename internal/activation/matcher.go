@@ -24,19 +24,23 @@ func (c MatchConfig) withDefaults() MatchConfig {
 }
 
 // Matcher holds an in-memory cache of matchable (verified+candidate) links
-// whose KP is still lifecycle=current. Cache invalidation is explicit —
-// CreateLink / TransitionLink / AppendObservedCondition / unit lifecycle
-// notifier call InvalidateCache.
+// whose KP is still lifecycle=current, plus the subject-dimension
+// SynonymResolver (docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md).
+// Cache invalidation is explicit — CreateLink / TransitionLink /
+// AppendObservedCondition / unit lifecycle notifier / synonym confirm-reject
+// call InvalidateCache; both the link cache and the synonym table reload
+// together on the next Match (one loadCache, one DB round trip pair).
 type Matcher struct {
 	store *Store
 
-	mu    sync.RWMutex
-	cache []ActivationLink
-	valid bool
+	mu       sync.RWMutex
+	cache    []ActivationLink
+	synonyms *SynonymResolver
+	valid    bool
 }
 
 func NewMatcher(store *Store) *Matcher {
-	return &Matcher{store: store}
+	return &Matcher{store: store, synonyms: NewSynonymResolver()}
 }
 
 func (m *Matcher) InvalidateCache() {
@@ -64,6 +68,11 @@ func (m *Matcher) loadCache() ([]ActivationLink, error) {
 	if err != nil {
 		return nil, err
 	}
+	synonyms, err := m.store.ListActiveSynonyms()
+	if err != nil {
+		return nil, err
+	}
+	m.synonyms.Load(synonyms)
 	m.cache = links
 	m.valid = true
 	return links, nil
@@ -84,7 +93,7 @@ func (m *Matcher) Match(query session.ExpandedQuery, cfg MatchConfig) ([]LinkMat
 		return nil, err
 	}
 
-	queryTopic := strings.TrimSpace(text.Normalize(query.Subject) + " " + text.Normalize(query.Intent))
+	queryTopic := m.synonyms.Canonicalize(strings.TrimSpace(text.Normalize(query.Subject) + " " + text.Normalize(query.Intent)))
 	qi := text.Terms(text.Normalize(query.Intent))
 	qc := text.Terms(text.Normalize(query.Constraint))
 	qa := text.NormalizeCompact(query.Audience)
@@ -103,7 +112,7 @@ func (m *Matcher) Match(query session.ExpandedQuery, cfg MatchConfig) ([]LinkMat
 			continue
 		}
 
-		if conditionGroupMatches(conds, queryTopic, qi, qa, qc) {
+		if conditionGroupMatches(conds, queryTopic, qi, qa, qc, m.synonyms) {
 			results = append(results, LinkMatch{Link: link, Score: 1.0})
 		}
 	}
@@ -124,9 +133,9 @@ func (m *Matcher) Match(query session.ExpandedQuery, cfg MatchConfig) ([]LinkMat
 	return results, nil
 }
 
-func conditionGroupMatches(conds []ObservedCondition, queryTopic, qi, qa, qc string) bool {
+func conditionGroupMatches(conds []ObservedCondition, queryTopic, qi, qa, qc string, resolver *SynonymResolver) bool {
 	for _, cond := range conds {
-		core := text.SplitTerms(text.Terms(cond.Subject))
+		core := text.SplitTerms(text.Terms(resolver.Canonicalize(cond.Subject)))
 		if len(core) == 0 {
 			if queryTopic != "" {
 				continue
@@ -146,6 +155,60 @@ func conditionGroupMatches(conds []ObservedCondition, queryTopic, qi, qa, qc str
 		return true
 	}
 	return false
+}
+
+// SubjectOnlyMiss reports whether any group in conds has intent/audience/
+// constraint all equal to the query's, but subject fails coreContained even
+// after synonym canonicalization — the diagnostic Trace's near-miss
+// detection uses to mine subject_synonym_gap candidates (docs/impl/v1/trace.md
+// 步骤 3, docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md).
+// Ensures the resolver is warm (loads the cache if Match hasn't run yet in
+// this process). Returns the representative group's normalized Subject
+// (hit_count-highest among qualifying groups) as observedSubject.
+func (m *Matcher) SubjectOnlyMiss(conds []ObservedCondition, subject, intent, audience, constraint string) (observedSubject string, ok bool) {
+	if len(conds) == 0 {
+		return "", false
+	}
+	if _, err := m.loadCache(); err != nil {
+		return "", false
+	}
+
+	queryTopic := m.synonyms.Canonicalize(strings.TrimSpace(text.Normalize(subject) + " " + text.Normalize(intent)))
+	normalizedSubject := text.Normalize(subject)
+	qi := text.Terms(text.Normalize(intent))
+	qa := text.NormalizeCompact(audience)
+	qc := text.Terms(text.Normalize(constraint))
+
+	var best ObservedCondition
+	found := false
+	for _, cond := range conds {
+		if qi != cond.Intent || qa != cond.Audience || qc != cond.Constraint {
+			continue
+		}
+		core := text.SplitTerms(text.Terms(m.synonyms.Canonicalize(cond.Subject)))
+		fullyMatched := false
+		if len(core) == 0 {
+			fullyMatched = queryTopic == ""
+		} else {
+			fullyMatched = queryTopic != "" && coreContained(core, queryTopic)
+		}
+		if fullyMatched {
+			continue // this group already Matches — not a miss
+		}
+		if cond.Subject == normalizedSubject {
+			// Contradiction guard: identical normalized subject failing
+			// coreContained shouldn't happen; skip rather than misreport.
+			continue
+		}
+		if !found || cond.HitCount > best.HitCount {
+			best = cond
+			found = true
+		}
+	}
+	if !found {
+		return "", false
+	}
+	return best.Subject, true
 }
 
 func coreContained(core map[string]struct{}, topicText string) bool {

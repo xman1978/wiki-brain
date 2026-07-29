@@ -54,6 +54,8 @@ EvidenceItem 新增（证据挖掘产出，见 evidence.md）：
 ```text
 既有：knowledge_gap / user_correction（knowledge_gap payload 结构 V1 扩展，见下）
 新增：activation_success / activation_failure / activation_gap
+新增（2026-07-24）：subject_synonym_gap（见步骤 3 近似检测；
+  聚合消费方是 Study，见 study.md 步骤 2a）
 ```
 
 各类型 payload 结构：
@@ -72,6 +74,10 @@ EvidenceItem 新增（证据挖掘产出，见 evidence.md）：
 
 // activation_gap —— 每次问答最多一条事件
 { "question_terms": "...", "direct_point_ids": ["..."] }
+
+// subject_synonym_gap —— 每次问答每个近似命中的 point 一条事件（2026-07-24 新增）
+{ "point_id": "...", "link_id": "...", "query_subject": "...",
+  "observed_subject": "...", "question_terms": "..." }
 ```
 
 概念演化模块（顺序 10）启用后，`activation_gap` payload 增加 `gap_level` / `null_concept_ratio` 两个字段；判定规则与存量事件兼容策略见 `concept-evolution.md`「activation_gap payload 扩展」。本模块实现时无需预留。
@@ -157,6 +163,23 @@ observed_conditions enrichment（与 gap 并行，不写 learning_results）：
     AppendObservedCondition（本轮 Session 四元组）；
     使创建/慢路径采用过的问法下次可 Match，无需等 Study。
 
+subject 同义词近似检测（2026-07-24 新增，与上面 enrichment 同一触发条件，
+  在 Append 之前执行；完整设计见
+  docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md）：
+  对该 point 已有的非 deprecated ActivationLink，逐组检查 observed_conditions：
+    qi == cond.intent 且 qa == cond.audience 且 qc == cond.constraint，
+    但同义词归一化后 subject 仍不满足 coreContained
+    （即 activation.md 步骤 2 的 Match 会判定该组不命中）
+    → 视为一次"仅 subject 未过"的近似命中；
+  存在至少一个这样的近似组时（取 hit_count 最高的一组作代表），写入
+    learning_event(type="subject_synonym_gap", payload={
+      "point_id", "link_id", "query_subject"（本轮归一化 subject）,
+      "observed_subject"（该组归一化 subject 原文）, "question_terms" })；
+  只读 activation_links，不写；与 AppendObservedCondition 互不影响，
+    Append 照常执行。
+  query_subject 与 observed_subject 归一化后逐字节相等时不产生该事件
+  （矛盾状态的防御性排除，理论上不会触发）。
+
 path_type == "wiki" 的问答不产生激活类事件（Wiki 直答不经过激活层，
 见 wiki.md）；knowledge_gap / user_correction 事件规则不变。
 ```
@@ -195,7 +218,9 @@ Retrieval：EvidenceSet 新增 path_type / activation_hits / gap_reason /
            filtered_evidence 字段（见 retrieval.md）
 Answer：   AnswerResult 原样传递扩展后的 EvidenceSet，Answer 自身无逻辑改动
 Study：    消费新增事件类型（只读，经 learning_events.processed 标记）
-Activation：不直接依赖——Trace 只记录 link_id，不读写 activation_links 表
+Activation：不直接写——Trace 只读 activation_links 的 observed_conditions
+            做近似检测比较（含 SynonymResolver.Canonicalize），不改写该表；
+            仍只记录 link_id 到 traces.activation_link_ids
 ```
 
 ## 完成标准
@@ -211,5 +236,8 @@ user_correction 对 fast 路径问答携带 link_ids；
 共现统计行为与 MVP 完全一致（片段级 citations 不改变 point_id 归集逻辑）；
 knowledge_gap payload.reason 按 Path==error → answer_error、
   GapReason 非空 → 原样取值、其余 → unspecified 的顺序正确判定；
+subject_synonym_gap：intent/audience/constraint 全同、subject 因同义词未注册
+  而未过 coreContained 时产生该事件，且不影响 AppendObservedCondition 照常执行；
+  query_subject 与 observed_subject 归一化后相等时不产生该事件；
 fake 队列下全部事件产生路径测试稳定运行。
 ```

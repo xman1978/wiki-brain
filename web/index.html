@@ -831,6 +831,15 @@ const S = {
   sessionId:     null,
   sessions:      [],
   studyTab:            'overview',
+  studyReport:         null,
+  reportGaps:          [],
+  alcPage:             0,
+  gapPage:             0,
+  lrPage:              0,
+  lrRows:              [],
+  lrAction:            '',
+  lrObjectType:        '',
+  lrStatus:            '',
   activationStatus:    'candidate',
   activationLinks:     [],
   activationSelectedId: null,
@@ -2702,9 +2711,57 @@ async function pollReuploadTimeline(shadowId, title, uploadStart) {
 function openStudyView() { document.getElementById('studyDrawer').classList.add('open'); document.getElementById('studyOverlay').classList.remove('hidden'); loadStudyReport(); }
 function closeStudyView() { document.getElementById('studyDrawer').classList.remove('open'); document.getElementById('studyOverlay').classList.add('hidden'); }
 
+var STUDY_ALC_PAGE_SIZE = 5;
+var STUDY_GAP_PAGE_SIZE = 5;
+var STUDY_LR_PAGE_SIZE = 10;
+
+function studyPagerHtml(page, total, pageSize, goFn) {
+  var totalPages = Math.ceil(total / pageSize) || 1;
+  if (totalPages <= 1) return '';
+  return '<div style="display:flex;align-items:center;justify-content:center;gap:8px;padding:10px 0 0;font-size:12px">\
+    <button class="btn btn-sm"' + (page <= 0 ? ' disabled' : '') + ' onclick="' + goFn + '(' + (page - 1) + ')">上一页</button>\
+    <span style="color:var(--text-3)">' + (page + 1) + ' / ' + totalPages + '</span>\
+    <button class="btn btn-sm"' + (page >= totalPages - 1 ? ' disabled' : '') + ' onclick="' + goFn + '(' + (page + 1) + ')">下一页</button>\
+  </div>';
+}
+
+function clampStudyPage(page, total, pageSize) {
+  var totalPages = Math.ceil(total / pageSize) || 1;
+  if (page < 0) return 0;
+  if (page >= totalPages) return totalPages - 1;
+  return page;
+}
+
+function setAlcPage(page) {
+  if (!S.studyReport) return;
+  var body = document.getElementById('studyBody');
+  var scrollTop = body ? body.scrollTop : 0;
+  var total = (S.studyReport.activation_link_candidates || []).length;
+  S.alcPage = clampStudyPage(page, total, STUDY_ALC_PAGE_SIZE);
+  renderStudyReport(S.studyReport, body);
+  if (body) body.scrollTop = scrollTop;
+}
+
+function setGapPage(page) {
+  if (!S.studyReport) return;
+  var body = document.getElementById('studyBody');
+  var scrollTop = body ? body.scrollTop : 0;
+  var total = (S.studyReport.knowledge_gaps || []).length;
+  S.gapPage = clampStudyPage(page, total, STUDY_GAP_PAGE_SIZE);
+  renderStudyReport(S.studyReport, body);
+  if (body) body.scrollTop = scrollTop;
+}
+
+function setLrPage(page) {
+  S.lrPage = clampStudyPage(page, (S.lrRows || []).length, STUDY_LR_PAGE_SIZE);
+  renderLearningResultsList();
+}
+
 async function loadStudyReport() {
   var body = document.getElementById('studyBody');
   body.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text-3)">加载中...</div>';
+  S.alcPage = 0;
+  S.gapPage = 0;
   try {
     var r = await api('GET', '/study/reports/latest');
     if (r.ok && r.data) renderStudyReport(r.data, body);
@@ -2714,11 +2771,18 @@ async function loadStudyReport() {
 }
 
 function renderStudyReport(report, container) {
+  S.studyReport = report;
   var s = report.summary || {};
   var lc = report.activation_link_candidates || [];
   var wc = report.wiki_candidates || [];
   var gp = report.knowledge_gaps || [];
   S.reportGaps = gp;
+  S.alcPage = clampStudyPage(S.alcPage, lc.length, STUDY_ALC_PAGE_SIZE);
+  S.gapPage = clampStudyPage(S.gapPage, gp.length, STUDY_GAP_PAGE_SIZE);
+  var lcStart = S.alcPage * STUDY_ALC_PAGE_SIZE;
+  var lcPage = lc.slice(lcStart, lcStart + STUDY_ALC_PAGE_SIZE);
+  var gpStart = S.gapPage * STUDY_GAP_PAGE_SIZE;
+  var gpPage = gp.slice(gpStart, gpStart + STUDY_GAP_PAGE_SIZE);
   var cc = report.concept_candidates || {};
   var ccPendingAdd = cc.pending_add || [];
   var ccPendingMerge = cc.pending_merge || [];
@@ -2733,7 +2797,8 @@ function renderStudyReport(report, container) {
       </div></div>\
     ' + (lc.length ? '<div class="study-card"><h2>ActivationLink 候选 (' + lc.length + ')</h2><div class="table-wrap"><table>\
       <thead><tr><th>问题主题</th><th>知识点摘要</th><th>所属概念</th><th>命中</th><th>置信</th><th>纯度</th><th>广度</th><th>短路径</th><th>推荐</th></tr></thead>\
-      <tbody>' + lc.map(function(c) { var st = c.stats || {}; return '<tr><td><code style="font-size:11px">' + esc(c.question_terms||'') + '</code></td><td style="font-size:12px">' + esc((c.point_summary||'').slice(0,30)) + '</td><td style="font-size:12px">' + esc(c.concept_name||'') + '</td><td>' + (st.hit_count||0) + '</td><td>' + (st.confident_count||0) + '</td><td>' + (st.signal_purity!=null?(st.signal_purity*100).toFixed(0)+'%':'-') + '</td><td>' + (st.activation_breadth||'-') + '</td><td>' + (st.short_path_rate!=null?(st.short_path_rate*100).toFixed(0)+'%':'-') + '</td><td><span class="badge ' + (c.recommendation==='strong'?'confident':'partial') + '">' + recLabel(c.recommendation) + '</span></td></tr>'; }).join('') + '</tbody></table></div>\
+      <tbody>' + lcPage.map(function(c) { var st = c.stats || {}; return '<tr><td><code style="font-size:11px">' + esc(c.question_terms||'') + '</code></td><td style="font-size:12px">' + esc((c.point_summary||'').slice(0,30)) + '</td><td style="font-size:12px">' + esc(c.concept_name||'') + '</td><td>' + (st.hit_count||0) + '</td><td>' + (st.confident_count||0) + '</td><td>' + (st.signal_purity!=null?(st.signal_purity*100).toFixed(0)+'%':'-') + '</td><td>' + (st.activation_breadth||'-') + '</td><td>' + (st.short_path_rate!=null?(st.short_path_rate*100).toFixed(0)+'%':'-') + '</td><td><span class="badge ' + (c.recommendation==='strong'?'confident':'partial') + '">' + recLabel(c.recommendation) + '</span></td></tr>'; }).join('') + '</tbody></table></div>\
+      ' + studyPagerHtml(S.alcPage, lc.length, STUDY_ALC_PAGE_SIZE, 'setAlcPage') + '\
       <div style="font-size:11px;color:var(--text-3);margin-top:12px">以上候选基于检索信号统计生成，仅供人工审核参考。</div></div>' : '') + '\
     ' + (wc.length ? '<div class="study-card"><h2>Wiki 候选 (' + wc.length + ')</h2><div class="table-wrap"><table>\
       <thead><tr><th>概念</th><th>达标 KP 数</th><th>平均置信</th><th>KPN 连接数</th><th>活跃天数</th><th>状态</th></tr></thead>\
@@ -2751,13 +2816,15 @@ function renderStudyReport(report, container) {
       }).join('') + '</tbody></table></div></div>' : '') + '\
     ' + (gp.length ? '<div class="study-card"><h2>高频知识盲区 (' + gp.length + ')</h2><div class="table-wrap"><table>\
       <thead><tr><th style="white-space:nowrap">问题主题</th><th style="white-space:nowrap">出现次数</th><th>主要原因</th><th>建议</th><th>典型问题</th></tr></thead>\
-      <tbody>' + gp.map(function(g, i) {
-        var clickable = g.last_trace_id ? ' style="cursor:pointer" onclick="openGapDetailModal(' + i + ')" title="点击查看该次检索详情"' : '';
+      <tbody>' + gpPage.map(function(g, i) {
+        var absIdx = gpStart + i;
+        var clickable = g.last_trace_id ? ' style="cursor:pointer" onclick="openGapDetailModal(' + absIdx + ')" title="点击查看该次检索详情"' : '';
         return '<tr' + clickable + '><td style="white-space:nowrap"><code style="font-size:12px">' + esc(g.question_terms||'') + '</code></td><td style="white-space:nowrap"><span class="badge gap">' + (g.hit_count||0) + ' 次</span></td>\
           <td style="font-size:12px;color:var(--text-2)">' + (g.last_reason ? esc(reasonLabel(g.last_reason)) : '-') + '</td>\
           <td style="font-size:12px;color:var(--text-2)">' + esc(g.recommendation||'') + '</td>\
           <td style="font-size:12px;color:var(--text-2)">' + esc((g.question||'').slice(0,60)) + '</td></tr>';
-      }).join('') + '</tbody></table></div></div>' : '') + '\
+      }).join('') + '</tbody></table></div>\
+      ' + studyPagerHtml(S.gapPage, gp.length, STUDY_GAP_PAGE_SIZE, 'setGapPage') + '</div>' : '') + '\
     <div class="study-card"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">概念演化</h2><button class="btn btn-sm" onclick="openConceptView()">打开审计视图</button></div>\
       <div class="study-summary-grid">\
         <div class="summary-stat"><div class="ss-val">' + (cc.concept_gap_event_count||0) + '</div><div class="ss-label">窗口内 concept_gap 事件</div></div>\
@@ -2806,6 +2873,21 @@ function switchStudyTab(tab) {
 }
 
 async function loadLearningResults() {
+  var actionEl = document.getElementById('lrActionFilter');
+  var objectTypeEl = document.getElementById('lrObjectTypeFilter');
+  var statusEl = document.getElementById('lrStatusFilter');
+  if (actionEl || objectTypeEl || statusEl) {
+    var nextAction = actionEl ? actionEl.value : (S.lrAction || '');
+    var nextObjectType = objectTypeEl ? objectTypeEl.value : (S.lrObjectType || '');
+    var nextStatus = statusEl ? statusEl.value : (S.lrStatus || '');
+    if (nextAction !== S.lrAction || nextObjectType !== S.lrObjectType || nextStatus !== S.lrStatus) {
+      S.lrPage = 0;
+    }
+    S.lrAction = nextAction;
+    S.lrObjectType = nextObjectType;
+    S.lrStatus = nextStatus;
+  }
+
   var body = document.getElementById('studyBody');
   body.innerHTML = '\
     <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">\
@@ -2819,30 +2901,45 @@ async function loadLearningResults() {
         <option value="applied">applied</option><option value="pending_confirm">pending_confirm</option><option value="rejected">rejected</option></select>\
     </div>\
     <div id="lrList"><div style="text-align:center;padding:40px;color:var(--text-3)">加载中...</div></div>';
-  var action = document.getElementById('lrActionFilter').value;
-  var objectType = document.getElementById('lrObjectTypeFilter').value;
-  var status = document.getElementById('lrStatusFilter').value;
-  var params = 'limit=50';
-  if (action) params += '&action=' + action;
-  if (objectType) params += '&object_type=' + objectType;
-  if (status) params += '&status=' + status;
-  var list = document.getElementById('lrList');
+  document.getElementById('lrActionFilter').value = S.lrAction || '';
+  document.getElementById('lrObjectTypeFilter').value = S.lrObjectType || '';
+  document.getElementById('lrStatusFilter').value = S.lrStatus || '';
+  var params = 'limit=200';
+  if (S.lrAction) params += '&action=' + encodeURIComponent(S.lrAction);
+  if (S.lrObjectType) params += '&object_type=' + encodeURIComponent(S.lrObjectType);
+  if (S.lrStatus) params += '&status=' + encodeURIComponent(S.lrStatus);
   try {
     var r = await api('GET', '/study/results?' + params);
-    var rows = Array.isArray(r.data) ? r.data : [];
-    if (!rows.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无学习动作记录</div>'; return; }
-    list.innerHTML = '<div class="table-wrap"><table><thead><tr><th>时间</th><th>动作</th><th>对象</th><th>原因</th><th>状态</th></tr></thead><tbody>' +
-      rows.map(function(row) {
-        var obj = row.question_terms ? esc(row.question_terms) : esc((row.object_id||'').slice(0,20));
-        return '<tr style="cursor:pointer" onclick="showLearningResultDetail(\'' + esc(row.result_id) + '\')">\
-          <td style="font-size:11px">' + dateStr(row.created_at) + '</td>\
-          <td><code style="font-size:11px">' + esc(row.action) + '</code></td>\
-          <td style="font-size:12px">' + obj + '</td>\
-          <td style="font-size:12px;color:var(--text-2)">' + esc((row.reason||'').slice(0,50)) + '</td>\
-          <td><span class="badge ' + (row.status==='applied'?'confident':(row.status==='rejected'?'gap':'partial')) + '">' + esc(row.status) + '</span></td>\
-        </tr>';
-      }).join('') + '</tbody></table></div><div id="lrDetail"></div>';
-  } catch(e) { list.innerHTML = '<div style="color:var(--red);padding:20px">加载失败：' + esc(e.message) + '</div>'; }
+    S.lrRows = Array.isArray(r.data) ? r.data : [];
+    S.lrPage = clampStudyPage(S.lrPage, S.lrRows.length, STUDY_LR_PAGE_SIZE);
+    renderLearningResultsList();
+  } catch(e) {
+    var list = document.getElementById('lrList');
+    if (list) list.innerHTML = '<div style="color:var(--red);padding:20px">加载失败：' + esc(e.message) + '</div>';
+  }
+}
+
+function renderLearningResultsList() {
+  var list = document.getElementById('lrList');
+  if (!list) return;
+  var rows = S.lrRows || [];
+  if (!rows.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无学习动作记录</div>'; return; }
+  S.lrPage = clampStudyPage(S.lrPage, rows.length, STUDY_LR_PAGE_SIZE);
+  var start = S.lrPage * STUDY_LR_PAGE_SIZE;
+  var pageRows = rows.slice(start, start + STUDY_LR_PAGE_SIZE);
+  list.innerHTML = '<div class="table-wrap"><table><thead><tr><th>时间</th><th>动作</th><th>对象</th><th>原因</th><th>状态</th></tr></thead><tbody>' +
+    pageRows.map(function(row) {
+      var obj = row.question_terms ? esc(row.question_terms) : esc((row.object_id||'').slice(0,20));
+      return '<tr style="cursor:pointer" onclick="showLearningResultDetail(\'' + esc(row.result_id) + '\')">\
+        <td style="font-size:11px">' + dateStr(row.created_at) + '</td>\
+        <td><code style="font-size:11px">' + esc(row.action) + '</code></td>\
+        <td style="font-size:12px">' + obj + '</td>\
+        <td style="font-size:12px;color:var(--text-2)">' + esc((row.reason||'').slice(0,50)) + '</td>\
+        <td><span class="badge ' + (row.status==='applied'?'confident':(row.status==='rejected'?'gap':'partial')) + '">' + esc(row.status) + '</span></td>\
+      </tr>';
+    }).join('') + '</tbody></table></div>' +
+    studyPagerHtml(S.lrPage, rows.length, STUDY_LR_PAGE_SIZE, 'setLrPage') +
+    '<div id="lrDetail"></div>';
 }
 
 async function showLearningResultDetail(resultId) {

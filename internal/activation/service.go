@@ -313,6 +313,114 @@ func (s *Service) InvalidateCache() error {
 	return nil
 }
 
+// FindSynonymByTerm is Study's dedup check before creating a new gap-mined
+// candidate — a term with an existing active/candidate/rejected row is never
+// re-proposed (docs/impl/v1/study.md 步骤 2a).
+func (s *Service) FindSynonymByTerm(term string) (*SubjectSynonym, error) {
+	return s.store.FindSynonymByTermAnyStatus(term)
+}
+
+// CreateSynonymCandidate is Study's write path for a subject_synonym_gap pair
+// that clears the aggregation threshold (docs/impl/v1/study.md 步骤 2a). No
+// cache invalidation needed — candidate rows don't participate in Match
+// (only status=active rows do).
+func (s *Service) CreateSynonymCandidate(domainID, term, canonical string, createdFrom []string) (*SubjectSynonym, error) {
+	return s.store.InsertSynonymCandidate(domainID, term, canonical, createdFrom)
+}
+
+// CreateActiveSynonym is the study.synonym_auto_promote=true path: a
+// candidate that clears the threshold goes straight to active, no
+// pending_confirm (docs/impl/v1/study.md 步骤 2a). Invalidates the Matcher
+// cache since active rows do participate in Match.
+func (s *Service) CreateActiveSynonym(domainID, term, canonical string, createdFrom []string) (*SubjectSynonym, error) {
+	syn, err := s.store.InsertActiveSynonym(domainID, term, canonical, createdFrom)
+	if err != nil {
+		return nil, err
+	}
+	if s.matcher != nil {
+		s.matcher.InvalidateCache()
+	}
+	return syn, nil
+}
+
+// ListSynonyms implements GET /subject-synonyms (docs/impl/v1/activation.md
+// 步骤 3a).
+func (s *Service) ListSynonyms(f ListSynonymsFilter) ([]SubjectSynonym, error) {
+	return s.store.ListSynonyms(f)
+}
+
+func (s *Service) GetSynonym(synonymID string) (*SubjectSynonym, error) {
+	return s.store.GetSynonym(synonymID)
+}
+
+// ConfirmSynonym implements POST /subject-synonyms/:id/confirm: only valid
+// for status=candidate rows. Invalidates the Matcher cache so the new
+// mapping is live on the next Match.
+func (s *Service) ConfirmSynonym(synonymID string) (*SubjectSynonym, error) {
+	syn, err := s.store.GetSynonym(synonymID)
+	if err != nil {
+		return nil, err
+	}
+	if syn == nil {
+		return nil, fmt.Errorf("activation: synonym not found: %s", synonymID)
+	}
+	if syn.Status != SynonymStatusCandidate {
+		return nil, fmt.Errorf("activation: confirm only valid for candidate synonyms, %s is %s", synonymID, syn.Status)
+	}
+	if err := s.store.UpdateSynonymStatus(synonymID, SynonymStatusActive); err != nil {
+		return nil, err
+	}
+	if s.matcher != nil {
+		s.matcher.InvalidateCache()
+	}
+	return s.store.GetSynonym(synonymID)
+}
+
+// RejectSynonym implements POST /subject-synonyms/:id/reject: only valid for
+// status=candidate rows. Rejected terms are not automatically revived — a
+// human must resubmit explicitly (docs/impl/v1/activation.md 步骤 3a).
+func (s *Service) RejectSynonym(synonymID string) (*SubjectSynonym, error) {
+	syn, err := s.store.GetSynonym(synonymID)
+	if err != nil {
+		return nil, err
+	}
+	if syn == nil {
+		return nil, fmt.Errorf("activation: synonym not found: %s", synonymID)
+	}
+	if syn.Status != SynonymStatusCandidate {
+		return nil, fmt.Errorf("activation: reject only valid for candidate synonyms, %s is %s", synonymID, syn.Status)
+	}
+	if err := s.store.UpdateSynonymStatus(synonymID, SynonymStatusRejected); err != nil {
+		return nil, err
+	}
+	return s.store.GetSynonym(synonymID)
+}
+
+// FindSynonymGapCandidate checks whether pointID's ActivationLink (if any,
+// non-deprecated) has an observed condition group whose intent/audience/
+// constraint all match the current query but whose subject does not — a
+// "subject-only miss" candidate for the subject synonym dictionary
+// (docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md).
+// Called from Trace alongside EnrichFromConfidentFullPath; read-only, never
+// mutates activation_links.
+func (s *Service) FindSynonymGapCandidate(pointID, subject, intent, audience, constraint string) (linkID, observedSubject string, ok bool, err error) {
+	if s.matcher == nil {
+		return "", "", false, nil
+	}
+	link, err := s.store.GetByPointID(pointID)
+	if err != nil {
+		return "", "", false, err
+	}
+	if link == nil || link.Status == StatusDeprecated {
+		return "", "", false, nil
+	}
+	observed, found := s.matcher.SubjectOnlyMiss(link.ObservedConditions, subject, intent, audience, constraint)
+	if !found {
+		return "", "", false, nil
+	}
+	return link.LinkID, observed, true, nil
+}
+
 // EnrichFromConfidentFullPath appends the current Session quadruple onto every
 // non-deprecated ActivationLink whose point was confidently cited on a full
 // (slow) path — so the next identical ask can Match without waiting for Study.

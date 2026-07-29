@@ -3,7 +3,7 @@
 
 # LLM 配置
 llm:
-  api_key:           "sk-7b7e0e6749d14e8b83381e0b8ac809e5"
+  api_key:           "sk-ws-H.EIHEDMI.xWSE.MEQCIAUqkSSOSoIzTE4DZCVAdWc84C3WNJgp6eHJfZsLhVYtAiBrw11oQke4KjEgM-A1PxjEE6aw4tjH7RBhkq94ahc55g"
   base_url:          "https://dashscope.aliyuncs.com/compatible-mode/v1"
   timeout_seconds:   120
   max_retries:       3
@@ -145,6 +145,10 @@ study:
   deprecate_idle_days:     60     # weakened 无有效使用自动淘汰
   correction_weight:       2      # user_correction 关联链接时按 N 次 failure 计
   observed_conditions_max: 50     # ActivationLink 观测条件组上限
+  # —— subject 同义词挖掘（V1 新增）——
+  synonym_gap_min:          3     # subject_synonym_gap 候选达标所需事件数
+  synonym_gap_distinct_min: 2     # 且来自 ≥ N 个不同 question_hash
+  synonym_auto_promote:     false # true 时候选直接 active，不经人工确认
   # —— 概念演化（V1 新增）——
   concept_null_ratio_min:      0.7   # concept_gap 判定：无概念归属 KP 占比下限
   concept_add_event_min:       5     # 新增候选：簇内 concept_gap 事件数下限

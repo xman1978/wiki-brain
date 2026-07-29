@@ -15,7 +15,7 @@
 | 7 | Wiki 初版（候选→确认→编译→检索命中→底层变化→待重编译） | P8 |
 | 8 | 反馈生效（user_correction 加速链接信号） | P9 |
 
-另覆盖两项不在成功标准列表但属 V1 交付范围的能力：跨 Source KPN（P7）、激活条件的对象/约束硬性守门（F 组，`activation.md` 步骤 2——技术域"同问法不同产品"是守门失效最容易暴露的场景）。
+另覆盖三项不在成功标准列表但属 V1 交付范围的能力：跨 Source KPN（P7）、激活条件的对象/约束硬性守门（F 组，`activation.md` 步骤 2——技术域"同问法不同产品"是守门失效最容易暴露的场景）、subject 同义词归一化（P11，2026-07-24 新增——P3 M3 当时记录的"覆盖靠积累，不靠模糊匹配"观测项，现已在 Match 侧落地为 `subject_synonyms` 表 + `SynonymResolver`，见 `activation.md` 附属表与步骤 3a）。
 
 ## 2. 测试数据画像
 
@@ -292,7 +292,7 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 2. M2 归一化容差：六题各任选 1 题，只调整词序或增删多余空白/标点（不改变用词），重问 1 次；
    验证：仍然 `path_type=fast`——证明归一化没有引入不必要的字面依赖；
 3. M3 改写观察（原"换第三种问法"保留，改为观测指标，不设通过/失败判定）：六题各换 1 种未出现过的自然表述（沿用 `--extra-phrasing-file` 机制）重问 3 次；
-   记录：命中率、以及 `GET /activation-links?point_id=...` 是否新增了一条对应新问法的 `candidate` 链接（慢路径 confident 时应产生新 candidate，验证"覆盖靠积累，不靠模糊匹配"这条设计假设）；**此项不计入 P3 通过标准**，结果写入报告供后续判断是否需要在 Study 侧做 subject 归一化演进；
+   记录：命中率、以及 `GET /activation-links?point_id=...` 是否新增了一条对应新问法的 `candidate` 链接（慢路径 confident 时应产生新 candidate，验证"覆盖靠积累，不靠模糊匹配"这条设计假设）；**此项不计入 P3 通过标准**，结果写入报告；本项记录的"是否需要 Study 侧 subject 归一化"已在 2026-07-24 落地为 `subject_synonyms` 机制，收敛效果验收见 P11（P11 依赖本步骤积累的 candidate 链接，勿在本阶段清库）；
 4. M4 约束不对称已取消——超集不再放行（**已试跑确认可行问法**，见下方"试跑记录"）：复用 F1_PRE 链接（P2 已培养、已确认为 verified），核心问法追加一个 F1_PRE 未覆盖的环境限定词重问：
    ```
    基线（F1_PRE 培养问法）：达梦怎么查询会话执行情况
@@ -388,6 +388,26 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 2. 随机抽 5 条 result 反向核对：reason 中的统计数字（success_n/failure_n/distinct_n）与 `learning_events` 按窗口重算一致；
 3. 学习报告包含：本周期学习动作清单、kpn_citation_rate（MVP 链路未被破坏）、知识缺口清单（含 C 组两题、P4 的「命中但挖不出片段」类缺口若出现）。
 
+### P11 Subject 同义词收敛（2026-07-24 新增，`activation.md` 附属表 + 步骤 3a）
+
+**前提说明（对齐 P3 M3/P8 的既有措辞）**：`subject_synonym_gap` 事件要求同一 ActivationLink 的 intent/audience/constraint 全部匹配、仅 subject 未通过 `coreContained`——这个条件能否被真实 Session Parser 自然产出，和 P3 M3、P8 头部注释描述的"subject 抖动不可控"是同一个不确定性来源。本阶段因此拆成两半：**轴一是确定性的（API/状态机），轴二是观测性的（能否自然攒够阈值）**，不要求轴二必须达标才算通过。
+
+**轴一：候选生命周期与 Match 生效（确定性，直接验收）**
+
+1. 前置：复用 P2 已 verified 的 F1_PRE 链接（`达梦怎么查询会话执行情况`，`constraint=达梦`，是当前题库里唯一非空约束字段的链接，最适合控制变量）；
+2. 用 F1_PRE 原问法的 intent/constraint 保持不变、仅替换 subject 措辞的变体连续问 `synonym_gap_min`（默认 3，见 `config/config.yml`）轮以上，每轮换一种不同表述（保证 `distinct_n ≥ synonym_gap_distinct_min`，默认 2）；
+3. `POST /study/run` → 若自然达标：`GET /subject-synonyms?status=candidate` 应出现一条 `source=gap_mined` 的行，`learning_results(action=synonym_candidate, status=pending_confirm)` 可回溯到支撑的 `subject_synonym_gap` 事件；
+4. `POST /subject-synonyms/:id/confirm` → 验证 `status=active`；`GET /subject-synonyms/:id` 的 `canonical`/`term` 符合"hit_count 更高一侧为 canonical，相同则取字符序靠前"的规则；
+5. confirm 后立即重问「触发 gap 时用过的原始变体问法」→ 验证现在命中 `path_type=fast` 且落在 F1_PRE 同一 `link_id`（confirm 必须触发 `Matcher.InvalidateCache`，否则会读到旧缓存仍不收敛）；
+6. reject 分支：另跑一条注定不该收敛的候选（如故意让某支撑事件語义确实不同源），`POST /subject-synonyms/:id/reject` → 验证 `status=rejected` 且重问原变体依旧 `path_type=full`（不因 reject 被误收敛）、且不会自动复活（重复触发同 pair 不再新增候选）。
+7. 通过标准（轴一）：4/5/6 三步涉及的状态迁移与 Match 生效全部成立；这是本阶段唯一计入通过/失败的部分。
+
+**轴二：自然达标观测（非确定性，只记录不判定）**
+
+8. 记录第 2 步实际用了几轮/几种变体才使 `hit_count`、`distinct_n` 达标（或始终未达标），以及 Study 判定的 canonical 方向是否符合直觉；
+9. 若第 2 步多轮后仍未自然产生候选（Session Parser 把 intent 也解析漂移，导致条件组根本对不上），改为直接在测试库里手工插入一条满足阈值的 `subject_synonym_gap` 事件集（仅用于验证轴一步骤 3-7 的状态机本身，不代表真实收敛概率），并在报告中如实注明"轴一验收改走人工造数据路径"；
+10. 结果写入报告供后续判断 `synonym_gap_min`/`synonym_gap_distinct_min` 默认值是否需要调整，**本步骤不设通过/失败判定**。
+
 ## 6. 量化验收指标汇总
 
 | 指标 | 目标 | 采集阶段 |
@@ -408,7 +428,7 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 
 - **时序控制**：全程手动 `POST /study/run`，禁止依赖 Ticker，否则事件 processed 状态不可控；
 - **变体问法是硬要求**：promote_distinct_min=2 要求不同 question_hash，同一字面重复问只累计 success_n 不累计 distinct_n，晋升永远不达标；
-- **阶段间不清库**：P2-P10 依赖 P1 积累的事件；靶子文档已按域错开（P5 删报销规定+RAC 归档、P6 改培训积分+神通、P7 新增两份 contradicts fixture、P8 改应收账款+19c RAC），执行时勿调换；
+- **阶段间不清库**：P2-P11 依赖 P1 积累的事件；靶子文档已按域错开（P5 删报销规定+RAC 归档、P6 改培训积分+神通、P7 新增两份 contradicts fixture、P8 改应收账款+19c RAC、P11 复用 F1_PRE 且不得在 P11 前调整其四元组字段），执行时勿调换；
 - **真实 LLM 的波动**：正确率类指标按题判要点命中而非逐字比对（技术域例外：命令与参数名必须逐字对）；单题失败先重跑一次排除 LLM 抖动，复现两次才计为缺陷；
 - **缺陷归因**：每个失败点先区分「提取期缺陷（KU/KP 就没有该事实）」与「检索/回答期缺陷」，前者不属于 V1 目标范围但需记录；
 - **技术文档的特有风险**：代码块/长表格密集，KU 按行切片可能把命令截断（P0 抽查覆盖）；LLM 对通用技术知识有强先验，容易"不看文档也答对"或"用先验覆盖文档细节"——凡技术题必须核验引用片段确实来自对应文档，答对但引用为空/错源一律计缺陷；

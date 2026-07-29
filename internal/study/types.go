@@ -192,7 +192,11 @@ type LearningActionsSummary struct {
 	Weakened          int                   `json:"weakened"`
 	Reverified        int                   `json:"reverified"`
 	Deprecated        int                   `json:"deprecated"`
-	Actions           []LearningActionEntry `json:"actions"`
+	// SynonymCandidatesCreated counts subject_synonyms rows created this cycle
+	// (candidate or, when synonym_auto_promote=true, active) from
+	// subject_synonym_gap aggregation (docs/impl/v1/study.md 步骤 2a).
+	SynonymCandidatesCreated int                   `json:"synonym_candidates_created"`
+	Actions                  []LearningActionEntry `json:"actions"`
 }
 
 type LearningActionEntry struct {

@@ -21,6 +21,11 @@ type Service struct {
 // trace tests without activation still run.
 type ObservedConditionEnricher interface {
 	EnrichFromConfidentFullPath(pointIDs []string, subject, intent, audience, constraint, questionTerms string, max int) error
+	// FindSynonymGapCandidate is the read-only diagnostic behind the
+	// subject_synonym_gap event (docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md):
+	// it reports whether pointID's existing link has an observed group whose
+	// intent/audience/constraint match but whose subject doesn't.
+	FindSynonymGapCandidate(pointID, subject, intent, audience, constraint string) (linkID, observedSubject string, ok bool, err error)
 }
 
 // conceptNullRatioMin is docs/impl/v1/concept-evolution.md's
@@ -130,7 +135,10 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 }
 
 // enrichObservedConditions appends this turn's Session quadruple onto links
-// for confidently cited points on the full path (slow path / fast fallback).
+// for confidently cited points on the full path (slow path / fast fallback),
+// and — before appending — mines subject_synonym_gap candidates from links
+// that would have matched if not for the subject wording
+// (docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md).
 func (s *Service) enrichObservedConditions(t *Trace) {
 	if s.enricher == nil {
 		return
@@ -141,11 +149,48 @@ func (s *Service) enrichObservedConditions(t *Trace) {
 	if len(t.DirectPointIDs) == 0 {
 		return
 	}
+
+	s.detectSubjectSynonymGaps(t)
+
 	if err := s.enricher.EnrichFromConfidentFullPath(
 		t.DirectPointIDs, t.Subject, t.Intent, t.Audience, t.ConstraintText, t.QuestionTerms,
 		s.observedConditionsMax,
 	); err != nil {
 		slog.Error("trace: observed condition enrich failed", "trace_id", t.TraceID, "error", err)
+	}
+}
+
+// detectSubjectSynonymGaps runs under the same eligibility gate as
+// enrichment (checked by the caller: full path, confident, direct points
+// non-empty) but is read-only. For each direct point with an existing
+// non-deprecated ActivationLink whose intent/audience/constraint match this
+// turn's query but whose subject doesn't (even after currently-registered
+// synonym canonicalization), it records one subject_synonym_gap learning
+// event — Study's aggregation input for confirming new synonym candidates
+// (docs/impl/v1/study.md 步骤 2a). Runs before EnrichFromConfidentFullPath so
+// the diagnostic reflects the link's state prior to this turn's own
+// enrichment (docs/impl/v1/trace.md 步骤 3).
+func (s *Service) detectSubjectSynonymGaps(t *Trace) {
+	for _, pid := range t.DirectPointIDs {
+		linkID, observedSubject, ok, err := s.enricher.FindSynonymGapCandidate(pid, t.Subject, t.Intent, t.Audience, t.ConstraintText)
+		if err != nil {
+			slog.Error("trace: subject synonym gap detection failed", "trace_id", t.TraceID, "point_id", pid, "error", err)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		payload, _ := json.Marshal(map[string]interface{}{
+			"point_id":         pid,
+			"link_id":          linkID,
+			"query_subject":    normalize(t.Subject),
+			"observed_subject": observedSubject,
+			"question_terms":   t.QuestionTerms,
+		})
+		slog.Debug("trace: generating subject_synonym_gap event", "trace_id", t.TraceID, "point_id", pid, "link_id", linkID)
+		if err := s.store.SaveLearningEvent(t.TraceID, "subject_synonym_gap", string(payload)); err != nil {
+			slog.Error("trace: save subject_synonym_gap event failed", "trace_id", t.TraceID, "error", err)
+		}
 	}
 }
 

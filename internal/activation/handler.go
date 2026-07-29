@@ -23,6 +23,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /activation-links/{id}/learning-results", h.learningResults)
 	mux.HandleFunc("POST /activation-links/{id}/confirm", h.confirm)
 	mux.HandleFunc("POST /activation-links/{id}/reject", h.reject)
+
+	mux.HandleFunc("GET /subject-synonyms", h.listSynonyms)
+	mux.HandleFunc("GET /subject-synonyms/{id}", h.getSynonym)
+	mux.HandleFunc("POST /subject-synonyms/{id}/confirm", h.confirmSynonym)
+	mux.HandleFunc("POST /subject-synonyms/{id}/reject", h.rejectSynonym)
 }
 
 type linkResp struct {
@@ -223,6 +228,101 @@ func (h *Handler) reject(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, map[string]string{
 		"link_id": link.LinkID,
 		"status":  link.Status,
+	})
+}
+
+// synonymResp is the GET /subject-synonyms(/:id) representation
+// (docs/impl/v1/activation.md 步骤 3a,
+// docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md).
+type synonymResp struct {
+	SynonymID   string   `json:"synonym_id"`
+	DomainID    string   `json:"domain_id,omitempty"`
+	Term        string   `json:"term"`
+	Canonical   string   `json:"canonical"`
+	Source      string   `json:"source"`
+	Status      string   `json:"status"`
+	CreatedFrom []string `json:"created_from,omitempty"`
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at"`
+}
+
+func toSynonymResp(s SubjectSynonym) synonymResp {
+	r := synonymResp{
+		SynonymID: s.SynonymID,
+		Term:      s.Term,
+		Canonical: s.Canonical,
+		Source:    s.Source,
+		Status:    s.Status,
+		CreatedAt: s.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt: s.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+	if s.DomainID.Valid {
+		r.DomainID = s.DomainID.String
+	}
+	if s.CreatedFrom != "" {
+		var ids []string
+		if err := json.Unmarshal([]byte(s.CreatedFrom), &ids); err == nil {
+			r.CreatedFrom = ids
+		}
+	}
+	return r
+}
+
+func (h *Handler) listSynonyms(w http.ResponseWriter, r *http.Request) {
+	f := ListSynonymsFilter{
+		Status: r.URL.Query().Get("status"),
+		Limit:  queryInt(r, "limit", 50),
+		Offset: queryInt(r, "offset", 0),
+	}
+	rows, err := h.svc.ListSynonyms(f)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := make([]synonymResp, 0, len(rows))
+	for _, row := range rows {
+		resp = append(resp, toSynonymResp(row))
+	}
+	foundation.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) getSynonym(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	syn, err := h.svc.GetSynonym(id)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if syn == nil {
+		foundation.WriteError(w, http.StatusNotFound, "subject synonym not found")
+		return
+	}
+	foundation.WriteJSON(w, http.StatusOK, toSynonymResp(*syn))
+}
+
+func (h *Handler) confirmSynonym(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	syn, err := h.svc.ConfirmSynonym(id)
+	if err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	foundation.WriteJSON(w, http.StatusOK, map[string]string{
+		"synonym_id": syn.SynonymID,
+		"status":     syn.Status,
+	})
+}
+
+func (h *Handler) rejectSynonym(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	syn, err := h.svc.RejectSynonym(id)
+	if err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	foundation.WriteJSON(w, http.StatusOK, map[string]string{
+		"synonym_id": syn.SynonymID,
+		"status":     syn.Status,
 	})
 }
 

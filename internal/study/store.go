@@ -305,6 +305,41 @@ func (s *Store) FetchUnprocessedActivationGapEvents() ([]RawGapEvent, error) {
 	return events, rows.Err()
 }
 
+// RawSynonymGapEvent is an unprocessed subject_synonym_gap learning_events
+// row joined to its trace's question_hash — the input to
+// aggregateSynonymGaps (docs/impl/v1/study.md 步骤 2a,
+// docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md).
+type RawSynonymGapEvent struct {
+	EventID      string
+	Payload      string
+	QuestionHash string
+}
+
+// FetchUnprocessedSynonymGapEvents returns unprocessed subject_synonym_gap
+// learning_events rows.
+func (s *Store) FetchUnprocessedSynonymGapEvents() ([]RawSynonymGapEvent, error) {
+	rows, err := s.db.Query(`
+		SELECT le.event_id, le.payload, COALESCE(t.question_hash, '')
+		FROM learning_events le
+		LEFT JOIN traces t ON le.trace_id = t.trace_id
+		WHERE le.processed = 0 AND le.event_type = 'subject_synonym_gap'
+		ORDER BY le.created_at`)
+	if err != nil {
+		return nil, fmt.Errorf("study store: fetch subject_synonym_gap events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []RawSynonymGapEvent
+	for rows.Next() {
+		var e RawSynonymGapEvent
+		if err := rows.Scan(&e.EventID, &e.Payload, &e.QuestionHash); err != nil {
+			return nil, fmt.Errorf("study store: scan subject_synonym_gap event: %w", err)
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
 // ActivationGapEventIDsForPoint returns learning_events.event_id values for
 // activation_gap rows whose payload.direct_point_ids contains pointID.
 // Used by Source A (cooccurrence) create_candidate so learning_results.event_ids

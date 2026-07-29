@@ -92,6 +92,10 @@ study:
   candidate_idle_days:     30     # candidate 无新信号自动淘汰
   deprecate_idle_days:     60     # weakened 无有效使用自动淘汰
   correction_weight:       2      # user_correction 关联链接时按 N 次 failure 计
+  # —— subject 同义词挖掘（2026-07-24 新增）——
+  synonym_gap_min:          3     # subject_synonym_gap 候选达标所需事件数
+  synonym_gap_distinct_min: 2     # 且来自 ≥ N 个不同 question_hash
+  synonym_auto_promote:     false # true 时候选直接 active，不经人工确认
 ```
 
 ## 实现步骤
@@ -170,6 +174,39 @@ computeLinkCondition → buildObservedConditions(pointID) → []ObservedConditio
 标记来源 activation_gap 事件 processed=1（无论创建/刷新/跳过都标记，
   该事件已被消费）。
 ```
+
+### 步骤 2a：subject 同义词候选聚合（2026-07-24 新增）
+
+供 ActivationLink Match 的 subject 维度同义词归一化提供人工确认候选；完整背景与动机见 `docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md`。挖掘信号来自 Trace 步骤 3（见 `trace.md`）产生的 `subject_synonym_gap` 事件：intent/audience/constraint 全部匹配某已有 ActivationLink 的某组观测条件、仅 subject 未通过 `coreContained` 时触发。
+
+```text
+扫描 processed=0 的 subject_synonym_gap 事件，按
+  (Normalize(query_subject), Normalize(observed_subject)) 排序后取字符序
+  组成的无序 pair key 聚合（避免 A→B 与 B→A 被当成两条）：
+    hit_count  = 事件数
+    distinct_n = 不同 question_hash 数（经 trace_id JOIN traces）
+
+达标（hit_count ≥ synonym_gap_min 且 distinct_n ≥ synonym_gap_distinct_min）：
+  canonical = pair 中 hit_count 更高的一侧；相同则取字符序靠前者（确定性规则，
+    避免同一 pair 反复达标时来回改变归一化方向）；
+  term = 另一侧；
+
+  已存在同 term 的 active/candidate/rejected 行 → 跳过（不重复产生候选；
+    rejected 的 term 不自动复活，需人工在 UI 显式重新提交）；
+
+  否则 INSERT subject_synonyms(term, canonical, source='gap_mined',
+    status='candidate', created_from=支撑事件 id 列表)，
+  写 learning_results(action='synonym_candidate', object_type='subject_synonym',
+    object_id=synonym_id, status='pending_confirm', reason 含 hit_count/distinct_n,
+    event_ids=支撑事件 id 列表)；
+
+synonym_auto_promote=true 时：直接 status='active'，
+  learning_results status='applied'，confirmed_by='auto'（与 auto_promote 同构）；
+
+事件标记 processed=1（无论是否达标、是否已存在同名候选，该事件已被消费）。
+```
+
+confirm/reject 由 Activation 模块的 `POST /subject-synonyms/:id/confirm|reject` 执行（见 `activation.md` 步骤 3a），本步骤只负责产生候选，不做状态迁移。
 
 ### 步骤 3：链接信号累积与状态判定
 
@@ -313,6 +350,9 @@ Trace：     learning_events（读+标记 processed）、traces、
 Activation：TransitionLink / CreateLink / UpdateStats（状态变更唯一路径）
 Lifecycle： 判定强化跳过时读取 knowledge_points.lifecycle
 Wiki：      needs_recompile 标记接口（未实现时 no-op）
+Trace：     subject_synonym_gap 事件的产生方（本模块只读+标记 processed）
+Activation：subject_synonyms 表的 CRUD 与 confirm/reject 由 Activation 模块提供，
+            本模块只调用 InsertSynonymCandidate 写候选、不做状态迁移
 ```
 
 ## 完成标准
@@ -337,5 +377,8 @@ GET /study/gaps 可按 reason 过滤，recommendation 按 last_reason 正确分�
   last_trace_id 能正确串联到 GET /traces/:id → GET /answers/:id 拿到完整
   evidence_snapshot（judge_filtered 场景下 filtered 证据非空）；
 事件消费幂等：同一事件不重复计入（processed 标记 + 单 goroutine 调度）；
+subject_synonym_gap 按 pair 聚合达标后生成 pending_confirm 候选，
+  同一 pair 不重复生成、reject 后的 term 不自动复活；
+  auto_promote=true 时同场景直接 active；
 fake 环境下全部动作路径测试稳定运行。
 ```

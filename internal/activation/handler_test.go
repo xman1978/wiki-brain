@@ -197,6 +197,87 @@ func TestHandler_ConfirmAndReject(t *testing.T) {
 	}
 }
 
+func TestHandler_Synonyms_ListGetConfirmReject(t *testing.T) {
+	handler, svc := setupHandler(t)
+
+	created, err := svc.CreateSynonymCandidate("", "证券市场", "股票市场", nil)
+	if err != nil {
+		t.Fatalf("create synonym candidate: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	// List
+	req := httptest.NewRequest("GET", "/subject-synonyms?status=candidate", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var listResp []synonymResp
+	if err := json.Unmarshal(w.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal list: %v", err)
+	}
+	if len(listResp) != 1 || listResp[0].Term != "证券市场" || listResp[0].Canonical != "股票市场" {
+		t.Fatalf("unexpected list response: %+v", listResp)
+	}
+
+	// Get
+	req = httptest.NewRequest("GET", "/subject-synonyms/"+created.SynonymID, nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// Get missing
+	req = httptest.NewRequest("GET", "/subject-synonyms/does-not-exist", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("get missing status = %d, want 404", w.Code)
+	}
+
+	// Confirm
+	req = httptest.NewRequest("POST", "/subject-synonyms/"+created.SynonymID+"/confirm", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("confirm status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var confirmResp map[string]string
+	json.Unmarshal(w.Body.Bytes(), &confirmResp)
+	if confirmResp["status"] != SynonymStatusActive {
+		t.Errorf("confirm response status = %q, want active", confirmResp["status"])
+	}
+
+	// Re-confirming an already-active synonym must fail.
+	req = httptest.NewRequest("POST", "/subject-synonyms/"+created.SynonymID+"/confirm", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("re-confirm status = %d, want 400", w.Code)
+	}
+
+	// Reject a second candidate.
+	created2, err := svc.CreateSynonymCandidate("", "二级市场", "股票市场", nil)
+	if err != nil {
+		t.Fatalf("create synonym candidate 2: %v", err)
+	}
+	req = httptest.NewRequest("POST", "/subject-synonyms/"+created2.SynonymID+"/reject", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("reject status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var rejectResp map[string]string
+	json.Unmarshal(w.Body.Bytes(), &rejectResp)
+	if rejectResp["status"] != SynonymStatusRejected {
+		t.Errorf("reject response status = %q, want rejected", rejectResp["status"])
+	}
+}
+
 func setupDBFromSvc(t *testing.T, svc *Service) *sql.DB {
 	t.Helper()
 	return svc.Store().db

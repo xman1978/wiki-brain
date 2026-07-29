@@ -1,6 +1,7 @@
 package activation
 
 import (
+	"database/sql"
 	"testing"
 	"time"
 
@@ -551,5 +552,158 @@ func TestMatcher_SubjectCoreSurvivesTokenizationBoundaryDrift(t *testing.T) {
 	}
 	if coreContained(map[string]struct{}{"数据库连接限制": {}}, "数据库连接配置") {
 		t.Error("expected a core word that isn't actually a substring to still be excluded")
+	}
+}
+
+// seedActiveSynonym inserts a status=active subject_synonyms row directly
+// (docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md),
+// standing in for either a preset-loaded alias or a confirmed gap-mined
+// candidate — Match doesn't distinguish by source.
+func seedActiveSynonym(t *testing.T, db *sql.DB, term, canonical string) {
+	t.Helper()
+	_, err := db.Exec(`INSERT INTO subject_synonyms (synonym_id, term, canonical, source, status)
+		VALUES (?, ?, ?, 'preset', 'active')`, "syn-"+term, term, canonical)
+	if err != nil {
+		t.Fatalf("seed active synonym %q->%q: %v", term, canonical, err)
+	}
+}
+
+// TestMatcher_SubjectSynonymCanonicalizesBothSides covers the core same-KP
+// scenario the synonym dictionary exists for: a link observed one wording,
+// and a differently-worded (but registered as synonymous) question should
+// still hit it — without loosening intent/audience/constraint at all.
+func TestMatcher_SubjectSynonymCanonicalizesBothSides(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	matcher := NewMatcher(store)
+	svc := NewService(store, matcher)
+	seedKPFull(t, db, "kp1")
+	seedActiveSynonym(t, db, text.Normalize("证券市场"), text.Normalize("股票市场"))
+
+	now := time.Now().UTC()
+	l, err := svc.CreateLink("t1", LinkCondition{
+		ObservedConditions: []ObservedCondition{
+			{Subject: text.Normalize("股票市场"), Intent: "", Audience: "", Constraint: "", FirstSeenAt: now, LastSeenAt: now, HitCount: 1},
+		},
+	}, "kp1", nil)
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	verifyLink(t, svc, l)
+
+	matches, err := matcher.Match(session.ExpandedQuery{
+		Subject: "证券市场", ExpandedQuestion: "证券市场怎么运作",
+	}, MatchConfig{})
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Errorf("expected synonym-registered subject wording to match, got %+v", matches)
+	}
+}
+
+// TestMatcher_SubjectSynonymDoesNotLoosenOtherDimensions ensures the
+// canonicalization is scoped to subject only: a query whose subject is
+// synonym-equivalent but whose constraint differs from every observed group
+// must still miss.
+func TestMatcher_SubjectSynonymDoesNotLoosenOtherDimensions(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	matcher := NewMatcher(store)
+	svc := NewService(store, matcher)
+	seedKPFull(t, db, "kp1")
+	seedActiveSynonym(t, db, text.Normalize("证券市场"), text.Normalize("股票市场"))
+
+	now := time.Now().UTC()
+	constraintTerms := text.Terms(text.Normalize("产品甲"))
+	l, err := svc.CreateLink("t1", LinkCondition{
+		ObservedConditions: []ObservedCondition{
+			{Subject: text.Normalize("股票市场"), Intent: "", Audience: "", Constraint: constraintTerms, FirstSeenAt: now, LastSeenAt: now, HitCount: 1},
+		},
+	}, "kp1", nil)
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	verifyLink(t, svc, l)
+
+	matches, err := matcher.Match(session.ExpandedQuery{
+		Subject: "证券市场", Constraint: "产品乙", ExpandedQuestion: "证券市场怎么运作",
+	}, MatchConfig{})
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("expected constraint mismatch to still exclude despite subject synonym match, got %+v", matches)
+	}
+}
+
+// TestMatcher_SubjectOnlyMiss_DetectsCandidateWhenOtherDimensionsAgree covers
+// the diagnostic Trace's near-miss detection relies on to mine
+// subject_synonym_gap candidates: intent/audience/constraint all agree with
+// an observed group, but the subject wording isn't registered as synonymous
+// (yet) — SubjectOnlyMiss should surface that group's observed subject.
+func TestMatcher_SubjectOnlyMiss_DetectsCandidateWhenOtherDimensionsAgree(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	matcher := NewMatcher(store)
+	svc := NewService(store, matcher)
+	seedKPFull(t, db, "kp1")
+
+	now := time.Now().UTC()
+	l, err := svc.CreateLink("t1", LinkCondition{
+		ObservedConditions: []ObservedCondition{
+			{Subject: text.Normalize("招待费报销"), Intent: "", Audience: "", Constraint: "", FirstSeenAt: now, LastSeenAt: now, HitCount: 3},
+		},
+	}, "kp1", nil)
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	verifyLink(t, svc, l)
+
+	// No synonym registered yet — Match itself should miss.
+	matches, err := matcher.Match(session.ExpandedQuery{
+		Subject: "差旅报销", ExpandedQuestion: "差旅报销怎么处理",
+	}, MatchConfig{})
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected no synonym registered to still miss on Match, got %+v", matches)
+	}
+
+	observed, ok := matcher.SubjectOnlyMiss(l.ObservedConditions, "差旅报销", "", "", "")
+	if !ok {
+		t.Fatal("expected SubjectOnlyMiss to surface a subject-only-miss candidate")
+	}
+	if observed != text.Normalize("招待费报销") {
+		t.Errorf("observedSubject = %q, want %q", observed, text.Normalize("招待费报销"))
+	}
+}
+
+// TestMatcher_SubjectOnlyMiss_NoCandidateWhenOtherDimensionsDiffer ensures
+// SubjectOnlyMiss doesn't fire when the mismatch isn't subject-only — a
+// different constraint should not be reported as a synonym candidate.
+func TestMatcher_SubjectOnlyMiss_NoCandidateWhenOtherDimensionsDiffer(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	matcher := NewMatcher(store)
+	svc := NewService(store, matcher)
+	seedKPFull(t, db, "kp1")
+
+	now := time.Now().UTC()
+	constraintTerms := text.Terms(text.Normalize("产品甲"))
+	l, err := svc.CreateLink("t1", LinkCondition{
+		ObservedConditions: []ObservedCondition{
+			{Subject: text.Normalize("招待费报销"), Intent: "", Audience: "", Constraint: constraintTerms, FirstSeenAt: now, LastSeenAt: now, HitCount: 1},
+		},
+	}, "kp1", nil)
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	verifyLink(t, svc, l)
+
+	_, ok := matcher.SubjectOnlyMiss(l.ObservedConditions, "差旅报销", "", "", "产品乙")
+	if ok {
+		t.Error("expected SubjectOnlyMiss to stay silent when constraint also differs (not a subject-only miss)")
 	}
 }

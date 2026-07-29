@@ -53,6 +53,26 @@ CREATE UNIQUE INDEX idx_al_point_id ON activation_links(point_id);
 
 与 MVP `link_candidates` 表的关系：link_candidates 保留，仍作为 Study 共现扫描的暂存快照；Study 从达标的 link_candidates 创建或刷新 activation_links（新建时 status=candidate），创建后该 candidate 行保留（用于报告展示），不迁移不删除。activation_links 才是参与系统行为的正式对象。
 
+### 附属表：subject_synonyms（2026-07-24 新增）
+
+```sql
+CREATE TABLE subject_synonyms (
+    synonym_id   TEXT PRIMARY KEY,
+    domain_id    TEXT REFERENCES domains(domain_id),
+    term         TEXT NOT NULL,       -- 归一化后的原始措辞（短语级，不分词）
+    canonical    TEXT NOT NULL,       -- 归一化后收敛到的规范措辞
+    source       TEXT NOT NULL DEFAULT 'manual',  -- preset / gap_mined / manual
+    status       TEXT NOT NULL DEFAULT 'active',  -- active / candidate / rejected
+    created_from TEXT NOT NULL DEFAULT '[]',
+    created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX idx_subject_synonyms_term_active ON subject_synonyms(term) WHERE status = 'active';
+CREATE INDEX idx_subject_synonyms_status ON subject_synonyms(status);
+```
+
+只归一化 subject 一个维度，intent/audience/constraint 的精确匹配语义不变。`source=preset` 的行来自 `preset/domains.json` 每个 concept 的 `aliases` 字段（启动时随 domains/concepts 一并 UPSERT，`status=active` 无需确认）；`source=gap_mined` 的行来自 Study 对 `subject_synonym_gap` 学习事件的聚合，默认 `status=candidate`，需人工 confirm 才生效（`study.synonym_auto_promote=true` 时直接 active）。设计动机、挖掘触发条件、Match 算法调整详见 `docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md`；`domain_id` 列 V1 仅作展示，Match 不按 domain 过滤。
+
 ## 状态机
 
 ```text
@@ -128,6 +148,31 @@ Match(query ExpandedQuery) → []LinkMatch{link, score}
 
 verified 链接数量在 V1 规模下（预计 <10^4）全量内存匹配足够；不建 Bleve 索引。
 
+**Subject 同义词归一化（2026-07-24 新增）**：`queryTopic` 与各组 `cond.Subject` 在参与 `coreContained` 比较前，先经 `SynonymResolver.Canonicalize` 做一次短语级替换（词表来自 `subject_synonyms` 表 `status=active` 的行，preset 别名 + 人工确认过的挖掘候选）。回退分支（`observed_conditions` 为空时的 `question_terms` 逐字节相等）不经过 resolver，保持最保守的兜底语义。intent/audience/constraint 的精确匹配不受影响。详见 `docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md`。
+
+### 步骤 3a：同义词候选确认 API（2026-07-24 新增）
+
+与步骤 3 的 confirm/reject 同构，作用对象是 `subject_synonyms` 而非 `activation_links`：
+
+```text
+GET    /subject-synonyms
+  查询参数：status、limit（默认 50）、offset
+  响应：[{ synonym_id, domain_id, term, canonical, source, status, created_at, updated_at }]
+
+GET    /subject-synonyms/:id
+  响应：完整字段 + created_from 关联的问法列表
+
+POST   /subject-synonyms/:id/confirm
+  仅对 status=candidate 生效；status → active；写 learning_results
+  (action=synonym_candidate 对应行 status=applied)；调用 Matcher.InvalidateCache
+  使新映射立即生效。
+
+POST   /subject-synonyms/:id/reject
+  仅对 status=candidate 生效；status → rejected；不自动复活。
+```
+
+候选来源（Study 聚合 `subject_synonym_gap` 事件产生 `pending_confirm`）见 `study.md`；挖掘触发条件见 `trace.md` 步骤 3；完整设计见 `docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md`。
+
 ### 步骤 3：人工确认 API
 
 ```text
@@ -170,9 +215,14 @@ POST   /activation-links/:id/reject
 ```text
 基础设施：SQLite（migration）、结构化日志、HTTP 框架
 Trace：   复用问题归一化 / 分词 / 停用词代码（提取为 foundation 层共享包，
-          避免 Trace 与 Activation 两份实现漂移）
+          避免 Trace 与 Activation 两份实现漂移）；subject_synonym_gap 学习
+          事件的产生方（本模块不产生，只消费其聚合结果，经 Study 中转）
 Lifecycle：匹配器 JOIN knowledge_points.lifecycle 过滤
-Study：   状态迁移与计数的唯一调用方（本模块提供接口，不自主迁移）
+Study：   状态迁移与计数的唯一调用方（本模块提供接口，不自主迁移）；
+          subject_synonyms 候选生成的唯一调用方（本模块提供 CRUD/confirm/reject，
+          Study 只负责聚合 subject_synonym_gap 事件并写候选行）
+Foundation preset：LoadPresetData 解析 domains.json concept.aliases 写入
+          subject_synonyms（source=preset），本模块只读该表
 ```
 
 ## 完成标准
@@ -199,5 +249,9 @@ TransitionLink 拒绝迁移表之外的一切迁移（含 deprecated 迁出）�
         见 study.md 步骤 2）；
 缓存失效：链接状态变更或 KP lifecycle 变更后，下一次 Match 反映新状态；
 confirm / reject API 正确迁移状态并联动 learning_results；
-fake 环境下全部状态机路径、匹配路径、条件刷新路径测试稳定运行。
+fake 环境下全部状态机路径、匹配路径、条件刷新路径测试稳定运行；
+subject_synonyms：preset alias 正确加载为 active 行，重跑 preset 刷新 canonical
+  不新增重复行、不覆盖 gap_mined 行；Match 中 subject 比较经 SynonymResolver
+  归一化命中同义措辞，intent/audience/constraint 精确匹配不受影响；
+  confirm/reject 正确迁移状态并触发 Matcher.InvalidateCache。
 ```
