@@ -174,8 +174,9 @@ candidate / needs_verification / conflicted / historical / retracted 均已从�
 - 页面要素（防固化最小集）：稳定结论、证据来源（回链 KP / KU / source_ref）、待验证点、最近更新时间、依赖的核心 KU 列表；
 - **重编译**：底层 KU/KP 状态变化或新的 wiki_update_candidate 信号时，Study 标记页面「待重编译」，人工确认后执行；每次编译记录触发来源，可追溯到 Learning Event；
 - **检索接入**：已发布 Wiki 页面建立独立 Bleve 索引，作为快路径的直接命中层——同主题问题可直接引用 Wiki 结论并附证据回链（`study.md` 2.5 节所述正向反馈）。
+- **两层架构（扩展）**：概念页为一阶编译（KP → 页面），主题页为二阶编译（已发布概念页 → 页面）；页面之间由程序从 KPN 派生 `related` / `contradicts` 关系，`contains` 由二阶编译写入，三者构成知识架构。**主题页在检索里的角色是召回骨架而非直答单元**——命中后展开成员概念页进候选，并把成员知识点注入慢路径 Rerank、跳过 Outline 召回（零额外 LLM 调用，这是复杂问题在 V1 唯一的实际收益）。写作出口是页面派生的草稿（`wiki_drafts`，主题页默认组装成员正文 + 只读证据清单），页面正文仍只由编译产生，无回写通道；草稿回流导入要打 `origin='wiki_draft'` 以阻断自体循环。详见 `wiki.md` 步骤 7-10。
 
-方法页 / 经验页 / 问题页 / 决策页、认知视角差异化页面，推迟到 V3。
+方法页 / 经验页 / 问题页 / 决策页、认知视角差异化页面，推迟到 V3。复杂问题的拆解与子结论聚合同样属 V3（深想 / Working Model）——V1 只准备好主题页结构，并记录 `topic_decompose_signal` 供后续使用。
 
 ### 9. 用户反馈通道
 
@@ -223,12 +224,19 @@ candidate / needs_verification / conflicted / historical / retracted 均已从�
   activation_links        ActivationLink 主体（条件、目标 KP、状态、统计）
   learning_results        Study 学习动作记录（动作、对象、reason、关联事件）
   wiki_pages              Wiki 页面（内容、类型、状态、依赖 KU 列表、修订记录）
+  wiki_page_relations     页面关系（related / contradicts 程序派生、contains 编译写入）
+  wiki_drafts             写作草稿（来源页面 + 版本，人工自由编辑，不参与检索）
 
 扩展
   knowledge_units / knowledge_points  增加 lifecycle 状态字段
   learning_events                     事件类型增加 activation_*（user_correction 沿用 MVP 通道）
   knowledge_point_relations           增加 scope 字段（intra/cross）与唯一索引
-  traces                              增加 path_type / activation_link_ids
+  traces                              增加 path_type / activation_link_ids /
+                                      skeleton_page_id（主题页提供的召回骨架）
+  wiki_pages                          增加 member_roles（结构化子主题分工）、
+                                      uncovered_points（覆盖度清单，只作字段）
+  sources                             增加 origin / origin_page_id
+                                      （Wiki 草稿回流标记，阻断自体循环）
   EvidenceSet / evidence_snapshot     证据细化为片段级：片段原文 + KU 内位置，
                                       整段回退时保留"未挖掘"标记
 

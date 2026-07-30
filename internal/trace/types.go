@@ -24,6 +24,10 @@ type Trace struct {
 	FeedbackContent   string    `json:"feedback_content,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at,omitempty"`
+	// SkeletonPageID is non-empty when a topic page provided this question's
+	// recall skeleton (docs/impl/v1/wiki.md 步骤 8「检索接入」两层架构扩展),
+	// regardless of which path_type the answer ultimately took.
+	SkeletonPageID string `json:"skeleton_page_id,omitempty"`
 }
 
 type Cooccurrence struct {

@@ -35,6 +35,9 @@ type Source struct {
 	CompletedAt         sql.NullTime
 	UnitsCompletedAt    sql.NullTime
 	UnitsBuiltAt        sql.NullTime
+	Origin              string
+	OriginPageID        sql.NullString
+	ReflowSkippedEdges  int
 }
 
 // SourceVersion is a snapshot of a source's files as they were the moment a
@@ -89,26 +92,53 @@ func (s *Store) Create(src *Source) error {
 	if src.SourceID == "" {
 		src.SourceID = uuid.New().String()
 	}
-	_, err := s.db.Exec(`INSERT INTO sources (source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, shadow_of)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	if src.Origin == "" {
+		src.Origin = SourceOriginUpload
+	}
+	_, err := s.db.Exec(`INSERT INTO sources (source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, origin, origin_page_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		src.SourceID, src.Title, src.Format, src.FileName, src.OriginalPath,
 		src.HTMLPath, src.MarkdownPath, src.Status, src.ErrorMsg,
-		src.OutlineType, src.Summary, src.DomainID, src.WordCount, src.ShadowOf)
+		src.OutlineType, src.Summary, src.DomainID, src.WordCount, src.ShadowOf,
+		src.Origin, src.OriginPageID)
 	if err != nil {
 		return fmt.Errorf("source store: create: %w", err)
 	}
 	return nil
 }
 
+// SourceOriginUpload / SourceOriginWikiDraft are sources.origin values
+// (docs/impl/v1/wiki.md 步骤 10 "回流的自体循环必须挡住").
+const (
+	SourceOriginUpload    = "upload"
+	SourceOriginWikiDraft = "wiki_draft"
+)
+
+// IncrementReflowSkippedEdges implements the wiki_draft_reflow observability
+// counter (docs/impl/v1/kpn.md 步骤 2 "自体祖先排除"): each CrossSourceKPN run
+// for a origin=wiki_draft source adds however many opposite-side candidates
+// it excluded as self-ancestor edges.
+func (s *Store) IncrementReflowSkippedEdges(sourceID string, delta int) error {
+	if delta <= 0 {
+		return nil
+	}
+	_, err := s.db.Exec(`UPDATE sources SET reflow_skipped_edges = reflow_skipped_edges + ? WHERE source_id = ?`, delta, sourceID)
+	if err != nil {
+		return fmt.Errorf("source store: increment reflow skipped edges: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) GetByID(sourceID string) (*Source, error) {
 	src := &Source{}
-	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at, units_built_at
+	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at, units_built_at, origin, origin_page_id, reflow_skipped_edges
 		FROM sources WHERE source_id = ?`, sourceID).Scan(
 		&src.SourceID, &src.Title, &src.Format, &src.FileName,
 		&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status, &src.UnitsStatus, &src.UnitsStage,
 		&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
 		&src.WordCount, &src.ShadowOf, &src.Version, &src.CreatedAt, &src.UpdatedAt,
-		&src.ProcessingStartedAt, &src.CompletedAt, &src.UnitsCompletedAt, &src.UnitsBuiltAt)
+		&src.ProcessingStartedAt, &src.CompletedAt, &src.UnitsCompletedAt, &src.UnitsBuiltAt,
+		&src.Origin, &src.OriginPageID, &src.ReflowSkippedEdges)
 	if err != nil {
 		return nil, fmt.Errorf("source store: get by id: %w", err)
 	}
@@ -120,7 +150,7 @@ func (s *Store) GetByID(sourceID string) (*Source, error) {
 func (s *Store) List(status, domainID string, limit, offset int) ([]Source, error) {
 	var rows *sql.Rows
 	var err error
-	base := `SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at, units_built_at FROM sources`
+	base := `SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at, units_built_at, origin, origin_page_id, reflow_skipped_edges FROM sources`
 	where := []string{"shadow_of IS NULL"}
 	var args []any
 	if status != "" {
@@ -147,12 +177,50 @@ func (s *Store) List(status, domainID string, limit, offset int) ([]Source, erro
 			&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status, &src.UnitsStatus, &src.UnitsStage,
 			&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
 			&src.WordCount, &src.ShadowOf, &src.Version, &src.CreatedAt, &src.UpdatedAt,
-			&src.ProcessingStartedAt, &src.CompletedAt, &src.UnitsCompletedAt, &src.UnitsBuiltAt); err != nil {
+			&src.ProcessingStartedAt, &src.CompletedAt, &src.UnitsCompletedAt, &src.UnitsBuiltAt,
+			&src.Origin, &src.OriginPageID, &src.ReflowSkippedEdges); err != nil {
 			return nil, fmt.Errorf("source store: scan: %w", err)
 		}
 		sources = append(sources, src)
 	}
 	return sources, rows.Err()
+}
+
+// WikiDraftReflowStat is one origin=wiki_draft source's reflow footprint —
+// backs the study.md 步骤 6 "wiki_draft_reflow" report item.
+type WikiDraftReflowStat struct {
+	SourceID           string
+	OriginPageID       string
+	ProducedKPCount    int
+	ReflowSkippedEdges int
+}
+
+// ListWikiDraftReflowStats returns every origin=wiki_draft source with its
+// produced-KP count and skipped self-ancestor edge count
+// (docs/impl/v1/wiki.md 步骤 10 "可观测").
+func (s *Store) ListWikiDraftReflowStats() ([]WikiDraftReflowStat, error) {
+	rows, err := s.db.Query(`
+		SELECT s.source_id, s.origin_page_id, s.reflow_skipped_edges,
+			(SELECT COUNT(*) FROM knowledge_points kp
+			 JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
+			 WHERE ku.source_id = s.source_id) AS produced_kp_count
+		FROM sources s WHERE s.origin = ?`, SourceOriginWikiDraft)
+	if err != nil {
+		return nil, fmt.Errorf("source store: list wiki draft reflow stats: %w", err)
+	}
+	defer rows.Close()
+
+	var out []WikiDraftReflowStat
+	for rows.Next() {
+		var stat WikiDraftReflowStat
+		var originPageID sql.NullString
+		if err := rows.Scan(&stat.SourceID, &originPageID, &stat.ReflowSkippedEdges, &stat.ProducedKPCount); err != nil {
+			return nil, fmt.Errorf("source store: scan wiki draft reflow stat: %w", err)
+		}
+		stat.OriginPageID = originPageID.String
+		out = append(out, stat)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) UpdateStatus(sourceID, status string, errorMsg *string) error {

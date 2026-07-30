@@ -70,6 +70,66 @@ type Report struct {
 	LearningActions          LearningActionsSummary    `json:"learning_actions"`
 	CrossSourceConflicts     []CrossSourceConflict     `json:"cross_source_conflicts"`
 	ConceptCandidates        ConceptCandidatesSection  `json:"concept_candidates"`
+
+	// 两层架构扩展（docs/impl/v1/study.md 步骤 6「报告提示项」+ 步骤 7）
+	OversizedTopicClusters []OversizedTopicClusterEntry `json:"oversized_topic_clusters,omitempty"`
+	WikiDraftReflow        []WikiDraftReflowEntry       `json:"wiki_draft_reflow,omitempty"`
+	TopicDecompose         []TopicDecomposeEntry        `json:"topic_decompose,omitempty"`
+	QuestionComplexity     QuestionComplexitySection    `json:"question_complexity"`
+}
+
+// OversizedTopicClusterEntry is one connected component that exceeded
+// wiki.topic_member_max — report-only, never auto-split
+// (docs/impl/v1/wiki.md 步骤 8「候选产生」).
+type OversizedTopicClusterEntry struct {
+	MemberCount           int      `json:"member_count"`
+	RepresentativePageIDs []string `json:"representative_page_ids"`
+	RelatedCount          int      `json:"related_count"`
+	ContradictsCount      int      `json:"contradicts_count"`
+}
+
+// WikiDraftReflowEntry is one origin=wiki_draft source's reflow footprint
+// (docs/impl/v1/wiki.md 步骤 10「可观测」).
+type WikiDraftReflowEntry struct {
+	SourceID             string `json:"source_id"`
+	OriginPageID         string `json:"origin_page_id"`
+	ProducedKPCount      int    `json:"produced_kp_count"`
+	SkippedAncestorEdges int    `json:"skipped_ancestor_edges"`
+}
+
+// TopicDecomposeEntry aggregates topic_decompose_signal events by the topic
+// page that provided the skeleton (docs/impl/v1/study.md 步骤 6
+// "topic_decompose" 报告提示项). Only accumulates — never drives any V1
+// learning action.
+type TopicDecomposeEntry struct {
+	PageID                 string  `json:"page_id"`
+	SignalCount            int     `json:"signal_count"`
+	AvgResolvedMemberCount float64 `json:"avg_resolved_member_count"`
+	OutsideRatioPositive   float64 `json:"outside_ratio_positive"` // share of signals with resolved_outside_count > 0
+}
+
+// QuestionComplexitySection is docs/impl/v1/study.md 步骤 7's "问题复杂度观测
+// 量" — observe-only, never feeds any online routing decision (V1 has no
+// routing layer).
+type QuestionComplexitySection struct {
+	Groups []QuestionComplexityGroup `json:"groups"`
+}
+
+type QuestionComplexityGroup struct {
+	Subject             string         `json:"subject"`
+	Intent              string         `json:"intent"`
+	Audience            string         `json:"audience"`
+	Constraint          string         `json:"constraint"`
+	QuestionCount       int            `json:"question_count"`
+	PathDistribution    map[string]int `json:"path_distribution"`
+	AvgDirectPointCount float64        `json:"avg_direct_point_count"`
+	WikiSatisfiedRatio  float64        `json:"wiki_satisfied_ratio"`
+	SkeletonUsedCount   int            `json:"skeleton_used_count"`
+	CrossMemberRatio    float64        `json:"cross_member_ratio"`
+	OutsideRatio        float64        `json:"outside_ratio"`
+	// ComplexityHint stays nil until thresholds are calibrated against real
+	// traces (docs/impl/v1/study.md 步骤 7: "阈值不预先拍定").
+	ComplexityHint *string `json:"complexity_hint"`
 }
 
 // ConceptCandidatesSection is the study report's concept evolution section
@@ -159,10 +219,16 @@ type WikiQualifyingPoint struct {
 }
 
 type WikiCandidateStats struct {
-	QualifyingKPCount  int     `json:"qualifying_kp_count"`
-	AvgConfidentCount  float64 `json:"avg_confident_count"`
-	KPNConnectionCount int     `json:"kpn_connection_count"`
-	DaysActive         int     `json:"days_active"`
+	QualifyingKPCount int     `json:"qualifying_kp_count"`
+	AvgConfidentCount float64 `json:"avg_confident_count"`
+	// KPNConnectionCount is related+contradicts, kept for the existing
+	// report/frontend field; RelatedConnectionCount/ContradictsConnectionCount
+	// are the gate's actual inputs (docs/design/wiki-compilation.md
+	// "ActivationLink 回答'这条管不管用'，Wiki 编译回答'这个主题够不够格立传'").
+	KPNConnectionCount         int `json:"kpn_connection_count"`
+	RelatedConnectionCount     int `json:"related_connection_count"`
+	ContradictsConnectionCount int `json:"contradicts_connection_count"`
+	DaysActive                 int `json:"days_active"`
 }
 
 type KnowledgeGapEntry struct {
@@ -186,12 +252,12 @@ type RunResult struct {
 // LearningActionsSummary is the report/run-response section documenting what
 // this cycle's learning actions did (docs/impl/v1/study.md 步骤 7).
 type LearningActionsSummary struct {
-	CreatedCandidates int                   `json:"created_candidates"`
-	Promoted          int                   `json:"promoted"`
-	PendingPromotions int                   `json:"pending_promotions"`
-	Weakened          int                   `json:"weakened"`
-	Reverified        int                   `json:"reverified"`
-	Deprecated        int                   `json:"deprecated"`
+	CreatedCandidates int `json:"created_candidates"`
+	Promoted          int `json:"promoted"`
+	PendingPromotions int `json:"pending_promotions"`
+	Weakened          int `json:"weakened"`
+	Reverified        int `json:"reverified"`
+	Deprecated        int `json:"deprecated"`
 	// SynonymCandidatesCreated counts subject_synonyms rows created this cycle
 	// (candidate or, when synonym_auto_promote=true, active) from
 	// subject_synonym_gap aggregation (docs/impl/v1/study.md 步骤 2a).

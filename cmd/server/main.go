@@ -157,7 +157,7 @@ func main() {
 
 	evidenceSvc := evidence.NewService(llmClient, cfg.Evidence)
 
-	wikiSvc := wiki.NewService(wikiStore, llmClient, idxMgr.Wiki, cfg.Wiki, cfg.Study.WikiConfidentMin)
+	wikiSvc := wiki.NewService(wikiStore, llmClient, idxMgr.Wiki, cfg.Wiki)
 	wikiSvc.SetActivationSvc(activationSvc)
 	unitSvc.SetWikiNotifier(wikiSvc)
 
@@ -165,7 +165,7 @@ func main() {
 	answerSvc := answer.NewService(answerStore, llmClient, q, retrievalSvc)
 	traceSvc := trace.NewService(traceStore, cfg.Study.ConceptNullRatioMin)
 	traceSvc.SetObservedConditionEnricher(activationSvc, cfg.Study.ObservedConditionsMax)
-	studySvc := study.NewService(studyStore, cfg.Study, activationSvc, wikiSvc, cfg.Wiki.RecompileNewKPMin)
+	studySvc := study.NewService(studyStore, cfg.Study, activationSvc, wikiSvc, cfg.Wiki.RecompileNewKPMin, cfg.Wiki.QualifyingMinDaysActive)
 
 	conceptSvc := concept.NewService(conceptStore, concept.Config{
 		AddEventMin:       cfg.Study.ConceptAddEventMin,

@@ -19,13 +19,20 @@ Wiki 直答层   已发布 Wiki 页面命中 → 直接基于页面回答（见 
 
 ```text
 问题（经 Session 补全，沿用 MVP）
-  ├─ 第 0 层：Wiki 直答候选采集（不调 LLM，两个入口，见 wiki.md 步骤 4）
+  ├─ 第 0 层：Wiki 直答候选采集（不调 LLM，三个入口，见 wiki.md 步骤 4）
   │    a. 词法：wiki index 查询（title/content/aliases/trigger_questions），
   │       分数 ≥ wiki_min_score；
   │    b. 概念：问题分词与概念名称词法匹配 → 该概念的 published 页面直接入候选；
+  │    c. 四元组：qc.Subject/Intent/Audience/Constraint 与页面
+  │       observed_conditions 做 conditionGroupMatches（Session 未解析时空转）；
+  │    优先级：四元组命中 > 词法（分数降序）> 仅概念命中；
+  │    命中的主题页不进直答序列，就地展开为其 contains 成员概念页
+  │       （主题页是召回骨架，不是直答单元，见 wiki.md 步骤 8「检索接入」）；
   │    合并去重取前 wiki_max_candidates 个，按序直答尝试，
   │    某页 sufficient=true → Wiki 直答路径（path_type=wiki）；
-  │    候选耗尽或为空 → 落入第 1 层
+  │    候选耗尽或为空 → 落入第 1 层，并携带 skeleton_point_ids
+  │      （展开成员页面的 source_point_ids 并集）与 skeleton_page_id；
+  │      同时写 topic_decompose_signal（见 wiki.md 步骤 9）
   ├─ 第 1 层：激活层 Match（不调 LLM，四元组完全匹配，见 activation.md 步骤 2）
   │    命中 → 快路径：
   │      链接目标 KP → 反查 KU（lifecycle=current）→ 直接构建 direct 候选
@@ -39,6 +46,17 @@ Wiki 直答层   已发布 Wiki 页面命中 → 直接基于页面回答（见 
        Domain 预过滤 → Source 过滤 → Outline/FTS 召回 → RRF → Rerank
        → KPN 扩展 → 证据挖掘 → 充分性判断 → EvidenceSet(path_type=full)
        → Answer
+
+  骨架注入（第 0 层带下来 skeleton_point_ids 时，两层架构，
+  见 wiki.md 步骤 8「检索接入」）：
+    这批 point_id 反查 KU 后直接作为 Rerank 候选注入，**跳过 Outline/FTS
+    召回与 RRF**（它们本就是为了找到这些 KU；主题页已经给出了经过一阶
+    编译验证的候选集），其余环节不变；
+    注入候选与 rerank_top_n 的关系：注入优先占位，不足则由既有召回补齐
+    （skeleton_point_ids 数 ≥ rerank_top_n 时按所属成员页面在候选序列中的
+    顺序截断）；
+    不增加任何 LLM 调用——这是主题页在 V1 的全部收益来源：
+    同一个复杂问题，命中主题页时慢路径少一轮召回、候选质量更高。
 ```
 
 ## 配置项（config.yml: retrieval 节扩展）
@@ -57,6 +75,8 @@ retrieval:
   wiki_min_score:         2.0    # Wiki 直答的 Bleve 最低分（BM25，需评估集校准）
   wiki_max_candidates:    3      # 直答候选序列长度上限（依次尝试，
                                   # 首个 sufficient=true 即停；设 1 退化为原 top-1 行为）
+                                  # 主题页命中不占候选位——它展开为成员概念页，
+                                  # 占位的是成员（wiki.md 步骤 8）
 ```
 
 ## 实现步骤

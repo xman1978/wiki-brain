@@ -15,16 +15,28 @@ import (
 )
 
 type Service struct {
-	store             *Store
-	cfg               config.StudyConfig
-	activationSvc     *activation.Service
-	wikiSvc           *wiki.Service
-	recompileNewKPMin int
-	conceptSvc        *concept.Service
+	store                   *Store
+	cfg                     config.StudyConfig
+	activationSvc           *activation.Service
+	wikiSvc                 *wiki.Service
+	recompileNewKPMin       int
+	qualifyingMinDaysActive int
+	conceptSvc              *concept.Service
+	// lastRelationScanAt is the in-process watermark for
+	// recomputePageRelations (docs/impl/v1/wiki.md 步骤 7b) — zero value on
+	// first Run scans the whole history once.
+	lastRelationScanAt time.Time
 }
 
-func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.Service, wikiSvc *wiki.Service, recompileNewKPMin int) *Service {
-	return &Service{store: store, cfg: cfg, activationSvc: activationSvc, wikiSvc: wikiSvc, recompileNewKPMin: recompileNewKPMin}
+func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.Service, wikiSvc *wiki.Service, recompileNewKPMin, qualifyingMinDaysActive int) *Service {
+	return &Service{
+		store:                   store,
+		cfg:                     cfg,
+		activationSvc:           activationSvc,
+		wikiSvc:                 wikiSvc,
+		recompileNewKPMin:       recompileNewKPMin,
+		qualifyingMinDaysActive: qualifyingMinDaysActive,
+	}
 }
 
 // SetConceptSvc wires the (optional) concept-candidate scan appended to this
@@ -81,12 +93,21 @@ func (s *Service) Run() (*RunResult, error) {
 		slog.Error("study: flag wiki recompile failed", "error", err)
 	}
 
+	if err := s.recomputePageRelations(); err != nil {
+		slog.Error("study: recompute page relations failed", "error", err)
+	}
+
+	oversizedClusters, err := s.flagTopicPageCandidates(&actions)
+	if err != nil {
+		slog.Error("study: flag topic page candidates failed", "error", err)
+	}
+
 	var conceptScan concept.ScanSummary
 	if s.conceptSvc != nil {
 		conceptScan = s.conceptSvc.Scan()
 	}
 
-	report, err := s.generateReport(actions, conceptScan)
+	report, err := s.generateReport(actions, conceptScan, oversizedClusters)
 	if err != nil {
 		return nil, fmt.Errorf("study: generate report: %w", err)
 	}
@@ -148,7 +169,7 @@ func (s *Service) aggregateGaps() (int, error) {
 	return processed, nil
 }
 
-func (s *Service) generateReport(actions LearningActionsSummary, conceptScan concept.ScanSummary) (*Report, error) {
+func (s *Service) generateReport(actions LearningActionsSummary, conceptScan concept.ScanSummary, oversizedClusters []wiki.OversizedCluster) (*Report, error) {
 	reportID := uuid.New().String()
 	periodDays := s.cfg.ReportPeriodDays
 
@@ -182,6 +203,29 @@ func (s *Service) generateReport(actions LearningActionsSummary, conceptScan con
 		return nil, err
 	}
 
+	oversizedEntries := make([]OversizedTopicClusterEntry, 0, len(oversizedClusters))
+	for _, c := range oversizedClusters {
+		oversizedEntries = append(oversizedEntries, OversizedTopicClusterEntry{
+			MemberCount: c.MemberCount, RepresentativePageIDs: c.RepresentativePageIDs,
+			RelatedCount: c.RelatedCount, ContradictsCount: c.ContradictsCount,
+		})
+	}
+
+	wikiDraftReflow, err := s.buildWikiDraftReflowSection()
+	if err != nil {
+		slog.Error("study: build wiki_draft_reflow report section failed", "error", err)
+	}
+
+	topicDecompose, err := s.buildTopicDecomposeSection(periodDays)
+	if err != nil {
+		slog.Error("study: build topic_decompose report section failed", "error", err)
+	}
+
+	questionComplexity, err := s.buildQuestionComplexitySection(periodDays)
+	if err != nil {
+		slog.Error("study: build question_complexity report section failed", "error", err)
+	}
+
 	report := &Report{
 		ReportID:                 reportID,
 		GeneratedAt:              time.Now().UTC(),
@@ -193,6 +237,10 @@ func (s *Service) generateReport(actions LearningActionsSummary, conceptScan con
 		LearningActions:          actions,
 		CrossSourceConflicts:     conflicts,
 		ConceptCandidates:        conceptCandidates,
+		OversizedTopicClusters:   oversizedEntries,
+		WikiDraftReflow:          wikiDraftReflow,
+		TopicDecompose:           topicDecompose,
+		QuestionComplexity:       questionComplexity,
 	}
 
 	content, err := json.Marshal(report)
@@ -312,7 +360,7 @@ func calcShortPathRate(pointID string, traces []TracePathRow) float64 {
 }
 
 func (s *Service) buildWikiCandidates() ([]WikiCandidate, error) {
-	qualifyingByConceptMap, err := s.store.QualifyingKPsByConceptFromCandidates(s.cfg.WikiConfidentMin)
+	qualifyingByConceptMap, err := s.store.QualifyingKPsByConceptFromCandidates()
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +391,7 @@ func (s *Service) buildWikiCandidates() ([]WikiCandidate, error) {
 			avgConfident = float64(totalConfident) / float64(len(kps))
 		}
 
-		connCount, err := s.store.KPNConnectionCount(pointIDs)
+		related, contradicts, err := s.store.KPNConnectionCountsByType(pointIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -353,13 +401,19 @@ func (s *Service) buildWikiCandidates() ([]WikiCandidate, error) {
 			return nil, err
 		}
 
+		// docs/design/wiki-compilation.md "ActivationLink 回答'这条管不管用'，
+		// Wiki 编译回答'这个主题够不够格立传'": 广度（qualifying_kp_count）、
+		// 连贯（related 连接存在且 contradicts 不反客为主）、稳定
+		// （daysActive 衡量的是跨时间跨度的持久性，不是问询频率）三者同时
+		// 满足才 ready；可靠性已经由 qualifying KP 定义里的 verified 状态
+		// 单独回答，这里不再重复检查。
 		recommendation := "needs_more_data"
-		if len(kps) >= s.cfg.WikiKPMin && connCount >= 1 {
+		if len(kps) >= s.cfg.WikiKPMin && related >= 1 && contradicts < related && daysActive >= s.qualifyingMinDaysActive {
 			recommendation = "ready"
 		}
 
-		reason := fmt.Sprintf("%d 个 KP 达到 Wiki 阈值，KPN 连接 %d 条，活跃天数 %d 天",
-			len(kps), connCount, daysActive)
+		reason := fmt.Sprintf("%d 个 KP 达到 Wiki 阈值，KPN 连接 related=%d/contradicts=%d，活跃天数 %d 天",
+			len(kps), related, contradicts, daysActive)
 
 		results = append(results, WikiCandidate{
 			ConceptID:          conceptID,
@@ -368,10 +422,12 @@ func (s *Service) buildWikiCandidates() ([]WikiCandidate, error) {
 			QualifyingPointIDs: pointIDs,
 			QualifyingPoints:   qualifyingPoints,
 			Stats: WikiCandidateStats{
-				QualifyingKPCount:  len(kps),
-				AvgConfidentCount:  avgConfident,
-				KPNConnectionCount: connCount,
-				DaysActive:         daysActive,
+				QualifyingKPCount:          len(kps),
+				AvgConfidentCount:          avgConfident,
+				KPNConnectionCount:         related + contradicts,
+				RelatedConnectionCount:     related,
+				ContradictsConnectionCount: contradicts,
+				DaysActive:                 daysActive,
 			},
 			Recommendation: recommendation,
 			Reason:         reason,
@@ -502,7 +558,7 @@ func (s *Service) flagWikiRecompile() error {
 		return nil
 	}
 
-	qualifyingByConcept, err := s.store.QualifyingKPsByConceptFromCandidates(s.cfg.WikiConfidentMin)
+	qualifyingByConcept, err := s.store.QualifyingKPsByConceptFromCandidates()
 	if err != nil {
 		return err
 	}
@@ -528,6 +584,224 @@ func (s *Service) flagWikiRecompile() error {
 		}
 	}
 	return nil
+}
+
+// flagTopicPageCandidates implements docs/impl/v1/study.md 步骤 6's two-tier
+// extension: delegate connected-component detection and shell-page creation
+// to the Wiki module (docs/impl/v1/wiki.md 步骤 8「候选产生」), then write the
+// pending_confirm topic_page_candidate audit trail for each shell page
+// created this cycle. The oversized clusters returned alongside are report-
+// only (docs/impl/v1/study.md 步骤 6 "oversized_topic_cluster") — passed
+// through to generateReport rather than recomputed there, since
+// DetectTopicCandidates has a side effect (shell page creation) that must
+// only run once per cycle.
+func (s *Service) flagTopicPageCandidates(actions *LearningActionsSummary) ([]wiki.OversizedCluster, error) {
+	if s.wikiSvc == nil || s.activationSvc == nil {
+		return nil, nil
+	}
+	candidates, oversized, err := s.wikiSvc.DetectTopicCandidates()
+	if err != nil {
+		return nil, fmt.Errorf("study: detect topic candidates: %w", err)
+	}
+	for _, c := range candidates {
+		lr := &activation.LearningResult{
+			Action:     activation.ActionTopicPageCandidate,
+			ObjectType: activation.ObjectTypeWikiPage,
+			ObjectID:   c.PageID,
+			Reason:     c.Reason,
+			EventIDs:   marshalIDs(c.MemberPageIDs),
+			Status:     activation.ResultPendingConfirm,
+		}
+		if err := s.activationSvc.Store().InsertLearningResult(lr); err != nil {
+			slog.Error("study: insert topic_page_candidate learning result failed", "page_id", c.PageID, "error", err)
+			continue
+		}
+		actions.Actions = append(actions.Actions, LearningActionEntry{
+			ResultID: lr.ResultID, Action: lr.Action, ObjectID: lr.ObjectID, Reason: lr.Reason, Status: lr.Status,
+		})
+	}
+	return oversized, nil
+}
+
+// recomputePageRelations implements docs/impl/v1/wiki.md 步骤 7b: after new
+// cross-Source KPN relations appear, recompute only the page pairs whose
+// published concept pages cite one of the newly-related points — not a full
+// pairwise rescan. "New" is tracked by an in-process watermark (the last
+// time this cycle ran); a fresh process re-scans the whole history once on
+// its first cycle, which is an acceptable one-time cost rather than a
+// persisted cross-restart watermark.
+func (s *Service) recomputePageRelations() error {
+	if s.wikiSvc == nil {
+		return nil
+	}
+	scanFrom := s.lastRelationScanAt
+	now := time.Now().UTC()
+	pointIDs, err := s.store.RecentCrossRelationPointIDs(scanFrom)
+	if err != nil {
+		return fmt.Errorf("study: recent cross relation point ids: %w", err)
+	}
+	s.lastRelationScanAt = now
+	if len(pointIDs) == 0 {
+		return nil
+	}
+	return s.wikiSvc.RecomputeRelationsForPoints(pointIDs)
+}
+
+// buildWikiDraftReflowSection implements docs/impl/v1/study.md 步骤 6's
+// "wiki_draft_reflow" report item.
+func (s *Service) buildWikiDraftReflowSection() ([]WikiDraftReflowEntry, error) {
+	rows, err := s.store.WikiDraftReflowStats()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]WikiDraftReflowEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, WikiDraftReflowEntry{
+			SourceID: r.SourceID, OriginPageID: r.OriginPageID,
+			ProducedKPCount: r.ProducedKPCount, SkippedAncestorEdges: r.SkippedAncestorEdges,
+		})
+	}
+	return out, nil
+}
+
+// buildTopicDecomposeSection implements docs/impl/v1/study.md 步骤 6's
+// "topic_decompose" report item: aggregate topic_decompose_signal events by
+// the topic page that provided the skeleton.
+func (s *Service) buildTopicDecomposeSection(windowDays int) ([]TopicDecomposeEntry, error) {
+	rows, err := s.store.TopicDecomposeSignals(windowDays)
+	if err != nil {
+		return nil, err
+	}
+	type agg struct {
+		count            int
+		memberSum        int
+		outsidePositives int
+	}
+	byPage := make(map[string]*agg)
+	var order []string
+	for _, r := range rows {
+		a, ok := byPage[r.PageID]
+		if !ok {
+			a = &agg{}
+			byPage[r.PageID] = a
+			order = append(order, r.PageID)
+		}
+		a.count++
+		a.memberSum += len(r.ResolvedMemberPageIDs)
+		if r.ResolvedOutsideCount > 0 {
+			a.outsidePositives++
+		}
+	}
+
+	out := make([]TopicDecomposeEntry, 0, len(order))
+	for _, pageID := range order {
+		a := byPage[pageID]
+		entry := TopicDecomposeEntry{PageID: pageID, SignalCount: a.count}
+		if a.count > 0 {
+			entry.AvgResolvedMemberCount = float64(a.memberSum) / float64(a.count)
+			entry.OutsideRatioPositive = float64(a.outsidePositives) / float64(a.count)
+		}
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
+// buildQuestionComplexitySection implements docs/impl/v1/study.md 步骤 7's
+// "问题复杂度观测量": group traces by their four-tuple and compute per-group
+// metrics. Report-only — never feeds any online routing decision.
+//
+// Grouping uses the raw (subject, intent, audience, constraint_text) tuple
+// rather than re-running activation.Matcher's fuzzy/synonym condition-group
+// matching: the doc calls for the same normalization the retrieval-side
+// matcher uses so "same class of question" means one thing across both
+// sides, but a full re-derivation of Matcher's grouping here would require
+// loading the synonym resolver and re-running conditionGroupMatches per
+// trace pair, which is a much larger change than this observation-only
+// section's actual decision weight (it drives no behavior) justifies for
+// V1. Revisit if the raw-tuple grouping turns out too fragmented to be
+// useful once real data accumulates.
+func (s *Service) buildQuestionComplexitySection(windowDays int) (QuestionComplexitySection, error) {
+	rows, err := s.store.ComplexityTraces(windowDays)
+	if err != nil {
+		return QuestionComplexitySection{}, err
+	}
+	decomposeRows, err := s.store.TopicDecomposeSignals(windowDays)
+	if err != nil {
+		slog.Warn("study: fetch topic decompose signals for complexity failed", "error", err)
+	}
+	// topic_decompose_signal payloads don't carry trace_id in the decoded
+	// struct (it's implicit via learning_events.trace_id, not part of the
+	// payload JSON) — cross_member_ratio/outside_ratio are therefore computed
+	// globally across the window rather than joined per group; still useful
+	// as an overall signal, just not sliced by four-tuple in this cut.
+	crossMemberTotal, outsideTotal := 0, 0
+	for _, r := range decomposeRows {
+		if len(r.ResolvedMemberPageIDs) >= 2 {
+			crossMemberTotal++
+		}
+		if r.ResolvedOutsideCount > 0 {
+			outsideTotal++
+		}
+	}
+	var globalCrossMemberRatio, globalOutsideRatio float64
+	if len(decomposeRows) > 0 {
+		globalCrossMemberRatio = float64(crossMemberTotal) / float64(len(decomposeRows))
+		globalOutsideRatio = float64(outsideTotal) / float64(len(decomposeRows))
+	}
+
+	type key struct{ subject, intent, audience, constraint string }
+	type agg struct {
+		count          int
+		pathCounts     map[string]int
+		directPointSum int
+		wikiCount      int
+		skeletonUsed   int
+	}
+	groups := make(map[key]*agg)
+	var order []key
+	for _, r := range rows {
+		k := key{r.Subject, r.Intent, r.Audience, r.Constraint}
+		a, ok := groups[k]
+		if !ok {
+			a = &agg{pathCounts: map[string]int{}}
+			groups[k] = a
+			order = append(order, k)
+		}
+		a.count++
+		a.pathCounts[r.PathType]++
+		a.directPointSum += r.DirectPointCount
+		if r.PathType == "wiki" {
+			a.wikiCount++
+		}
+		if r.SkeletonPageID != "" {
+			a.skeletonUsed++
+		}
+	}
+
+	minQuestions := s.cfg.ComplexityMinQuestions
+	if minQuestions <= 0 {
+		minQuestions = 3
+	}
+
+	var out []QuestionComplexityGroup
+	for _, k := range order {
+		a := groups[k]
+		if a.count < minQuestions {
+			continue
+		}
+		out = append(out, QuestionComplexityGroup{
+			Subject: k.subject, Intent: k.intent, Audience: k.audience, Constraint: k.constraint,
+			QuestionCount:       a.count,
+			PathDistribution:    a.pathCounts,
+			AvgDirectPointCount: float64(a.directPointSum) / float64(a.count),
+			WikiSatisfiedRatio:  float64(a.wikiCount) / float64(a.count),
+			SkeletonUsedCount:   a.skeletonUsed,
+			CrossMemberRatio:    globalCrossMemberRatio,
+			OutsideRatio:        globalOutsideRatio,
+			ComplexityHint:      nil, // thresholds not calibrated yet (docs/impl/v1/study.md 步骤 7)
+		})
+	}
+	return QuestionComplexitySection{Groups: out}, nil
 }
 
 // createCandidates implements docs/impl/v1/study.md 步骤 2: two sources,

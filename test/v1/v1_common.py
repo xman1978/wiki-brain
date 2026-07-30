@@ -72,13 +72,20 @@ def http_delete_json(base_url, path, timeout=30):
         return (json.loads(body) if body else None), resp.status
 
 
-def http_post_multipart_file(base_url, path, file_path: Path, timeout=300):
-    """上传文件到 POST /sources 或 /sources/:id/reupload（multipart form, field=file）。"""
+def http_post_multipart_file(base_url, path, file_path: Path, timeout=300, extra_fields=None):
+    """上传文件到 POST /sources 或 /sources/:id/reupload（multipart form, field=file）。
+    extra_fields（可选）：额外的 form 字段，如两层架构回流入口的
+    {"origin": "wiki_draft", "origin_page_id": "..."}（docs/impl/v1/wiki.md 步骤 10）。
+    """
     boundary = uuid.uuid4().hex
     filename = file_path.name
     data = file_path.read_bytes()
 
     body = bytearray()
+    for key, value in (extra_fields or {}).items():
+        body += f"--{boundary}\r\n".encode("utf-8")
+        body += f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8")
+        body += f"{value}\r\n".encode("utf-8")
     body += f"--{boundary}\r\n".encode("utf-8")
     body += (
         f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
@@ -332,6 +339,30 @@ def db_wiki_pages(conn, status=None):
         params.append(status)
     rows = conn.execute(q, params).fetchall()
     return [dict(r) for r in rows]
+
+
+def db_wiki_page_relations(conn, page_id):
+    """两层架构（docs/impl/v1/wiki.md 步骤 7）：page_id 参与的全部关系行，无论作为
+    from_page_id 还是 to_page_id。"""
+    rows = conn.execute(
+        "SELECT * FROM wiki_page_relations WHERE from_page_id = ? OR to_page_id = ?",
+        (page_id, page_id),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def db_wiki_drafts(conn, page_id):
+    rows = conn.execute("SELECT * FROM wiki_drafts WHERE page_id = ?", (page_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def db_source_by_id(conn, source_id):
+    row = conn.execute("SELECT * FROM sources WHERE source_id = ?", (source_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def db_topic_decompose_events(conn, since_created_at=None):
+    return db_learning_events_by_type(conn, "topic_decompose_signal", since_created_at)
 
 
 def db_cooccurrence_for_point(conn, point_id):

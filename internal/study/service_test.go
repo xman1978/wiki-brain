@@ -23,7 +23,6 @@ func testConfig() config.StudyConfig {
 		CandidateConfidentMin: 5,
 		CandidateRatioMin:     0.6,
 		WikiKPMin:             4,
-		WikiConfidentMin:      8,
 		GapHitThreshold:       3,
 		ScanBatchSize:         200,
 		ReportPeriodDays:      30,
@@ -44,7 +43,7 @@ func testConfig() config.StudyConfig {
 func TestService_Run_Empty(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0)
+	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0)
 
 	result, err := svc.Run()
 	if err != nil {
@@ -79,7 +78,7 @@ func TestService_Run_WithData(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0)
 
 	// Seed prerequisite data
 	seedSource(t, db, "src1")
@@ -172,7 +171,7 @@ func TestService_GapThresholdWarning(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.GapHitThreshold = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -204,7 +203,7 @@ func TestService_RecommendationLogic(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -253,8 +252,7 @@ func TestService_WikiCandidates(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.WikiKPMin = 2
-	cfg.WikiConfidentMin = 5
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -263,6 +261,8 @@ func TestService_WikiCandidates(t *testing.T) {
 	seedKP(t, db, "kp1", "ku1", "src1", "c1")
 	seedKP(t, db, "kp2", "ku1", "src1", "c2")
 	seedKPRelation(t, db, "kp1", "kp2")
+	seedVerifiedActivationLink(t, db, "link1", "kp1")
+	seedVerifiedActivationLink(t, db, "link2", "kp2")
 
 	// Insert candidates with high confident_count
 	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc1', 't1', 'kp1', 10, 12)`)
@@ -287,8 +287,66 @@ func TestService_WikiCandidates(t *testing.T) {
 	if w.Stats.KPNConnectionCount != 1 {
 		t.Errorf("expected 1 KPN connection, got %d", w.Stats.KPNConnectionCount)
 	}
+	if w.Stats.RelatedConnectionCount != 1 || w.Stats.ContradictsConnectionCount != 0 {
+		t.Errorf("expected related=1/contradicts=0, got related=%d/contradicts=%d",
+			w.Stats.RelatedConnectionCount, w.Stats.ContradictsConnectionCount)
+	}
 	if w.Recommendation != "ready" {
 		t.Errorf("expected ready, got %s", w.Recommendation)
+	}
+}
+
+// TestService_WikiCandidates_ContradictsDominantNotReady covers
+// docs/design/wiki-compilation.md "ActivationLink 回答'这条管不管用'，Wiki
+// 编译回答'这个主题够不够格立传'": a topic whose KPN connections are mostly
+// contradicts (not settled enough to consolidate) must not be recommended
+// ready, even though qualifying_kp_count and days_active would otherwise pass.
+func TestService_WikiCandidates_ContradictsDominantNotReady(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	cfg := testConfig()
+	cfg.WikiKPMin = 2
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0)
+
+	seedSource(t, db, "src1")
+	seedDomain(t, db, "dom1", "D")
+	seedConcept(t, db, "con1", "dom1", "TestConcept")
+	seedKU(t, db, "ku1", "src1", "con1")
+	seedKP(t, db, "kp1", "ku1", "src1", "c1")
+	seedKP(t, db, "kp2", "ku1", "src1", "c2")
+	seedKP(t, db, "kp3", "ku1", "src1", "c3")
+	// One related connection, two contradicts — contradicts dominates.
+	seedKPRelation(t, db, "kp1", "kp2")
+	if _, err := db.Exec(`INSERT INTO knowledge_point_relations (relation_id, source_point_id, target_point_id, relation_type, prompt_version)
+		VALUES ('rel-c1', 'kp1', 'kp3', 'contradicts', 'v1')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO knowledge_point_relations (relation_id, source_point_id, target_point_id, relation_type, prompt_version)
+		VALUES ('rel-c2', 'kp2', 'kp3', 'contradicts', 'v1')`); err != nil {
+		t.Fatal(err)
+	}
+	seedVerifiedActivationLink(t, db, "link1", "kp1")
+	seedVerifiedActivationLink(t, db, "link2", "kp2")
+	seedVerifiedActivationLink(t, db, "link3", "kp3")
+
+	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc1', 't1', 'kp1', 10, 12)`)
+	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc2', 't2', 'kp2', 8, 10)`)
+	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc3', 't3', 'kp3', 8, 10)`)
+
+	wikis, err := svc.buildWikiCandidates()
+	if err != nil {
+		t.Fatalf("buildWikiCandidates: %v", err)
+	}
+	if len(wikis) != 1 {
+		t.Fatalf("expected 1 wiki candidate, got %d", len(wikis))
+	}
+	w := wikis[0]
+	if w.Stats.RelatedConnectionCount != 1 || w.Stats.ContradictsConnectionCount != 2 {
+		t.Fatalf("expected related=1/contradicts=2, got related=%d/contradicts=%d",
+			w.Stats.RelatedConnectionCount, w.Stats.ContradictsConnectionCount)
+	}
+	if w.Recommendation != "needs_more_data" {
+		t.Errorf("expected needs_more_data when contradicts dominates related, got %s", w.Recommendation)
 	}
 }
 
@@ -301,9 +359,8 @@ func TestService_FlagWikiCandidates_RecordsEventIDs(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.WikiKPMin = 2
-	cfg.WikiConfidentMin = 5
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, cfg, activationSvc, nil, 0)
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -312,6 +369,8 @@ func TestService_FlagWikiCandidates_RecordsEventIDs(t *testing.T) {
 	seedKP(t, db, "kp1", "ku1", "src1", "c1")
 	seedKP(t, db, "kp2", "ku1", "src1", "c2")
 	seedKPRelation(t, db, "kp1", "kp2")
+	seedVerifiedActivationLink(t, db, "link1", "kp1")
+	seedVerifiedActivationLink(t, db, "link2", "kp2")
 
 	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc1', 't1', 'kp1', 10, 12)`)
 	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc2', 't2', 'kp2', 8, 10)`)

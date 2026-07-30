@@ -153,6 +153,13 @@ type RetrievalConfig struct {
 	// rerankJudgeIncludeAnalysis() resolves it. Set to false to A/B test
 	// whether dropping the analysis field speeds up rerank latency.
 	RerankJudgeIncludeAnalysis *bool `yaml:"rerank_judge_include_analysis"`
+	// SkeletonInjectionEnabled gates topic-page skeleton injection into the
+	// slow path (docs/impl/v1/wiki.md 步骤 8「检索接入」, docs/impl/v1/wiki.md
+	// 两层架构扩展): default false — injection stakes recall quality on how
+	// well a topic page's member boundary was drawn, and a too-narrow
+	// boundary silently degrades recall instead of failing loud. Turn on
+	// after observing resolved_outside_count (docs/impl/v1/study.md 步骤 7).
+	SkeletonInjectionEnabled bool `yaml:"skeleton_injection_enabled"`
 }
 
 // EvidenceConfig — docs/impl/v1/evidence.md 配置项.
@@ -176,6 +183,18 @@ type WikiConfig struct {
 	// TriggerQuestionsMax caps aliases and trigger_questions each (<=0
 	// defaults to 10; docs/impl/v1/wiki.md 步骤 3).
 	TriggerQuestionsMax int `yaml:"trigger_questions_max"`
+	// QualifyingMinDaysActive gates the concept-level "ready" recommendation
+	// on activity span, not just count (docs/design/wiki-compilation.md
+	// "反复激活、多次验证、持续采用不是命中次数"; docs/impl/v1/wiki.md 步骤 3
+	// "概念级 ready 判定").
+	QualifyingMinDaysActive int `yaml:"qualifying_min_days_active"`
+
+	// —— 两层架构（docs/impl/v1/wiki.md 步骤 7-9）——
+	RelationKPNMin         int `yaml:"relation_kpn_min"`
+	RelationSharedPointMin int `yaml:"relation_shared_point_min"`
+	TopicMemberMin         int `yaml:"topic_member_min"`
+	TopicMemberMax         int `yaml:"topic_member_max"`
+	TopicCompileMaxChars   int `yaml:"topic_compile_max_chars"`
 }
 
 type StudyConfig struct {
@@ -183,7 +202,6 @@ type StudyConfig struct {
 	CandidateConfidentMin int     `yaml:"candidate_confident_min"`
 	CandidateRatioMin     float64 `yaml:"candidate_ratio_min"`
 	WikiKPMin             int     `yaml:"wiki_kp_min"`
-	WikiConfidentMin      int     `yaml:"wiki_confident_min"`
 	GapHitThreshold       int     `yaml:"gap_hit_threshold"`
 	ScanBatchSize         int     `yaml:"scan_batch_size"`
 	ReportPeriodDays      int     `yaml:"report_period_days"`
@@ -216,6 +234,8 @@ type StudyConfig struct {
 	ConceptMergeOverlapMin   float64 `yaml:"concept_merge_overlap_min"`
 	ConceptCandidateIdleDays int     `yaml:"concept_candidate_idle_days"`
 	ConceptEventWindowDays   int     `yaml:"concept_event_window_days"`
+	// —— 问题复杂度观测量（两层架构扩展，docs/impl/v1/study.md 步骤 7）——
+	ComplexityMinQuestions int `yaml:"complexity_min_questions"`
 }
 
 func (c *LLMConfig) TimeoutDuration() time.Duration {

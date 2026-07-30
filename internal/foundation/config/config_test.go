@@ -48,7 +48,6 @@ study:
   candidate_confident_min: 5
   candidate_ratio_min: 0.6
   wiki_kp_min: 4
-  wiki_confident_min: 8
   gap_hit_threshold: 3
   scan_batch_size: 200
   report_period_days: 30

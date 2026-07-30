@@ -22,6 +22,21 @@ func (s *Service) Store() *Store {
 	return s.store
 }
 
+// LoadSynonymResolver builds a SynonymResolver warmed with the currently
+// active subject synonyms — for callers outside this package (Wiki's
+// four-tuple retrieval entry, docs/design/wiki-compilation.md "触发问法取材
+// 真实观测，检索匹配复用四元组") that need to call BuildQueryConditionTerms /
+// MatchConditionGroups themselves instead of going through Matcher.Match.
+func (s *Service) LoadSynonymResolver() (*SynonymResolver, error) {
+	synonyms, err := s.store.ListActiveSynonyms()
+	if err != nil {
+		return nil, fmt.Errorf("activation: load synonym resolver: %w", err)
+	}
+	r := NewSynonymResolver()
+	r.Load(synonyms)
+	return r, nil
+}
+
 // Match is Retrieval's entry point into the activation layer
 // (docs/impl/v1/retrieval.md 步骤 2): a thin passthrough to the Matcher so
 // Retrieval only needs one dependency on this package.

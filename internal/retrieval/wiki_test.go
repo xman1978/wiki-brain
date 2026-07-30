@@ -43,7 +43,7 @@ func setupTestServiceWithWiki(t *testing.T) (*Service, *llm.FakeClient, *wiki.Se
 	t.Cleanup(func() { idxMgr.Close() })
 
 	wikiCfg := config.WikiConfig{CompileMaxChars: 12000, RecompileNewKPMin: 2}
-	wikiSvc := wiki.NewService(wikiStore, fake, idxMgr.Wiki, wikiCfg, 5)
+	wikiSvc := wiki.NewService(wikiStore, fake, idxMgr.Wiki, wikiCfg)
 	if _, err := wikiSvc.Publish(page.PageID); err != nil {
 		t.Fatal(err)
 	}

@@ -125,7 +125,19 @@ type OutlineIndexDoc struct {
 // Import handles the full upload flow: save file, create source record.
 // Returns the source for the caller; processing happens async.
 func (s *Service) Import(ctx context.Context, fileName string, fileReader io.Reader) (*Source, error) {
-	return s.importInternal(ctx, fileName, fileReader, "")
+	return s.importInternal(ctx, fileName, fileReader, "", SourceOriginUpload, "")
+}
+
+// ImportWithOrigin implements docs/impl/v1/wiki.md 步骤 10's reflow entry:
+// POST /sources with an optional origin/origin_page_id, defaulting to
+// SourceOriginUpload ("upload") when origin is empty — the existing call
+// behavior. origin_page_id is only meaningful (and only stored) alongside
+// origin=wiki_draft.
+func (s *Service) ImportWithOrigin(ctx context.Context, fileName string, fileReader io.Reader, origin, originPageID string) (*Source, error) {
+	if origin == "" {
+		origin = SourceOriginUpload
+	}
+	return s.importInternal(ctx, fileName, fileReader, "", origin, originPageID)
 }
 
 // ImportShadow creates a hidden Shadow Source for POST /sources/:id/reupload
@@ -150,10 +162,10 @@ func (s *Service) ImportShadow(ctx context.Context, targetSourceID, fileName str
 		}
 	}
 
-	return s.importInternal(ctx, fileName, fileReader, targetSourceID)
+	return s.importInternal(ctx, fileName, fileReader, targetSourceID, SourceOriginUpload, "")
 }
 
-func (s *Service) importInternal(ctx context.Context, fileName string, fileReader io.Reader, shadowOf string) (*Source, error) {
+func (s *Service) importInternal(ctx context.Context, fileName string, fileReader io.Reader, shadowOf, origin, originPageID string) (*Source, error) {
 	sourceID := uuid.New().String()
 	ext := strings.ToLower(filepath.Ext(fileName))
 
@@ -200,6 +212,10 @@ func (s *Service) importInternal(ctx context.Context, fileName string, fileReade
 		OriginalPath: filepath.Join("data", "sources", "original", sourceID+ext),
 		MarkdownPath: markdownPath,
 		Status:       "pending",
+		Origin:       origin,
+	}
+	if origin == SourceOriginWikiDraft && originPageID != "" {
+		src.OriginPageID = sql.NullString{String: originPageID, Valid: true}
 	}
 	if shadowOf != "" {
 		src.ShadowOf = sql.NullString{String: shadowOf, Valid: true}

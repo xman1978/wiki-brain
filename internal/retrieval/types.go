@@ -52,6 +52,27 @@ type EvidenceSet struct {
 	// Deliberately excluded from evidence_snapshot (json:"-"): the doc's
 	// persisted shape has no content field, only wiki_page_id/cited_point_ids.
 	WikiAnswerContent string `json:"-"`
+
+	// Skeleton fields (docs/impl/v1/wiki.md 步骤 8「检索接入」两层架构扩展):
+	// set whenever a topic-page hit expanded into member concept pages,
+	// regardless of whether the Wiki direct-answer path itself succeeded
+	// ("无论直答是否成功都记录"). SkeletonPageID is persisted onto
+	// traces.skeleton_page_id; SkeletonMembers is transient (not persisted in
+	// evidence_snapshot) — it exists only to let Trace compute
+	// resolved_member_page_ids / resolved_outside_count for the
+	// topic_decompose_signal learning event without a wiki-package
+	// dependency.
+	SkeletonPageID string               `json:"skeleton_page_id,omitempty"`
+	SkeletonMembers []SkeletonMemberInfo `json:"-"`
+}
+
+// SkeletonMemberInfo is one topic-page member's page id and the
+// source_point_ids it contributed to the skeleton — including members
+// truncated out of the direct-answer candidate list
+// (docs/impl/v1/wiki.md 步骤 8: "含被截断掉的").
+type SkeletonMemberInfo struct {
+	PageID   string
+	PointIDs []string
 }
 
 // PathType values (docs/impl/v1/retrieval.md, docs/impl/v1/trace.md).

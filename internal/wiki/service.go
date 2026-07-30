@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/jxman78/wiki-brain/internal/activation"
@@ -22,20 +24,15 @@ var requiredSections = []string{"## 稳定结论", "## 展开说明", "## 待验
 var pointIDTagRe = regexp.MustCompile(`\[([^\[\]\s]+)\]`)
 
 type Service struct {
-	store                  *Store
-	llmClient              llm.LLMClient
-	wikiIndex              bleve.Index
-	cfg                    config.WikiConfig
-	qualifyingMinConfident int
-	activationSvc          *activation.Service
+	store         *Store
+	llmClient     llm.LLMClient
+	wikiIndex     bleve.Index
+	cfg           config.WikiConfig
+	activationSvc *activation.Service
 }
 
-// qualifyingMinConfident should be study.StudyConfig.WikiConfidentMin — Wiki
-// doesn't import the study package (docs/impl/v1/wiki.md 步骤 3, "与 Study
-// 候选口径一致" is a data-contract statement, not a Go dependency), so the
-// caller (main.go) threads the same config.yml value through here.
-func NewService(store *Store, llmClient llm.LLMClient, wikiIndex bleve.Index, cfg config.WikiConfig, qualifyingMinConfident int) *Service {
-	return &Service{store: store, llmClient: llmClient, wikiIndex: wikiIndex, cfg: cfg, qualifyingMinConfident: qualifyingMinConfident}
+func NewService(store *Store, llmClient llm.LLMClient, wikiIndex bleve.Index, cfg config.WikiConfig) *Service {
+	return &Service{store: store, llmClient: llmClient, wikiIndex: wikiIndex, cfg: cfg}
 }
 
 // SetActivationSvc wires the (optional) dependency Compile needs to resolve
@@ -45,10 +42,39 @@ func (s *Service) SetActivationSvc(a *activation.Service) {
 	s.activationSvc = a
 }
 
+// Analyze implements docs/impl/v1/wiki.md 步骤 2: POST /wiki/compile/analyze.
+// Read-only — it changes no state (does not resolve any pending_confirm
+// wiki_candidate) and its result is never persisted. The caller is expected
+// to show it to a human and, on confirmation, send it back as
+// CompileRequest.Claims/Tensions (docs/design/wiki-compilation.md "编译内部
+// 分两步").
+func (s *Service) Analyze(ctx context.Context, req AnalyzeRequest) (*AnalyzeResult, error) {
+	// page_type=topic is exclusively a second-tier compile output now
+	// (docs/impl/v1/wiki.md 步骤 8, "数据结构" 两层架构扩展): topic pages are
+	// produced only by POST /wiki/pages/:id/topic/analyze|compile, which
+	// takes already-published concept pages as material, not KPs. This
+	// KP-based one-tier path only ever produces concept pages.
+	if req.PageType != PageTypeConcept {
+		return nil, fmt.Errorf("wiki: invalid page_type %q (topic pages are compiled via POST /wiki/pages/:id/topic/analyze|compile)", req.PageType)
+	}
+
+	claims, tensions, err := s.analyzeClaims(ctx, req.ConceptID)
+	if err != nil {
+		return nil, err
+	}
+	return &AnalyzeResult{
+		ConceptID: req.ConceptID,
+		PageType:  req.PageType,
+		ResultID:  req.ResultID,
+		Claims:    claims,
+		Tensions:  tensions,
+	}, nil
+}
+
 // Compile implements docs/impl/v1/wiki.md 步骤 2-3: POST /wiki/compile.
 func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error) {
-	if req.PageType != PageTypeTopic && req.PageType != PageTypeConcept {
-		return nil, fmt.Errorf("wiki: invalid page_type %q", req.PageType)
+	if req.PageType != PageTypeConcept {
+		return nil, fmt.Errorf("wiki: invalid page_type %q (topic pages are compiled via POST /wiki/pages/:id/topic/analyze|compile)", req.PageType)
 	}
 
 	if req.ResultID != "" {
@@ -67,24 +93,38 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 		return nil, ErrPageAlreadyExists
 	}
 
-	compiled, err := s.compileContent(ctx, req.ConceptID, req.PageType)
+	claims, tensions := req.Claims, req.Tensions
+	if len(claims) == 0 {
+		// No analysis round-tripped back (debug path, or caller skipped
+		// /wiki/compile/analyze) — run it internally so generation is still
+		// constrained to an analysis result, not raw material access.
+		var err error
+		claims, tensions, err = s.analyzeClaims(ctx, req.ConceptID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	compiled, err := s.compileContent(ctx, req.ConceptID, req.PageType, claims, tensions)
 	if err != nil {
 		return nil, err
 	}
 
 	page := &Page{
-		PageType:         req.PageType,
-		Title:            compiled.title,
-		Content:          compiled.content,
-		Status:           StatusDraft,
-		SourcePointIDs:   marshalIDs(compiled.sourcePointIDs),
-		SourceUnitIDs:    marshalIDs(compiled.sourceUnitIDs),
-		SourceLinkIDs:    marshalIDs(compiled.sourceLinkIDs),
-		Aliases:          marshalIDs(compiled.aliases),
-		TriggerQuestions: marshalIDs(compiled.triggerQuestions),
-		CompiledFrom:     marshalIDs(nonEmpty(req.ResultID)),
-		PromptVersion:    "v1",
-		ModelName:        "reasoning",
+		PageType:           req.PageType,
+		Title:              compiled.title,
+		Content:            compiled.content,
+		Status:             StatusDraft,
+		SourcePointIDs:     marshalIDs(compiled.sourcePointIDs),
+		SourceUnitIDs:      marshalIDs(compiled.sourceUnitIDs),
+		SourceLinkIDs:      marshalIDs(compiled.sourceLinkIDs),
+		ObservedConditions: marshalConditions(compiled.observedConditions),
+		Aliases:            marshalIDs(compiled.aliases),
+		TriggerQuestions:   marshalIDs(compiled.triggerQuestions),
+		UncoveredPoints:    marshalUncoveredPoints(compiled.uncoveredPoints),
+		CompiledFrom:       marshalIDs(nonEmpty(req.ResultID)),
+		PromptVersion:      "v1",
+		ModelName:          "reasoning",
 	}
 	page.ConceptID = nullableString(req.ConceptID)
 
@@ -114,19 +154,32 @@ func (s *Service) Recompile(ctx context.Context, pageID, reason string, compiled
 	if page.Status == StatusArchived {
 		return nil, ErrPageArchived
 	}
+	if page.PageType == PageTypeTopic {
+		return s.RecompileTopic(ctx, page, reason, compiledFrom)
+	}
 
 	conceptID := ""
 	if page.ConceptID.Valid {
 		conceptID = page.ConceptID.String
 	}
-	compiled, err := s.compileContent(ctx, conceptID, page.PageType)
+
+	// Recompile has no exposed analyze-preview step (docs/impl/v1/wiki.md
+	// 步骤 5): the human confirming "recompile" on the Page is itself the
+	// confirmation of this new analysis round.
+	claims, tensions, err := s.analyzeClaims(ctx, conceptID)
+	if err != nil {
+		return nil, err
+	}
+	compiled, err := s.compileContent(ctx, conceptID, page.PageType, claims, tensions)
 	if err != nil {
 		return nil, err
 	}
 
 	if err := s.store.ReplaceContent(pageID, compiled.title, compiled.content,
 		marshalIDs(compiled.sourcePointIDs), marshalIDs(compiled.sourceUnitIDs), marshalIDs(compiled.sourceLinkIDs),
+		marshalConditions(compiled.observedConditions),
 		marshalIDs(compiled.aliases), marshalIDs(compiled.triggerQuestions),
+		marshalUncoveredPoints(compiled.uncoveredPoints),
 		marshalIDs(compiledFrom), "v1", "reasoning"); err != nil {
 		return nil, err
 	}
@@ -145,25 +198,63 @@ func (s *Service) Recompile(ctx context.Context, pageID, reason string, compiled
 }
 
 type compiledContent struct {
-	title            string
-	content          string
-	sourcePointIDs   []string
-	sourceUnitIDs    []string
-	sourceLinkIDs    []string
-	aliases          []string
-	triggerQuestions []string
+	title              string
+	content            string
+	sourcePointIDs     []string
+	sourceUnitIDs      []string
+	sourceLinkIDs      []string
+	observedConditions []activation.ObservedCondition
+	aliases            []string
+	triggerQuestions   []string
+	uncoveredPoints    []UncoveredPoint
 }
 
-// compileContent implements docs/impl/v1/wiki.md 步骤 3: gather inputs, call
-// the LLM once (retrying once on validation failure), and validate the
-// result. Shared by Compile and Recompile.
-func (s *Service) compileContent(ctx context.Context, conceptID, pageType string) (*compiledContent, error) {
+// marshalConditions JSON-encodes an observed_conditions union for storage,
+// defaulting to "[]" like marshalIDs does for the other JSON-array fields.
+// marshalUncoveredPoints JSON-encodes an uncovered_points list for storage,
+// defaulting to "[]".
+func marshalUncoveredPoints(points []UncoveredPoint) string {
+	if len(points) == 0 {
+		return "[]"
+	}
+	b, err := json.Marshal(points)
+	if err != nil {
+		slog.Warn("wiki: marshal uncovered points failed, storing empty", "error", err)
+		return "[]"
+	}
+	return string(b)
+}
+
+func marshalConditions(conds []activation.ObservedCondition) string {
+	if len(conds) == 0 {
+		return "[]"
+	}
+	b, err := json.Marshal(conds)
+	if err != nil {
+		slog.Warn("wiki: marshal observed conditions failed, storing empty", "error", err)
+		return "[]"
+	}
+	return string(b)
+}
+
+// compileInputs bundles the material-gathering step shared by analysis and
+// generation (docs/impl/v1/wiki.md 步骤 3 "输入收集").
+type compileInputs struct {
+	conceptName  string
+	conceptDesc  string
+	qualifying   []QualifyingPoint
+	materials    string
+	usedPointIDs []string
+	gapsText     string
+}
+
+func (s *Service) gatherInputs(conceptID string) (*compileInputs, error) {
 	conceptName, conceptDesc, _, err := s.store.GetConceptInfo(conceptID)
 	if err != nil {
 		return nil, fmt.Errorf("wiki: get concept info: %w", err)
 	}
 
-	qualifying, err := s.store.ListQualifyingPoints(conceptID, s.qualifyingMinConfident)
+	qualifying, err := s.store.ListQualifyingPoints(conceptID)
 	if err != nil {
 		return nil, fmt.Errorf("wiki: list qualifying points: %w", err)
 	}
@@ -182,21 +273,196 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 		slog.Warn("wiki: gather gaps failed, continuing without them", "concept_id", conceptID, "error", err)
 	}
 
+	return &compileInputs{
+		conceptName:  conceptName,
+		conceptDesc:  conceptDesc,
+		qualifying:   qualifying,
+		materials:    materials,
+		usedPointIDs: usedPointIDs,
+		gapsText:     gapsText,
+	}, nil
+}
+
+// analyzeClaims implements docs/impl/v1/wiki.md 步骤 3「分析产物」: call the
+// analysis Prompt once (retrying once on validation failure) to get the
+// proposed claim structure, validated against the full qualifying-KP
+// whitelist. Shared by Analyze, Compile (debug/no-analysis path) and
+// Recompile.
+func (s *Service) analyzeClaims(ctx context.Context, conceptID string) ([]Claim, []Tension, error) {
+	in, err := s.gatherInputs(conceptID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	whitelist := make(map[string]bool, len(in.usedPointIDs))
+	for _, id := range in.usedPointIDs {
+		whitelist[id] = true
+	}
+
+	vars := map[string]string{
+		"concept_name":        in.conceptName,
+		"concept_description": in.conceptDesc,
+		"materials":           in.materials,
+		"gaps":                in.gapsText,
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		raw, err := s.llmClient.CompleteJSON(ctx, "wiki_analyze.md", vars, "reasoning")
+		if err != nil {
+			lastErr = fmt.Errorf("llm call: %w", err)
+			slog.Warn("wiki: analyze llm call failed", "attempt", attempt, "concept_id", conceptID, "error", err)
+			continue
+		}
+
+		var output struct {
+			Claims   []Claim   `json:"claims"`
+			Tensions []Tension `json:"tensions"`
+		}
+		if err := json.Unmarshal(raw, &output); err != nil {
+			lastErr = fmt.Errorf("parse: %w", err)
+			slog.Warn("wiki: analyze parse failed", "attempt", attempt, "concept_id", conceptID, "error", err)
+			continue
+		}
+
+		claims := filterClaims(output.Claims, whitelist, conceptID)
+		tensions := filterTensions(output.Tensions, whitelist, conceptID)
+		if len(claims) == 0 {
+			lastErr = fmt.Errorf("wiki: analysis produced no usable claims")
+			slog.Warn("wiki: analyze produced no usable claims", "attempt", attempt, "concept_id", conceptID)
+			continue
+		}
+		return claims, tensions, nil
+	}
+
+	return nil, nil, fmt.Errorf("wiki: analyze failed after retry: %w", lastErr)
+}
+
+// filterClaims drops any cited_point_id outside whitelist (warn), then drops
+// whole claims left with zero citations — an uncited claim can't be enforced
+// by the generation whitelist downstream.
+func filterClaims(claims []Claim, whitelist map[string]bool, conceptID string) []Claim {
+	var out []Claim
+	var droppedIDs []string
+	droppedClaims := 0
+	for _, c := range claims {
+		var kept []string
+		for _, id := range c.CitedPointIDs {
+			if whitelist[id] {
+				kept = append(kept, id)
+			} else {
+				droppedIDs = append(droppedIDs, id)
+			}
+		}
+		if len(kept) == 0 {
+			droppedClaims++
+			continue
+		}
+		out = append(out, Claim{Summary: c.Summary, CitedPointIDs: kept})
+	}
+	if len(droppedIDs) > 0 {
+		slog.Warn("wiki: dropped out-of-whitelist cited_point_ids in analysis", "concept_id", conceptID, "ids", droppedIDs)
+	}
+	if droppedClaims > 0 {
+		slog.Warn("wiki: dropped claims with no whitelisted citations after filtering", "concept_id", conceptID, "count", droppedClaims)
+	}
+	return out
+}
+
+// filterTensions drops any related_point_id outside whitelist (warn); a
+// tension with zero related points is still kept — it can describe a gap
+// with no existing KP to point at.
+func filterTensions(tensions []Tension, whitelist map[string]bool, conceptID string) []Tension {
+	var out []Tension
+	var dropped []string
+	for _, t := range tensions {
+		var kept []string
+		for _, id := range t.RelatedPointIDs {
+			if whitelist[id] {
+				kept = append(kept, id)
+			} else {
+				dropped = append(dropped, id)
+			}
+		}
+		out = append(out, Tension{Description: t.Description, RelatedPointIDs: kept})
+	}
+	if len(dropped) > 0 {
+		slog.Warn("wiki: dropped out-of-whitelist related_point_ids in analysis", "concept_id", conceptID, "ids", dropped)
+	}
+	return out
+}
+
+// claimsWhitelist unions every confirmed claim's cited_point_ids — the
+// generation-stage citation whitelist, narrower than the full qualifying-KP
+// set used at analysis time (docs/design/wiki-compilation.md "编译内部分
+// 两步").
+func claimsWhitelist(claims []Claim) map[string]bool {
+	w := make(map[string]bool)
+	for _, c := range claims {
+		for _, id := range c.CitedPointIDs {
+			w[id] = true
+		}
+	}
+	return w
+}
+
+// compileContent implements docs/impl/v1/wiki.md 步骤 3「生成产物」: given an
+// already-confirmed claim structure, call the generation Prompt once
+// (retrying once on validation failure) and validate the result. Shared by
+// Compile and Recompile.
+func (s *Service) compileContent(ctx context.Context, conceptID, pageType string, claims []Claim, tensions []Tension) (*compiledContent, error) {
+	if len(claims) == 0 {
+		return nil, fmt.Errorf("wiki: no confirmed claims for concept %s", conceptID)
+	}
+
+	in, err := s.gatherInputs(conceptID)
+	if err != nil {
+		return nil, err
+	}
+
 	pageTypeHint := "本页面类型为 concept（概念页）：标题使用概念名称本身。"
 	if pageType == PageTypeTopic {
 		pageTypeHint = "本页面类型为 topic（主题页）：标题请根据材料内容概括一个合适的主题名称，不必是概念名称本身。"
 	}
 
-	whitelist := make(map[string]bool, len(usedPointIDs))
-	for _, id := range usedPointIDs {
-		whitelist[id] = true
+	// Generation's citation whitelist is the claims' cited_point_ids union —
+	// narrower than the full qualifying-KP set analysis was validated
+	// against, by design.
+	whitelist := claimsWhitelist(claims)
+
+	claimsJSON, _ := json.Marshal(claims)
+	tensionsJSON := "[]"
+	if len(tensions) > 0 {
+		if b, err := json.Marshal(tensions); err == nil {
+			tensionsJSON = string(b)
+		}
+	}
+
+	triggerMax := s.cfg.TriggerQuestionsMax
+	if triggerMax <= 0 {
+		triggerMax = 10
+	}
+
+	// Real observed questions ground trigger_questions in confirmed usage
+	// instead of LLM invention (docs/design/wiki-compilation.md "触发问法取材
+	// 真实观测，检索匹配复用四元组"). Best-effort: failure just means the LLM
+	// falls back to inventing from materials, doesn't fail the compile.
+	observedQuestions, err := s.store.ConfidentQuestionsForPoints(in.usedPointIDs, triggerMax)
+	if err != nil {
+		slog.Warn("wiki: fetch confident questions failed, continuing without them", "concept_id", conceptID, "error", err)
+	}
+	observedQuestionsText := "（无）"
+	if len(observedQuestions) > 0 {
+		observedQuestionsText = "- " + strings.Join(observedQuestions, "\n- ")
 	}
 
 	vars := map[string]string{
-		"concept_name":        conceptName,
-		"concept_description": conceptDesc,
-		"materials":           materials,
-		"gaps":                gapsText,
+		"concept_name":        in.conceptName,
+		"concept_description": in.conceptDesc,
+		"materials":           in.materials,
+		"claims":              string(claimsJSON),
+		"tensions":            tensionsJSON,
+		"observed_questions":  observedQuestionsText,
 		"page_type_hint":      pageTypeHint,
 	}
 
@@ -250,29 +516,36 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 			continue
 		}
 
-		sourceUnitIDs := sourceUnitsForPoints(citedInContent, qualifying)
+		sourceUnitIDs := sourceUnitsForPoints(citedInContent, in.qualifying)
 		sourceLinkIDs, err := s.store.VerifiedLinkIDsForPoints(citedInContent)
 		if err != nil {
 			slog.Warn("wiki: lookup verified link ids for cited points failed", "concept_id", conceptID, "error", err)
 		}
-
-		triggerMax := s.cfg.TriggerQuestionsMax
-		if triggerMax <= 0 {
-			triggerMax = 10
+		observedConditions, err := s.store.VerifiedLinksObservedConditions(citedInContent)
+		if err != nil {
+			slog.Warn("wiki: lookup observed conditions for cited points failed", "concept_id", conceptID, "error", err)
 		}
+
 		if len(output.Aliases) == 0 || len(output.TriggerQuestions) == 0 {
 			slog.Warn("wiki: compile output missing aliases/trigger_questions, storing empty",
 				"concept_id", conceptID, "aliases", len(output.Aliases), "trigger_questions", len(output.TriggerQuestions))
 		}
 
+		uncoveredPoints, err := s.store.ListUncoveredPoints(conceptID)
+		if err != nil {
+			slog.Warn("wiki: list uncovered points failed, storing empty", "concept_id", conceptID, "error", err)
+		}
+
 		return &compiledContent{
-			title:            output.Title,
-			content:          filteredContent,
-			sourcePointIDs:   citedInContent,
-			sourceUnitIDs:    sourceUnitIDs,
-			sourceLinkIDs:    sourceLinkIDs,
-			aliases:          truncateStrings(output.Aliases, triggerMax),
-			triggerQuestions: truncateStrings(output.TriggerQuestions, triggerMax),
+			title:              output.Title,
+			content:            filteredContent,
+			sourcePointIDs:     citedInContent,
+			sourceUnitIDs:      sourceUnitIDs,
+			sourceLinkIDs:      sourceLinkIDs,
+			observedConditions: observedConditions,
+			aliases:            truncateStrings(output.Aliases, triggerMax),
+			triggerQuestions:   truncateStrings(output.TriggerQuestions, triggerMax),
+			uncoveredPoints:    uncoveredPoints,
 		}, nil
 	}
 
@@ -435,6 +708,12 @@ func (s *Service) Publish(pageID string) (*Page, error) {
 		slog.Error("wiki: index page after publish failed", "page_id", pageID, "error", err)
 	}
 
+	if page.PageType == PageTypeConcept {
+		if err := s.RecomputeRelationsForPage(pageID); err != nil {
+			slog.Error("wiki: recompute relations after publish failed", "page_id", pageID, "error", err)
+		}
+	}
+
 	slog.Info("wiki: published page", "page_id", pageID, "concept_id", page.ConceptID.String)
 	return s.store.GetPage(pageID)
 }
@@ -456,6 +735,8 @@ func (s *Service) Archive(pageID string) (*Page, error) {
 	if err := s.wikiIndex.Delete(pageID); err != nil {
 		slog.Warn("wiki: remove archived page from index failed", "page_id", pageID, "error", err)
 	}
+	s.clearRelationsForPage(pageID)
+	s.cascadeToParentTopics(pageID, "archived")
 
 	slog.Info("wiki: archived page", "page_id", pageID)
 	return s.store.GetPage(pageID)
@@ -482,7 +763,32 @@ func (s *Service) MarkNeedsRecompile(pageID, reason string) error {
 	}
 
 	slog.Info("wiki: marked page needs_recompile", "page_id", pageID, "reason", reason)
+	s.cascadeToParentTopics(pageID, reason)
 	return nil
+}
+
+// cascadeToParentTopics implements docs/impl/v1/wiki.md 步骤 9: a concept
+// page entering needs_recompile or archived propagates to its containing
+// topic page(s) (needs_recompile only — topic pages don't propagate further,
+// "只有两层"). No-op for topic pages themselves (contains is only ever
+// concept -> topic in the ContainingTopics lookup direction, so this is
+// naturally a no-op when called with a topic page id, but the page_type
+// check makes the intent explicit and avoids an extra store round-trip).
+func (s *Service) cascadeToParentTopics(memberPageID, memberReason string) {
+	page, err := s.store.GetPage(memberPageID)
+	if err != nil || page == nil || page.PageType != PageTypeConcept {
+		return
+	}
+	topics, err := s.store.ContainingTopics(memberPageID)
+	if err != nil {
+		slog.Warn("wiki: cascade to parent topics: list containing topics failed", "page_id", memberPageID, "error", err)
+		return
+	}
+	for _, topicID := range topics {
+		if err := s.MarkNeedsRecompile(topicID, "member_page_changed:"+memberPageID); err != nil {
+			slog.Error("wiki: cascade needs_recompile to parent topic failed", "topic_page_id", topicID, "member_page_id", memberPageID, "error", err)
+		}
+	}
 }
 
 // GetActivePageByConceptID exposes the store lookup for callers outside this
@@ -503,8 +809,8 @@ type RecompileFlag struct {
 
 // ScanForNewQualifyingKP implements docs/impl/v1/wiki.md 步骤 5b: for every
 // published page tied to a concept, compare currentQualifyingCounts (Study's
-// fresh count of KPs meeting wiki.wiki_confident_min for that concept, same
-// query semantics as this package's own qualifying-KP query) against the
+// fresh count of qualifying KPs for that concept, same query semantics as
+// this package's own qualifying-KP query) against the
 // count actually compiled into the page — approximated by len(source_point_ids)
 // since the compile-time qualifying count itself isn't a persisted column.
 // A difference >= minNewKP marks the page needs_recompile and reports it.
@@ -587,20 +893,42 @@ func (s *Service) NotifyPointsLifecycleChanged(pointIDs []string) error {
 // maxCandidates are retrieval.RetrievalConfig.WikiMinScore/WikiMaxCandidates,
 // passed in by the caller since Wiki doesn't depend on the retrieval
 // package's config section. maxCandidates<=0 defaults to 3.
-func (s *Service) TryDirectAnswer(ctx context.Context, question string, minScore float64, maxCandidates int) (*DirectAnswerResult, bool, error) {
+// SkeletonInfo carries the topic-page recall skeleton
+// (docs/impl/v1/wiki.md 步骤 8「检索接入」): the point_ids of every member
+// concept page a topic-page hit expanded into (including members truncated
+// out of the direct-answer candidate list), plus the topic page id that
+// provided it. Set whenever a topic page was hit during candidate gathering,
+// regardless of whether direct answer ultimately succeeded — traces.
+// skeleton_page_id records it either way (docs/impl/v1/wiki.md 步骤 8:
+// "无论直答是否成功都记录").
+type SkeletonInfo struct {
+	PageID  string
+	Members []SkeletonMember
+}
+
+// SkeletonMember is one expanded topic-page member and its own
+// source_point_ids (not the flat union) — callers that need per-member
+// attribution (docs/impl/v1/trace.md topic_decompose_signal's
+// resolved_member_page_ids) can use this without a second lookup.
+type SkeletonMember struct {
+	PageID   string
+	PointIDs []string
+}
+
+func (s *Service) TryDirectAnswer(ctx context.Context, question, subject, intent, audience, constraint string, minScore float64, maxCandidates int) (*DirectAnswerResult, bool, *SkeletonInfo, error) {
 	if maxCandidates <= 0 {
 		maxCandidates = 3
 	}
 
-	candidates, err := s.gatherDirectAnswerCandidates(question, minScore, maxCandidates)
+	candidates, skeleton, err := s.gatherDirectAnswerCandidates(question, subject, intent, audience, constraint, minScore, maxCandidates)
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
 
 	for _, pageID := range candidates {
 		page, err := s.store.GetPage(pageID)
 		if err != nil {
-			return nil, false, fmt.Errorf("wiki: get page: %w", err)
+			return nil, false, skeleton, fmt.Errorf("wiki: get page: %w", err)
 		}
 		if page == nil || page.Status != StatusPublished {
 			// Index/DB momentarily out of sync (e.g. mid recompile) — skip.
@@ -609,38 +937,53 @@ func (s *Service) TryDirectAnswer(ctx context.Context, question string, minScore
 
 		result, ok, err := s.answerFromPage(ctx, question, page)
 		if err != nil {
-			return nil, false, err
+			return nil, false, skeleton, err
 		}
 		if ok {
-			return result, true, nil
+			return result, true, skeleton, nil
 		}
 	}
-	return nil, false, nil
+	return nil, false, skeleton, nil
 }
 
-// gatherDirectAnswerCandidates implements docs/impl/v1/wiki.md 步骤 4's two
-// direct-answer entries, merged and deduped: lexical hits (wiki index,
-// including aliases/trigger_questions fields, score >= minScore) ordered
-// first, then concept-name hits not already present, truncated to
-// maxCandidates. Neither entry calls the LLM.
-func (s *Service) gatherDirectAnswerCandidates(question string, minScore float64, maxCandidates int) ([]string, error) {
+// gatherDirectAnswerCandidates implements docs/impl/v1/wiki.md 步骤 4's three
+// direct-answer entries, merged and deduped, in priority order: four-tuple
+// hits (most-verified-specific — precise match against previously confirmed
+// usage) first, then lexical hits (wiki index, including aliases/
+// trigger_questions fields, score >= minScore) ordered by score, then
+// concept-name hits not already present, truncated to maxCandidates. None of
+// the three entries calls the LLM.
+func (s *Service) gatherDirectAnswerCandidates(question, subject, intent, audience, constraint string, minScore float64, maxCandidates int) ([]string, *SkeletonInfo, error) {
+	seen := make(map[string]bool)
+	var rawHits []string // may include topic pages, pre-expansion
+
+	fourTupleHits, err := s.matchFourTupleEntry(subject, intent, audience, constraint)
+	if err != nil {
+		slog.Warn("wiki: four-tuple entry lookup failed, continuing without it", "error", err)
+	}
+	for _, pageID := range fourTupleHits {
+		if seen[pageID] {
+			continue
+		}
+		seen[pageID] = true
+		rawHits = append(rawHits, pageID)
+	}
+
 	q := bleve.NewMatchQuery(question)
 	req := bleve.NewSearchRequest(q)
 	req.Size = maxCandidates
 
 	results, err := s.wikiIndex.Search(req)
 	if err != nil {
-		return nil, fmt.Errorf("wiki: search: %w", err)
+		return nil, nil, fmt.Errorf("wiki: search: %w", err)
 	}
 
-	seen := make(map[string]bool)
-	var candidates []string
 	for _, hit := range results.Hits {
 		if hit.Score < minScore || seen[hit.ID] {
 			continue
 		}
 		seen[hit.ID] = true
-		candidates = append(candidates, hit.ID)
+		rawHits = append(rawHits, hit.ID)
 	}
 
 	conceptHits, err := s.matchConceptEntry(question)
@@ -652,13 +995,183 @@ func (s *Service) gatherDirectAnswerCandidates(question string, minScore float64
 			continue
 		}
 		seen[pageID] = true
-		candidates = append(candidates, pageID)
+		rawHits = append(rawHits, pageID)
+	}
+
+	// Topic-page expansion (docs/impl/v1/wiki.md 步骤 8「检索接入」): a topic
+	// page never enters the direct-answer sequence itself — it's a recall
+	// skeleton, not an answer unit. Expand it into its published contains
+	// members, inserted at the slot the topic page held; a member already
+	// present from another entry keeps its existing (higher-priority) slot.
+	var candidates []string
+	seenConcept := make(map[string]bool)
+	var skeleton *SkeletonInfo
+	for _, pageID := range rawHits {
+		page, err := s.store.GetPage(pageID)
+		if err != nil || page == nil {
+			continue
+		}
+		if page.PageType != PageTypeTopic {
+			if !seenConcept[pageID] {
+				seenConcept[pageID] = true
+				candidates = append(candidates, pageID)
+			}
+			continue
+		}
+
+		orderedMemberIDs, members, err := s.expandTopicMembers(pageID, question)
+		if err != nil {
+			slog.Warn("wiki: expand topic members failed", "page_id", pageID, "error", err)
+			continue
+		}
+		if skeleton == nil {
+			skeleton = &SkeletonInfo{PageID: pageID}
+		}
+		skeleton.Members = append(skeleton.Members, members...)
+		for _, m := range orderedMemberIDs {
+			if !seenConcept[m] {
+				seenConcept[m] = true
+				candidates = append(candidates, m)
+			}
+		}
 	}
 
 	if len(candidates) > maxCandidates {
 		candidates = candidates[:maxCandidates]
 	}
-	return candidates, nil
+	return candidates, skeleton, nil
+}
+
+// expandTopicMembers implements docs/impl/v1/wiki.md 步骤 8's member
+// ordering: published contains members ranked by question-term overlap with
+// member_roles.question_types (falling back to source_point_ids count
+// descending when member_roles is empty). Returns the ordered member page
+// ids plus the union of ALL members' source_point_ids — including ones that
+// get truncated out of the direct-answer candidate list — for
+// skeleton_point_ids (docs/impl/v1/wiki.md 步骤 8: "含被截断掉的").
+func (s *Service) expandTopicMembers(topicPageID, question string) (memberIDs []string, members []SkeletonMember, err error) {
+	page, err := s.store.GetPage(topicPageID)
+	if err != nil || page == nil {
+		return nil, nil, err
+	}
+	var roles []MemberRole
+	json.Unmarshal([]byte(page.MemberRoles), &roles)
+	roleByMember := make(map[string]MemberRole, len(roles))
+	for _, r := range roles {
+		roleByMember[r.MemberPageID] = r
+	}
+
+	memberPageIDs, err := s.store.ContainsMembers(topicPageID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	type scored struct {
+		pageID   string
+		score    int
+		kpN      int
+		pointIDs []string
+	}
+	questionTerms := text.TermSet(question)
+	var published []scored
+	for _, m := range memberPageIDs {
+		mp, err := s.store.GetPage(m)
+		if err != nil || mp == nil || mp.Status != StatusPublished {
+			continue
+		}
+		var mPointIDs []string
+		json.Unmarshal([]byte(mp.SourcePointIDs), &mPointIDs)
+
+		sc := scored{pageID: m, kpN: len(mPointIDs), pointIDs: mPointIDs}
+		if role, ok := roleByMember[m]; ok {
+			overlap := 0
+			for _, qt := range role.QuestionTypes {
+				qtTerms := text.TermSet(qt)
+				for t := range qtTerms {
+					if _, ok := questionTerms[t]; ok {
+						overlap++
+					}
+				}
+			}
+			sc.score = overlap
+		}
+		published = append(published, sc)
+	}
+
+	sort.SliceStable(published, func(i, j int) bool {
+		if published[i].score != published[j].score {
+			return published[i].score > published[j].score
+		}
+		return published[i].kpN > published[j].kpN
+	})
+
+	for _, sc := range published {
+		memberIDs = append(memberIDs, sc.pageID)
+		members = append(members, SkeletonMember{PageID: sc.pageID, PointIDs: sc.pointIDs})
+	}
+	return memberIDs, members, nil
+}
+
+// matchFourTupleEntry implements docs/impl/v1/wiki.md 步骤 4c: match the
+// already-Session-parsed subject/intent/audience/constraint against every
+// published page's aggregated observed_conditions, reusing
+// activation.MatchConditionGroups instead of a second matching
+// implementation (docs/design/wiki-compilation.md "触发问法取材真实观测，
+// 检索匹配复用四元组"). Naturally no-ops when all four fields are empty (the
+// plain POST /answer path that skips Session parsing) — MatchConditionGroups
+// itself guards against an all-empty query. Ties among multiple matching
+// pages break by the matching group's LastSeenAt descending, mirroring
+// Matcher.Match's LastUsedAt-descending sort.
+func (s *Service) matchFourTupleEntry(subject, intent, audience, constraint string) ([]string, error) {
+	if s.activationSvc == nil {
+		return nil, nil
+	}
+	if subject == "" && intent == "" && audience == "" && constraint == "" {
+		return nil, nil
+	}
+
+	resolver, err := s.activationSvc.LoadSynonymResolver()
+	if err != nil {
+		return nil, fmt.Errorf("wiki: load synonym resolver: %w", err)
+	}
+	queryTopic, qi, qa, qc := activation.BuildQueryConditionTerms(subject, intent, audience, constraint, resolver)
+
+	pages, err := s.store.ListPublishedPagesWithConditions()
+	if err != nil {
+		return nil, fmt.Errorf("wiki: list published pages with conditions: %w", err)
+	}
+
+	type match struct {
+		pageID     string
+		lastSeenAt time.Time
+	}
+	var matches []match
+	for _, p := range pages {
+		var latest time.Time
+		hit := false
+		for _, cond := range p.Conditions {
+			if !activation.MatchConditionGroups([]activation.ObservedCondition{cond}, queryTopic, qi, qa, qc, resolver) {
+				continue
+			}
+			hit = true
+			if cond.LastSeenAt.After(latest) {
+				latest = cond.LastSeenAt
+			}
+		}
+		if hit {
+			matches = append(matches, match{pageID: p.PageID, lastSeenAt: latest})
+		}
+	}
+
+	sort.SliceStable(matches, func(i, j int) bool {
+		return matches[i].lastSeenAt.After(matches[j].lastSeenAt)
+	})
+
+	pageIDs := make([]string, len(matches))
+	for i, m := range matches {
+		pageIDs[i] = m.pageID
+	}
+	return pageIDs, nil
 }
 
 // matchConceptEntry implements docs/impl/v1/wiki.md 步骤 4's concept入口:

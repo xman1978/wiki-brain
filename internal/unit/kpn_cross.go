@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+
+	"github.com/jxman78/wiki-brain/internal/source"
 )
 
 // crossBatchMaxSize is the per-batch cap on (new + opposite) knowledge
@@ -66,6 +68,28 @@ func (s *Service) CrossSourceKPN(ctx context.Context, sourceID string) (*CrossKP
 		maxBatches = 20
 	}
 
+	// Self-ancestor exclusion (docs/impl/v1/wiki.md 步骤 10 "回流的自体循环
+	// 必须挡住"; docs/impl/v1/kpn.md 步骤 2 "自体祖先排除"): a wiki_draft
+	// reflow source must not build KPN relations against the point_ids its
+	// own origin page already cited — those are copies of the same
+	// knowledge, not a relation between two pieces of knowledge.
+	var ancestorPointIDs map[string]bool
+	src, srcErr := s.sourceStore.GetByID(sourceID)
+	if srcErr != nil {
+		slog.Warn("unit: cross kpn get source failed", "source_id", sourceID, "error", srcErr)
+	} else if src.Origin == source.SourceOriginWikiDraft && src.OriginPageID.Valid && src.OriginPageID.String != "" {
+		ids, err := s.store.AncestorPointIDsForWikiPage(src.OriginPageID.String)
+		if err != nil {
+			slog.Warn("unit: cross kpn ancestor lookup failed", "source_id", sourceID, "origin_page_id", src.OriginPageID.String, "error", err)
+		} else {
+			ancestorPointIDs = make(map[string]bool, len(ids))
+			for _, id := range ids {
+				ancestorPointIDs[id] = true
+			}
+		}
+	}
+
+	totalSkippedAncestorEdges := 0
 	batchesRun := 0
 groupLoop:
 	for _, g := range groups {
@@ -76,6 +100,21 @@ groupLoop:
 		}
 		if len(opposite) == 0 {
 			continue
+		}
+
+		if len(ancestorPointIDs) > 0 {
+			var filtered []KnowledgePoint
+			for _, p := range opposite {
+				if ancestorPointIDs[p.PointID] {
+					totalSkippedAncestorEdges++
+					continue
+				}
+				filtered = append(filtered, p)
+			}
+			opposite = filtered
+			if len(opposite) == 0 {
+				continue
+			}
 		}
 
 		opposite = s.trimOppositeByConfidence(opposite, len(g.points))
@@ -96,10 +135,16 @@ groupLoop:
 		}
 	}
 
+	if totalSkippedAncestorEdges > 0 {
+		if err := s.sourceStore.IncrementReflowSkippedEdges(sourceID, totalSkippedAncestorEdges); err != nil {
+			slog.Warn("unit: cross kpn record skipped ancestor edges failed", "source_id", sourceID, "error", err)
+		}
+		slog.Info("unit: cross kpn skipped self-ancestor edges", "source_id", sourceID, "skipped", totalSkippedAncestorEdges)
+	}
+
 	if len(orphans) > 0 {
-		src, err := s.sourceStore.GetByID(sourceID)
-		if err != nil {
-			slog.Warn("unit: cross kpn get source for orphan proposal failed", "source_id", sourceID, "error", err)
+		if srcErr != nil {
+			slog.Warn("unit: cross kpn get source for orphan proposal failed", "source_id", sourceID, "error", srcErr)
 		} else if src.DomainID.Valid && src.DomainID.String != "" {
 			touched, err := s.proposeConceptsForOrphans(ctx, sourceID, src.DomainID.String, orphans, unitCenterMap)
 			if err != nil {

@@ -82,6 +82,44 @@ candidate Tab 行内操作：
   （GET /wiki/pages/:id/revisions/:rev）。
 ```
 
+两层架构扩展（wiki.md 步骤 7-10）：
+
+```text
+候选区增加主题页候选（action=topic_page_candidate）：
+  显示壳页标题、成员概念页列表、related / contradicts 边数、Reason；
+  [分析] → POST /wiki/pages/:id/topic/analyze（展示拟采用的论断结构，
+    可微调）→ [编译] POST /wiki/pages/:id/topic/compile；
+  [驳回] → 壳页 archive；
+  成员页面存在非 published 时按钮禁用并列出待处理页面（409 前置检查）；
+
+页面阅读增加关系区（GET /wiki/pages/:id/relations）：
+  概念页：related / contradicts 邻居页面链接（附共享 KP 数），
+    以及「所属主题页」（contains 反向）；
+  主题页：contains 成员页面列表（附各自 status，非 published 标黄）
+    与 member_roles（每个成员承担的面向 / 能回答的问题类型）；
+  关系是程序派生的只读信息，不提供人工增删关系的入口；
+
+覆盖度区（页面详情的 uncovered_points 字段）：
+  折叠列表「本主题尚无可用材料的知识点（N）」，逐条显示 point_id 与摘要，
+    点击查看 KP / KU；概念页为自身清单，主题页为成员并集；
+  文案要说清它不是页面内容的一部分：这些 KP 还没有 verified 激活链接，
+    不进稳定结论、不可引用；写作时把它读作「这几块还写不了」；
+  为空时整区隐藏。
+
+写作草稿（GET /wiki/drafts?page_id=）：
+  页面阅读页 [派生草稿] → POST /wiki/pages/:id/drafts
+    （主题页默认 mode=assembled，界面上说明"将并入 N 个成员页面正文"；
+     概念页默认 mode=page，可切换）；
+  草稿编辑器：textarea 直接改 title / content / note，
+    失焦或手动保存 → PATCH /wiki/drafts/:id（不做任何校验提示）；
+  右侧固定证据清单（evidence_index，只读）：point_id / KP 摘要 /
+    KU 主题 / 来源位置，点击复制 [point_id] 标注，供人工改写后重新挂引用；
+  stale 标记（来源版本已不是页面最新版本）显示为提示条，
+    提供并列查看当前页面正文的入口，但**不提供**「合并回页面」按钮；
+  草稿区文案需明确：草稿不参与检索；内容要长期沉淀请导出文件走导入，
+    导入时勾选「来自 Wiki 草稿」（origin=wiki_draft）以免自体循环。
+```
+
 ### 步骤 4：学习动作审计视图
 
 学习报告视图内新增「学习动作」Tab：

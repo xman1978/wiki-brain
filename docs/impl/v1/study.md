@@ -15,7 +15,7 @@ CREATE TABLE learning_results (
     result_id       TEXT PRIMARY KEY,
     action          TEXT NOT NULL,
     -- create_candidate / promote / weaken / reverify / deprecate /
-    -- gap_flag / wiki_candidate / recompile_flag
+    -- gap_flag / wiki_candidate / recompile_flag / topic_page_candidate
     object_type     TEXT NOT NULL,
     -- activation_link / knowledge_gap / wiki_page
     object_id       TEXT NOT NULL,
@@ -76,7 +76,11 @@ study:
   candidate_confident_min: 5
   candidate_ratio_min:     0.6
   wiki_kp_min:             4
-  wiki_confident_min:      8
+  # wiki_confident_min 已移除（2026-07-29 修订，见 docs/design/wiki-compilation.md
+  # "ActivationLink 回答'这条管不管用'，Wiki 编译回答'这个主题够不够格立传'"）——
+  # 可靠性只由 ActivationLink 的 verified 状态判断，不再叠加一个次数门槛；
+  # 素材排序（wiki.md 步骤 3，按 confident_count 降序截取）用的是 KP 自身的
+  # confident_count 数值，不需要任何最小值配置，所以这个字段没有剩余用途。
   gap_hit_threshold:       3
   scan_batch_size:         200
   report_period_days:      5
@@ -94,6 +98,8 @@ study:
   correction_weight:       2      # user_correction 关联链接时按 N 次 failure 计
   # —— subject 同义词挖掘（2026-07-24 新增）——
   synonym_gap_min:          3     # subject_synonym_gap 候选达标所需事件数
+  # —— 问题复杂度观测量（步骤 7，只观测不驱动）——
+  complexity_min_questions: 3     # 条件组内问答数下限，低于此不出报告项
   synonym_gap_distinct_min: 2     # 且来自 ≥ N 个不同 question_hash
   synonym_auto_promote:     false # true 时候选直接 active，不经人工确认
 ```
@@ -274,7 +280,11 @@ knowledge_gap 聚合逻辑沿用 MVP（UPSERT knowledge_gaps ON CONFLICT(questio
   达 gap_hit_threshold 时额外写 learning_results(action=gap_flag,
   object_type=knowledge_gap, reason 含 last_reason)，纳入统一审计；
 
-Wiki 候选计算沿用 MVP 报告逻辑；recommendation=ready 的候选写
+Wiki 候选计算：qualifying KP 定义与概念级 ready 判定口径见 wiki.md 步骤 3
+  "输入收集"/"概念级 ready 判定"（2026-07-29 修订：qualifying KP 不再要求
+  confident_count 达标，只要求 lifecycle=current 且 ActivationLink
+  status=verified；概念级新增连贯性的 related/contradicts 区分，不再
+  只看连接总数）；recommendation=ready 的候选写
   learning_results(action=wiki_candidate, status=pending_confirm,
   object_type=wiki_page, object_id=concept_id)——Wiki 编译经人工确认触发，
   见 wiki.md 步骤 2；
@@ -282,6 +292,31 @@ Wiki 候选计算沿用 MVP 报告逻辑；recommendation=ready 的候选写
 已发布 wiki 页面依赖的 KP 出现 lifecycle != current：
   标记页面 needs_recompile（调 Wiki 模块接口）并写
   learning_results(action=recompile_flag)。
+
+主题页候选（两层架构，口径见 wiki.md 步骤 8「候选产生」）：
+  取 published 概念页 + wiki_page_relations 的 related 边求连通分量，
+  满足 wiki.topic_member_min ≤ 成员数 ≤ wiki.topic_member_max、
+  contradicts 边数 < related 边数、
+  且足够多成员尚未被非 archived 主题页 contains 时，建 draft 壳页并写
+  learning_results(action=topic_page_candidate, object_type=wiki_page,
+  object_id=壳页 page_id, status=pending_confirm)——object_id 用页面 id
+  而不是概念 id 或成员集合指纹，标识天然唯一、人工确认对象即一个具体页面；
+  二阶编译同样经人工确认触发，见 wiki.md 步骤 8。
+
+页面关系重算：跨 Source KPN 新增后重算涉及的页面对关系
+  （纯程序派生，不调 LLM，不产生 learning_results，见 wiki.md 步骤 7b）。
+
+报告提示项（只进报告，不产生 learning_results）：
+  oversized_topic_cluster：连通分量成员数 > wiki.topic_member_max，
+    附成员数、代表页面、related / contradicts 边数——提示人工提高
+    relation_kpn_min / relation_shared_point_min 或按 domain 切分，
+    不自动切分（切在哪里是知识判断，不是阈值判断）；
+  wiki_draft_reflow：origin='wiki_draft' 的 Source 及其产出 KP 数、
+    被跳过的自体祖先边数（见 wiki.md 步骤 10「回流的自体循环」），
+    用于发现系统在自己身上打转；
+  topic_decompose：topic_decompose_signal 的聚合——按主题页分组的信号数、
+    resolved_member_page_ids 平均成员数、resolved_outside_count > 0 的
+    占比（后者持续偏高说明该主题页成员边界漏了知识，提示重编译）。
 ```
 
 ### 步骤 7：报告扩展
@@ -300,6 +335,70 @@ Wiki 候选计算沿用 MVP 报告逻辑；recommendation=ready 的候选写
 ```
 
 `summary` 增加 `fast_path_rate`（窗口内 traces.path_type=fast 占比），用于验证「学习改变检索行为」的 V1 目标。
+
+#### 问题复杂度观测量（新增一节，只观测不驱动）
+
+设计依据：`docs/design/cognitive-routing.md`「复杂度是相对已有知识而言的」。认知路由要按问题形态查表决定路径，而这张映射表的修正需要数据基础——「这类问题历史上实际需要几块知识、有没有被现成结论满足过」。V1 已经在积累这些信号，本节把它们聚合成可读的观测量，**为 V3 的路由映射表准备依据**，V1 自身不据此改变任何行为。
+
+```text
+分组口径：窗口内（event_window_days）的 traces 按四元组条件组分组——
+  (subject, intent, audience, constraint_text)，归一化口径与
+  activation.Matcher 的条件匹配一致（见 activation.md 步骤 2），
+  保证「同一类问题」的定义在检索侧和学习侧是同一个；
+  组内 question_count < study.complexity_min_questions（默认 3）的
+  不出报告项——样本太少的组只是噪声。
+
+每组指标（全部来自既有字段，不新增采集点）：
+  question_count           组内问答数；
+  path_distribution        {wiki, fast, full} 各自次数（traces.path_type）；
+  avg_direct_point_count   direct_point_ids 数量均值——
+                           「这类问题需要几块知识」最直接的度量；
+  wiki_satisfied_ratio     path_type=wiki 占比，即被现成概念页结论
+                           满足过的比例；
+  skeleton_used_count      traces.skeleton_page_id 非空次数
+                           （主题页提供过骨架，见 wiki.md 步骤 8）；
+  cross_member_ratio       该组的 topic_decompose_signal 中
+                           resolved_member_page_ids ≥ 2 的占比——
+                           「必须跨成员拼起来才答得了」的比例；
+  outside_ratio            resolved_outside_count > 0 的占比——
+                           答案落在主题页成员边界之外的比例。
+
+派生标签 complexity_hint（只作展示，不参与任何判定）：
+  simple     现成结论覆盖得住（wiki_satisfied_ratio 高、
+             avg_direct_point_count 低）；
+  composite  需要多块知识拼合（cross_member_ratio 高 或
+             avg_direct_point_count 高）；
+  uncovered  知识本身不够（outside_ratio 高、组内 gap 事件多）。
+
+  **阈值不预先拍定**：先在真实 traces 上测出基线分布，再回填到本文档，
+  没有基线的阈值是假精确（与 docs/impl/v2/readme.md「两步制定标」同一立场）。
+  在阈值确定之前，报告只输出原始指标，complexity_hint 留空。
+
+边界（硬）：
+  只进报告，不产生 learning_results、不改 ActivationLink 状态、
+  不触发 Wiki 编译或重编译、不改变任何检索行为——V1 没有路由层
+  （见 docs/impl/v1/readme.md「V1 不做什么」），这些数字的消费方是
+  人工阅读与 V3 的路由映射表；
+  不新增 LLM 调用，全部是对既有 traces / learning_events 的 SQL 聚合。
+```
+
+报告 JSON 新增：
+
+```json
+"question_complexity": {
+  "groups": [
+    { "subject": "...", "intent": "...", "audience": "...", "constraint": "...",
+      "question_count": 7,
+      "path_distribution": { "wiki": 1, "fast": 2, "full": 4 },
+      "avg_direct_point_count": 3.4,
+      "wiki_satisfied_ratio": 0.14,
+      "skeleton_used_count": 3,
+      "cross_member_ratio": 0.6,
+      "outside_ratio": 0.2,
+      "complexity_hint": null }
+  ]
+}
+```
 
 `knowledge_gaps` 每条记录新增 `reason_counts` / `last_reason` / `last_trace_id`，`recommendation` 由固定的「补充材料」改为按 `last_reason` 细化：
 

@@ -48,6 +48,11 @@ v1 的使用记录、ActivationLink、Wiki、KP、证据
 不重复建模：置信度与时效由 point 的 lifecycle、confident_count 与页面
   status 派生，冲突复用 KPN contradicts，不落新字段；
 唯一入口：Claim 只能由编译产生，不提供独立编辑 API。
+两层适配：概念页（一阶）的 Claim 依据 point_ids；主题页（二阶）的 Claim
+  依据同样是 point_ids（不指向下层 Claim），并额外记录来源成员页面，
+  与 V1「主题页引用白名单 = 成员页面并集」同源，避免出现依赖 Claim 的
+  Claim 这种二级间接（见 docs/design/wiki-compilation.md
+  「证据回链必须穿透两层」）。
 ```
 
 ### 2. KPP 模式库（定义，不执行）

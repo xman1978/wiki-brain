@@ -43,6 +43,12 @@ const (
 	ActionConceptMergeCandidate = "concept_merge_candidate"
 	ActionConceptAdd            = "concept_add"
 	ActionConceptMerge          = "concept_merge"
+	// ActionTopicPageCandidate is the two-tier architecture's topic-page
+	// candidate audit action (docs/impl/v1/wiki.md 步骤 8, docs/impl/v1/study.md
+	// 步骤 6) — object_id is the shell page's page_id (identity is inherently
+	// unique; the confirmation target is a concrete page, not a concept id or
+	// member-set fingerprint).
+	ActionTopicPageCandidate = "topic_page_candidate"
 )
 
 // learning_results.object_type — activation_link is written by this module;

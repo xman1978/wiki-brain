@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
@@ -43,19 +44,28 @@ func TestCompile_HappyPath(t *testing.T) {
 }
 
 func TestCompile_RecordsVerifiedLinkIDs(t *testing.T) {
-	svc, fake, db, _ := setupTestService(t)
+	svc, fake, _, _ := setupTestService(t)
 	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: validCompileOutput})
-	seedVerifiedLink(t, db, "link-p1", "p1")
 
 	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 
+	// Every qualifying KP now requires a verified ActivationLink to be
+	// selected as compile input at all (docs/design/wiki-compilation.md
+	// "反复激活、多次验证、持续采用不是命中次数"), so both p1 and p2's link
+	// ids should be recorded.
 	var sourceLinkIDs []string
 	json.Unmarshal([]byte(page.SourceLinkIDs), &sourceLinkIDs)
-	if len(sourceLinkIDs) != 1 || sourceLinkIDs[0] != "link-p1" {
-		t.Errorf("source_link_ids = %v, want [link-p1] (p2 has no link, p1's is verified)", sourceLinkIDs)
+	want := map[string]bool{"link-p1": true, "link-p2": true}
+	if len(sourceLinkIDs) != 2 {
+		t.Fatalf("source_link_ids = %v, want 2 entries (link-p1, link-p2)", sourceLinkIDs)
+	}
+	for _, id := range sourceLinkIDs {
+		if !want[id] {
+			t.Errorf("unexpected source_link_id %q", id)
+		}
 	}
 }
 
@@ -81,9 +91,14 @@ func TestCompile_MissingSectionsFailsAfterRetry(t *testing.T) {
 		t.Fatal("expected compile to fail when required sections are missing")
 	}
 
-	calls := fake.Calls()
-	if len(calls) != 2 {
-		t.Errorf("expected 2 LLM attempts, got %d", len(calls))
+	compileCalls := 0
+	for _, c := range fake.Calls() {
+		if c.PromptFile == "wiki_compile.md" {
+			compileCalls++
+		}
+	}
+	if compileCalls != 2 {
+		t.Errorf("expected 2 wiki_compile.md attempts, got %d", compileCalls)
 	}
 
 	page, err := svc.store.GetActivePageByConceptID("c1")
@@ -346,7 +361,7 @@ func TestTryDirectAnswer_Sufficient(t *testing.T) {
 
 	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答内容 [p1]","citations":["p1"],"sufficient":true}`})
 
-	result, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", 0, 3)
+	result, ok, _, err := svc.TryDirectAnswer(context.Background(), "point one content", "", "", "", "", 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -367,7 +382,7 @@ func TestTryDirectAnswer_HallucinatedCitationFiltered(t *testing.T) {
 
 	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答内容","citations":["p1","p999"],"sufficient":true}`})
 
-	result, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", 0, 3)
+	result, ok, _, err := svc.TryDirectAnswer(context.Background(), "point one content", "", "", "", "", 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -387,7 +402,7 @@ func TestTryDirectAnswer_InsufficientFallsBack(t *testing.T) {
 
 	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"","citations":[],"sufficient":false}`})
 
-	_, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", 0, 3)
+	_, ok, _, err := svc.TryDirectAnswer(context.Background(), "point one content", "", "", "", "", 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -400,7 +415,7 @@ func TestTryDirectAnswer_NoHitBelowMinScoreSkipsLLM(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
 	publishedPage(t, svc, fake)
 
-	_, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", 1000, 3)
+	_, ok, _, err := svc.TryDirectAnswer(context.Background(), "point one content", "", "", "", "", 1000, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -416,7 +431,7 @@ func TestTryDirectAnswer_NoHitBelowMinScoreSkipsLLM(t *testing.T) {
 
 func TestTryDirectAnswer_NoPublishedPagesNoHit(t *testing.T) {
 	svc, _, _, _ := setupTestService(t)
-	_, ok, err := svc.TryDirectAnswer(context.Background(), "anything", 0, 3)
+	_, ok, _, err := svc.TryDirectAnswer(context.Background(), "anything", "", "", "", "", 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -505,7 +520,7 @@ func TestTryDirectAnswer_TriggerQuestionRoutesWithoutContentOverlap(t *testing.T
 	// The question exactly echoes the compiled trigger_questions entry, which
 	// shares no vocabulary with the page's title/content — only the trigger
 	// index field can produce a lexical hit here.
-	result, ok, err := svc.TryDirectAnswer(context.Background(), "这是一个专属触发问法", 0, 3)
+	result, ok, _, err := svc.TryDirectAnswer(context.Background(), "这是一个专属触发问法", "", "", "", "", 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -526,7 +541,7 @@ func TestTryDirectAnswer_ConceptEntryBypassesMinScore(t *testing.T) {
 	// minScore is set unreachably high so no lexical hit could clear it; only
 	// the concept entry (question contains the concept name "Concept One",
 	// scored independently of Bleve) should surface this page as a candidate.
-	result, ok, err := svc.TryDirectAnswer(context.Background(), "Concept One 该注意什么", 1e9, 3)
+	result, ok, _, err := svc.TryDirectAnswer(context.Background(), "Concept One 该注意什么", "", "", "", "", 1e9, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -546,7 +561,9 @@ func TestTryDirectAnswer_TopNRetriesNextCandidateOnInsufficient(t *testing.T) {
 	seedKU(t, db, "u3", "s1", "c2", "Topic C", 1, 5)
 	seedKP(t, db, "p3", "u3", "s1", "point three content")
 	seedLinkCandidate(t, db, "lc3", "t3", "p3", 10)
+	seedVerifiedLink(t, db, "link-p3", "p3")
 
+	fake.SetResponse("wiki_analyze.md", llm.FakeResponse{Output: `{"claims":[{"summary":"内容三的核心结论","cited_point_ids":["p3"]}],"tensions":[]}`})
 	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: `{
 		"title": "Concept One 知识页 相关补充",
 		"content": "## 稳定结论\n[p3] 内容三\n\n## 展开说明\n详细说明。\n\n## 待验证点\n暂无。\n\n## 依赖来源\n见引用。\n",
@@ -568,7 +585,7 @@ func TestTryDirectAnswer_TopNRetriesNextCandidateOnInsufficient(t *testing.T) {
 		{Output: `{"content":"来自第二个候选页的回答","citations":[],"sufficient":true}`},
 	})
 
-	result, ok, err := svc.TryDirectAnswer(context.Background(), "Concept One 知识页", 0, 3)
+	result, ok, _, err := svc.TryDirectAnswer(context.Background(), "Concept One 知识页", "", "", "", "", 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -587,5 +604,121 @@ func TestTryDirectAnswer_TopNRetriesNextCandidateOnInsufficient(t *testing.T) {
 	}
 	if answerCalls != 2 {
 		t.Errorf("answer_wiki.md calls = %d, want 2 (first declined, second retried)", answerCalls)
+	}
+}
+
+// TestCompile_AggregatesObservedConditions covers docs/design/wiki-compilation.md
+// "触发问法取材真实观测，检索匹配复用四元组": a compiled page's
+// observed_conditions should be the union of its cited KPs' verified-link
+// conditions.
+func TestCompile_AggregatesObservedConditions(t *testing.T) {
+	svc, fake, db, _ := setupTestService(t)
+	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: validCompileOutput})
+
+	cond1 := activation.NormalizeObservedCondition("database performance tuning", "troubleshoot", "dba", "production", "qterm1", time.Now())
+	cond2 := activation.NormalizeObservedCondition("index rebuild strategy", "howto", "dba", "", "qterm2", time.Now())
+	setObservedConditions(t, db, "link-p1", []activation.ObservedCondition{cond1})
+	setObservedConditions(t, db, "link-p2", []activation.ObservedCondition{cond2})
+
+	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	var conds []activation.ObservedCondition
+	if err := json.Unmarshal([]byte(page.ObservedConditions), &conds); err != nil {
+		t.Fatalf("unmarshal observed_conditions: %v", err)
+	}
+	if len(conds) != 2 {
+		t.Fatalf("observed_conditions = %+v, want 2 entries (from link-p1 and link-p2)", conds)
+	}
+}
+
+// TestCompile_TriggerQuestionsUseRealObservedQuestions covers the same design
+// note's generation-side requirement: the generation prompt's
+// observed_questions var should contain real confirmed question text, not be
+// left for the LLM to invent from materials alone.
+func TestCompile_TriggerQuestionsUseRealObservedQuestions(t *testing.T) {
+	svc, fake, db, _ := setupTestService(t)
+	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: validCompileOutput})
+
+	seedConfidentTrace(t, db, "tr1", "这个真实问法应该出现在生成素材里", []string{"p1"})
+
+	if _, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept}); err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	var compileVars map[string]string
+	for _, c := range fake.Calls() {
+		if c.PromptFile == "wiki_compile.md" {
+			compileVars = c.Vars
+		}
+	}
+	if compileVars == nil {
+		t.Fatal("no wiki_compile.md call recorded")
+	}
+	if !strings.Contains(compileVars["observed_questions"], "这个真实问法应该出现在生成素材里") {
+		t.Errorf("observed_questions = %q, want it to contain the seeded confident trace question", compileVars["observed_questions"])
+	}
+}
+
+// TestTryDirectAnswer_FourTupleEntry covers docs/impl/v1/wiki.md 步骤 4c: a
+// published page whose observed_conditions match the already-parsed
+// subject/intent/audience/constraint should surface as a direct-answer
+// candidate even when the question text has no lexical overlap with the
+// page (title/content/aliases/trigger_questions) and minScore is
+// unreachably high — only the four-tuple entry can find it.
+func TestTryDirectAnswer_FourTupleEntry(t *testing.T) {
+	svc, fake, db, _ := setupTestService(t)
+	activationSvc := newTestActivationSvc(db)
+	svc.SetActivationSvc(activationSvc)
+
+	cond := activation.NormalizeObservedCondition("database performance tuning", "troubleshoot", "dba", "production", "qterm1", time.Now())
+	setObservedConditions(t, db, "link-p1", []activation.ObservedCondition{cond})
+
+	page := publishedPage(t, svc, fake)
+
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"sufficient":true}`})
+
+	result, ok, _, err := svc.TryDirectAnswer(context.Background(),
+		"完全不重合的措辞，既不在标题里也不在正文里",
+		"database performance tuning", "troubleshoot", "dba", "production",
+		1e9, 3)
+	if err != nil {
+		t.Fatalf("try direct answer: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected the four-tuple entry to surface the page despite no lexical overlap and an unreachable min score")
+	}
+	if result.PageID != page.PageID {
+		t.Errorf("page_id = %q, want %q", result.PageID, page.PageID)
+	}
+}
+
+// TestTryDirectAnswer_FourTupleEmptyQueryNoMatch is the regression test for
+// the empty-query guard added to activation.MatchConditionGroups: a page
+// whose observed_conditions include a group with empty audience/constraint
+// must not match an entirely empty query (subject/intent/audience/constraint
+// all ""), which is what the plain POST /answer path (no Session parsing)
+// looks like.
+func TestTryDirectAnswer_FourTupleEmptyQueryNoMatch(t *testing.T) {
+	svc, fake, db, _ := setupTestService(t)
+	activationSvc := newTestActivationSvc(db)
+	svc.SetActivationSvc(activationSvc)
+
+	cond := activation.NormalizeObservedCondition("", "", "", "", "qterm1", time.Now())
+	setObservedConditions(t, db, "link-p1", []activation.ObservedCondition{cond})
+
+	publishedPage(t, svc, fake)
+
+	_, ok, _, err := svc.TryDirectAnswer(context.Background(),
+		"完全不重合的措辞，既不在标题里也不在正文里",
+		"", "", "", "",
+		1e9, 3)
+	if err != nil {
+		t.Fatalf("try direct answer: %v", err)
+	}
+	if ok {
+		t.Fatal("expected an entirely empty query not to match via the four-tuple entry, even against an empty-fields condition group")
 	}
 }

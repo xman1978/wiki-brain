@@ -206,9 +206,8 @@ func TestIntegration_StudyReportFromSeedDB(t *testing.T) {
 	cfg := testConfig()
 	cfg.CandidateConfidentMin = 1 // lower thresholds for single-pass data
 	cfg.CandidateRatioMin = 0.5
-	cfg.WikiConfidentMin = 1
 	cfg.WikiKPMin = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0)
 
 	result, err := svc.Run()
 	if err != nil {
@@ -331,7 +330,9 @@ func TestIntegration_StudyReportFromSeedDB(t *testing.T) {
 			}
 
 			// Verify recommendation logic
-			isReady := w.Stats.QualifyingKPCount >= cfg.WikiKPMin && w.Stats.KPNConnectionCount >= 1
+			isReady := w.Stats.QualifyingKPCount >= cfg.WikiKPMin &&
+				w.Stats.RelatedConnectionCount >= 1 &&
+				w.Stats.ContradictsConnectionCount < w.Stats.RelatedConnectionCount
 			expectedRec := "needs_more_data"
 			if isReady {
 				expectedRec = "ready"

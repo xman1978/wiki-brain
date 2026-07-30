@@ -54,7 +54,13 @@ func (h *Handler) createSource(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	src, err := h.svc.Import(r.Context(), header.Filename, file)
+	// origin/origin_page_id (docs/impl/v1/wiki.md 步骤 10 "回流的自体循环必须
+	// 挡住"): optional form fields, default 'upload' preserves existing
+	// behavior for every caller that doesn't set them.
+	origin := r.FormValue("origin")
+	originPageID := r.FormValue("origin_page_id")
+
+	src, err := h.svc.ImportWithOrigin(r.Context(), header.Filename, file, origin, originPageID)
 	if err != nil {
 		if strings.Contains(err.Error(), "unsupported format") {
 			foundation.WriteError(w, http.StatusBadRequest, err.Error())

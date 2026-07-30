@@ -75,21 +75,25 @@ func (s *Service) Retrieve(ctx context.Context, question string) (*EvidenceSet, 
 // quality without changing behavior.
 func (s *Service) RetrieveWithProgress(ctx context.Context, qc QueryContext, progress ProgressFunc) (*EvidenceSet, error) {
 	if !qc.ForceFull {
-		if wikiES, ok := s.tryWikiAnswer(ctx, qc); ok {
+		wikiES, skeletonPageID, skeletonMembers, ok := s.tryWikiAnswer(ctx, qc)
+		if ok {
 			return wikiES, nil
 		}
 		fastES, hits, ok := s.tryFastPath(ctx, qc)
 		if ok {
+			fastES.SkeletonPageID = skeletonPageID
+			fastES.SkeletonMembers = skeletonMembers
 			return fastES, nil
 		}
 		if len(hits) > 0 {
-			slowES, err := s.retrieveSlowPath(ctx, qc, progress)
+			slowES, err := s.retrieveSlowPathWithSkeleton(ctx, qc, progress, skeletonPageID, skeletonMembers)
 			if err != nil {
 				return nil, err
 			}
 			slowES.ActivationHits = hits
 			return slowES, nil
 		}
+		return s.retrieveSlowPathWithSkeleton(ctx, qc, progress, skeletonPageID, skeletonMembers)
 	}
 	return s.retrieveSlowPath(ctx, qc, progress)
 }
@@ -98,18 +102,32 @@ func (s *Service) RetrieveWithProgress(ctx context.Context, qc QueryContext, pro
 // index before the activation fast path (不调 LLM 除非命中分达标), and if the
 // hit page can sufficiently answer the question, return a path_type=wiki
 // EvidenceSet without ever reaching the fast/slow path. wikiSvc is nil until
-// main.go wires it up, matching the doc's "未实现时第 0 层跳过".
-func (s *Service) tryWikiAnswer(ctx context.Context, qc QueryContext) (*EvidenceSet, bool) {
+// main.go wires it up, matching the doc's "未实现时第 0 层跳过". The second and
+// third return values are the topic-page skeleton (docs/impl/v1/wiki.md 步骤
+// 8「检索接入」) — set whenever a topic page was hit and expanded, regardless
+// of whether direct answer itself succeeded, so callers can carry it forward
+// into the fast/slow path either way.
+func (s *Service) tryWikiAnswer(ctx context.Context, qc QueryContext) (*EvidenceSet, string, []SkeletonMemberInfo, bool) {
 	if s.wikiSvc == nil {
-		return nil, false
+		return nil, "", nil, false
 	}
-	result, ok, err := s.wikiSvc.TryDirectAnswer(ctx, qc.Question, s.cfg.Retrieval.WikiMinScore, s.cfg.Retrieval.WikiMaxCandidates)
+	result, ok, skeleton, err := s.wikiSvc.TryDirectAnswer(ctx, qc.Question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, s.cfg.Retrieval.WikiMinScore, s.cfg.Retrieval.WikiMaxCandidates)
 	if err != nil {
 		slog.Warn("wiki direct-answer failed, falling back", "error", err)
-		return nil, false
+		return nil, "", nil, false
 	}
+
+	var skeletonPageID string
+	var skeletonMembers []SkeletonMemberInfo
+	if skeleton != nil {
+		skeletonPageID = skeleton.PageID
+		for _, m := range skeleton.Members {
+			skeletonMembers = append(skeletonMembers, SkeletonMemberInfo{PageID: m.PageID, PointIDs: m.PointIDs})
+		}
+	}
+
 	if !ok {
-		return nil, false
+		return nil, skeletonPageID, skeletonMembers, false
 	}
 	return &EvidenceSet{
 		Question:          qc.Question,
@@ -125,7 +143,9 @@ func (s *Service) tryWikiAnswer(ctx context.Context, qc QueryContext) (*Evidence
 		WikiPageID:        result.PageID,
 		CitedPointIDs:     result.CitedPointIDs,
 		WikiAnswerContent: result.Content,
-	}, true
+		SkeletonPageID:    skeletonPageID,
+		SkeletonMembers:   skeletonMembers,
+	}, skeletonPageID, skeletonMembers, true
 }
 
 // RetrieveSlowPathWithProgress forces the full MVP pipeline, used by Answer's
@@ -133,6 +153,121 @@ func (s *Service) tryWikiAnswer(ctx context.Context, qc QueryContext) (*Evidence
 // (docs/impl/v1/retrieval.md 步骤 6).
 func (s *Service) RetrieveSlowPathWithProgress(ctx context.Context, qc QueryContext, progress ProgressFunc) (*EvidenceSet, error) {
 	return s.retrieveSlowPath(ctx, qc, progress)
+}
+
+// retrieveSlowPathWithSkeleton implements docs/impl/v1/wiki.md 步骤 8「检索接
+// 入」两层架构扩展 for the slow path: when a topic page was hit (regardless of
+// whether Wiki direct-answer succeeded), tag the resulting EvidenceSet with
+// skeleton_page_id/members for observability (question_complexity's
+// skeleton_used_count, docs/impl/v1/study.md 步骤 7) even when injection
+// itself is gated off. Actual candidate injection only happens when
+// retrieval.skeleton_injection_enabled is true (决策 B, 默认关闭).
+func (s *Service) retrieveSlowPathWithSkeleton(ctx context.Context, qc QueryContext, progress ProgressFunc, skeletonPageID string, skeletonMembers []SkeletonMemberInfo) (*EvidenceSet, error) {
+	if skeletonPageID == "" || !s.cfg.Retrieval.SkeletonInjectionEnabled {
+		es, err := s.retrieveSlowPath(ctx, qc, progress)
+		if err != nil {
+			return nil, err
+		}
+		if skeletonPageID != "" {
+			es.SkeletonPageID = skeletonPageID
+			es.SkeletonMembers = skeletonMembers
+		}
+		return es, nil
+	}
+
+	pointIDs := uniqueSkeletonPointIDs(skeletonMembers)
+	skeletonCandidates, err := s.buildSkeletonCandidates(pointIDs)
+	if err != nil {
+		slog.Warn("retrieval: build skeleton candidates failed, continuing without injection", "error", err)
+	}
+
+	rerankTopN := s.cfg.Retrieval.RerankTopN
+	var es *EvidenceSet
+	if rerankTopN > 0 && len(skeletonCandidates) >= rerankTopN {
+		// Decision A, full-bypass branch: injection alone already meets
+		// rerank_top_n — skip Domain/Source prefilter and Outline/FTS/RRF
+		// entirely (3 LLM calls total: mining + rerank + answer).
+		emit := func(phase, status, detail string, dur int64) {
+			if progress != nil {
+				progress(ProgressEvent{Phase: phase, Status: status, Detail: detail, Duration: dur})
+			}
+		}
+		es, err = s.rerankAndBuildEvidenceSet(ctx, qc, skeletonCandidates, emit, progress, false)
+	} else {
+		// Decision A, supplement branch: prefilter/outline/FTS still run;
+		// skeleton candidates are merged in before Rerank (recallFromSources).
+		es, err = s.retrieveSlowPathInternal(ctx, qc, progress, skeletonCandidates)
+	}
+	if err != nil {
+		return nil, err
+	}
+	es.SkeletonPageID = skeletonPageID
+	es.SkeletonMembers = skeletonMembers
+	return es, nil
+}
+
+func uniqueSkeletonPointIDs(members []SkeletonMemberInfo) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, m := range members {
+		for _, pid := range m.PointIDs {
+			if !seen[pid] {
+				seen[pid] = true
+				out = append(out, pid)
+			}
+		}
+	}
+	return out
+}
+
+// buildSkeletonCandidates reverse-looks-up each skeleton point_id's KU
+// (lifecycle=current on both, same as the fast path — docs/impl/v1/wiki.md
+// 步骤 8), producing pre-ranked candidates tagged sourcePaths=["skeleton"] so
+// they're indistinguishable from any other candidate once inside Rerank.
+func (s *Service) buildSkeletonCandidates(pointIDs []string) ([]candidate, error) {
+	if len(pointIDs) == 0 {
+		return nil, nil
+	}
+	hits, err := s.store.GetCurrentUnitsByPointIDs(pointIDs)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval: get current units by skeleton points: %w", err)
+	}
+	out := make([]candidate, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, candidate{
+			candidateID: h.UnitID,
+			unitID:      h.UnitID,
+			pointID:     h.PointID,
+			sourceID:    h.SourceID,
+			lineStart:   h.LineStart,
+			lineEnd:     h.LineEnd,
+			score:       1.0,
+			sourcePaths: []string{"skeleton"},
+		})
+	}
+	return out, nil
+}
+
+// mergeSkeletonCandidates appends skeleton candidates not already present
+// (by unitID) into merged, tagging sourcePaths with "skeleton" on top of
+// whatever recall path(s) already found it — a unit that both a normal recall
+// path and the skeleton agree on keeps its original entry unmodified.
+func mergeSkeletonCandidates(merged, skeleton []candidate) []candidate {
+	if len(skeleton) == 0 {
+		return merged
+	}
+	seen := make(map[string]bool, len(merged))
+	for _, c := range merged {
+		seen[c.unitID] = true
+	}
+	for _, c := range skeleton {
+		if seen[c.unitID] {
+			continue
+		}
+		seen[c.unitID] = true
+		merged = append(merged, c)
+	}
+	return merged
 }
 
 // tryFastPath implements docs/impl/v1/retrieval.md 步骤 2. It returns
@@ -335,6 +470,10 @@ func (s *Service) verifyFastPathEvidence(ctx context.Context, question string, e
 }
 
 func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progress ProgressFunc) (*EvidenceSet, error) {
+	return s.retrieveSlowPathInternal(ctx, qc, progress, nil)
+}
+
+func (s *Service) retrieveSlowPathInternal(ctx context.Context, qc QueryContext, progress ProgressFunc, skeleton []candidate) (*EvidenceSet, error) {
 	emit := func(phase, status, detail string, dur int64) {
 		if progress != nil {
 			progress(ProgressEvent{Phase: phase, Status: status, Detail: detail, Duration: dur})
@@ -350,7 +489,7 @@ func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progres
 	}
 	slog.Info("retrieval: step2 domain pre-filter done", "candidates", len(candidateSources))
 
-	es, err := s.filterAndRecall(ctx, qc, candidateSources, emit, progress, false)
+	es, err := s.filterAndRecall(ctx, qc, candidateSources, emit, progress, false, skeleton)
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +509,7 @@ func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progres
 			retryQC.Intent = parsed.Intent
 			slog.Info("retrieval: empty result, retrying with extracted subject/intent",
 				"subject", parsed.Subject, "intent", parsed.Intent)
-			es, err = s.filterAndRecall(ctx, retryQC, candidateSources, emit, progress, false)
+			es, err = s.filterAndRecall(ctx, retryQC, candidateSources, emit, progress, false, skeleton)
 			if err != nil {
 				return nil, err
 			}
@@ -390,7 +529,7 @@ func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progres
 	// （docs/impl/v1/evidence.md），只是在最后一次重试里把这条回退也对 supporting
 	// 开放，避免"rerank 已经判定候选主题相关、只是摘要没抓到关键句"这种情况直接判空。
 	slog.Info("retrieval: empty result, retrying against full domain-filtered source pool", "sources", len(candidateSources))
-	return s.recallFromSources(ctx, retryQC, candidateSources, emit, progress, true)
+	return s.recallFromSources(ctx, retryQC, candidateSources, emit, progress, true, skeleton)
 }
 
 func evidenceEmpty(es *EvidenceSet) bool {
@@ -399,7 +538,7 @@ func evidenceEmpty(es *EvidenceSet) bool {
 
 // filterAndRecall runs Step 3 (Source semantic filter) then Steps 4-10 within
 // the filtered source set.
-func (s *Service) filterAndRecall(ctx context.Context, qc QueryContext, candidateSources []SourceInfo, emit func(phase, status, detail string, dur int64), progress ProgressFunc, lastResort bool) (*EvidenceSet, error) {
+func (s *Service) filterAndRecall(ctx context.Context, qc QueryContext, candidateSources []SourceInfo, emit func(phase, status, detail string, dur int64), progress ProgressFunc, lastResort bool, skeleton []candidate) (*EvidenceSet, error) {
 	activationStart := time.Now()
 	emit("activation", "start", "", 0)
 
@@ -416,14 +555,17 @@ func (s *Service) filterAndRecall(ctx context.Context, qc QueryContext, candidat
 	slog.Info("retrieval: step3 source filter done", "sources", sourceIDs)
 	emit("activation", "done", fmt.Sprintf("%d 个来源", len(sourceIDs)), time.Since(activationStart).Milliseconds())
 
-	return s.recallFromSources(ctx, qc, filteredSources, emit, progress, lastResort)
+	return s.recallFromSources(ctx, qc, filteredSources, emit, progress, lastResort, skeleton)
 }
 
 // recallFromSources runs Steps 4-10 (outline+FTS recall through
 // EvidenceSet construction) against a fixed source set. lastResort is
 // forwarded to buildEvidenceSet — see retrieveSlowPath's fallback 2 for what
-// it changes.
-func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, sources []SourceInfo, emit func(phase, status, detail string, dur int64), progress ProgressFunc, lastResort bool) (*EvidenceSet, error) {
+// it changes. skeleton (docs/impl/v1/wiki.md 步骤 8「检索接入」) is merged into
+// the RRF-merged candidate set before Rerank when non-empty — this is
+// decision A's "不足时保留预过滤走混合召回" branch (prefilter/outline/FTS still
+// run; skeleton only supplements them).
+func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, sources []SourceInfo, emit func(phase, status, detail string, dur int64), progress ProgressFunc, lastResort bool, skeleton []candidate) (*EvidenceSet, error) {
 	question := qc.Question
 	sourceIDs := make([]string, len(sources))
 	for i, src := range sources {
@@ -464,6 +606,7 @@ func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, source
 
 	// Step 6: RRF merge（outline + fts(question) + fts(四元组)）
 	merged := s.rrfMerge(outlineCandidates, ftsQuestion, ftsTuple)
+	merged = mergeSkeletonCandidates(merged, skeleton)
 	slog.Info("retrieval: step6 rrf merge done", "merged", len(merged))
 
 	if len(merged) == 0 {
@@ -483,6 +626,18 @@ func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, source
 			GapReason:      GapReasonNoCandidates,
 		}, nil
 	}
+
+	return s.rerankAndBuildEvidenceSet(ctx, qc, merged, emit, progress, lastResort)
+}
+
+// rerankAndBuildEvidenceSet runs Steps 7-10 (Rerank through EvidenceSet
+// construction) given an already-assembled candidate set. Factored out of
+// recallFromSources so the skeleton-injection full-bypass branch
+// (docs/impl/v1/wiki.md 步骤 8「检索接入」, decision A: skeleton_point_ids ≥
+// rerank_top_n skips Domain/Source prefilter and Outline/FTS/RRF entirely)
+// can reuse it without going through Domain/Source/Outline/FTS at all.
+func (s *Service) rerankAndBuildEvidenceSet(ctx context.Context, qc QueryContext, merged []candidate, emit func(phase, status, detail string, dur int64), progress ProgressFunc, lastResort bool) (*EvidenceSet, error) {
+	question := qc.Question
 
 	// Step 7: 证据分类（LLM Rerank）
 	emit("rerank", "start", fmt.Sprintf("%d 条候选", len(merged)), 0)

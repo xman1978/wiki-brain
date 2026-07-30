@@ -100,6 +100,19 @@ func seedLearningEvent(t *testing.T, db *sql.DB, eventID, traceID, eventType, pa
 	}
 }
 
+// seedVerifiedActivationLink seeds a minimal activation_links row with
+// status=verified for pointID — the "多次验证" gate that
+// QualifyingKPsByConceptFromCandidates now requires (docs/design/
+// wiki-compilation.md "反复激活、多次验证、持续采用不是命中次数").
+func seedVerifiedActivationLink(t *testing.T, db *sql.DB, linkID, pointID string) {
+	t.Helper()
+	_, err := db.Exec(`INSERT INTO activation_links (link_id, question_terms, point_id, status)
+		VALUES (?, ?, ?, 'verified')`, linkID, "t_"+linkID, pointID)
+	if err != nil {
+		t.Fatalf("seed verified activation link: %v", err)
+	}
+}
+
 func seedKPRelation(t *testing.T, db *sql.DB, sourcePointID, targetPointID string) {
 	t.Helper()
 	_, err := db.Exec(`INSERT INTO knowledge_point_relations (relation_id, source_point_id, target_point_id, relation_type, prompt_version)
@@ -390,7 +403,11 @@ func TestHasKPNNeighbors(t *testing.T) {
 	}
 }
 
-func TestKPNConnectionCount(t *testing.T) {
+// TestKPNConnectionCountsByType covers docs/design/wiki-compilation.md
+// "ActivationLink 回答'这条管不管用'，Wiki 编译回答'这个主题够不够格立传'"'s
+// 连贯性 gate: related and contradicts relations must be counted separately,
+// not folded into one total.
+func TestKPNConnectionCountsByType(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 
@@ -402,20 +419,23 @@ func TestKPNConnectionCount(t *testing.T) {
 	seedKP(t, db, "kp2", "ku1", "src1", "c2")
 	seedKP(t, db, "kp3", "ku1", "src1", "c3")
 
-	seedKPRelation(t, db, "kp1", "kp2")
-	seedKPRelation(t, db, "kp2", "kp3")
+	seedKPRelation(t, db, "kp1", "kp2") // related
+	if _, err := db.Exec(`INSERT INTO knowledge_point_relations (relation_id, source_point_id, target_point_id, relation_type, prompt_version)
+		VALUES (?, 'kp2', 'kp3', 'contradicts', 'v1')`, uuid.New().String()); err != nil {
+		t.Fatal(err)
+	}
 
-	count, err := store.KPNConnectionCount([]string{"kp1", "kp2", "kp3"})
+	related, contradicts, err := store.KPNConnectionCountsByType([]string{"kp1", "kp2", "kp3"})
 	if err != nil {
-		t.Fatalf("KPNConnectionCount: %v", err)
+		t.Fatalf("KPNConnectionCountsByType: %v", err)
 	}
-	if count != 2 {
-		t.Errorf("expected 2 connections, got %d", count)
+	if related != 1 || contradicts != 1 {
+		t.Errorf("expected related=1/contradicts=1, got related=%d/contradicts=%d", related, contradicts)
 	}
 
-	count, _ = store.KPNConnectionCount([]string{"kp1"})
-	if count != 0 {
-		t.Errorf("expected 0 for single point, got %d", count)
+	related, contradicts, _ = store.KPNConnectionCountsByType([]string{"kp1"})
+	if related != 0 || contradicts != 0 {
+		t.Errorf("expected 0/0 for single point, got related=%d/contradicts=%d", related, contradicts)
 	}
 }
 
@@ -525,10 +545,12 @@ func TestQualifyingKPsByConceptFromCandidates_ExcludesMerged(t *testing.T) {
 	seedKU(t, db, "ku-merged", "src1", "c-merged")
 	seedKP(t, db, "kp-active", "ku-active", "src1", "active point")
 	seedKP(t, db, "kp-merged", "ku-merged", "src1", "merged point")
+	seedVerifiedActivationLink(t, db, "link-active", "kp-active")
+	seedVerifiedActivationLink(t, db, "link-merged", "kp-merged")
 	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc1', 't1', 'kp-active', 10, 12)`)
 	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc2', 't2', 'kp-merged', 10, 12)`)
 
-	result, err := store.QualifyingKPsByConceptFromCandidates(5)
+	result, err := store.QualifyingKPsByConceptFromCandidates()
 	if err != nil {
 		t.Fatalf("QualifyingKPsByConceptFromCandidates: %v", err)
 	}
@@ -556,6 +578,8 @@ func TestQualifyingKPsByConceptFromCandidates_DedupsAndFiltersLifecycle(t *testi
 	seedKU(t, db, "ku1", "src1", "c1")
 	seedKP(t, db, "kp-dup", "ku1", "src1", "duplicated point")
 	seedKP(t, db, "kp-stale", "ku1", "src1", "superseded point")
+	seedVerifiedActivationLink(t, db, "link-dup", "kp-dup")
+	seedVerifiedActivationLink(t, db, "link-stale", "kp-stale")
 	if _, err := db.Exec(`UPDATE knowledge_points SET lifecycle = 'superseded' WHERE point_id = 'kp-stale'`); err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +589,7 @@ func TestQualifyingKPsByConceptFromCandidates_DedupsAndFiltersLifecycle(t *testi
 	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc2', 't2', 'kp-dup', 5, 7)`)
 	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc3', 't3', 'kp-stale', 10, 12)`)
 
-	result, err := store.QualifyingKPsByConceptFromCandidates(5)
+	result, err := store.QualifyingKPsByConceptFromCandidates()
 	if err != nil {
 		t.Fatalf("QualifyingKPsByConceptFromCandidates: %v", err)
 	}

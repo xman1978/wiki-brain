@@ -685,14 +685,15 @@
   <div class="drawer-header">
     <span>学习报告</span>
     <div style="display:flex;gap:6px;align-items:center">
-      <button class="btn btn-sm" onclick="runStudy()" id="runStudyBtn">生成报告</button>
-      <button class="btn btn-sm" onclick="studyTab==='overview'?loadStudyReport():loadLearningResults()">刷新</button>
+      <button class="btn btn-sm" onclick="runStudy()" id="runStudyBtn" title="手动触发一轮学习扫描：扫描问题-知识点共现，更新 ActivationLink / Wiki 候选与知识缺口，并生成最新学习报告（定时任务也会自动执行）">学习扫描</button>
+      <button class="btn btn-sm" onclick="refreshStudyView()">刷新</button>
       <button class="btn-ghost" onclick="closeStudyView()">✕</button>
     </div>
   </div>
   <div class="panel-tabs">
     <button class="panel-tab active" data-study-tab="overview" onclick="switchStudyTab('overview')">概览</button>
     <button class="panel-tab" data-study-tab="actions" onclick="switchStudyTab('actions')">学习动作</button>
+    <button class="panel-tab" data-study-tab="records" onclick="switchStudyTab('records')">学习记录</button>
   </div>
   <div class="study-body" id="studyBody" style="flex:1;overflow-y:auto;padding:16px 20px;">
     <div style="text-align:center;padding:60px;color:var(--text-3)">加载中...</div>
@@ -747,6 +748,7 @@
     <div class="split-list">
       <div class="split-list-tabs" id="wikiStatusTabs">
         <button class="panel-tab active" data-wiki-status="" onclick="switchWikiStatus('')">候选</button>
+        <button class="panel-tab" data-wiki-status="topic_candidate" onclick="switchWikiStatus('topic_candidate')">主题候选</button>
         <button class="panel-tab" data-wiki-status="draft" onclick="switchWikiStatus('draft')">草稿</button>
         <button class="panel-tab" data-wiki-status="published" onclick="switchWikiStatus('published')">已发布</button>
         <button class="panel-tab" data-wiki-status="needs_recompile" onclick="switchWikiStatus('needs_recompile')">待重编译</button>
@@ -762,6 +764,11 @@
 <!-- ── WIKI DETAIL MODAL ───────────────────────────────── -->
 <div class="modal-overlay hidden" id="wikiDetailModal" onclick="if(event.target===this)closeWikiDetailModal()">
   <div class="modal-box" id="wikiDetailModalContent" style="width:640px"></div>
+</div>
+
+<!-- ── WIKI DRAFT EDITOR MODAL（docs/impl/v1/wiki.md 步骤 10） ───────────────────────────────── -->
+<div class="modal-overlay hidden" id="wikiDraftModal" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="modal-box" id="wikiDraftModalContent" style="width:820px"></div>
 </div>
 
 <!-- ── CONCEPT EVOLUTION DRAWER OVERLAY ──────────────────── -->
@@ -834,8 +841,11 @@ const S = {
   studyReport:         null,
   reportGaps:          [],
   alcPage:             0,
+  wcPage:              0,
   gapPage:             0,
   lrPage:              0,
+  recordsPage:         0,
+  studyRecords:        [],
   lrRows:              [],
   lrAction:            '',
   lrObjectType:        '',
@@ -2711,9 +2721,11 @@ async function pollReuploadTimeline(shadowId, title, uploadStart) {
 function openStudyView() { document.getElementById('studyDrawer').classList.add('open'); document.getElementById('studyOverlay').classList.remove('hidden'); loadStudyReport(); }
 function closeStudyView() { document.getElementById('studyDrawer').classList.remove('open'); document.getElementById('studyOverlay').classList.add('hidden'); }
 
-var STUDY_ALC_PAGE_SIZE = 5;
-var STUDY_GAP_PAGE_SIZE = 5;
+var STUDY_ALC_PAGE_SIZE = 3;
+var STUDY_WC_PAGE_SIZE = 3;
+var STUDY_GAP_PAGE_SIZE = 3;
 var STUDY_LR_PAGE_SIZE = 10;
+var STUDY_RECORDS_PAGE_SIZE = 10;
 
 function studyPagerHtml(page, total, pageSize, goFn) {
   var totalPages = Math.ceil(total / pageSize) || 1;
@@ -2742,6 +2754,16 @@ function setAlcPage(page) {
   if (body) body.scrollTop = scrollTop;
 }
 
+function setWcPage(page) {
+  if (!S.studyReport) return;
+  var body = document.getElementById('studyBody');
+  var scrollTop = body ? body.scrollTop : 0;
+  var total = (S.studyReport.wiki_candidates || []).length;
+  S.wcPage = clampStudyPage(page, total, STUDY_WC_PAGE_SIZE);
+  renderStudyReport(S.studyReport, body);
+  if (body) body.scrollTop = scrollTop;
+}
+
 function setGapPage(page) {
   if (!S.studyReport) return;
   var body = document.getElementById('studyBody');
@@ -2761,11 +2783,12 @@ async function loadStudyReport() {
   var body = document.getElementById('studyBody');
   body.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text-3)">加载中...</div>';
   S.alcPage = 0;
+  S.wcPage = 0;
   S.gapPage = 0;
   try {
     var r = await api('GET', '/study/reports/latest');
     if (r.ok && r.data) renderStudyReport(r.data, body);
-    else if (r.status===404) body.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text-3)"><div style="margin-bottom:16px"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg></div><div>暂无学习报告</div><div style="font-size:13px;margin-top:8px">点击"生成报告"生成第一份报告</div></div>';
+    else if (r.status===404) body.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text-3)"><div style="margin-bottom:16px"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg></div><div>暂无学习报告</div><div style="font-size:13px;margin-top:8px">点击「学习扫描」运行第一轮扫描并生成报告</div></div>';
     else body.innerHTML = '<div style="color:var(--red);padding:20px">加载失败：' + esc(JSON.stringify(r.data)) + '</div>';
   } catch(e) { body.innerHTML = '<div style="color:var(--red);padding:20px">请求失败：' + esc(e.message) + '</div>'; }
 }
@@ -2778,9 +2801,12 @@ function renderStudyReport(report, container) {
   var gp = report.knowledge_gaps || [];
   S.reportGaps = gp;
   S.alcPage = clampStudyPage(S.alcPage, lc.length, STUDY_ALC_PAGE_SIZE);
+  S.wcPage = clampStudyPage(S.wcPage, wc.length, STUDY_WC_PAGE_SIZE);
   S.gapPage = clampStudyPage(S.gapPage, gp.length, STUDY_GAP_PAGE_SIZE);
   var lcStart = S.alcPage * STUDY_ALC_PAGE_SIZE;
   var lcPage = lc.slice(lcStart, lcStart + STUDY_ALC_PAGE_SIZE);
+  var wcStart = S.wcPage * STUDY_WC_PAGE_SIZE;
+  var wcPage = wc.slice(wcStart, wcStart + STUDY_WC_PAGE_SIZE);
   var gpStart = S.gapPage * STUDY_GAP_PAGE_SIZE;
   var gpPage = gp.slice(gpStart, gpStart + STUDY_GAP_PAGE_SIZE);
   var cc = report.concept_candidates || {};
@@ -2796,24 +2822,37 @@ function renderStudyReport(report, container) {
         <div class="summary-stat gap"><div class="ss-val">' + (s.gap_count||0) + '</div><div class="ss-label">缺口 ' + rt(s.gap_count,s.total_traces) + '</div></div>\
       </div></div>\
     ' + (lc.length ? '<div class="study-card"><h2>ActivationLink 候选 (' + lc.length + ')</h2><div class="table-wrap"><table>\
-      <thead><tr><th>问题主题</th><th>知识点摘要</th><th>所属概念</th><th>命中</th><th>置信</th><th>纯度</th><th>广度</th><th>短路径</th><th>推荐</th></tr></thead>\
-      <tbody>' + lcPage.map(function(c) { var st = c.stats || {}; return '<tr><td><code style="font-size:11px">' + esc(c.question_terms||'') + '</code></td><td style="font-size:12px">' + esc((c.point_summary||'').slice(0,30)) + '</td><td style="font-size:12px">' + esc(c.concept_name||'') + '</td><td>' + (st.hit_count||0) + '</td><td>' + (st.confident_count||0) + '</td><td>' + (st.signal_purity!=null?(st.signal_purity*100).toFixed(0)+'%':'-') + '</td><td>' + (st.activation_breadth||'-') + '</td><td>' + (st.short_path_rate!=null?(st.short_path_rate*100).toFixed(0)+'%':'-') + '</td><td><span class="badge ' + (c.recommendation==='strong'?'confident':'partial') + '">' + recLabel(c.recommendation) + '</span></td></tr>'; }).join('') + '</tbody></table></div>\
+      <thead><tr><th>问题主题</th><th>所属概念</th><th>命中</th><th>置信</th><th>纯度</th><th>广度</th><th>短路径</th><th>推荐</th></tr></thead>\
+      <tbody>' + lcPage.map(function(c) {
+        var st = c.stats || {};
+        return '<tr style="cursor:pointer" title="点击查看 ActivationLink 详情" onclick="openStudyActivationCandidate(\'' + esc(c.point_id||'') + '\')">\
+          <td><code style="font-size:11px">' + esc(c.question_terms||'') + '</code></td>\
+          <td style="font-size:12px">' + esc(c.concept_name||'') + '</td>\
+          <td>' + (st.hit_count||0) + '</td>\
+          <td>' + (st.confident_count||0) + '</td>\
+          <td>' + (st.signal_purity!=null?(st.signal_purity*100).toFixed(0)+'%':'-') + '</td>\
+          <td>' + (st.activation_breadth||'-') + '</td>\
+          <td>' + (st.short_path_rate!=null?(st.short_path_rate*100).toFixed(0)+'%':'-') + '</td>\
+          <td><span class="badge ' + (c.recommendation==='strong'?'confident':'partial') + '">' + recLabel(c.recommendation) + '</span></td>\
+        </tr>';
+      }).join('') + '</tbody></table></div>\
       ' + studyPagerHtml(S.alcPage, lc.length, STUDY_ALC_PAGE_SIZE, 'setAlcPage') + '\
-      <div style="font-size:11px;color:var(--text-3);margin-top:12px">以上候选基于检索信号统计生成，仅供人工审核参考。</div></div>' : '') + '\
+      <div style="font-size:11px;color:var(--text-3);margin-top:12px">以上候选基于检索信号统计生成，仅供人工审核参考。点击行可查看 ActivationLink 详情。</div></div>' : '') + '\
     ' + (wc.length ? '<div class="study-card"><h2>Wiki 候选 (' + wc.length + ')</h2><div class="table-wrap"><table>\
       <thead><tr><th>概念</th><th>达标 KP 数</th><th>平均置信</th><th>KPN 连接数</th><th>活跃天数</th><th>状态</th></tr></thead>\
-      <tbody>' + wc.map(function(w) {
+      <tbody>' + wcPage.map(function(w) {
         var ws = w.stats || {};
-        var points = w.qualifying_points || [];
-        var pointsHtml = points.length
-          ? points.map(function(p) {
-              var summary = (p.point_summary || p.point_id || '').slice(0, 24);
-              return '<span class="kp-chip" title="' + esc(p.point_summary || '') + '">' + esc(summary) + (summary.length >= 24 ? '…' : '') + ' (置信 ' + (p.confident_count||0) + ')</span>';
-            }).join('')
-          : (w.qualifying_point_ids || []).map(function(id) { return '<span class="kp-chip">' + esc(id) + '</span>'; }).join('');
-        return '<tr><td><b>' + esc(w.concept_name||'') + '</b></td><td>' + (ws.qualifying_kp_count||0) + '</td><td>' + (ws.avg_confident_count ? ws.avg_confident_count.toFixed(1) : '-') + '</td><td>' + (ws.kpn_connection_count||0) + '</td><td>' + (ws.days_active||'-') + '</td><td><span class="badge ' + (w.recommendation==='ready'?'confident':'partial') + '">' + (w.recommendation==='ready' ? '可编译' : '数据不足') + '</span></td></tr>'
-          + '<tr><td colspan="6" style="padding-top:0;border-top:none"><div style="font-size:11px;color:var(--text-3);margin-bottom:4px">关联知识点</div>' + pointsHtml + '</td></tr>';
-      }).join('') + '</tbody></table></div></div>' : '') + '\
+        return '<tr style="cursor:pointer" title="点击查看 Wiki 候选详情" onclick="openStudyWikiCandidate(\'' + esc(w.concept_id||'') + '\')">\
+          <td><b>' + esc(w.concept_name||'') + '</b></td>\
+          <td>' + (ws.qualifying_kp_count||0) + '</td>\
+          <td>' + (ws.avg_confident_count ? ws.avg_confident_count.toFixed(1) : '-') + '</td>\
+          <td>' + (ws.kpn_connection_count||0) + '</td>\
+          <td>' + (ws.days_active||'-') + '</td>\
+          <td><span class="badge ' + (w.recommendation==='ready'?'confident':'partial') + '">' + (w.recommendation==='ready' ? '可编译' : '数据不足') + '</span></td>\
+        </tr>';
+      }).join('') + '</tbody></table></div>\
+      ' + studyPagerHtml(S.wcPage, wc.length, STUDY_WC_PAGE_SIZE, 'setWcPage') + '\
+      <div style="font-size:11px;color:var(--text-3);margin-top:12px">点击行可查看 Wiki 候选详情并编译。</div></div>' : '') + '\
     ' + (gp.length ? '<div class="study-card"><h2>高频知识盲区 (' + gp.length + ')</h2><div class="table-wrap"><table>\
       <thead><tr><th style="white-space:nowrap">问题主题</th><th style="white-space:nowrap">出现次数</th><th>主要原因</th><th>建议</th><th>典型问题</th></tr></thead>\
       <tbody>' + gpPage.map(function(g, i) {
@@ -2825,41 +2864,106 @@ function renderStudyReport(report, container) {
           <td style="font-size:12px;color:var(--text-2)">' + esc((g.question||'').slice(0,60)) + '</td></tr>';
       }).join('') + '</tbody></table></div>\
       ' + studyPagerHtml(S.gapPage, gp.length, STUDY_GAP_PAGE_SIZE, 'setGapPage') + '</div>' : '') + '\
-    <div class="study-card"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">概念演化</h2><button class="btn btn-sm" onclick="openConceptView()">打开审计视图</button></div>\
+    <div class="study-card"><h2 style="margin:0 0 10px">概念演化</h2>\
       <div class="study-summary-grid">\
-        <div class="summary-stat"><div class="ss-val">' + (cc.concept_gap_event_count||0) + '</div><div class="ss-label">窗口内 concept_gap 事件</div></div>\
+        <div class="summary-stat"><div class="ss-val">' + (cc.concept_gap_event_count||0) + '</div><div class="ss-label">概念缺口</div></div>\
         <div class="summary-stat confident"><div class="ss-val">' + (cc.add_created||0) + '</div><div class="ss-label">本轮新增候选</div></div>\
         <div class="summary-stat confident"><div class="ss-val">' + (cc.merge_created||0) + '</div><div class="ss-label">本轮合并候选</div></div>\
         <div class="summary-stat partial"><div class="ss-val">' + (ccPendingAdd.length + ccPendingMerge.length) + '</div><div class="ss-label">待确认候选</div></div>\
       </div>\
-      <div style="font-size:11px;color:var(--text-3);margin-top:12px">新增/合并候选的确认与执行请到「概念演化」审计视图操作，Study 只负责识别候选，不自动执行。</div></div>\
-    <div class="study-card"><h2>历史报告</h2><div id="reportsList"><button class="btn btn-sm" onclick="loadReportList()">加载历史报告</button></div></div>';
-}
-
-async function loadReportList() {
-  var el = document.getElementById('reportsList');
-  el.innerHTML = '加载中...';
-  try {
-    var r = await api('GET', '/study/reports');
-    var list = Array.isArray(r.data) ? r.data : [];
-    if (!list.length) { el.innerHTML = '<span style="font-size:13px;color:var(--text-3)">暂无历史报告</span>'; return; }
-    el.innerHTML = list.map(function(rp) {
-      return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-lt)"><span style="font-size:13px">' + dateStr(rp.created_at) + '</span><span class="badge">周期 ' + (rp.period_days||30) + ' 天</span><span style="font-size:11px;color:var(--text-3)">候选 ' + (rp.candidates_count||0) + ' · Wiki ' + (rp.wiki_count||0) + ' · 缺口 ' + (rp.gap_count||0) + '</span></div>';
-    }).join('');
-  } catch(e) { el.innerHTML = '<span style="color:var(--red);font-size:12px">加载失败</span>'; }
+      <div style="font-size:11px;color:var(--text-3);margin-top:12px">新增/合并候选的确认与执行请到「概念演化」审计视图操作，Study 只负责识别候选，不自动执行。</div></div>';
 }
 
 async function runStudy() {
   var btn = document.getElementById('runStudyBtn');
   var body = document.getElementById('studyBody');
-  btn.disabled = true; btn.textContent = '生成中...';
-  body.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text-3)">正在生成学习报告...</div>';
+  btn.disabled = true; btn.textContent = '扫描中...';
+  body.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text-3)">正在运行学习扫描并生成报告...</div>';
   try {
     var r = await api('POST', '/study/run', {});
     if (r.ok) { loadStudyReport(); }
-    else { body.innerHTML = '<div style="color:var(--red);padding:20px">生成失败：' + esc(JSON.stringify(r.data)) + '</div>'; }
+    else { body.innerHTML = '<div style="color:var(--red);padding:20px">扫描失败：' + esc(JSON.stringify(r.data)) + '</div>'; }
   } catch(e) { body.innerHTML = '<div style="color:var(--red);padding:20px">请求失败：' + esc(e.message) + '</div>'; }
-  btn.disabled = false; btn.textContent = '生成报告';
+  btn.disabled = false; btn.textContent = '学习扫描';
+}
+
+async function openStudyActivationCandidate(pointId) {
+  if (!pointId) return;
+  var detail = document.getElementById('activationLinkModalContent');
+  detail.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3)">加载中...</div>';
+  document.getElementById('activationLinkModal').classList.remove('hidden');
+  try {
+    var r = await api('GET', '/activation-links?point_id=' + encodeURIComponent(pointId) + '&limit=1');
+    var rows = Array.isArray(r.data) ? r.data : [];
+    if (!r.ok || !rows.length || !rows[0].link_id) {
+      detail.innerHTML = '\
+        <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">ActivationLink 详情</h2>\
+        <div style="color:var(--text-3);font-size:13px;line-height:1.6;padding:8px 0">该候选尚未形成 ActivationLink（可能仍停留在共现统计阶段）。可先执行「学习扫描」创建候选链接后再查看。</div>\
+        <div class="modal-actions" style="margin-top:14px;justify-content:flex-start">\
+          <button class="btn btn-sm" onclick="closeActivationLinkModal()">关闭</button>\
+        </div>';
+      return;
+    }
+    await selectActivationLink(rows[0].link_id);
+  } catch(e) {
+    detail.innerHTML = '<div style="color:var(--red);padding:20px">加载失败：' + esc(e.message) + '</div>';
+  }
+}
+
+async function openStudyWikiCandidate(conceptId) {
+  if (!conceptId) return;
+  var w = ((S.studyReport && S.studyReport.wiki_candidates) || []).find(function(x) { return x.concept_id === conceptId; });
+  var detail = document.getElementById('wikiDetailModalContent');
+  document.getElementById('wikiDetailModal').classList.remove('hidden');
+  if (!w) {
+    detail.innerHTML = '<div style="color:var(--red);padding:20px">未找到 Wiki 候选</div>';
+    return;
+  }
+  detail.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3)">加载中...</div>';
+  var ws = w.stats || {};
+  var reason = w.reason || '';
+  var resultId = null;
+  try {
+    var rr = await api('GET', '/study/results?action=wiki_candidate&object_id=' + encodeURIComponent(conceptId) + '&limit=20');
+    var rows = Array.isArray(rr.data) ? rr.data : [];
+    var pending = rows.find(function(row) { return row.status === 'pending_confirm'; });
+    if (pending) {
+      resultId = pending.result_id;
+      reason = pending.reason || reason;
+    } else if (rows.length) {
+      reason = rows[0].reason || reason;
+    }
+  } catch(e) { /* 无 learning_result 时仍展示报告侧统计 */ }
+
+  var points = w.qualifying_points || [];
+  var pointsHtml = points.length
+    ? points.map(function(p) {
+        var summary = (p.point_summary || p.point_id || '').slice(0, 40);
+        return '<div class="detail-row"><span class="dl">KP</span><span class="dv">' + esc(summary) + (summary.length >= 40 ? '…' : '') + ' <span style="color:var(--text-3)">置信 ' + (p.confident_count||0) + '</span></span></div>';
+      }).join('')
+    : '<div style="font-size:12px;color:var(--text-3)">暂无合格知识点明细</div>';
+
+  var compileBtn = resultId
+    ? '<button class="btn btn-primary btn-sm" onclick="compileWikiCandidate(\'' + esc(conceptId) + '\',\'' + esc(resultId) + '\')">编译（概念页）</button>'
+    : '';
+  var tip = !resultId
+    ? '<div style="font-size:12px;color:var(--text-3);margin-top:8px">' + (w.recommendation === 'ready' ? '尚未找到待确认的 wiki_candidate 学习动作，无法直接编译。可先执行「学习扫描」。' : '尚未达到可编译门槛，仅供查看信号进展。') + '</div>'
+    : '';
+
+  detail.innerHTML = '\
+    <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">' + esc(w.concept_name || conceptId) + '</h2>\
+    <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="badge ' + (w.recommendation==='ready'?'confident':'partial') + '">' + (w.recommendation==='ready' ? '可编译' : '数据不足') + '</span></span></div>\
+    <div class="detail-row"><span class="dl">合格 KP</span><span class="dv">' + (ws.qualifying_kp_count||0) + ' 个</span></div>\
+    <div class="detail-row"><span class="dl">平均置信</span><span class="dv">' + (ws.avg_confident_count ? ws.avg_confident_count.toFixed(1) : '-') + '</span></div>\
+    <div class="detail-row"><span class="dl">KPN 连接</span><span class="dv">' + (ws.kpn_connection_count||0) + '</span></div>\
+    <div class="detail-row"><span class="dl">活跃天数</span><span class="dv">' + (ws.days_active != null ? ws.days_active : '-') + '</span></div>\
+    <div class="detail-row"><span class="dl">Learning Reason</span><span class="dv">' + esc(reason) + '</span></div>\
+    <h3 style="margin-top:16px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">关联知识点</h3>\
+    <div style="margin-top:8px">' + pointsHtml + '</div>\
+    <div style="margin-top:16px;display:flex;gap:8px;align-items:center">' + compileBtn + '</div>\
+    ' + tip + '\
+    <div id="wikiCompileStatus" style="margin-top:10px;font-size:12px;color:var(--text-3)"></div>\
+    <div class="modal-actions"><button class="btn btn-sm" onclick="closeWikiDetailModal()">关闭</button></div>';
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2869,7 +2973,58 @@ function switchStudyTab(tab) {
   S.studyTab = tab;
   document.querySelectorAll('[data-study-tab]').forEach(function(t) { t.classList.toggle('active', t.dataset.studyTab === tab); });
   if (tab === 'overview') loadStudyReport();
-  else loadLearningResults();
+  else if (tab === 'actions') loadLearningResults();
+  else if (tab === 'records') loadStudyRecords();
+}
+
+function refreshStudyView() {
+  if (S.studyTab === 'overview') loadStudyReport();
+  else if (S.studyTab === 'actions') loadLearningResults();
+  else if (S.studyTab === 'records') loadStudyRecords();
+}
+
+async function loadStudyRecords() {
+  var body = document.getElementById('studyBody');
+  body.innerHTML = '<div class="study-card"><h2 style="margin:0 0 12px">学习记录</h2><div id="studyRecordsList"><div style="text-align:center;padding:40px;color:var(--text-3)">加载中...</div></div></div>';
+  try {
+    var r = await api('GET', '/study/reports');
+    S.studyRecords = Array.isArray(r.data) ? r.data : [];
+    S.recordsPage = clampStudyPage(S.recordsPage || 0, S.studyRecords.length, STUDY_RECORDS_PAGE_SIZE);
+    renderStudyRecordsList();
+  } catch(e) {
+    var list = document.getElementById('studyRecordsList');
+    if (list) list.innerHTML = '<div style="color:var(--red);padding:20px">加载失败：' + esc(e.message) + '</div>';
+  }
+}
+
+function setRecordsPage(page) {
+  S.recordsPage = clampStudyPage(page, (S.studyRecords || []).length, STUDY_RECORDS_PAGE_SIZE);
+  renderStudyRecordsList();
+}
+
+function renderStudyRecordsList() {
+  var list = document.getElementById('studyRecordsList');
+  if (!list) return;
+  var rows = S.studyRecords || [];
+  if (!rows.length) {
+    list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无学习记录</div>';
+    return;
+  }
+  S.recordsPage = clampStudyPage(S.recordsPage, rows.length, STUDY_RECORDS_PAGE_SIZE);
+  var start = S.recordsPage * STUDY_RECORDS_PAGE_SIZE;
+  var pageRows = rows.slice(start, start + STUDY_RECORDS_PAGE_SIZE);
+  list.innerHTML = '<div class="table-wrap"><table>\
+    <thead><tr><th>生成时间</th><th>统计周期</th><th>ActivationLink 候选</th><th>Wiki 候选</th><th>知识盲区</th></tr></thead>\
+    <tbody>' + pageRows.map(function(rp) {
+      return '<tr>\
+        <td style="white-space:nowrap;font-size:13px">' + dateStr(rp.created_at) + '</td>\
+        <td style="white-space:nowrap"><span class="badge">' + (rp.period_days||30) + ' 天</span></td>\
+        <td>' + (rp.candidates_count||0) + '</td>\
+        <td>' + (rp.wiki_count||0) + '</td>\
+        <td>' + (rp.gap_count||0) + '</td>\
+      </tr>';
+    }).join('') + '</tbody></table></div>' +
+    studyPagerHtml(S.recordsPage, rows.length, STUDY_RECORDS_PAGE_SIZE, 'setRecordsPage');
 }
 
 async function loadLearningResults() {
@@ -3187,7 +3342,12 @@ async function confirmActivationLink(linkId) {
   if (!(await showConfirm('确认将该候选链接晋升为 verified？'))) return;
   try {
     var r = await api('POST', '/activation-links/' + linkId + '/confirm');
-    if (r.ok) { loadActivationLinks(); selectActivationLink(linkId); pollActivationPendingCount(); }
+    if (r.ok) {
+      loadActivationLinks();
+      selectActivationLink(linkId);
+      pollActivationPendingCount();
+      if (document.getElementById('studyDrawer').classList.contains('open') && S.studyTab === 'overview') loadStudyReport();
+    }
     else alert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
   } catch(e) { alert('操作出错：' + e.message); }
 }
@@ -3196,7 +3356,12 @@ async function rejectActivationLink(linkId) {
   if (!(await showConfirm('确认驳回该候选链接？'))) return;
   try {
     var r = await api('POST', '/activation-links/' + linkId + '/reject');
-    if (r.ok) { loadActivationLinks(); selectActivationLink(linkId); pollActivationPendingCount(); }
+    if (r.ok) {
+      loadActivationLinks();
+      selectActivationLink(linkId);
+      pollActivationPendingCount();
+      if (document.getElementById('studyDrawer').classList.contains('open') && S.studyTab === 'overview') loadStudyReport();
+    }
     else alert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
   } catch(e) { alert('操作出错：' + e.message); }
 }
@@ -3246,6 +3411,7 @@ function switchWikiStatus(status) {
 
 async function loadWikiPages() {
   if (S.wikiStatus === '') { loadWikiCandidates(); return; }
+  if (S.wikiStatus === 'topic_candidate') { loadTopicCandidates(); return; }
   var list = document.getElementById('wikiListItems');
   list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>';
   try {
@@ -3309,8 +3475,7 @@ function selectWikiCandidate(resultId) {
     <div class="detail-row"><span class="dl">合格 KP</span><span class="dv">' + (c.qualifyingKpCount != null ? c.qualifyingKpCount : '-') + ' 个</span></div>\
     <div class="detail-row"><span class="dl">Learning Reason</span><span class="dv">' + esc(c.reason || '') + '</span></div>\
     <div style="margin-top:16px;display:flex;gap:8px;align-items:center">\
-      <select id="wikiPageTypeSelect"><option value="concept">concept（概念页）</option><option value="topic">topic（主题页）</option></select>\
-      <button class="btn btn-primary btn-sm" onclick="compileWikiCandidate(\'' + esc(c.conceptId) + '\',\'' + esc(c.resultId) + '\')">编译</button>\
+      <button class="btn btn-primary btn-sm" onclick="compileWikiCandidate(\'' + esc(c.conceptId) + '\',\'' + esc(c.resultId) + '\')">编译（概念页）</button>\
     </div>\
     <div id="wikiCompileStatus" style="margin-top:10px;font-size:12px;color:var(--text-3)"></div>\
     <div class="modal-actions"><button class="btn btn-sm" onclick="closeWikiDetailModal()">关闭</button></div>';
@@ -3322,18 +3487,115 @@ function closeWikiDetailModal() {
 
 async function compileWikiCandidate(conceptId, resultId) {
   var statusEl = document.getElementById('wikiCompileStatus');
-  var pageType = document.getElementById('wikiPageTypeSelect').value;
   statusEl.textContent = '编译中，可能需要一些时间...';
   try {
-    var r = await api('POST', '/wiki/compile', { concept_id: conceptId, page_type: pageType, result_id: resultId });
+    var r = await api('POST', '/wiki/compile', { concept_id: conceptId, page_type: 'concept', result_id: resultId });
     if (r.ok) {
       statusEl.innerHTML = '<span style="color:var(--green)">编译成功，已生成草稿</span>';
-      switchWikiStatus('draft');
       pollActivationPendingCount();
+      if (document.getElementById('wikiDrawer').classList.contains('open')) switchWikiStatus('draft');
+      if (document.getElementById('studyDrawer').classList.contains('open') && S.studyTab === 'overview') loadStudyReport();
     } else {
       statusEl.innerHTML = '<span style="color:var(--red)">编译失败：' + esc(r.data && r.data.message ? r.data.message : JSON.stringify(r.data)) + '</span>';
     }
   } catch(e) { statusEl.innerHTML = '<span style="color:var(--red)">编译出错：' + esc(e.message) + '</span>'; }
+}
+
+// ═══════════════════════════════════════════════════════
+// 主题页候选（两层架构扩展，docs/impl/v1/wiki.md 步骤 8）
+// ═══════════════════════════════════════════════════════
+
+async function loadTopicCandidates() {
+  var list = document.getElementById('wikiListItems');
+  list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>';
+  try {
+    var rr = await api('GET', '/study/results?action=topic_page_candidate&status=pending_confirm&limit=100');
+    var pending = Array.isArray(rr.data) ? rr.data : [];
+    S.wikiListData = pending.map(function(row) { return { resultId: row.result_id, pageId: row.object_id, reason: row.reason }; });
+    renderTopicCandidatesList();
+  } catch(e) { list.innerHTML = '<div style="color:var(--red);padding:20px;font-size:12px">加载失败</div>'; }
+}
+
+function renderTopicCandidatesList() {
+  var list = document.getElementById('wikiListItems');
+  if (!S.wikiListData.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无主题页候选</div>'; return; }
+  list.innerHTML = S.wikiListData.map(function(c) {
+    return '<div class="page-row' + (c.resultId === S.wikiSelectedId ? ' active' : '') + '" onclick="selectTopicCandidate(\'' + esc(c.resultId) + '\')">\
+      <div class="pr-title">壳页 ' + esc(c.pageId) + '</div>\
+      <div class="pr-meta"><span>' + esc(c.reason || '') + '</span></div>\
+    </div>';
+  }).join('');
+}
+
+async function selectTopicCandidate(resultId) {
+  S.wikiSelectedId = resultId;
+  renderTopicCandidatesList();
+  var c = S.wikiListData.find(function(x) { return x.resultId === resultId; });
+  var detail = document.getElementById('wikiDetailModalContent');
+  document.getElementById('wikiDetailModal').classList.remove('hidden');
+  if (!c) { detail.innerHTML = '<div style="color:var(--red);padding:20px">未找到候选</div>'; return; }
+  detail.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3)">加载成员页面...</div>';
+  try {
+    var relR = await api('GET', '/wiki/pages/' + c.pageId + '/relations');
+    var containsRows = (relR.ok && Array.isArray(relR.data)) ? relR.data.filter(function(x) { return x.relation_type === 'contains'; }) : [];
+    var memberHtml = containsRows.length
+      ? containsRows.map(function(m) { return '<div class="detail-row"><span class="dl">成员</span><span class="dv">' + esc(m.title || m.other_page_id) + '</span></div>'; }).join('')
+      : '<div style="font-size:12px;color:var(--text-3)">无法加载成员列表</div>';
+    detail.innerHTML = '\
+      <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">主题页候选</h2>\
+      <div class="detail-row"><span class="dl">Learning Reason</span><span class="dv">' + esc(c.reason || '') + '</span></div>\
+      <h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase">成员概念页</h3>\
+      <div style="margin-top:8px">' + memberHtml + '</div>\
+      <div id="topicAnalyzeResult" style="margin-top:14px"></div>\
+      <div style="margin-top:16px;display:flex;gap:8px">\
+        <button class="btn btn-sm" onclick="analyzeTopicCandidate(\'' + esc(c.pageId) + '\',\'' + esc(c.resultId) + '\')">分析</button>\
+        <button class="btn btn-sm" style="color:var(--red)" onclick="rejectTopicCandidate(\'' + esc(c.pageId) + '\')">驳回</button>\
+      </div>\
+      <div id="topicCompileStatus" style="margin-top:10px;font-size:12px;color:var(--text-3)"></div>\
+      <div class="modal-actions"><button class="btn btn-sm" onclick="closeWikiDetailModal()">关闭</button></div>';
+  } catch(e) { detail.innerHTML = '<div style="color:var(--red);padding:20px">加载失败</div>'; }
+}
+
+async function analyzeTopicCandidate(pageId, resultId) {
+  var host = document.getElementById('topicAnalyzeResult');
+  host.innerHTML = '<div style="color:var(--text-3);font-size:12px">分析中...</div>';
+  try {
+    var r = await api('POST', '/wiki/pages/' + pageId + '/topic/analyze');
+    if (!r.ok || !r.data) { host.innerHTML = '<div style="color:var(--red);font-size:12px">分析失败：' + esc(r.data && r.data.error ? r.data.error : JSON.stringify(r.data)) + '</div>'; return; }
+    var claims = r.data.claims || [];
+    var tensions = r.data.tensions || [];
+    host.innerHTML = '\
+      <h3 style="font-size:13px;color:var(--text-3);text-transform:uppercase">拟采用的论断结构（' + claims.length + ' 条）</h3>\
+      <div style="margin-top:6px">' + claims.map(function(cl) { return '<div class="detail-row"><span class="dv">' + esc(cl.summary) + ' <span style="color:var(--text-3)">[' + (cl.cited_point_ids||[]).join(', ') + ']</span></span></div>'; }).join('') + '</div>\
+      ' + (tensions.length ? '<h3 style="margin-top:10px;font-size:13px;color:var(--text-3);text-transform:uppercase">张力/待验证点</h3><div style="margin-top:6px">' + tensions.map(function(t) { return '<div class="detail-row"><span class="dv">' + esc(t.description) + '</span></div>'; }).join('') + '</div>' : '') + '\
+      <button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="compileTopicCandidate(\'' + esc(pageId) + '\')">确认并编译</button>';
+    S.topicAnalyzeCache = S.topicAnalyzeCache || {};
+    S.topicAnalyzeCache[pageId] = { claims: claims, tensions: tensions };
+  } catch(e) { host.innerHTML = '<div style="color:var(--red);font-size:12px">分析出错：' + esc(e.message) + '</div>'; }
+}
+
+async function compileTopicCandidate(pageId) {
+  var statusEl = document.getElementById('topicCompileStatus');
+  statusEl.textContent = '编译中，可能需要一些时间...';
+  var cached = (S.topicAnalyzeCache && S.topicAnalyzeCache[pageId]) || {};
+  try {
+    var r = await api('POST', '/wiki/pages/' + pageId + '/topic/compile', { claims: cached.claims || [], tensions: cached.tensions || [] });
+    if (r.ok) {
+      statusEl.innerHTML = '<span style="color:var(--green)">编译成功，已生成草稿</span>';
+      switchWikiStatus('draft');
+    } else {
+      statusEl.innerHTML = '<span style="color:var(--red)">编译失败：' + esc(r.data && r.data.error ? r.data.error : JSON.stringify(r.data)) + '</span>';
+    }
+  } catch(e) { statusEl.innerHTML = '<span style="color:var(--red)">编译出错：' + esc(e.message) + '</span>'; }
+}
+
+async function rejectTopicCandidate(pageId) {
+  if (!(await showConfirm('确认驳回该主题页候选？壳页将被归档。'))) return;
+  try {
+    await api('POST', '/wiki/pages/' + pageId + '/archive');
+    closeWikiDetailModal();
+    loadTopicCandidates();
+  } catch(e) { alert('驳回出错：' + e.message); }
 }
 
 async function selectWikiPage(pageId) {
@@ -3382,19 +3644,117 @@ function renderWikiPageDetail(p) {
   else if (p.status === 'needs_recompile') actionsHtml = '<button class="btn btn-primary btn-sm" onclick="recompileWikiPage(\'' + esc(p.page_id) + '\')">重编译</button>';
   else if (p.status === 'published') actionsHtml = '<button class="btn btn-sm" style="color:var(--red)" onclick="archiveWikiPage(\'' + esc(p.page_id) + '\')">归档</button>';
   var revisions = p.revisions || [];
+  var uncovered = p.uncovered_points || [];
+  var memberRoles = p.member_roles || [];
   detail.innerHTML = '\
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">\
       <h2 style="font-size:16px;font-weight:700">' + esc(p.title || '') + '</h2>\
-      <span class="badge">' + esc(p.status) + '</span>\
+      <span class="badge">' + esc(p.page_type || '') + ' · ' + esc(p.status) + '</span>\
     </div>\
-    <div style="margin-bottom:12px;display:flex;gap:8px">' + actionsHtml + '<button class="btn btn-sm" onclick="closeWikiDetailModal()">关闭</button></div>\
+    <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">' + actionsHtml + '\
+      <button class="btn btn-sm" onclick="deriveWikiDraft(\'' + esc(p.page_id) + '\',\'' + esc(p.page_type) + '\')">派生草稿</button>\
+      <button class="btn btn-sm" onclick="closeWikiDetailModal()">关闭</button>\
+    </div>\
     <div class="wiki-page-content ans-body">' + renderWikiContent(p.content) + '</div>\
     <div id="wikiPointRefPanel"></div>\
+    ' + (memberRoles.length ? '\
+    <h3 style="margin-top:18px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">成员分工（member_roles）</h3>\
+    <div style="margin-top:8px">' + memberRoles.map(function(m) { return '<div class="detail-row"><span class="dl">' + esc(m.member_page_id) + '</span><span class="dv">' + esc(m.aspect || '') + (m.question_types && m.question_types.length ? '（' + m.question_types.map(esc).join('、') + '）' : '') + '</span></div>'; }).join('') + '</div>' : '') + '\
+    ' + (uncovered.length ? '\
+    <details style="margin-top:18px">\
+      <summary style="font-size:13px;color:var(--text-3);cursor:pointer">本主题尚无可用材料的知识点（' + uncovered.length + '）</summary>\
+      <div style="margin-top:8px;font-size:12px;color:var(--text-3)">这些 KP 还没有 verified 激活链接，不进稳定结论、不可引用——这几块还写不了。</div>\
+      <div style="margin-top:6px">' + uncovered.map(function(u) { return '<div class="detail-row"><span class="dl">' + esc(u.point_id) + '</span><span class="dv">' + esc(u.summary || '') + '</span></div>'; }).join('') + '</div>\
+    </details>' : '') + '\
+    <h3 style="margin-top:18px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">关系</h3>\
+    <div id="wikiRelationsPanel" style="margin-top:8px;font-size:12px;color:var(--text-3)">加载中...</div>\
+    <h3 style="margin-top:18px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">写作草稿</h3>\
+    <div id="wikiDraftsPanel" style="margin-top:8px;font-size:12px;color:var(--text-3)">加载中...</div>\
     <h3 style="margin-top:18px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">修订记录 (' + revisions.length + ')</h3>\
     <div style="margin-top:8px">' + (revisions.length
       ? revisions.map(function(rv) { return '<div class="timeline-event" style="cursor:pointer" onclick="viewWikiRevision(\'' + esc(p.page_id) + '\',\'' + esc(rv.revision_id) + '\')"><b>' + esc(rv.reason || '') + '</b> · ' + dateStr(rv.created_at) + '</div>'; }).join('')
       : '<div style="font-size:12px;color:var(--text-3)">暂无历史修订</div>') + '</div>\
     <div id="wikiRevisionContent"></div>';
+  loadWikiRelationsPanel(p.page_id);
+  loadWikiDraftsPanel(p.page_id);
+}
+
+// 关系区（docs/impl/v1/page.md 步骤 3 两层架构扩展）：程序派生的只读信息，
+// 不提供人工增删关系的入口。
+async function loadWikiRelationsPanel(pageId) {
+  var host = document.getElementById('wikiRelationsPanel');
+  if (!host) return;
+  try {
+    var r = await api('GET', '/wiki/pages/' + pageId + '/relations');
+    var rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    if (!rows.length) { host.innerHTML = '<div style="font-size:12px;color:var(--text-3)">暂无关系</div>'; return; }
+    var labels = { related: '相关', contradicts: '矛盾', contains: '包含' };
+    host.innerHTML = rows.map(function(rel) {
+      return '<div class="detail-row"><span class="dl">' + esc(labels[rel.relation_type] || rel.relation_type) + '</span><span class="dv">' + esc(rel.title || rel.other_page_id) + '</span></div>';
+    }).join('');
+  } catch(e) { host.innerHTML = '<div style="font-size:12px;color:var(--red)">加载失败</div>'; }
+}
+
+// 写作草稿区（docs/impl/v1/wiki.md 步骤 10）：草稿不进检索、不产生学习信号，
+// 页面重编译后草稿只变 stale，不被覆盖，也不提供任何写回页面的入口。
+async function loadWikiDraftsPanel(pageId) {
+  var host = document.getElementById('wikiDraftsPanel');
+  if (!host) return;
+  try {
+    var r = await api('GET', '/wiki/drafts?page_id=' + pageId);
+    var rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    host.innerHTML = rows.length
+      ? rows.map(function(d) { return '<div class="timeline-event" style="cursor:pointer" onclick="openWikiDraftEditor(\'' + esc(d.draft_id) + '\')"><b>' + esc(d.title || '(未命名草稿)') + '</b> · ' + dateStr(d.updated_at || d.created_at) + '</div>'; }).join('')
+      : '<div style="font-size:12px;color:var(--text-3)">暂无草稿</div>';
+  } catch(e) { host.innerHTML = '<div style="font-size:12px;color:var(--red)">加载失败</div>'; }
+}
+
+async function deriveWikiDraft(pageId, pageType) {
+  var mode = pageType === 'topic' ? 'assembled' : 'page';
+  try {
+    var r = await api('POST', '/wiki/pages/' + pageId + '/drafts', { mode: mode });
+    if (r.ok && r.data) { openWikiDraftEditor(r.data.draft_id); loadWikiDraftsPanel(pageId); }
+    else alert('派生草稿失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+  } catch(e) { alert('派生草稿出错：' + e.message); }
+}
+
+async function openWikiDraftEditor(draftId) {
+  var overlay = document.getElementById('wikiDraftModal');
+  var content = document.getElementById('wikiDraftModalContent');
+  content.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3)">加载中...</div>';
+  overlay.classList.remove('hidden');
+  try {
+    var r = await api('GET', '/wiki/drafts/' + draftId);
+    if (!r.ok || !r.data) { content.innerHTML = '<div style="color:var(--red);padding:20px">加载失败</div>'; return; }
+    var d = r.data;
+    var evidence = d.evidence_index || [];
+    content.innerHTML = '\
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">\
+        <h2 style="font-size:16px;font-weight:700">写作草稿</h2>\
+        ' + (d.stale ? '<span class="badge" style="color:var(--red)">已落后于最新页面版本</span>' : '') + '\
+      </div>\
+      <div style="display:flex;gap:14px;align-items:flex-start">\
+        <div style="flex:1;min-width:0">\
+          <input id="draftTitleInput" value="' + esc(d.title || '') + '" style="width:100%;margin-bottom:8px" onblur="saveWikiDraft(\'' + esc(draftId) + '\')">\
+          <textarea id="draftContentInput" style="width:100%;min-height:360px;font-family:monospace;font-size:12px" onblur="saveWikiDraft(\'' + esc(draftId) + '\')">' + esc(d.content || '') + '</textarea>\
+          <input id="draftNoteInput" placeholder="备注" value="' + esc(d.note || '') + '" style="width:100%;margin-top:8px" onblur="saveWikiDraft(\'' + esc(draftId) + '\')">\
+        </div>\
+        <div style="width:220px;flex-shrink:0;max-height:420px;overflow:auto">\
+          <h3 style="font-size:12px;color:var(--text-3);text-transform:uppercase">证据清单（只读）</h3>\
+          ' + evidence.map(function(e) { return '<div class="detail-row" style="cursor:pointer" onclick="navigator.clipboard&&navigator.clipboard.writeText(\'[' + esc(e.point_id) + ']\')" title="点击复制 [' + esc(e.point_id) + ']"><span class="dl">' + esc(e.point_id) + '</span><span class="dv" style="font-size:11px">' + esc(e.point_summary || '') + '</span></div>'; }).join('') + '\
+        </div>\
+      </div>\
+      <div style="margin-top:10px;font-size:12px;color:var(--text-3)">草稿不参与检索；内容要长期沉淀请导出文件，通过导入并勾选「来自 Wiki 草稿」（origin=wiki_draft）导入，避免自体循环。</div>\
+      <div class="modal-actions"><button class="btn btn-sm" onclick="document.getElementById(\'wikiDraftModal\').classList.add(\'hidden\')">关闭</button></div>';
+  } catch(e) { content.innerHTML = '<div style="color:var(--red);padding:20px">加载失败</div>'; }
+}
+
+async function saveWikiDraft(draftId) {
+  var title = document.getElementById('draftTitleInput').value;
+  var contentVal = document.getElementById('draftContentInput').value;
+  var note = document.getElementById('draftNoteInput').value;
+  try { await api('PATCH', '/wiki/drafts/' + draftId, { title: title, content: contentVal, note: note }); }
+  catch(e) { /* best-effort autosave */ }
 }
 
 async function viewWikiRevision(pageId, revId) {

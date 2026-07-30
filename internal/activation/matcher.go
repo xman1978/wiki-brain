@@ -93,10 +93,7 @@ func (m *Matcher) Match(query session.ExpandedQuery, cfg MatchConfig) ([]LinkMat
 		return nil, err
 	}
 
-	queryTopic := m.synonyms.Canonicalize(strings.TrimSpace(text.Normalize(query.Subject) + " " + text.Normalize(query.Intent)))
-	qi := text.Terms(text.Normalize(query.Intent))
-	qc := text.Terms(text.Normalize(query.Constraint))
-	qa := text.NormalizeCompact(query.Audience)
+	queryTopic, qi, qa, qc := BuildQueryConditionTerms(query.Subject, query.Intent, query.Audience, query.Constraint, m.synonyms)
 	qq := text.Terms(text.Normalize(query.ExpandedQuestion))
 
 	var results []LinkMatch
@@ -112,7 +109,7 @@ func (m *Matcher) Match(query session.ExpandedQuery, cfg MatchConfig) ([]LinkMat
 			continue
 		}
 
-		if conditionGroupMatches(conds, queryTopic, qi, qa, qc, m.synonyms) {
+		if MatchConditionGroups(conds, queryTopic, qi, qa, qc, m.synonyms) {
 			results = append(results, LinkMatch{Link: link, Score: 1.0})
 		}
 	}
@@ -133,7 +130,35 @@ func (m *Matcher) Match(query session.ExpandedQuery, cfg MatchConfig) ([]LinkMat
 	return results, nil
 }
 
-func conditionGroupMatches(conds []ObservedCondition, queryTopic, qi, qa, qc string, resolver *SynonymResolver) bool {
+// BuildQueryConditionTerms normalizes a raw subject/intent/audience/constraint
+// four-tuple into the form MatchConditionGroups compares against
+// ObservedCondition groups — shared by Match and by Wiki's four-tuple
+// retrieval entry (docs/design/wiki-compilation.md "触发问法取材真实观测，
+// 检索匹配复用四元组") so both callers use the exact same normalization.
+func BuildQueryConditionTerms(subject, intent, audience, constraint string, resolver *SynonymResolver) (queryTopic, qi, qa, qc string) {
+	queryTopic = resolver.Canonicalize(strings.TrimSpace(text.Normalize(subject) + " " + text.Normalize(intent)))
+	qi = text.Terms(text.Normalize(intent))
+	qc = text.Terms(text.Normalize(constraint))
+	qa = text.NormalizeCompact(audience)
+	return
+}
+
+// MatchConditionGroups reports whether any of conds agrees with the query on
+// all four dimensions (subject via coreContained after synonym
+// canonicalization, others by equality). Exported for Wiki's four-tuple
+// retrieval entry, which reuses this instead of a second matching
+// implementation.
+//
+// Guards against an all-empty query: without this, a query with no
+// intent/audience/constraint (e.g. the plain POST /answer path that skips
+// Session parsing) would trivially equal a condition group that itself has
+// empty intent/audience/constraint, producing a false-positive match. Match's
+// own zero-groups branch only guards the len(conds)==0 case, not this one, so
+// the guard lives here rather than being left to each caller to replicate.
+func MatchConditionGroups(conds []ObservedCondition, queryTopic, qi, qa, qc string, resolver *SynonymResolver) bool {
+	if queryTopic == "" && qi == "" && qa == "" && qc == "" {
+		return false
+	}
 	for _, cond := range conds {
 		core := text.SplitTerms(text.Terms(resolver.Canonicalize(cond.Subject)))
 		if len(core) == 0 {
@@ -173,11 +198,8 @@ func (m *Matcher) SubjectOnlyMiss(conds []ObservedCondition, subject, intent, au
 		return "", false
 	}
 
-	queryTopic := m.synonyms.Canonicalize(strings.TrimSpace(text.Normalize(subject) + " " + text.Normalize(intent)))
+	queryTopic, qi, qa, qc := BuildQueryConditionTerms(subject, intent, audience, constraint, m.synonyms)
 	normalizedSubject := text.Normalize(subject)
-	qi := text.Terms(text.Normalize(intent))
-	qa := text.NormalizeCompact(audience)
-	qc := text.Terms(text.Normalize(constraint))
 
 	var best ObservedCondition
 	found := false

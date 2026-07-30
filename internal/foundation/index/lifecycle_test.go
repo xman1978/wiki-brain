@@ -8,7 +8,6 @@ import (
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/analysis"
-	"github.com/jxman78/wiki-brain/internal/foundation"
 )
 
 // TestLifecycle_IndexSearchCorruptRebuild verifies the full lifecycle:
@@ -21,7 +20,7 @@ import (
 //  6. EnsureHealthy: detects corruption and rebuilds
 //  7. Search again: rebuilt index returns same results
 func TestLifecycle_IndexSearchCorruptRebuild(t *testing.T) {
-	db := foundation.NewTestDB(t)
+	db := newTestDB(t)
 	idxDir := filepath.Join(t.TempDir(), "idx")
 	mdDir := filepath.Join(t.TempDir(), "md")
 	os.MkdirAll(mdDir, 0755)
@@ -142,7 +141,7 @@ func TestLifecycle_IndexSearchCorruptRebuild(t *testing.T) {
 // index time, and lifecycleCurrentQuery's conjunction always returned zero
 // hits — for every query, not just this project's specific test cases.
 func TestLifecycle_KeywordFieldSurvivesTermQuery(t *testing.T) {
-	db := foundation.NewTestDB(t)
+	db := newTestDB(t)
 	idxDir := filepath.Join(t.TempDir(), "idx")
 	mdDir := filepath.Join(t.TempDir(), "md")
 	os.MkdirAll(mdDir, 0755)

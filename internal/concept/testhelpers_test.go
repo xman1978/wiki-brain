@@ -180,7 +180,7 @@ func setupServiceWithWiki(t *testing.T) (*Service, *Store, *sql.DB, *wiki.Servic
 
 	wikiStore := wiki.NewStore(db)
 	fake := llm.NewFakeClient()
-	wikiSvc := wiki.NewService(wikiStore, fake, idxMgr.Wiki, config.WikiConfig{CompileMaxChars: 12000, RecompileNewKPMin: 2}, 5)
+	wikiSvc := wiki.NewService(wikiStore, fake, idxMgr.Wiki, config.WikiConfig{CompileMaxChars: 12000, RecompileNewKPMin: 2})
 
 	svc := NewService(store, testConfig(), wikiSvc)
 	return svc, store, db, wikiSvc

@@ -17,6 +17,8 @@
 
 另覆盖三项不在成功标准列表但属 V1 交付范围的能力：跨 Source KPN（P7）、激活条件的对象/约束硬性守门（F 组，`activation.md` 步骤 2——技术域"同问法不同产品"是守门失效最容易暴露的场景）、subject 同义词归一化（P11，2026-07-24 新增——P3 M3 当时记录的"覆盖靠积累，不靠模糊匹配"观测项，现已在 Match 侧落地为 `subject_synonyms` 表 + `SynonymResolver`，见 `activation.md` 附属表与步骤 3a）。
 
+第四项：Wiki 两层架构扩展（P12，2026-07-30 新增，`docs/impl/v1/two-tier-task-brief.md`）——页面关系派生、主题页候选与二阶编译、检索骨架注入、写作草稿、回流防护，均为 P8 单层闭环之上的扩展能力，不改变标准 7 本身的判定口径。
+
 ## 2. 测试数据画像
 
 ### 2.1 制度域（10 篇）
@@ -367,12 +369,20 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 
 ### P8 Wiki 初版闭环（标准 7，两域各一个主题）
 
-1. 制度域主题「销售回款管理」：围绕应收账款文档密集问答（A9、A10、A11 及其变体，凑足 wiki_confident_min 与 wiki_kp_min）；技术域主题「Oracle RAC」：围绕 T10、T11、T18、B4 密集问答（11g/19c/问题汇总三篇文档的 KP 同 Concept 聚簇，天然满足多 KU 依赖，比单文档主题更能检验编译的综合能力）→ `POST /study/run` → 验证两域各出现 `action=wiki_candidate, status=pending_confirm`；
-2. Page 确认后 `POST /wiki/compile` → 页面 draft：验证要素齐全（稳定结论、KP/KU/source_ref 回链、待验证点、更新时间、依赖 KU 列表），正文引用通过白名单校验（不引用不存在的 KP）；
-3. `POST /wiki/pages/:id/publish` → 重问该主题问题：`path_type=wiki`，回答基于页面并附证据回链，且不产生激活类事件（wiki 直答不经激活层）；
-4. 底层变化：制度页对应收账款 source、技术页对 19c RAC source 各做一次 reupload 换血（微改任一数值）→ `POST /study/run` → 对应页面被标记 `needs_recompile`（不得自动重编译）；
-5. 人工 `POST /wiki/pages/:id/recompile` → 新版本生成，revisions 可查旧版，编译记录可追溯到触发的 Learning Event。
-6. 通过标准：readme 描述的完整生命周期「候选→确认→编译→检索命中→底层变化→待重编译」逐环节成立，任何环节自动越过人工确认即为失败。
+**前提说明（2026-07-29 修订，qualifying KP 口径变更，见 `docs/design/wiki-compilation.md`"反复激活、多次验证、持续采用不是命中次数"）**：qualifying KP 现在同时要求 (a) `confident_count ≥ wiki_confident_min`（不变）、(b) 对应 ActivationLink 已 `status=verified`（新增，复用晋升机制而非另立次数口径）、(c) 概念级还额外要求 `days_active ≥ wiki.qualifying_min_days_active`（默认 7，衡量"持续采用"）。参照 P11 的既有拆分方式，本阶段也拆成两半：**轴一是确定性的（verified 链接门槛按代码逻辑生效，可直接验收），轴二是观测性的（days_active 门槛能否在单次脚本运行的自然日窗口内自然达标）**，不要求轴二必须达标才算通过——脚本单次运行大概率仍停在 `needs_more_data`（仅因 days_active 不够），这不算失败，只要能证明"verified 门槛生效 + 门槛逻辑本身正确"即可。真正要观测 days_active 生效，需要跨真实自然日多次运行（`--skip-cultivate` 续跑）或临时调低 `config.yml` 的 `qualifying_min_days_active` 冒烟测试，两者都不在本阶段的必过范围内。
+
+编译流程也改为两步（`docs/impl/v1/wiki.md` 步骤 2）：`POST /wiki/compile/analyze` 先产出拟采用的论断结构（claims/tensions，不落库），人工确认后把该结构原样（或编辑后）带回 `POST /wiki/compile`；跳过 analyze 直接调用 compile 时服务端会自动内部跑一遍分析，效果等价，仍应验收。
+
+**两层架构收紧（`docs/impl/v1/two-tier-task-brief.md`，本阶段脚本已同步修正）**：`POST /wiki/compile`、`POST /wiki/compile/analyze` 的 `page_type` 参数现在**只接受 `concept`**——主题页（`page_type=topic`）不再由这两个端点产出，而是完全由二阶编译端点 `POST /wiki/pages/:id/topic/analyze`、`POST /wiki/pages/:id/topic/compile` 负责（详见 P12）。本阶段每个领域培养的仍是单一 concept（一个业务话题对应一个 KP 聚簇），`page_type` 传 `concept` 即可，不要再传 `topic`。
+
+1. 制度域主题「销售回款管理」：围绕应收账款文档密集问答（A9、A10、A11 及其变体，凑足 wiki_confident_min 与 wiki_kp_min）；技术域主题「Oracle RAC」：围绕 T10、T11、T18、B4 密集问答（11g/19c/问题汇总三篇文档的 KP 同 Concept 聚簇，天然满足多 KU 依赖，比单文档主题更能检验编译的综合能力）；
+2. `POST /study/run` → 对每个被密集问答覆盖的 point_id，`GET /activation-links?point_id=...&status=candidate` 应能找到候选链接 → 逐个 `POST /activation-links/:id/confirm` 促成 `verified`（轴一，必过：这一步验证"多次验证"门槛确实复用了既有晋升状态机，而不是另造一套次数口径）；
+3. 再次 `POST /study/run` → 验证两域各出现 `action=wiki_candidate, status=pending_confirm`（若因 days_active 未达标仍是 `needs_more_data`，按前提说明记为观测性缺口，不判失败，但要核实 `Reason`/`Stats` 中 `qualifying_kp_count`、`kpn_connection_count` 已经达标，只差 `days_active`）；
+4. 若拿到 `pending_confirm`：`POST /wiki/compile/analyze`（concept_id + result_id）→ 核对返回的 claims 均引用白名单内 point_id、tensions 结构合理；Page 确认后把该结构带回 `POST /wiki/compile` → 页面 draft：验证要素齐全（稳定结论、KP/KU/source_ref 回链、待验证点、更新时间、依赖 KU 列表），正文引用通过白名单校验（不引用 analyze 阶段未确认的 point_id）；
+5. `POST /wiki/pages/:id/publish` → 重问该主题问题：`path_type=wiki`，回答基于页面并附证据回链，且不产生激活类事件（wiki 直答不经激活层）；
+6. 底层变化：制度页对应收账款 source、技术页对 19c RAC source 各做一次 reupload 换血（微改任一数值）→ `POST /study/run` → 对应页面被标记 `needs_recompile`（不得自动重编译）；
+7. 人工 `POST /wiki/pages/:id/recompile` → 新版本生成（内部自动走分析→生成两步，不额外暴露 analyze 预览接口），revisions 可查旧版，编译记录可追溯到触发的 Learning Event。
+8. 通过标准：readme 描述的完整生命周期「候选→确认→编译→检索命中→底层变化→待重编译」逐环节成立，任何环节自动越过人工确认即为失败；verified 链接门槛（轴一）必须验证到位，days_active 门槛（轴二）达标与否不影响通过判定。
 
 ### P9 用户反馈通道（标准 8）
 
@@ -408,6 +418,29 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 9. 若第 2 步多轮后仍未自然产生候选（Session Parser 把 intent 也解析漂移，导致条件组根本对不上），改为直接在测试库里手工插入一条满足阈值的 `subject_synonym_gap` 事件集（仅用于验证轴一步骤 3-7 的状态机本身，不代表真实收敛概率），并在报告中如实注明"轴一验收改走人工造数据路径"；
 10. 结果写入报告供后续判断 `synonym_gap_min`/`synonym_gap_distinct_min` 默认值是否需要调整，**本步骤不设通过/失败判定**。
 
+### P12 Wiki 两层架构扩展（2026-07-30 新增，`docs/impl/v1/two-tier-task-brief.md`）
+
+**前提**：依赖 P8 已跑通并至少一个领域 publish 成功（脚本从 `test/v1/results/v1_p8_wiki_*.jsonl` 读取最近一次结果里的 `page_id`/`concept_id`，不重新培养信号）。
+
+**范围边界（对照 `docs/impl/v1/wiki.md` 硬约束，逐条不越界）**：页面关系只有 `related`/`contradicts`/`contains` 三种，不引入 broader/narrower；主题页命中后不产生 `answer_wiki` 调用；主题页只聚合概念页，不聚合主题页；`uncovered_points` 只作字段不进正文；`member_roles` 必须结构化落库；`wiki_pages.content` 只由编译产生，不存在任何 draft → page 写回接口；回流三条防护（来源标记/祖先关系跳过/统计排除）缺一不可。
+
+同 P8/P11 的既有拆分方式，本阶段也分两条轴，**只有轴一计入通过/失败判定**：
+
+**轴一（确定性，必过）：新增端点/字段的契约行为**
+
+1. `POST /wiki/compile`、`POST /wiki/compile/analyze` 传 `page_type=topic` 必须被拒绝（非 200）——一阶编译端点收紧为仅接受 `concept`，主题页只能走二阶编译端点（`docs/impl/v1/wiki.md` 步骤 8）；
+2. `GET /wiki/pages/:id/relations` 对 P8 已发布的两个页面各查一次，响应结构含 `relation_type`/`other_page_id`/`derived_from`/`evidence`（P8 制度/技术两页分属不同领域，天然不会有 KPN 关系，返回空列表是预期，不是失败——本步骤只验证接口契约，不验证是否非空）；
+3. 写作草稿全生命周期：`POST /wiki/pages/:id/drafts`（mode=page）→ `GET /wiki/drafts/:id`（`evidence_index` 非空、`stale` 字段存在）→ `PATCH /wiki/drafts/:id` 改写标题与正文 → 重新 `GET /wiki/pages/:id` 核对页面正文与标题**完全不变**（代码中不存在 draft → page 写回路径的行为化验收）→ `DELETE /wiki/drafts/:id`；
+4. 回流来源标记：`POST /sources` 附带 `origin=wiki_draft`、`origin_page_id=<P8 页面 id>`（multipart form 字段）导入一份最小文件，DB 直接核对 `sources.origin`/`sources.origin_page_id` 落库正确（自体祖先排除本身的匹配逻辑已由 Go 单测 `internal/unit/kpn_reflow_test.go::TestCrossSourceKPN_SkipsSelfAncestorEdges` 覆盖，本步骤只测 API 入口的字段透传）；
+5. `POST /study/run` 后 `GET /study/reports/latest` 响应包含 `question_complexity` 板块（`{"groups": [...]}` 结构本身，不要求 `groups` 非空——阈值未定标前 `complexity_hint` 恒为 `null`，见 `docs/impl/v1/study.md` 步骤 7）。
+
+**轴二（观测性，只记录，不判定）：页面关系与主题候选的自然形成情况**
+
+6. 读 `knowledge_point_relations`/`wiki_page_relations` 总行数（P7 阶段的跨 Source fixture 可能已产生可供派生的关系）；
+7. `GET /study/results?action=topic_page_candidate&status=pending_confirm` 数量——P8 每个领域目前只发布了 1 个概念页，远低于 `topic_member_min`（默认 3），单次运行大概率为 0，属预期观测性缺口；要真正观测主题页候选自然形成，需要在同一领域内再培养并 publish 至少两个额外的、与已有页面 KP 存在 `related` 关系的概念页，这不在本阶段自动化范围内（成本模型同 P8 的 `days_active` 轴二）。
+
+**通过标准**：轴一 1-5 步全部成立（`page_type=topic` 被拒绝、relations 接口结构正确、草稿生命周期与写回防护、回流字段落库、报告新板块存在）即判 PASS；轴二 6-7 步仅记录数字，不影响判定。
+
 ## 6. 量化验收指标汇总
 
 | 指标 | 目标 | 采集阶段 |
@@ -423,12 +456,13 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 | 跨 Source 关系合理率 | 抽查 ≥80%，类型仅 related/contradicts | P7 |
 | 状态迁移审计完整率 | 100%（迁移必有 result+reason+events） | P10 |
 | 缺口题幻构率 | 0（C 组不得编造引用，技术域 C3/C4 重点盯） | P1 |
+| 两层架构契约行为通过率 | 100%（page_type 拒绝、relations 结构、草稿生命周期与写回防护、回流字段落库、report 新板块，5 项全过） | P12 |
 
 ## 7. 执行注意事项
 
 - **时序控制**：全程手动 `POST /study/run`，禁止依赖 Ticker，否则事件 processed 状态不可控；
 - **变体问法是硬要求**：promote_distinct_min=2 要求不同 question_hash，同一字面重复问只累计 success_n 不累计 distinct_n，晋升永远不达标；
-- **阶段间不清库**：P2-P11 依赖 P1 积累的事件；靶子文档已按域错开（P5 删报销规定+RAC 归档、P6 改培训积分+神通、P7 新增两份 contradicts fixture、P8 改应收账款+19c RAC、P11 复用 F1_PRE 且不得在 P11 前调整其四元组字段），执行时勿调换；
+- **阶段间不清库**：P2-P12 依赖 P1 积累的事件；靶子文档已按域错开（P5 删报销规定+RAC 归档、P6 改培训积分+神通、P7 新增两份 contradicts fixture、P8 改应收账款+19c RAC、P11 复用 F1_PRE 且不得在 P11 前调整其四元组字段、P12 直接读 P8 落盘结果不重新培养信号），执行时勿调换；P12 必须排在 P8 之后。
 - **真实 LLM 的波动**：正确率类指标按题判要点命中而非逐字比对（技术域例外：命令与参数名必须逐字对）；单题失败先重跑一次排除 LLM 抖动，复现两次才计为缺陷；
 - **缺陷归因**：每个失败点先区分「提取期缺陷（KU/KP 就没有该事实）」与「检索/回答期缺陷」，前者不属于 V1 目标范围但需记录；
 - **技术文档的特有风险**：代码块/长表格密集，KU 按行切片可能把命令截断（P0 抽查覆盖）；LLM 对通用技术知识有强先验，容易"不看文档也答对"或"用先验覆盖文档细节"——凡技术题必须核验引用片段确实来自对应文档，答对但引用为空/错源一律计缺陷；

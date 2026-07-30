@@ -41,6 +41,8 @@ CREATE INDEX idx_sources_shadow_of ON sources(shadow_of);
 
 `shadow_of` 非空表示这是一条为 reupload 而创建的影子 Source，用于在新内容完全处理成功之前不影响、不暴露被替换的原 Source。字段含义与用途见步骤 2。
 
+`sources` 另有两列由 Wiki 两层架构扩展引入（`origin` / `origin_page_id`，用于识别 Wiki 草稿回流并阻断自体循环），schema 与语义定义在 `wiki.md`「数据结构」，匹配侧规则在 `kpn.md` 步骤 2。本模块不消费这两列——lifecycle 传导不区分 Source 来源。
+
 ## 实现步骤
 
 ### 步骤 1：状态传导规则（KU → KP）
@@ -143,7 +145,10 @@ Study 感知： Study 扫描时跳过指向非 current KP 的链接的强化，
             并对 verified 链接生成降权信号（见 study.md 步骤 4）；
 Wiki 标记：  SetUnitLifecycle 执行后，查询 wiki_pages.source_point_ids
             包含受影响 point_id 的已发布页面，标记 needs_recompile
-            （见 wiki.md 步骤 5）。
+            （见 wiki.md 步骤 5）；概念页被标记后，Wiki 模块内部再经
+            contains 关系把其父主题页也标记为 needs_recompile
+            （两层，级联深度恒为 1，见 wiki.md 步骤 9）——
+            lifecycle 模块仍只调一次标记接口，级联在 Wiki 侧完成。
 ```
 
 前两条无需在 lifecycle 模块写代码；第三条由 SetUnitLifecycle 内部调用 Wiki 模块的标记接口完成。

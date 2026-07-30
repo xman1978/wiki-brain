@@ -2,6 +2,7 @@ package wiki
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,7 +63,7 @@ func seedLinkCandidate(t *testing.T, db *sql.DB, candidateID, questionTerms, poi
 }
 
 // setupTestService seeds one concept (c1) with two qualifying KPs (p1 in
-// u1/lines 1-5, p2 in u2/lines 6-10), both above qualifyingMinConfident=5,
+// u1/lines 1-5, p2 in u2/lines 6-10), each with a verified ActivationLink,
 // and opens a real Bleve wiki index so Publish/TryDirectAnswer can be
 // exercised end-to-end.
 func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *sql.DB, bleve.Index) {
@@ -86,6 +87,12 @@ func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *sql.DB, bleve.I
 	seedKP(t, db, "p2", "u2", "s1", "point two content")
 	seedLinkCandidate(t, db, "lc1", "t1", "p1", 10)
 	seedLinkCandidate(t, db, "lc2", "t2", "p2", 8)
+	// Both qualifying KPs need a verified ActivationLink (docs/design/
+	// wiki-compilation.md "反复激活、多次验证、持续采用不是命中次数") — tests
+	// that care about the verified/unverified distinction seed their own extra
+	// point instead of relying on p1/p2 lacking one.
+	seedVerifiedLink(t, db, "link-p1", "p1")
+	seedVerifiedLink(t, db, "link-p2", "p2")
 
 	idxDir := filepath.Join(tmpDir, "index")
 	idxMgr, err := index.NewManager(idxDir)
@@ -95,9 +102,14 @@ func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *sql.DB, bleve.I
 	t.Cleanup(func() { idxMgr.Close() })
 
 	fake := llm.NewFakeClient()
+	// Default analysis response covering both qualifying KPs — Compile/
+	// Recompile always run the analysis step first (docs/impl/v1/wiki.md
+	// 步骤 2/3); tests exercising a different concept's own points override
+	// this before compiling.
+	fake.SetResponse("wiki_analyze.md", llm.FakeResponse{Output: validAnalyzeOutput})
 	store := NewStore(db)
 	cfg := config.WikiConfig{CompileMaxChars: 12000, RecompileNewKPMin: 2}
-	svc := NewService(store, fake, idxMgr.Wiki, cfg, 5)
+	svc := NewService(store, fake, idxMgr.Wiki, cfg)
 
 	return svc, fake, db, idxMgr.Wiki
 }
@@ -110,10 +122,55 @@ func seedVerifiedLink(t *testing.T, db *sql.DB, linkID, pointID string) {
 	}
 }
 
+// setObservedConditions overwrites linkID's observed_conditions column —
+// used to test the four-tuple retrieval entry (docs/design/wiki-compilation.md
+// "触发问法取材真实观测，检索匹配复用四元组"), which reads this column
+// directly rather than going through AppendObservedCondition.
+func setObservedConditions(t *testing.T, db *sql.DB, linkID string, conds []activation.ObservedCondition) {
+	t.Helper()
+	raw, err := json.Marshal(conds)
+	if err != nil {
+		t.Fatalf("marshal observed conditions: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE activation_links SET observed_conditions = ? WHERE link_id = ?`, string(raw), linkID); err != nil {
+		t.Fatalf("set observed conditions: %v", err)
+	}
+}
+
+// seedConfidentTrace seeds a minimal answers+traces pair so
+// ConfidentQuestionsForPoints has real question text to select
+// (docs/design/wiki-compilation.md "触发问法取材真实观测，检索匹配复用四元组").
+func seedConfidentTrace(t *testing.T, db *sql.DB, traceID, question string, pointIDs []string) {
+	t.Helper()
+	answerID := "ans-" + traceID
+	if _, err := db.Exec(`INSERT INTO answers (answer_id, question, content, path, prompt_version, model_name)
+		VALUES (?, ?, 'a', 'short', 'v1', 'test')`, answerID, question); err != nil {
+		t.Fatalf("seed answer: %v", err)
+	}
+	directPointIDsJSON, err := json.Marshal(pointIDs)
+	if err != nil {
+		t.Fatalf("marshal direct point ids: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO traces
+		(trace_id, answer_id, question, question_hash, question_terms, retrieval_quality, path, direct_point_ids, subject, intent, audience, constraint_text)
+		VALUES (?, ?, ?, ?, ?, 'confident', 'fast', ?, '', '', '', '')`,
+		traceID, answerID, question, "hash_"+traceID, question, string(directPointIDsJSON)); err != nil {
+		t.Fatalf("seed confident trace: %v", err)
+	}
+}
+
 func newTestActivationSvc(db *sql.DB) *activation.Service {
 	store := activation.NewStore(db)
 	return activation.NewService(store, activation.NewMatcher(store))
 }
+
+const validAnalyzeOutput = `{
+	"claims": [
+		{"summary": "内容一的核心结论", "cited_point_ids": ["p1"]},
+		{"summary": "内容二的核心结论", "cited_point_ids": ["p2"]}
+	],
+	"tensions": []
+}`
 
 const validCompileOutput = `{
 	"title": "Concept One 知识页",

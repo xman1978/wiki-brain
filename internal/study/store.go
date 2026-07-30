@@ -740,7 +740,17 @@ func (s *Store) HasKPNNeighbors(pointID string) (bool, error) {
 // (docs/impl/v1/concept-evolution.md 步骤 4). In practice a merge's own
 // transaction already repoints every KU off the merged concept_id, so this
 // join is a defensive backstop rather than the primary guarantee.
-func (s *Store) QualifyingKPsByConceptFromCandidates(wikiConfidentMin int) (map[string][]QualifyingKP, error) {
+//
+// The verified-ActivationLink requirement implements docs/design/wiki-compilation.md
+// "ActivationLink 回答'这条管不管用'，Wiki 编译回答'这个主题够不够格立传'":
+// reliability is answered once, by the KP's ActivationLink being verified
+// (itself already a success-count + distinct-question judgment) — there is
+// no separate confident_count floor here, since re-checking a second,
+// independently invented count on top would just re-ask the same question
+// verified already answered. confident_count is still selected (MAX) for
+// QualifyingKP.ConfidentCount, used only for material-ordering downstream
+// (docs/impl/v1/wiki.md 步骤 3), not as a filter.
+func (s *Store) QualifyingKPsByConceptFromCandidates() (map[string][]QualifyingKP, error) {
 	rows, err := s.db.Query(`
 		SELECT ku.concept_id, lc.point_id, MAX(lc.confident_count) AS max_confident, kp.content AS point_summary
 		FROM link_candidates lc
@@ -749,9 +759,8 @@ func (s *Store) QualifyingKPsByConceptFromCandidates(wikiConfidentMin int) (map[
 		JOIN concepts c ON ku.concept_id = c.concept_id
 		WHERE ku.concept_id IS NOT NULL AND ku.concept_id != '' AND c.merged_into IS NULL
 			AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
-		GROUP BY lc.point_id
-		HAVING MAX(lc.confident_count) >= ?`,
-		wikiConfidentMin)
+			AND EXISTS (SELECT 1 FROM activation_links al WHERE al.point_id = lc.point_id AND al.status = 'verified')
+		GROUP BY lc.point_id`)
 	if err != nil {
 		return nil, fmt.Errorf("study store: qualifying kps: %w", err)
 	}
@@ -782,9 +791,15 @@ func (s *Store) ConceptInfo(conceptID string) (conceptName, domainID string, err
 	return
 }
 
-func (s *Store) KPNConnectionCount(pointIDs []string) (int, error) {
+// KPNConnectionCountsByType implements docs/design/wiki-compilation.md
+// "ActivationLink 回答'这条管不管用'，Wiki 编译回答'这个主题够不够格立传'"'s
+// 连贯性 gate: connectivity among qualifying KPs must be split by relation
+// type, since a count dominated by contradicts relations means the topic
+// hasn't settled enough to warrant a single stable write-up, even if the
+// raw connection count clears a threshold.
+func (s *Store) KPNConnectionCountsByType(pointIDs []string) (related, contradicts int, err error) {
 	if len(pointIDs) < 2 {
-		return 0, nil
+		return 0, 0, nil
 	}
 	placeholders := ""
 	args := make([]interface{}, 0, len(pointIDs)*2)
@@ -799,15 +814,30 @@ func (s *Store) KPNConnectionCount(pointIDs []string) (int, error) {
 	copy(args2, args)
 	allArgs := append(args, args2...)
 
-	var count int
-	err := s.db.QueryRow(fmt.Sprintf(`
-		SELECT COUNT(*) FROM knowledge_point_relations
-		WHERE source_point_id IN (%s) AND target_point_id IN (%s)`,
-		placeholders, placeholders), allArgs...).Scan(&count)
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT relation_type, COUNT(*) FROM knowledge_point_relations
+		WHERE source_point_id IN (%s) AND target_point_id IN (%s)
+		GROUP BY relation_type`,
+		placeholders, placeholders), allArgs...)
 	if err != nil {
-		return 0, fmt.Errorf("study store: kpn connection count: %w", err)
+		return 0, 0, fmt.Errorf("study store: kpn connection counts by type: %w", err)
 	}
-	return count, nil
+	defer rows.Close()
+
+	for rows.Next() {
+		var relType string
+		var count int
+		if err := rows.Scan(&relType, &count); err != nil {
+			return 0, 0, fmt.Errorf("study store: scan kpn connection count: %w", err)
+		}
+		switch relType {
+		case "related":
+			related = count
+		case "contradicts":
+			contradicts = count
+		}
+	}
+	return related, contradicts, rows.Err()
 }
 
 func (s *Store) DaysActive(pointIDs []string) (int, error) {
@@ -1026,6 +1056,147 @@ func (s *Store) CooccurrenceLastSeen(pointID string) (time.Time, error) {
 		return time.Time{}, nil
 	}
 	return t, nil
+}
+
+// RecentCrossRelationPointIDs returns the distinct point_ids (both sides) of
+// scope='cross' knowledge_point_relations created after since — the
+// incremental input for wiki page relation recompute
+// (docs/impl/v1/wiki.md 步骤 7b: "只重算涉及新增 knowledge_point_relations 的
+// 页面对，不做全库两两扫描").
+func (s *Store) RecentCrossRelationPointIDs(since time.Time) ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT source_point_id FROM knowledge_point_relations WHERE scope = 'cross' AND created_at > ?
+		UNION
+		SELECT target_point_id FROM knowledge_point_relations WHERE scope = 'cross' AND created_at > ?`,
+		since, since)
+	if err != nil {
+		return nil, fmt.Errorf("study store: recent cross relation point ids: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("study store: scan recent cross relation point id: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// WikiDraftReflowStats backs the "wiki_draft_reflow" report item
+// (docs/impl/v1/study.md 步骤 6): every origin=wiki_draft source with its
+// produced-KP count and skipped self-ancestor edge count.
+func (s *Store) WikiDraftReflowStats() ([]WikiDraftReflowRow, error) {
+	rows, err := s.db.Query(`
+		SELECT s.source_id, s.origin_page_id, s.reflow_skipped_edges,
+			(SELECT COUNT(*) FROM knowledge_points kp
+			 JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
+			 WHERE ku.source_id = s.source_id) AS produced_kp_count
+		FROM sources s WHERE s.origin = 'wiki_draft'`)
+	if err != nil {
+		return nil, fmt.Errorf("study store: wiki draft reflow stats: %w", err)
+	}
+	defer rows.Close()
+
+	var out []WikiDraftReflowRow
+	for rows.Next() {
+		var row WikiDraftReflowRow
+		var originPageID sql.NullString
+		if err := rows.Scan(&row.SourceID, &originPageID, &row.SkippedAncestorEdges, &row.ProducedKPCount); err != nil {
+			return nil, fmt.Errorf("study store: scan wiki draft reflow row: %w", err)
+		}
+		row.OriginPageID = originPageID.String
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// TopicDecomposeSignals backs the "topic_decompose" report item
+// (docs/impl/v1/study.md 步骤 6): every topic_decompose_signal learning_event
+// in the window, decoded. Report-only aggregation — never drives a learning
+// action.
+func (s *Store) TopicDecomposeSignals(windowDays int) ([]TopicDecomposeSignalRow, error) {
+	rows, err := s.db.Query(`
+		SELECT payload FROM learning_events
+		WHERE event_type = 'topic_decompose_signal' AND created_at >= datetime('now', ?)`,
+		fmt.Sprintf("-%d days", windowDays))
+	if err != nil {
+		return nil, fmt.Errorf("study store: topic decompose signals: %w", err)
+	}
+	defer rows.Close()
+
+	var out []TopicDecomposeSignalRow
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return nil, fmt.Errorf("study store: scan topic decompose signal: %w", err)
+		}
+		var row TopicDecomposeSignalRow
+		if err := json.Unmarshal([]byte(payload), &row); err != nil {
+			slog.Warn("study store: decode topic_decompose_signal payload failed", "error", err)
+			continue
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// ComplexityTraces backs docs/impl/v1/study.md 步骤 7's "问题复杂度观测量":
+// every trace in the window with the fields needed to group by four-tuple
+// and compute per-group metrics. Grouping itself (and the
+// activation.Matcher-consistent normalization) happens in the caller — this
+// just returns the raw rows.
+func (s *Store) ComplexityTraces(windowDays int) ([]ComplexityTraceRow, error) {
+	rows, err := s.db.Query(`
+		SELECT trace_id, subject, intent, audience, constraint_text, path_type,
+			json_array_length(direct_point_ids), COALESCE(skeleton_page_id, '')
+		FROM traces WHERE created_at >= datetime('now', ?)`,
+		fmt.Sprintf("-%d days", windowDays))
+	if err != nil {
+		return nil, fmt.Errorf("study store: complexity traces: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ComplexityTraceRow
+	for rows.Next() {
+		var row ComplexityTraceRow
+		if err := rows.Scan(&row.TraceID, &row.Subject, &row.Intent, &row.Audience, &row.Constraint,
+			&row.PathType, &row.DirectPointCount, &row.SkeletonPageID); err != nil {
+			return nil, fmt.Errorf("study store: scan complexity trace: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+type WikiDraftReflowRow struct {
+	SourceID             string
+	OriginPageID         string
+	ProducedKPCount      int
+	SkippedAncestorEdges int
+}
+
+// TopicDecomposeSignalRow mirrors the combined topic_decompose_signal
+// payload shape (docs/impl/v1/trace.md's event payload).
+type TopicDecomposeSignalRow struct {
+	PageID                string   `json:"page_id"`
+	MemberPageIDs         []string `json:"member_page_ids"`
+	ResolvedMemberPageIDs []string `json:"resolved_member_page_ids"`
+	ResolvedOutsideCount  int      `json:"resolved_outside_count"`
+	Unresolved            bool     `json:"unresolved"`
+}
+
+type ComplexityTraceRow struct {
+	TraceID          string
+	Subject          string
+	Intent           string
+	Audience         string
+	Constraint       string
+	PathType         string
+	DirectPointCount int
+	SkeletonPageID   string
 }
 
 func init() {

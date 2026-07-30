@@ -22,6 +22,12 @@ ALTER TABLE traces ADD COLUMN constraint_text TEXT NOT NULL DEFAULT '';
 -- Session 解析四元组，从 EvidenceSet 取原值列化
 -- （evidence_snapshot 中已有，列化便于 Study 创建链接时直接查询；
 --  constraint 是 SQL 保留字，列名用 constraint_text）
+
+-- 两层架构扩展（migration 编号顺延，见 wiki.md 步骤 8「检索接入」）
+ALTER TABLE traces ADD COLUMN skeleton_page_id TEXT REFERENCES wiki_pages(page_id);
+-- 非空表示本次检索由该主题页提供召回骨架（成员展开 + skeleton_point_ids
+-- 注入）。path_type 不因此改变：直答成功仍是 wiki，回落后仍是 full。
+-- 用途：topic_decompose_signal 的回填与「主题页边界切得对不对」的评估。
 ```
 
 traces.question 记录的是 expanded_question（standalone 补全后的问题，Page 传给 POST /answer 的值），question_terms 由其归一化生成——与激活匹配器的输入基准一致（见 activation.md 步骤 2）。
@@ -56,6 +62,22 @@ EvidenceItem 新增（证据挖掘产出，见 evidence.md）：
 新增：activation_success / activation_failure / activation_gap
 新增（2026-07-24）：subject_synonym_gap（见步骤 3 近似检测；
   聚合消费方是 Study，见 study.md 步骤 2a）
+新增（两层架构）：topic_decompose_signal——主题页命中并展开成员概念页、
+  但全部直答候选 sufficient=false 而回落慢路径时产生（见 wiki.md 步骤 9）。
+  payload 分两次写：
+    检索时  { page_id, question, member_page_ids, skeleton_point_ids }；
+    回填时（本模块 trace_write 任务内，与 trace 落库同一步，不额外起任务）
+            { resolved_point_ids, resolved_member_page_ids,
+              resolved_outside_count, unresolved: bool }
+            resolved_point_ids 取 traces.direct_point_ids（与共现统计同源）；
+            resolved_member_page_ids 由成员页面 source_point_ids 反查；
+            resolved_outside_count 为不属于任何成员页面的 point_id 数；
+            回答无有效引用（partial / gap）时置空数组 + unresolved=true。
+  **只累积、只进报告，不驱动任何 V1 学习动作**：不改页面状态、不计入
+  ActivationLink 成功/失败统计（沿用「页面命中不计入链接统计」边界）、
+  不触发重编译；resolved_member_page_ids 含 2 个以上成员的样本是 V3
+  问题拆解的训练素材，resolved_outside_count 持续 > 0 是主题页边界
+  切得不对的证据。
 ```
 
 各类型 payload 结构：

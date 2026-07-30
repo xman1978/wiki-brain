@@ -1,13 +1,26 @@
 package index
 
 import (
+	"database/sql"
+	"path/filepath"
 	"testing"
 
-	"github.com/jxman78/wiki-brain/internal/foundation"
+	fdb "github.com/jxman78/wiki-brain/internal/foundation/db"
 )
 
+func newTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := fdb.Open(dbPath)
+	if err != nil {
+		t.Fatalf("newTestDB: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
 func TestCheckHealth_EmptyDB(t *testing.T) {
-	db := foundation.NewTestDB(t)
+	db := newTestDB(t)
 	tmpDir := t.TempDir()
 	mgr, err := NewManager(tmpDir)
 	if err != nil {
@@ -26,7 +39,7 @@ func TestCheckHealth_EmptyDB(t *testing.T) {
 }
 
 func TestCheckHealth_Mismatch(t *testing.T) {
-	db := foundation.NewTestDB(t)
+	db := newTestDB(t)
 	// Insert a completed unit but don't index it
 	db.Exec(`INSERT INTO sources (source_id, title, format, file_name, original_path, markdown_path, status)
 		VALUES ('s1', 'test', 'md', 'test.md', '/tmp/test.md', '/tmp/test.md', 'completed')`)

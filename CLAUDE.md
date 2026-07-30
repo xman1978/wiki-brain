@@ -23,6 +23,12 @@ Wiki-Brain 是一个知识检索系统，核心流程：文件导入 → KU/KP �
 - **Source 重新上传用 Shadow Source 机制**：新文件先在隐藏的影子 Source（`sources.shadow_of` 指向目标 source_id）里走完全正常的 `source_process → unit_extract`（不改动该链路一行代码），全程不影响、不暴露原 Source；只有影子处理全部成功（含 KPN、Concept 匹配）后，才在一个事务里把影子内容的 `source_id` 改写为目标 source_id、原内容标记 `superseded`、影子行删除。创建影子时要跳过对目标 source_id 自身的文件名去重检查。影子失败直接丢弃，不需要回滚代码；提供 `POST /sources/:id/reupload/retry` 复用已有的 `POST /sources/:shadow_id/retry` 续跑逻辑。Retrieval 的 Domain 预过滤、Source 语义过滤要排除 `shadow_of IS NOT NULL` 的行。详见 `docs/impl/v1/lifecycle.md`。
 - **Study 报告已有 `kpn_citation_rate`**：retrieval 层 `Evidence.origin` 字段、trace 层 `kpn_cited_count`/`cited_count`、study 层聚合已实现，V1 扩展 traces 表和报告结构时不要破坏这条链路。
 - **Wiki 编译不是全自动的**：候选识别（Study）和 `needs_recompile` 标记是自动的，但编译/重编译永远需要人工调用 `POST /wiki/compile` 或 `/wiki/pages/:id/recompile` 确认后才执行，不要做成流水线自动编译。
+- **Wiki 是两层架构，页面关系只有 3 种**：概念页 = 一阶编译（qualifying KP → 页面，`concept_id` 必填）；主题页 = 二阶编译（已发布概念页 → 页面，`concept_id` 恒 NULL），二阶编译输入只有成员页面正文与关系，不含 KU 正文/KP 原文。`wiki_page_relations` 只有 `related` / `contradicts`（程序从 KPN 派生，无向，不调 LLM）与 `contains`（主题页 → 成员页，有向，编译时写入）；**不要引入 broader/narrower** —— KPN 只有 2 种关系且恒 bidirectional、concepts 表在 domain 下平铺无父子，派生不出层级，层级唯一来源是 `contains`。主题页只聚合概念页，**不聚合主题页**（只有两层，重编译级联深度恒为 1）。主题页 citation 白名单 = 成员页面 `source_point_ids` 并集，正文仍标注 `point_id`，保证「主题页 → 概念页 → KP → KU → source_ref」回链完整。详见 `docs/impl/v1/wiki.md` 步骤 7-10。
+- **写作编辑落在派生草稿上，不改页面**：`wiki_drafts` 记录来源 `page_id` + `source_revision_id`，人工在草稿上自由改写（不做 citation/结构校验）；`wiki_pages.content` 仍然只由编译产生，**不存在任何 draft → page 的写回接口**。草稿内容要长期沉淀就走 `POST /sources` 正常导入链路回流。
+- **主题页是召回骨架，不是直答单元**：主题页命中后**不调 `answer_wiki`**，而是展开其 `contains` 成员概念页进入直答候选，并把成员 `source_point_ids` 作为 `skeleton_point_ids` 注入慢路径 Rerank、跳过 Outline 召回（零额外 LLM 调用）。不要"顺手"让主题页也试一次直答——它是概要，`sufficient=false` 概率高，白花一次调用还挤掉概念页。「子主题分工」除正文一节外必须同时结构化落库到 `wiki_pages.member_roles`，供 V3 拆解查表而不是解析 Markdown。
+- **复杂问题拆解不在 V1**：主题页展开后全部候选 `sufficient=false` 时写 `topic_decompose_signal`（检索时记 `member_page_ids`，慢路径完成后回填 `resolved_point_ids` / `resolved_member_page_ids` / `resolved_outside_count`），只累积、不驱动任何学习动作；问题拆解与子结论聚合属深想路径 / Working Model，是 V3 能力。
+- **Wiki 草稿回流必须防自指**：草稿导入时打 `sources.origin='wiki_draft'` + `origin_page_id`；KPN 匹配要剔除来源页面已引用过的 KP（复印件不是关系），且这些边不计入 qualifying / 连通分量统计。否则关系边、连贯度、可编译主题数会虚增，系统在自己身上打转还显得在"增长"。回流 KP 与其他知识的关系照常建立。
+- **连通分量要有上限，覆盖度只作字段**：主题页候选要求 `topic_member_min ≤ 成员数 ≤ topic_member_max`（默认 3/8），超限只写 `oversized_topic_cluster` 报告项、不自动切分。`wiki_pages.uncovered_points`（current 但无 verified 链接的 KP）**只作字段、不进正文**——正文四节/五节结构与 citation 白名单校验一条不动。
 
 ## 技术栈
 

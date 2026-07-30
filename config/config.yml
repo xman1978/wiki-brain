@@ -103,6 +103,7 @@ retrieval:
   fast_path_fallback:     true   # 快路径回答失败时自动回落慢路径
   wiki_min_score:         2.0    # Wiki 直答的 Bleve 最低分（Wiki 模块未实现前不生效）
   wiki_max_candidates:    3      # 直答候选序列长度上限（词法+概念入口合并去重后依次尝试，首个 sufficient=true 即停；设 1 退化为原 top-1 行为）
+  skeleton_injection_enabled: false  # 主题页骨架注入灰度开关，默认关闭，观测 resolved_outside_count 后再打开
 
 # Evidence 模块
 evidence:
@@ -118,9 +119,17 @@ kpn:
 
 # Wiki 模块
 wiki:
-  compile_max_chars:      12000  # 单页编译输入合计上限（rune），超出按 confident_count 降序截取 KP
-  recompile_new_kp_min:   2      # 已发布页面依赖概念新增 qualifying KP 达到该数量触发重编译标记
-  trigger_questions_max:  10     # aliases / trigger_questions 各自条数上限，超出截断保留前 N 条
+  compile_max_chars:            12000  # 单页编译输入合计上限（rune），超出按 confident_count 降序截取 KP
+  recompile_new_kp_min:         2      # 已发布页面依赖概念新增 qualifying KP 达到该数量触发重编译标记
+  trigger_questions_max:        10     # aliases / trigger_questions 各自条数上限，超出截断保留前 N 条
+  qualifying_min_days_active:  7      # 概念级 ready 判定新增门槛："持续采用"要求 qualifying KP 的激活事件覆盖至少 N 天
+
+  # 两层架构（步骤 7-9）
+  relation_kpn_min:             1    # 派生 related 所需的 KPN related 关系对数
+  relation_shared_point_min:    2    # 派生 related 的另一条件：共享 KP 数
+  topic_member_min:             3    # 主题页候选的连通分量最小成员数，也是重编译后剩余成员数的下限
+  topic_member_max:             8    # 连通分量成员数上限，超限不产候选、只写 oversized_topic_cluster 报告项
+  topic_compile_max_chars:      24000 # 二阶编译输入上限（成员页面正文合计）
 
 # Study 模块
 study:
@@ -128,7 +137,6 @@ study:
   candidate_confident_min: 3
   candidate_ratio_min:     0.6
   wiki_kp_min:             4
-  wiki_confident_min:      8
   gap_hit_threshold:       3
   scan_batch_size:         200
   report_period_days:      5
@@ -158,3 +166,6 @@ study:
   concept_merge_overlap_min:   0.6   # 且共同采用中 KP 重叠比例下限
   concept_candidate_idle_days: 60    # 候选无新信号自动过期
   concept_event_window_days:   90    # 聚合统计的时间窗口（长于链接窗口）
+
+  # 问题复杂度观测量（两层架构扩展，只观测不驱动）
+  complexity_min_questions:    3     # 条件组内问答数下限，低于此不出报告项

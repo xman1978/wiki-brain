@@ -65,6 +65,17 @@ Step 7    content_driven 概念候选生成（本文档步骤 3，调用概念�
   的知识建立关系），仍超则硬切多批；
   单个 source 的匹配批次总数上限 kpn.cross_max_batches（默认 20），
   超出记录 warn 后放弃剩余（防大库导入时调用爆炸）。
+
+自体祖先排除（Wiki 草稿回流防护，见 wiki.md 步骤 10「回流的自体循环」）：
+  当前 source 的 origin='wiki_draft' 时，从对端 KP 集合中剔除
+  sources.origin_page_id 指向的那个 Wiki 页面已引用过的 point_id
+  （该页面当前 source_point_ids ∪ 其历史 wiki_revisions 引用过的
+  point_id）——这些不是"另一份知识"，是同一份知识的复印件，
+  与之建立 related 关系会虚增关系边、虚增 qualifying 计数，
+  反过来把同一批知识推成新的主题页 / 重编译候选（自指正反馈环）；
+  剔除只作用于这一对来源关系：回流 KP 与**其他**知识照常匹配、
+  照常可成为 qualifying KP，否则回流就失去意义；
+  被剔除的对端数量计入 warn 日志与学习报告的 wiki_draft_reflow 项。
 ```
 
 ### 步骤 3：content_driven 概念候选
