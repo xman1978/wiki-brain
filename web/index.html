@@ -370,11 +370,12 @@
 
     .file-overlay { position:fixed; inset:0; background:rgba(0,0,0,.2); z-index:100; }
     .file-drawer {
-      position:fixed; top:0; right:-620px; width:600px; height:100vh; background:var(--bg);
+      position:fixed; top:0; right:0; width:600px; height:100vh; background:var(--bg);
       border-left:1px solid var(--border); z-index:101; display:flex; flex-direction:column;
-      box-shadow:var(--shadow-md); transition:right .25s ease;
+      box-shadow:var(--shadow-md); transition:transform .25s ease;
+      transform:translateX(100%);
     }
-    .file-drawer.open { right:0; }
+    .file-drawer.open { transform:translateX(0); }
     .file-drawer .drawer-header { padding:18px 24px; }
     .drawer-body { flex:1; overflow:hidden; display:flex; }
     .drawer-upload { width:260px; border-right:1px solid var(--border-lt); padding:16px; display:flex; flex-direction:column; gap:12px; }
@@ -462,6 +463,81 @@
     .raw-json { font-family:'SF Mono',SFMono-Regular,Menlo,monospace; font-size:11px; white-space:pre-wrap; word-break:break-all; color:var(--text); background:var(--bg-alt); padding:14px; border-radius:var(--radius-sm); border:1px solid var(--border); overflow-x:auto; }
     select { padding:6px 10px; border:1px solid var(--border); border-radius:var(--radius-xs); font-size:13px; background:var(--bg); outline:none; cursor:pointer; color:var(--text); }
     select:focus { border-color:var(--text-3); }
+    #llmDrawer .llm-field,
+    #llmDrawer select.llm-field {
+      box-sizing:border-box;
+      padding:6px 10px;
+      border:1px solid var(--border);
+      border-radius:var(--radius-xs);
+      font-size:13px;
+      background:var(--bg);
+      outline:none;
+      color:var(--text);
+      font-family:inherit;
+    }
+    #llmDrawer input.llm-field { width:100%; }
+    #llmDrawer input.llm-field-inline { width:auto; flex:1; min-width:0; }
+    #llmDrawer select.llm-field { cursor:pointer; }
+    #llmDrawer .llm-field:focus { border-color:var(--text-3); }
+    #llmDrawer select.llm-field-bind { flex:1; width:auto; min-width:0; }
+    #llmDrawer .panel-section h3 {
+      font-size:12px;
+      color:#000;
+    }
+    #llmDrawer .llm-purpose-fold {
+      border:1px solid var(--border-lt);
+      border-radius:8px;
+      overflow:hidden;
+      background:var(--bg);
+    }
+    #llmDrawer .llm-purpose-fold > summary {
+      list-style:none;
+      cursor:pointer;
+      padding:12px 14px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      background:var(--bg-alt);
+      user-select:none;
+    }
+    #llmDrawer .llm-purpose-fold > summary::-webkit-details-marker { display:none; }
+    #llmDrawer .llm-purpose-fold > summary::marker { content:''; }
+    #llmDrawer .llm-purpose-fold-title {
+      display:flex;
+      align-items:center;
+      gap:8px;
+      font-weight:600;
+      font-size:14px;
+      color:var(--text);
+    }
+    #llmDrawer .llm-purpose-fold-title::before {
+      content:'▶';
+      font-size:10px;
+      color:var(--text-3);
+      transition:transform .15s ease;
+      flex-shrink:0;
+    }
+    #llmDrawer .llm-purpose-fold[open] > summary .llm-purpose-fold-title::before {
+      transform:rotate(90deg);
+    }
+    #llmDrawer .llm-purpose-hint {
+      font-size:12px;
+      font-weight:400;
+      color:var(--text-3);
+      text-align:right;
+      flex:1;
+      min-width:0;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+    #llmDrawer .llm-purpose-fold-body {
+      padding:12px 14px 14px;
+      display:grid;
+      gap:8px;
+      border-top:1px solid var(--border-lt);
+    }
     ::-webkit-scrollbar { width:6px; }
     ::-webkit-scrollbar-thumb { background:#d9d9d4; border-radius:3px; }
     ::-webkit-scrollbar-thumb:hover { background:#b0b0a8; }
@@ -485,7 +561,7 @@
 
     /* ── V1: list drawers (activation / wiki / concept views) — the detail
        side pane was replaced by a click-to-open modal, see .modal-overlay ── */
-    .split-drawer { width:min(480px, 96vw); right:-560px; }
+    .split-drawer { width:min(480px, 96vw); }
     .split-list { width:100%; display:flex; flex-direction:column; overflow:hidden; }
     .split-list-tabs { display:flex; border-bottom:1px solid var(--border-lt); padding:0 8px; flex-shrink:0; overflow-x:auto; }
     .split-list-items { flex:1; overflow-y:auto; padding:8px; }
@@ -514,10 +590,20 @@
     .wiki-page-content a[href^="point:"] { color:var(--accent); text-decoration:none; border-bottom:1px dotted var(--accent); cursor:pointer; }
     .wiki-page-content a[href^="point:"]:hover { background:var(--accent-lt); }
     .needs-recompile-card { border-left:3px solid var(--yellow) !important; background:var(--yellow-lt); }
+
+    .app-toast {
+      position:fixed; bottom:24px; left:50%; transform:translateX(-50%); z-index:500;
+      max-width:min(420px, 90vw); padding:10px 16px; border-radius:var(--radius-sm);
+      font-size:13px; color:var(--text); background:var(--bg); border:1px solid var(--border);
+      box-shadow:var(--shadow-md); pointer-events:none;
+    }
+    .app-toast.error { border-color:var(--red); color:var(--red); background:#fff5f5; }
+    .app-toast.hidden { display:none; }
   </style>
   <script src="marked.min.js"></script>
 </head>
 <body>
+<div id="appToast" class="app-toast hidden" role="status" aria-live="polite"></div>
 
 <!-- ── SIDEBAR (collapsible icon rail) ──────────────────── -->
 <aside class="sidebar" id="sidebar">
@@ -537,6 +623,7 @@
     <button class="nav-item" onclick="openActivationView()" title="激活链接"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg></span><span class="nav-label">激活链接</span><span class="nav-badge hidden" id="activationPendingBadge">0</span></button>
     <button class="nav-item" onclick="openWikiView()" title="Wiki"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span><span class="nav-label">Wiki</span><span class="nav-badge hidden" id="wikiPendingBadge">0</span></button>
     <button class="nav-item" onclick="openConceptView()" title="概念演化"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="7" r="3"/><circle cx="12" cy="18" r="3"/><path d="M9.5 8.5L14.5 15.5M14.5 8.5L9.5 15.5"/></svg></span><span class="nav-label">概念演化</span><span class="nav-badge hidden" id="conceptPendingBadge">0</span></button>
+    <button class="nav-item" onclick="openLlmView()" title="模型设置"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg></span><span class="nav-label">模型设置</span></button>
   </div>
 
   <div class="sidebar-divider"></div>
@@ -697,6 +784,22 @@
   </div>
   <div class="study-body" id="studyBody" style="flex:1;overflow-y:auto;padding:16px 20px;">
     <div style="text-align:center;padding:60px;color:var(--text-3)">加载中...</div>
+  </div>
+</div>
+
+<!-- ── LLM SETTINGS DRAWER ───────────────────────────── -->
+<div class="file-overlay hidden" id="llmOverlay" onclick="closeLlmView()"></div>
+<div class="file-drawer" id="llmDrawer" style="width:min(720px,95vw)">
+  <div class="drawer-header">
+    <span>模型设置</span>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-sm" onclick="loadLlmSettings()">刷新</button>
+      <button class="btn btn-sm" onclick="newLlmProvider()">新建服务商</button>
+      <button class="btn-ghost" onclick="closeLlmView()">✕</button>
+    </div>
+  </div>
+  <div class="study-body" id="llmBody" style="flex:1;overflow-y:auto;padding:16px 20px;font-size:13px">
+    <div style="text-align:center;padding:40px;color:var(--text-3)">加载中...</div>
   </div>
 </div>
 
@@ -2713,6 +2816,339 @@ async function pollReuploadTimeline(shadowId, title, uploadStart) {
     showTimeline(title, 'processing', r.data, uploadStart);
   } catch(e) { /* ignore, retry */ }
   S.pollTimers[shadowId] = setTimeout(function() { pollReuploadTimeline(shadowId, title, uploadStart); }, 3000);
+}
+
+// ═══════════════════════════════════════════════════════
+// LLM SETTINGS
+// ═══════════════════════════════════════════════════════
+var LLM_PURPOSES = ['default', 'reasoning', 'extraction', 'classification'];
+var LLM_PURPOSE_LABELS = {
+  default: '默认',
+  reasoning: '推理',
+  extraction: '提取',
+  classification: '分类'
+};
+function llmPurposeLabel(purpose) {
+  return LLM_PURPOSE_LABELS[purpose] || purpose;
+}
+function llmPlatformLabel(platformId) {
+  var p = (llmState.platforms || []).find(function(x) { return x.id === platformId; });
+  return p ? p.label : platformId;
+}
+var llmState = { providers: [], bindings: {}, platforms: [], editingId: null, openPurposes: { default: true } };
+
+function openLlmView() {
+  document.getElementById('llmDrawer').classList.add('open');
+  document.getElementById('llmOverlay').classList.remove('hidden');
+  loadLlmSettings();
+}
+function closeLlmView() {
+  document.getElementById('llmDrawer').classList.remove('open');
+  document.getElementById('llmOverlay').classList.add('hidden');
+}
+
+async function loadLlmSettings() {
+  var body = document.getElementById('llmBody');
+  body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3)">加载中...</div>';
+  try {
+    llmState.platforms = await llmApi('GET', '/llm/platforms') || [];
+    llmState.providers = await llmApi('GET', '/llm/providers') || [];
+    llmState.bindings = await llmApi('GET', '/llm/bindings') || {};
+    if (!Array.isArray(llmState.providers)) llmState.providers = [];
+    if (!Array.isArray(llmState.platforms)) llmState.platforms = [];
+    renderLlmSettings();
+  } catch (e) {
+    body.innerHTML = '<div style="color:var(--danger)">加载失败: ' + esc(e.message) + '</div>';
+  }
+}
+
+async function llmApi(method, path, body) {
+  var r = await api(method, path, body);
+  if (!r.ok) {
+    var msg = (r.data && r.data.message) ? r.data.message : ('HTTP ' + r.status);
+    throw new Error(msg);
+  }
+  return r.data;
+}
+
+function toast(msg, isError) {
+  var el = document.getElementById('appToast');
+  if (!el) {
+    alert(msg);
+    return;
+  }
+  el.textContent = msg;
+  el.classList.toggle('error', !!isError);
+  el.classList.remove('hidden');
+  if (toast._hideTimer) clearTimeout(toast._hideTimer);
+  toast._hideTimer = setTimeout(function() { el.classList.add('hidden'); }, 4000);
+}
+
+function bindLlmDrawerActions(root) {
+  if (!root) return;
+  root.querySelectorAll('[data-llm-test]').forEach(function(btn) {
+    btn.onclick = function() { testLlmProvider(btn.getAttribute('data-llm-test'), btn); };
+  });
+  root.querySelectorAll('[data-llm-edit]').forEach(function(btn) {
+    btn.onclick = function() { toggleEditLlmProvider(btn.getAttribute('data-llm-edit')); };
+  });
+  root.querySelectorAll('[data-llm-delete]').forEach(function(btn) {
+    btn.onclick = function() { deleteLlmProvider(btn.getAttribute('data-llm-delete')); };
+  });
+}
+
+function bindingSlot(raw) {
+  if (!raw || typeof raw === 'string') {
+    return { provider_id: raw || '', model: '', temperature: 0, input_max_tokens: 4096, output_max_tokens: 4096, enable_think: false };
+  }
+  return {
+    provider_id: raw.provider_id || '',
+    model: raw.model || '',
+    temperature: raw.temperature != null ? raw.temperature : 0,
+    input_max_tokens: raw.input_max_tokens != null ? raw.input_max_tokens : 4096,
+    output_max_tokens: raw.output_max_tokens != null ? raw.output_max_tokens : 4096,
+    enable_think: !!raw.enable_think
+  };
+}
+
+function bindingSummaryHint(b) {
+  if (!b.provider_id && !b.model) return '未绑定';
+  var pr = (llmState.providers || []).find(function(x) { return x.provider_id === b.provider_id; });
+  var name = pr ? pr.name : '';
+  if (b.model) return (name ? name + ' · ' : '') + b.model;
+  return name || '未配置模型';
+}
+
+function syncLlmPurposeOpenState() {
+  if (!llmState.openPurposes) llmState.openPurposes = {};
+  LLM_PURPOSES.forEach(function(purpose) {
+    var el = document.getElementById('llmPurpose_' + purpose);
+    if (el) llmState.openPurposes[purpose] = el.open;
+  });
+}
+
+function renderLlmSettings() {
+  syncLlmPurposeOpenState();
+  var body = document.getElementById('llmBody');
+  var html = '<div class="panel-section"><h3>用途绑定</h3><div style="display:grid;gap:8px">';
+  LLM_PURPOSES.forEach(function(purpose) {
+    var b = bindingSlot(llmState.bindings[purpose]);
+    var open = llmState.openPurposes && llmState.openPurposes[purpose];
+    html += '<details class="llm-purpose-fold" id="llmPurpose_' + purpose + '"' + (open ? ' open' : '') + '>';
+    html += '<summary><span class="llm-purpose-fold-title">' + llmPurposeLabel(purpose) + '</span>';
+    html += '<span class="llm-purpose-hint">' + esc(bindingSummaryHint(b)) + '</span></summary>';
+    html += '<div class="llm-purpose-fold-body">';
+    html += '<label style="display:block"><div style="font-size:11px;color:var(--text-3);margin-bottom:4px">服务商</div>';
+    html += '<select id="bind_provider_' + purpose + '" class="llm-field llm-field-bind">';
+    html += '<option value="">（未绑定）</option>';
+    llmState.providers.forEach(function(pr) {
+      var sel = b.provider_id === pr.provider_id ? ' selected' : '';
+      html += '<option value="' + esc(pr.provider_id) + '"' + sel + '>' + esc(pr.name) + '</option>';
+    });
+    html += '</select></label>';
+    html += modelNameField('bind', purpose, b.model);
+    html += miniField('温度', 'bind_temp_' + purpose, b.temperature);
+    html += miniField('输入 token 上限', 'bind_in_' + purpose, b.input_max_tokens);
+    html += miniField('输出 token 上限', 'bind_out_' + purpose, b.output_max_tokens);
+    html += '<label style="display:flex;align-items:center;gap:6px;margin-top:2px;font-size:12px"><input type="checkbox" id="bind_think_' + purpose + '"' + (b.enable_think ? ' checked' : '') + '> 开启思考模式</label>';
+    html += '</div></details>';
+  });
+  html += '<button class="btn btn-sm" style="margin-top:8px" onclick="saveLlmBindings()">保存绑定</button></div></div>';
+
+  html += '<div class="panel-section"><h3>模型服务商配置</h3>';
+  if (!llmState.providers.length) {
+    html += '<p style="color:var(--text-3)">尚无服务商，请点击「新建服务商」或从 config.yml 升级导入。</p>';
+  }
+  llmState.providers.forEach(function(pr) {
+    var open = llmState.editingId === pr.provider_id;
+    html += '<div style="border:1px solid var(--border-lt);border-radius:8px;padding:12px;margin-bottom:10px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><strong>' + esc(pr.name) + '</strong>';
+    html += '<div style="display:flex;gap:6px"><button type="button" class="btn btn-sm" data-llm-test="' + esc(pr.provider_id) + '">测试</button>';
+    html += '<button type="button" class="btn btn-sm" data-llm-edit="' + esc(pr.provider_id) + '">' + (open ? '收起' : '编辑') + '</button>';
+    html += '<button type="button" class="btn btn-sm" style="color:var(--danger)" data-llm-delete="' + esc(pr.provider_id) + '">删除</button></div></div>';
+    html += '<div style="font-size:12px;color:var(--text-3);margin-top:4px">' + esc(llmPlatformLabel(pr.platform)) + ' · ' + esc(pr.base_url) + '</div>';
+    if (open) html += renderLlmProviderForm(pr);
+    html += '</div>';
+  });
+  if (llmState.editingId === '__new__') {
+    html += renderLlmProviderForm({ provider_id: '', name: '', platform: 'openai_compatible', base_url: '', api_key: '', timeout_seconds: 120, max_retries: 3, response_format: 'json_object' });
+  }
+  html += '</div>';
+  body.innerHTML = html;
+  bindLlmDrawerActions(body);
+}
+
+function renderLlmProviderForm(pr) {
+  var id = pr.provider_id || '__new__';
+  var html = '<div style="margin-top:12px;display:grid;gap:8px" id="llmForm_' + esc(id) + '">';
+  html += fieldRow('名称', '<input id="llm_name_' + id + '" class="llm-field" value="' + esc(pr.name) + '">');
+  html += fieldRow('平台', '<select id="llm_platform_' + id + '" class="llm-field">' +
+    llmState.platforms.map(function(p) {
+      return '<option value="' + esc(p.id) + '"' + (pr.platform === p.id ? ' selected' : '') + '>' + esc(p.label) + '</option>';
+    }).join('') + '</select>');
+  var rf = pr.response_format || 'json_object';
+  html += fieldRow('响应格式', '<select id="llm_rf_' + id + '" class="llm-field">' +
+    '<option value="json_object"' + (rf === 'json_object' ? ' selected' : '') + '>json_object</option>' +
+    '<option value="json_schema"' + (rf === 'json_schema' ? ' selected' : '') + '>json_schema</option>' +
+    '</select>');
+  html += fieldRow('接口地址', '<input id="llm_base_' + id + '" class="llm-field" value="' + esc(pr.base_url) + '">');
+  html += fieldRow('API 密钥', '<input id="llm_key_' + id + '" class="llm-field" value="' + esc(pr.api_key) + '">');
+  html += fieldRow('超时(秒)', '<input type="number" id="llm_timeout_' + id + '" class="llm-field" value="' + (pr.timeout_seconds || 120) + '">');
+  html += fieldRow('重试次数', '<input type="number" id="llm_retries_' + id + '" class="llm-field" value="' + (pr.max_retries != null ? pr.max_retries : 3) + '">');
+  html += '<button class="btn btn-sm" style="margin-top:8px" onclick="saveLlmProvider(\'' + esc(id) + '\')">保存配置</button></div>';
+  return html;
+}
+
+function fieldRow(label, input) {
+  return '<label><div style="font-size:11px;color:var(--text-3);margin-bottom:4px">' + label + '</div>' + input + '</label>';
+}
+function miniField(label, elId, val) {
+  return '<label style="font-size:12px;display:block">' + label + '<input id="' + elId + '" class="llm-field" value="' + esc(String(val != null ? val : '')) + '" style="margin-top:4px"></label>';
+}
+
+function modelNameField(formId, purpose, modelVal) {
+  var inputId = 'llm_m_model_' + formId + '_' + purpose;
+  var pickId = 'llm_model_pick_' + formId + '_' + purpose;
+  var statusId = 'llm_model_pick_status_' + formId + '_' + purpose;
+  return '<label style="font-size:12px">模型名称' +
+    '<div style="display:flex;gap:6px;margin-top:2px;align-items:center">' +
+    '<input id="' + inputId + '" class="llm-field llm-field-inline" value="' + esc(String(modelVal != null ? modelVal : '')) + '">' +
+    '<button type="button" class="btn btn-sm" onclick="fetchLlmModelList(\'' + esc(formId) + '\',\'' + esc(purpose) + '\')">获取模型列表</button>' +
+    '</div>' +
+    '<select id="' + pickId + '" class="llm-field" style="display:none;margin-top:6px" onchange="applyLlmModelPick(\'' + esc(formId) + '\',\'' + esc(purpose) + '\')">' +
+    '<option value="">— 选择模型填入上方 —</option></select>' +
+    '<div id="' + statusId + '" style="font-size:11px;color:var(--text-3);margin-top:4px"></div></label>';
+}
+
+async function fetchLlmModelList(formId, purpose) {
+  var statusEl = document.getElementById('llm_model_pick_status_' + formId + '_' + purpose);
+  var pickEl = document.getElementById('llm_model_pick_' + formId + '_' + purpose);
+  if (statusEl) statusEl.textContent = '正在获取…';
+  pickEl.style.display = 'none';
+  try {
+    var models;
+    if (formId === '__new__') {
+      var base = document.getElementById('llm_base___new__').value;
+      var key = document.getElementById('llm_key___new__').value;
+      var platform = document.getElementById('llm_platform___new__').value;
+      models = await llmApi('POST', '/llm/models/discover', { base_url: base, api_key: key, platform: platform });
+    } else if (formId === 'bind') {
+      var providerId = document.getElementById('bind_provider_' + purpose).value;
+      if (!providerId) {
+        if (statusEl) statusEl.textContent = '请先选择服务商';
+        return;
+      }
+      models = await llmApi('GET', '/llm/providers/' + providerId + '/models');
+    } else {
+      models = await llmApi('GET', '/llm/providers/' + formId + '/models');
+    }
+    if (!models || !models.length) {
+      if (statusEl) statusEl.textContent = '未返回任何模型';
+      return;
+    }
+    pickEl.innerHTML = '<option value="">— 选择模型填入上方 —</option>' +
+      models.map(function(m) { return '<option value="' + esc(m) + '">' + esc(m) + '</option>'; }).join('');
+    pickEl.style.display = 'block';
+    if (statusEl) statusEl.textContent = '共 ' + models.length + ' 个模型，请从下拉选择';
+  } catch (e) {
+    if (statusEl) statusEl.textContent = '获取失败: ' + e.message;
+    toast('获取模型列表失败: ' + e.message, true);
+  }
+}
+
+function applyLlmModelPick(formId, purpose) {
+  var pickEl = document.getElementById('llm_model_pick_' + formId + '_' + purpose);
+  var inputEl = document.getElementById('llm_m_model_' + formId + '_' + purpose);
+  if (pickEl && pickEl.value && inputEl) {
+    inputEl.value = pickEl.value;
+    toast('已填入模型: ' + pickEl.value);
+  }
+}
+
+function toggleEditLlmProvider(id) {
+  llmState.editingId = llmState.editingId === id ? null : id;
+  renderLlmSettings();
+}
+function newLlmProvider() {
+  llmState.editingId = '__new__';
+  renderLlmSettings();
+}
+
+function collectProviderFromForm(id) {
+  return {
+    name: document.getElementById('llm_name_' + id).value,
+    platform: document.getElementById('llm_platform_' + id).value,
+    base_url: document.getElementById('llm_base_' + id).value,
+    api_key: document.getElementById('llm_key_' + id).value,
+    timeout_seconds: parseInt(document.getElementById('llm_timeout_' + id).value, 10) || 120,
+    max_retries: parseInt(document.getElementById('llm_retries_' + id).value, 10) || 0,
+    response_format: document.getElementById('llm_rf_' + id).value
+  };
+}
+
+async function saveLlmProvider(id) {
+  var body = collectProviderFromForm(id);
+  try {
+    if (id === '__new__') {
+      await llmApi('POST', '/llm/providers', body);
+    } else {
+      await llmApi('PUT', '/llm/providers/' + id, Object.assign({ provider_id: id }, body));
+    }
+    llmState.editingId = null;
+    await loadLlmSettings();
+    toast('配置已保存并生效');
+  } catch (e) { toast('保存失败: ' + e.message, true); }
+}
+
+async function deleteLlmProvider(id) {
+  if (!confirm('确定删除该服务商配置？')) return;
+  try {
+    await llmApi('DELETE', '/llm/providers/' + id);
+    await loadLlmSettings();
+    toast('已删除');
+  } catch (e) { toast('删除失败: ' + e.message, true); }
+}
+
+async function saveLlmBindings() {
+  var bindings = {};
+  LLM_PURPOSES.forEach(function(p) {
+    var providerId = document.getElementById('bind_provider_' + p).value;
+    if (!providerId) return;
+    bindings[p] = {
+      provider_id: providerId,
+      model: document.getElementById('llm_m_model_bind_' + p).value,
+      temperature: parseFloat(document.getElementById('bind_temp_' + p).value) || 0,
+      input_max_tokens: parseInt(document.getElementById('bind_in_' + p).value, 10) || 0,
+      output_max_tokens: parseInt(document.getElementById('bind_out_' + p).value, 10) || 0,
+      enable_think: document.getElementById('bind_think_' + p).checked
+    };
+  });
+  try {
+    await llmApi('PUT', '/llm/bindings', bindings);
+    llmState.bindings = bindings;
+    await loadLlmSettings();
+    toast('绑定已保存并生效');
+  } catch (e) { toast('保存失败: ' + e.message, true); }
+}
+
+async function testLlmProvider(id, btn) {
+  var label = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '测试中…';
+  }
+  try {
+    var res = await llmApi('POST', '/llm/providers/' + encodeURIComponent(id) + '/test');
+    var n = res && res.model_count != null ? res.model_count : null;
+    toast(n != null ? ('连接测试成功，获取到 ' + n + ' 个模型') : '连接测试成功');
+  } catch (e) {
+    toast('测试失败: ' + e.message, true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = label || '测试';
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════
