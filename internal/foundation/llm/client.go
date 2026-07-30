@@ -13,20 +13,22 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/kaptinlin/jsonrepair"
 )
 
 type OpenAIClient struct {
-	cfg        *config.LLMConfig
+	provider   *ProviderRuntime
 	httpClient *http.Client
 	promptsDir string
 }
 
-func NewOpenAIClient(cfg *config.LLMConfig, promptsDir string) (*OpenAIClient, error) {
+func NewOpenAIClient(provider *ProviderRuntime, promptsDir string) (*OpenAIClient, error) {
+	if provider == nil {
+		return nil, fmt.Errorf("llm: nil provider")
+	}
 	return &OpenAIClient{
-		cfg:        cfg,
-		httpClient: &http.Client{Timeout: cfg.TimeoutDuration()},
+		provider:   provider,
+		httpClient: &http.Client{Timeout: provider.TimeoutDuration()},
 		promptsDir: promptsDir,
 	}, nil
 }
@@ -34,20 +36,6 @@ func NewOpenAIClient(cfg *config.LLMConfig, promptsDir string) (*OpenAIClient, e
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
-}
-
-type chatRequest struct {
-	Model          string          `json:"model"`
-	Messages       []chatMessage   `json:"messages"`
-	Temperature    *float64        `json:"temperature,omitempty"`
-	MaxTokens      int             `json:"max_tokens,omitempty"`
-	EnableThinking *bool           `json:"enable_thinking,omitempty"`
-	ResponseFormat *responseFormat `json:"response_format,omitempty"`
-	Stream         bool            `json:"stream,omitempty"`
-}
-
-type responseFormat struct {
-	Type string `json:"type"`
 }
 
 type chatResponse struct {
@@ -64,22 +52,29 @@ type chatResponse struct {
 }
 
 func (c *OpenAIClient) Complete(ctx context.Context, promptFile string, vars map[string]string, purpose string) (string, error) {
+	mc := c.provider.ModelForPurpose(purpose)
+	return c.CompleteWithParams(ctx, promptFile, vars, mc)
+}
+
+func (c *OpenAIClient) CompleteWithParams(ctx context.Context, promptFile string, vars map[string]string, mc ModelParams) (string, error) {
 	prompt, err := c.loadPrompt(promptFile, vars)
 	if err != nil {
 		return "", err
 	}
-
-	mc := c.cfg.ModelForPurpose(purpose)
 	return c.call(ctx, prompt, mc, false)
 }
 
-func (c *OpenAIClient) CompleteJSON(ctx context.Context, promptFile string, vars map[string]string, model string) ([]byte, error) {
+func (c *OpenAIClient) CompleteJSON(ctx context.Context, promptFile string, vars map[string]string, purpose string) ([]byte, error) {
+	mc := c.provider.ModelForPurpose(purpose)
+	return c.CompleteJSONWithParams(ctx, promptFile, vars, mc)
+}
+
+func (c *OpenAIClient) CompleteJSONWithParams(ctx context.Context, promptFile string, vars map[string]string, mc ModelParams) ([]byte, error) {
 	prompt, err := c.loadPrompt(promptFile, vars)
 	if err != nil {
 		return nil, err
 	}
 
-	mc := c.cfg.ModelForPurpose(model)
 	raw, err := c.call(ctx, prompt, mc, true)
 	if err != nil {
 		return nil, err
@@ -96,7 +91,6 @@ func (c *OpenAIClient) CompleteJSON(ctx context.Context, promptFile string, vars
 		return []byte(jsonStr), nil
 	}
 
-	// Schema 校验失败：尝试让模型修复缺失/错误的字段
 	slog.Info("llm: schema validation failed, attempting field repair",
 		"promptFile", promptFile, "error", validationErr)
 
@@ -126,11 +120,6 @@ func (c *OpenAIClient) extractAndRepairJSON(raw, promptFile string) string {
 	return after
 }
 
-// ExtractAndRepairJSON extracts a JSON object/array from raw LLM output
-// (stripping markdown code fences) and repairs common syntax issues (e.g.
-// unescaped newlines) via jsonrepair. Exported so callers that accumulate
-// streamed chunks themselves (bypassing CompleteJSON) get the same
-// robustness as the non-streaming path.
 func ExtractAndRepairJSON(raw string) string {
 	jsonStr := extractJSON(raw)
 	if !json.Valid([]byte(jsonStr)) {
@@ -141,8 +130,7 @@ func ExtractAndRepairJSON(raw string) string {
 	return jsonStr
 }
 
-// repairFields 针对 schema 校验失败的 JSON，让模型只修复缺失/错误的字段。
-func (c *OpenAIClient) repairFields(ctx context.Context, originalJSON, validationError, schema string, mc config.ModelConfig) (string, error) {
+func (c *OpenAIClient) repairFields(ctx context.Context, originalJSON, validationError, schema string, mc ModelParams) (string, error) {
 	repairPrompt := &Prompt{
 		System: `你是 JSON 修复助手。用户会给你一段 JSON 和校验错误信息。
 请只修复错误提到的字段（补全缺失字段、修正类型错误的值），保持其他字段不变。
@@ -179,30 +167,20 @@ func (c *OpenAIClient) loadPrompt(promptFile string, vars map[string]string) (*P
 	return LoadPrompt(path, vars)
 }
 
-func (c *OpenAIClient) call(ctx context.Context, prompt *Prompt, mc config.ModelConfig, jsonObject bool) (string, error) {
+func (c *OpenAIClient) call(ctx context.Context, prompt *Prompt, mc ModelParams, jsonObject bool) (string, error) {
 	var messages []chatMessage
 	if prompt.System != "" {
 		messages = append(messages, chatMessage{Role: "system", Content: prompt.System})
 	}
 	messages = append(messages, chatMessage{Role: "user", Content: prompt.User})
 
-	reqBody := chatRequest{
-		Model:    mc.Model,
-		Messages: messages,
-	}
-	temp := mc.Temperature
-	reqBody.Temperature = &temp
-	if mc.MaxOutputTokens > 0 {
-		reqBody.MaxTokens = mc.MaxOutputTokens
-	}
-	thinking := mc.Thinking
-	reqBody.EnableThinking = &thinking
-	if jsonObject {
-		reqBody.ResponseFormat = &responseFormat{Type: "json_object"}
+	bodyBytes, err := marshalChatRequest(c.provider.Platform, mc, messages, jsonObject, false, c.provider.ResponseFormat)
+	if err != nil {
+		return "", fmt.Errorf("llm: marshal request: %w", err)
 	}
 
 	var lastErr error
-	maxAttempts := c.cfg.MaxRetries + 1
+	maxAttempts := c.provider.MaxRetries + 1
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
@@ -214,7 +192,7 @@ func (c *OpenAIClient) call(ctx context.Context, prompt *Prompt, mc config.Model
 			}
 		}
 
-		result, err := c.doRequest(ctx, reqBody)
+		result, err := c.doRequest(ctx, bodyBytes)
 		if err == nil {
 			return result, nil
 		}
@@ -228,21 +206,15 @@ func (c *OpenAIClient) call(ctx context.Context, prompt *Prompt, mc config.Model
 	return "", lastErr
 }
 
-func (c *OpenAIClient) doRequest(ctx context.Context, reqBody chatRequest) (string, error) {
-	bodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", fmt.Errorf("llm: marshal request: %w", err)
-	}
-
-	url := strings.TrimRight(c.cfg.BaseURL, "/") + "/chat/completions"
+func (c *OpenAIClient) doRequest(ctx context.Context, bodyBytes []byte) (string, error) {
+	url := strings.TrimRight(c.provider.BaseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", fmt.Errorf("llm: create request: %w", err)
 	}
 
-	apiKey := c.cfg.ResolvedAPIKey()
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Authorization", "Bearer "+c.provider.APIKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -294,12 +266,15 @@ type streamDelta struct {
 }
 
 func (c *OpenAIClient) CompleteStream(ctx context.Context, promptFile string, vars map[string]string, purpose string) (<-chan StreamChunk, error) {
+	mc := c.provider.ModelForPurpose(purpose)
+	return c.CompleteStreamWithParams(ctx, promptFile, vars, mc)
+}
+
+func (c *OpenAIClient) CompleteStreamWithParams(ctx context.Context, promptFile string, vars map[string]string, mc ModelParams) (<-chan StreamChunk, error) {
 	prompt, err := c.loadPrompt(promptFile, vars)
 	if err != nil {
 		return nil, err
 	}
-
-	mc := c.cfg.ModelForPurpose(purpose)
 
 	var messages []chatMessage
 	if prompt.System != "" {
@@ -307,33 +282,19 @@ func (c *OpenAIClient) CompleteStream(ctx context.Context, promptFile string, va
 	}
 	messages = append(messages, chatMessage{Role: "user", Content: prompt.User})
 
-	reqBody := chatRequest{
-		Model:    mc.Model,
-		Messages: messages,
-		Stream:   true,
-	}
-	temp := mc.Temperature
-	reqBody.Temperature = &temp
-	if mc.MaxOutputTokens > 0 {
-		reqBody.MaxTokens = mc.MaxOutputTokens
-	}
-	thinking := mc.Thinking
-	reqBody.EnableThinking = &thinking
-
-	bodyBytes, err := json.Marshal(reqBody)
+	bodyBytes, err := marshalChatRequest(c.provider.Platform, mc, messages, false, true, c.provider.ResponseFormat)
 	if err != nil {
 		return nil, fmt.Errorf("llm: marshal request: %w", err)
 	}
 
-	url := strings.TrimRight(c.cfg.BaseURL, "/") + "/chat/completions"
+	url := strings.TrimRight(c.provider.BaseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("llm: create request: %w", err)
 	}
 
-	apiKey := c.cfg.ResolvedAPIKey()
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Authorization", "Bearer "+c.provider.APIKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -455,7 +416,6 @@ func stripThinkTags(s string) string {
 func extractJSON(s string) string {
 	s = strings.TrimSpace(s)
 
-	// 去除 ```json ... ``` 包裹
 	if strings.HasPrefix(s, "```") {
 		firstNewline := strings.Index(s, "\n")
 		if firstNewline == -1 {
@@ -469,7 +429,6 @@ func extractJSON(s string) string {
 		return strings.TrimSpace(rest)
 	}
 
-	// 尝试找到 JSON 对象/数组的起止
 	start := strings.IndexAny(s, "{[")
 	if start == -1 {
 		return s
@@ -492,4 +451,19 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen]) + "..."
+}
+
+// TestPing sends a minimal completion to verify connectivity.
+func (c *OpenAIClient) TestPing(ctx context.Context) error {
+	mc := c.provider.ModelForPurpose("default")
+	return c.TestPingWithParams(ctx, mc)
+}
+
+func (c *OpenAIClient) TestPingWithParams(ctx context.Context, mc ModelParams) error {
+	if mc.Model == "" {
+		return fmt.Errorf("model not configured")
+	}
+	prompt := &Prompt{User: "ping"}
+	_, err := c.call(ctx, prompt, mc, false)
+	return err
 }
