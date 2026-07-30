@@ -5,13 +5,11 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	LLM       LLMConfig       `yaml:"llm"`
 	Server    ServerConfig    `yaml:"server"`
 	Logging   LoggingConfig   `yaml:"logging"`
 	Database  DatabaseConfig  `yaml:"database"`
@@ -24,17 +22,22 @@ type Config struct {
 	Evidence  EvidenceConfig  `yaml:"evidence"`
 	KPN       KPNConfig       `yaml:"kpn"`
 	Wiki      WikiConfig      `yaml:"wiki"`
+
+	// BootstrapLLM is populated from an optional llm: section in config.yml
+	// only for one-time import into the database at startup. Not used at runtime.
+	BootstrapLLM *BootstrapLLM `yaml:"-"`
 }
 
-type LLMConfig struct {
-	BaseURL        string                 `yaml:"base_url"`
-	APIKey         string                 `yaml:"api_key"`
-	TimeoutSeconds int                    `yaml:"timeout_seconds"`
-	MaxRetries     int                    `yaml:"max_retries"`
-	Models         map[string]ModelConfig `yaml:"models"`
+// BootstrapLLM is the legacy config.yml llm block used only for first-start import.
+type BootstrapLLM struct {
+	BaseURL        string                       `yaml:"base_url"`
+	APIKey         string                       `yaml:"api_key"`
+	TimeoutSeconds int                          `yaml:"timeout_seconds"`
+	MaxRetries     int                          `yaml:"max_retries"`
+	Models         map[string]BootstrapModel    `yaml:"models"`
 }
 
-type ModelConfig struct {
+type BootstrapModel struct {
 	Model           string  `yaml:"model"`
 	Temperature     float64 `yaml:"temperature"`
 	MaxInputTokens  int     `yaml:"max_input_tokens"`
@@ -238,30 +241,6 @@ type StudyConfig struct {
 	ComplexityMinQuestions int `yaml:"complexity_min_questions"`
 }
 
-func (c *LLMConfig) TimeoutDuration() time.Duration {
-	if c.TimeoutSeconds > 0 {
-		return time.Duration(c.TimeoutSeconds) * time.Second
-	}
-	return 120 * time.Second
-}
-
-func (c *LLMConfig) ModelForPurpose(purpose string) ModelConfig {
-	if m, ok := c.Models[purpose]; ok {
-		return m
-	}
-	if m, ok := c.Models["default"]; ok {
-		return m
-	}
-	return ModelConfig{}
-}
-
-func (c *LLMConfig) ResolvedAPIKey() string {
-	if val := os.Getenv(c.APIKey); val != "" {
-		return val
-	}
-	return c.APIKey
-}
-
 func Load(configPath string) (*Config, error) {
 	path, err := findConfigFile(configPath)
 	if err != nil {
@@ -278,6 +257,13 @@ func Load(configPath string) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+
+	var bootstrap struct {
+		LLM *BootstrapLLM `yaml:"llm"`
+	}
+	if err := yaml.Unmarshal([]byte(expanded), &bootstrap); err == nil {
+		cfg.BootstrapLLM = bootstrap.LLM
 	}
 
 	applyLoggingDefaults(&cfg)
@@ -329,8 +315,6 @@ func findConfigFile(explicit string) (string, error) {
 
 func applyEnvOverrides(cfg *Config) {
 	overrides := map[string]*string{
-		"WB_LLM_BASE_URL":         &cfg.LLM.BaseURL,
-		"WB_LLM_API_KEY":          &cfg.LLM.APIKey,
 		"WB_DATABASE_PATH":        &cfg.Database.Path,
 		"WB_INDEX_PATH":           &cfg.Index.Path,
 		"WB_SOURCE_UPLOAD_DIR":    &cfg.Source.UploadDir,
@@ -352,8 +336,6 @@ func applyEnvOverrides(cfg *Config) {
 	intOverrides := map[string]*int{
 		"WB_SERVER_PORT":            &cfg.Server.Port,
 		"WB_SERVER_MAX_CONCURRENCY": &cfg.Server.MaxConcurrency,
-		"WB_LLM_TIMEOUT_SECONDS":    &cfg.LLM.TimeoutSeconds,
-		"WB_LLM_MAX_RETRIES":        &cfg.LLM.MaxRetries,
 		"WB_QUEUE_BUFFER_SIZE":      &cfg.Queue.BufferSize,
 		"WB_QUEUE_WORKERS":          &cfg.Queue.Workers,
 		"WB_LOGGING_MAX_SIZE_MB":    &cfg.Logging.MaxSizeMB,

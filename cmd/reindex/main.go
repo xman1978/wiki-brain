@@ -22,6 +22,7 @@ import (
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	fdb "github.com/jxman78/wiki-brain/internal/foundation/db"
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
+	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 	"github.com/jxman78/wiki-brain/internal/foundation/queue"
 	"github.com/jxman78/wiki-brain/internal/source"
 	"github.com/jxman78/wiki-brain/internal/unit"
@@ -58,7 +59,7 @@ func main() {
 	baseDir, _ := os.Getwd()
 
 	unitSvc := unit.NewService(unitStore, sourceStore, nil, idxMgr.Units, idxMgr.Points, queue.New(1), cfg)
-	sourceSvc := source.NewService(sourceStore, nil, nil, idxMgr.Outlines, queue.New(1), cfg, baseDir)
+	sourceSvc := source.NewService(sourceStore, nil, nil, llm.StaticPurposeModels{}, idxMgr.Outlines, queue.New(1), cfg, baseDir)
 
 	sources, err := sourceStore.List("", "", 100000, 0)
 	if err != nil {

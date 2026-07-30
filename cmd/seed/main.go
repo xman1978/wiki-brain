@@ -17,6 +17,7 @@ import (
 	fdb "github.com/jxman78/wiki-brain/internal/foundation/db"
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/llmconfig"
 	"github.com/jxman78/wiki-brain/internal/foundation/queue"
 	"github.com/jxman78/wiki-brain/internal/source"
 	"github.com/jxman78/wiki-brain/internal/unit"
@@ -58,10 +59,11 @@ func main() {
 		log.Fatalf("create index: %v", err)
 	}
 	promptsDir, _ := filepath.Abs("config/prompts")
-	llmClient, err := llm.NewOpenAIClient(&cfg.LLM, promptsDir)
+	llmRouter, err := llmconfig.NewRoutingFromBootstrap(cfg.BootstrapLLM, promptsDir)
 	if err != nil {
 		log.Fatalf("create LLM client: %v", err)
 	}
+	llmClient := llmRouter
 
 	// Load preset domains/concepts
 	presetPath, _ := filepath.Abs("preset/domains.json")
@@ -137,13 +139,17 @@ func main() {
 			fmt.Printf("  semantic trigger: %v\n", trigger.Reasons)
 
 			if hasOversizeLeaves(outlines, mdLines, cfg.Source.SegmentMaxChars) {
-				mc := cfg.LLM.ModelForPurpose("extraction")
-				newNodes, err := source.RefineLeafNodes(context.Background(), llmClient, sourceID, content, outlines, mc, cfg.Source.SegmentMaxChars)
+				mc, err := llmRouter.ModelForPurpose("extraction")
 				if err != nil {
-					fmt.Printf("  WARN leaf refinement failed: %v\n", err)
-				} else if len(newNodes) > 0 {
-					outlines = append(outlines, newNodes...)
-					fmt.Printf("  refined leaves: +%d nodes\n", len(newNodes))
+					fmt.Printf("  WARN extraction model: %v\n", err)
+				} else {
+					newNodes, err := source.RefineLeafNodes(context.Background(), llmClient, sourceID, content, outlines, mc, cfg.Source.SegmentMaxChars)
+					if err != nil {
+						fmt.Printf("  WARN leaf refinement failed: %v\n", err)
+					} else if len(newNodes) > 0 {
+						outlines = append(outlines, newNodes...)
+						fmt.Printf("  refined leaves: +%d nodes\n", len(newNodes))
+					}
 				}
 			}
 		}

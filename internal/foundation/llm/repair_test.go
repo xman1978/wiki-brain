@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/jxman78/wiki-brain/internal/foundation/config"
 )
 
 func TestCompleteJSON_RepairMissingField(t *testing.T) {
@@ -71,12 +70,13 @@ Test user: {{content}}
 
 	os.WriteFile(filepath.Join(tmpDir, "test_outline.md"), []byte(promptContent), 0644)
 
-	cfg := &config.LLMConfig{
+	cfg := &ProviderRuntime{
 		BaseURL:        server.URL,
 		APIKey:         "test-key",
 		TimeoutSeconds: 30,
 		MaxRetries:     0,
-		Models: map[string]config.ModelConfig{
+		Platform:       PlatformOpenAICompatible,
+		Models: map[string]ModelParams{
 			"default": {Model: "test-model", Temperature: 0.2, MaxOutputTokens: 4096},
 		},
 	}
@@ -153,12 +153,13 @@ Test.
 
 	os.WriteFile(filepath.Join(tmpDir, "valid.md"), []byte(promptContent), 0644)
 
-	cfg := &config.LLMConfig{
+	cfg := &ProviderRuntime{
 		BaseURL:        server.URL,
 		APIKey:         "test-key",
 		TimeoutSeconds: 30,
 		MaxRetries:     0,
-		Models: map[string]config.ModelConfig{
+		Platform:       PlatformOpenAICompatible,
+		Models: map[string]ModelParams{
 			"default": {Model: "test-model", Temperature: 0.2, MaxOutputTokens: 4096},
 		},
 	}

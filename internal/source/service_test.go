@@ -43,17 +43,13 @@ func setupTestService(t *testing.T) (*Service, *llm.FakeClient) {
 			SegmentMaxChars: 4000,
 			MinSegmentChars: 400,
 		},
-		LLM: config.LLMConfig{
-			TimeoutSeconds: 30,
-			MaxRetries:     0,
-			Models: map[string]config.ModelConfig{
-				"default":    {Model: "test", MaxInputTokens: 100000, MaxOutputTokens: 4096},
-				"extraction": {Model: "test", MaxInputTokens: 100000, MaxOutputTokens: 4096},
-			},
-		},
+	}
+	models := llm.StaticPurposeModels{
+		"default":    {Model: "test", MaxInputTokens: 100000, MaxOutputTokens: 4096},
+		"extraction": {Model: "test", MaxInputTokens: 100000, MaxOutputTokens: 4096},
 	}
 
-	svc := NewService(store, nil, fake, idxMgr.Outlines, q, cfg, tmpDir)
+	svc := NewService(store, nil, fake, models, idxMgr.Outlines, q, cfg, tmpDir)
 	return svc, fake
 }
 

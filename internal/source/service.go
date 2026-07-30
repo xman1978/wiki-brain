@@ -26,6 +26,7 @@ type Service struct {
 	store           *Store
 	fileView        FileViewClient
 	llmClient       llm.LLMClient
+	purposeModels   llm.PurposeModels
 	outlineIdx      bleve.Index
 	unitsIdx        bleve.Index
 	pointsIdx       bleve.Index
@@ -70,16 +71,24 @@ type ConceptMatcher interface {
 	MatchConcepts(ctx context.Context, sourceID, domainID string)
 }
 
-func NewService(store *Store, fv FileViewClient, lc llm.LLMClient, outlineIdx bleve.Index, q *queue.Queue, cfg *config.Config, baseDir string) *Service {
+func NewService(store *Store, fv FileViewClient, lc llm.LLMClient, pm llm.PurposeModels, outlineIdx bleve.Index, q *queue.Queue, cfg *config.Config, baseDir string) *Service {
 	return &Service{
-		store:      store,
-		fileView:   fv,
-		llmClient:  lc,
-		outlineIdx: outlineIdx,
-		queue:      q,
-		cfg:        cfg,
-		baseDir:    baseDir,
+		store:         store,
+		fileView:      fv,
+		llmClient:     lc,
+		purposeModels: pm,
+		outlineIdx:    outlineIdx,
+		queue:         q,
+		cfg:           cfg,
+		baseDir:       baseDir,
 	}
+}
+
+func (s *Service) extractionModel() (llm.ModelParams, error) {
+	if s.purposeModels == nil {
+		return llm.ModelParams{}, llm.ErrNotConfigured
+	}
+	return s.purposeModels.ModelForPurpose("extraction")
 }
 
 func (s *Service) Store() *Store {
@@ -311,22 +320,33 @@ func (s *Service) Process(ctx context.Context, sourceID string) error {
 		}
 
 		if hasE && onlyE && len(structOutlines) > 0 {
-			newNodes, err := RefineLeafNodes(ctx, s.llmClient, sourceID, normalized, structOutlines, s.cfg.LLM.ModelForPurpose("extraction"), s.cfg.Source.SegmentMaxChars)
+			mc, err := s.extractionModel()
 			if err != nil {
-				slog.Warn("leaf refinement failed", "source_id", sourceID, "error", err)
-			}
-			allOutlines = append(structOutlines, newNodes...)
-			if len(newNodes) > 0 {
-				outlineType = "mixed"
+				slog.Warn("leaf refinement skipped", "source_id", sourceID, "error", err)
+			} else {
+				newNodes, err := RefineLeafNodes(ctx, s.llmClient, sourceID, normalized, structOutlines, mc, s.cfg.Source.SegmentMaxChars)
+				if err != nil {
+					slog.Warn("leaf refinement failed", "source_id", sourceID, "error", err)
+				}
+				allOutlines = append(structOutlines, newNodes...)
+				if len(newNodes) > 0 {
+					outlineType = "mixed"
+				}
 			}
 		} else {
-			semanticOutlines, err := GenerateSemanticOutlines(ctx, s.llmClient, sourceID, normalized, s.cfg.LLM.ModelForPurpose("extraction"), s.cfg.Source.SegmentMaxChars)
+			mc, err := s.extractionModel()
 			if err != nil {
-				slog.Warn("semantic outline generation failed, using structural", "source_id", sourceID, "error", err)
+				slog.Warn("semantic outline skipped", "source_id", sourceID, "error", err)
 				allOutlines = structOutlines
 			} else {
-				allOutlines = semanticOutlines
-				outlineType = "semantic"
+				semanticOutlines, err := GenerateSemanticOutlines(ctx, s.llmClient, sourceID, normalized, mc, s.cfg.Source.SegmentMaxChars)
+				if err != nil {
+					slog.Warn("semantic outline generation failed, using structural", "source_id", sourceID, "error", err)
+					allOutlines = structOutlines
+				} else {
+					allOutlines = semanticOutlines
+					outlineType = "semantic"
+				}
 			}
 		}
 		s.emit(sourceID, progress.Event{Step: progress.StepOutlineSemantic, Status: progress.StatusCompleted, ElapsedMs: time.Since(stepStart).Milliseconds()})
@@ -340,8 +360,9 @@ func (s *Service) Process(ctx context.Context, sourceID string) error {
 	stepStart = time.Now()
 	s.emit(sourceID, progress.Event{Step: progress.StepOutlineSummary, Status: progress.StatusStarted, Message: "目录摘要生成"})
 	if len(allOutlines) > 0 {
-		mc := s.cfg.LLM.ModelForPurpose("extraction")
-		GenerateOutlineSummaries(ctx, s.llmClient, allOutlines, normalized, mc)
+		if mc, err := s.extractionModel(); err == nil {
+			GenerateOutlineSummaries(ctx, s.llmClient, allOutlines, normalized, mc)
+		}
 	}
 	s.emit(sourceID, progress.Event{Step: progress.StepOutlineSummary, Status: progress.StatusCompleted, ElapsedMs: time.Since(stepStart).Milliseconds()})
 
@@ -1287,8 +1308,9 @@ func (s *Service) ProcessRetry(ctx context.Context, sourceID string) error {
 	structOutlines := ExtractStructuralOutlines(sourceID, normalized)
 
 	if len(structOutlines) > 0 {
-		mc := s.cfg.LLM.ModelForPurpose("extraction")
-		GenerateOutlineSummaries(ctx, s.llmClient, structOutlines, normalized, mc)
+		if mc, err := s.extractionModel(); err == nil {
+			GenerateOutlineSummaries(ctx, s.llmClient, structOutlines, normalized, mc)
+		}
 	}
 
 	trigger := CheckSemanticTrigger(structOutlines, normalized, src.Format, s.cfg.Source.SegmentMaxChars)
@@ -1308,22 +1330,33 @@ func (s *Service) ProcessRetry(ctx context.Context, sourceID string) error {
 		}
 
 		if hasE && onlyE && len(structOutlines) > 0 {
-			newNodes, err := RefineLeafNodes(ctx, s.llmClient, sourceID, normalized, structOutlines, s.cfg.LLM.ModelForPurpose("extraction"), s.cfg.Source.SegmentMaxChars)
+			mc, err := s.extractionModel()
 			if err != nil {
-				slog.Warn("leaf refinement failed", "error", err)
-			}
-			allOutlines = append(structOutlines, newNodes...)
-			if len(newNodes) > 0 {
-				outlineType = "mixed"
+				slog.Warn("leaf refinement skipped", "error", err)
+			} else {
+				newNodes, err := RefineLeafNodes(ctx, s.llmClient, sourceID, normalized, structOutlines, mc, s.cfg.Source.SegmentMaxChars)
+				if err != nil {
+					slog.Warn("leaf refinement failed", "error", err)
+				}
+				allOutlines = append(structOutlines, newNodes...)
+				if len(newNodes) > 0 {
+					outlineType = "mixed"
+				}
 			}
 		} else {
-			semanticOutlines, err := GenerateSemanticOutlines(ctx, s.llmClient, sourceID, normalized, s.cfg.LLM.ModelForPurpose("extraction"), s.cfg.Source.SegmentMaxChars)
+			mc, err := s.extractionModel()
 			if err != nil {
-				slog.Warn("semantic outline generation failed", "error", err)
+				slog.Warn("semantic outline skipped", "error", err)
 				allOutlines = structOutlines
 			} else {
-				allOutlines = semanticOutlines
-				outlineType = "semantic"
+				semanticOutlines, err := GenerateSemanticOutlines(ctx, s.llmClient, sourceID, normalized, mc, s.cfg.Source.SegmentMaxChars)
+				if err != nil {
+					slog.Warn("semantic outline generation failed", "error", err)
+					allOutlines = structOutlines
+				} else {
+					allOutlines = semanticOutlines
+					outlineType = "semantic"
+				}
 			}
 		}
 	} else {
@@ -1331,8 +1364,9 @@ func (s *Service) ProcessRetry(ctx context.Context, sourceID string) error {
 	}
 
 	if len(allOutlines) > 0 {
-		mc := s.cfg.LLM.ModelForPurpose("extraction")
-		GenerateOutlineSummaries(ctx, s.llmClient, allOutlines, normalized, mc)
+		if mc, err := s.extractionModel(); err == nil {
+			GenerateOutlineSummaries(ctx, s.llmClient, allOutlines, normalized, mc)
+		}
 	}
 
 	s.store.InsertOutlines(allOutlines)

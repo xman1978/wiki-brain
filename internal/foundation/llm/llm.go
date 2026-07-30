@@ -9,6 +9,7 @@ var (
 	ErrTimeout          = errors.New("llm: timeout")
 	ErrSchemaValidation = errors.New("llm: schema validation failed")
 	ErrModelError       = errors.New("llm: model error")
+	ErrNotConfigured    = errors.New("llm: not configured")
 )
 
 type StreamChunkType int

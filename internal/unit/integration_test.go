@@ -13,6 +13,7 @@ import (
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/llmconfig"
 	"github.com/jxman78/wiki-brain/internal/foundation/queue"
 	"github.com/jxman78/wiki-brain/internal/source"
 )
@@ -36,6 +37,15 @@ func TestIntegration_SingleFile(t *testing.T) {
 	t.Run(filepath.Base(testFile), func(t *testing.T) {
 		runIntegrationFiles(t, cfg, testFiles)
 	})
+}
+
+func mustExtractionModel(t *testing.T, pm llm.PurposeModels) llm.ModelParams {
+	t.Helper()
+	mc, err := pm.ModelForPurpose("extraction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mc
 }
 
 func TestIntegration_RealLLM(t *testing.T) {
@@ -66,7 +76,7 @@ func runIntegrationFiles(t *testing.T, cfg *config.Config, testFiles []string) {
 	unitStore := NewStore(db)
 
 	promptsDir, _ := filepath.Abs("../../config/prompts")
-	realClient, err := llm.NewOpenAIClient(&cfg.LLM, promptsDir)
+	realClient, err := llmconfig.NewRoutingFromBootstrap(cfg.BootstrapLLM, promptsDir)
 	if err != nil {
 		t.Fatalf("create LLM client: %v", err)
 	}
@@ -102,7 +112,7 @@ func runIntegrationFiles(t *testing.T, cfg *config.Config, testFiles []string) {
 		outlines := parseStructuralOutlines(mdLines, sourceID)
 
 		// Refine oversized leaf nodes (same as source module step 6.5)
-		mc := cfg.LLM.ModelForPurpose("extraction")
+		mc := mustExtractionModel(t, realClient)
 		newNodes, err := source.RefineLeafNodes(context.Background(), realClient, sourceID, string(mdBytes), outlines, mc, cfg.Source.SegmentMaxChars)
 		if err != nil {
 			t.Logf("leaf refinement failed (non-fatal): %v", err)

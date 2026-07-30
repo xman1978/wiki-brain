@@ -16,7 +16,7 @@ import (
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/db"
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
-	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/llmconfig"
 )
 
 type testQuestion struct {
@@ -44,7 +44,7 @@ func TestIntegrationRetrieval(t *testing.T) {
 
 	// Create real LLM client
 	promptsDir := filepath.Join(projectRoot, "config", "prompts")
-	llmClient, err := llm.NewOpenAIClient(&cfg.LLM, promptsDir)
+	llmClient, err := llmconfig.NewRoutingFromBootstrap(cfg.BootstrapLLM, promptsDir)
 	if err != nil {
 		t.Fatalf("create llm client: %v", err)
 	}

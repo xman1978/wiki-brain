@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
-	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/llmconfig"
 )
 
 func TestDiagSessionParser(t *testing.T) {
@@ -23,7 +23,7 @@ func TestDiagSessionParser(t *testing.T) {
 		t.Fatal(err)
 	}
 	promptsDir := filepath.Join(projectRoot, "config", "prompts")
-	llmClient, err := llm.NewOpenAIClient(&cfg.LLM, promptsDir)
+	llmClient, err := llmconfig.NewRoutingFromBootstrap(cfg.BootstrapLLM, promptsDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestDiagSessionParser(t *testing.T) {
 	}
 
 	w("Session Parser Diagnostic (subject+intent model)")
-	w("Model: %s", cfg.LLM.Models["default"].Model)
+	w("Model: %s", bootstrapModel(t, cfg))
 	w("")
 
 	for _, c := range cases {

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 )
 
@@ -28,7 +27,7 @@ type outlineSummaryOutput struct {
 
 // GenerateOutlineSummaries 为结构 outline 节点批量生成关键词 summary。
 // 按模型 max_input_tokens 分批，每批一次 LLM 调用。
-func GenerateOutlineSummaries(ctx context.Context, client llm.LLMClient, outlines []Outline, content string, mc config.ModelConfig) {
+func GenerateOutlineSummaries(ctx context.Context, client llm.LLMClient, outlines []Outline, content string, mc llm.ModelParams) {
 	lines := strings.Split(content, "\n")
 
 	// 筛选需要生成 summary 的节点（structural 且 summary 为空）

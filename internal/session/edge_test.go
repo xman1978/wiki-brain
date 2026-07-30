@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
-	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/llmconfig"
 )
 
 func TestEdgeCaseSessionParser(t *testing.T) {
@@ -22,7 +22,7 @@ func TestEdgeCaseSessionParser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	llmClient, err := llm.NewOpenAIClient(&cfg.LLM, filepath.Join(projectRoot, "config", "prompts"))
+	llmClient, err := llmconfig.NewRoutingFromBootstrap(cfg.BootstrapLLM, filepath.Join(projectRoot, "config", "prompts"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestEdgeCaseSessionParser(t *testing.T) {
 	}
 
 	w("Session Edge Case Report")
-	w("Model: %s", cfg.LLM.Models["default"].Model)
+	w("Model: %s", bootstrapModel(t, cfg))
 	w("")
 
 	pass, fail := 0, 0

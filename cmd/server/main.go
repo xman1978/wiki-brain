@@ -22,6 +22,7 @@ import (
 	"github.com/jxman78/wiki-brain/internal/foundation/db"
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/llmconfig"
 	"github.com/jxman78/wiki-brain/internal/foundation/progress"
 	"github.com/jxman78/wiki-brain/internal/foundation/queue"
 	"github.com/jxman78/wiki-brain/internal/retrieval"
@@ -113,11 +114,18 @@ func main() {
 	q := queue.New(bufSize)
 
 	// LLM client
-	llmClient, err := llm.NewOpenAIClient(&cfg.LLM, "config/prompts")
-	if err != nil {
-		slog.Error("初始化 LLM 客户端失败", "error", err)
+	llmRouter := llm.NewRoutingClient("config/prompts")
+	llmConfigStore := llmconfig.NewStore(database)
+	llmConfigSvc := llmconfig.NewService(llmConfigStore, llmRouter)
+	if err := llmConfigSvc.BootstrapFromYAML(cfg.BootstrapLLM); err != nil {
+		slog.Error("LLM 配置引导失败", "error", err)
 		os.Exit(1)
 	}
+	if err := llmConfigSvc.ReloadRouter(context.Background()); err != nil {
+		slog.Error("加载 LLM 配置失败", "error", err)
+		os.Exit(1)
+	}
+	var llmClient llm.LLMClient = llmRouter
 
 	// FileView client
 	fvClient := source.NewFileViewClient(
@@ -142,7 +150,7 @@ func main() {
 	conceptStore := concept.NewStore(database)
 
 	// ── Services ────────────────────────────────────────
-	sourceSvc := source.NewService(sourceStore, fvClient, llmClient, idxMgr.Outlines, q, cfg, baseDir)
+	sourceSvc := source.NewService(sourceStore, fvClient, llmClient, llmRouter, idxMgr.Outlines, q, cfg, baseDir)
 	sourceSvc.SetBroadcaster(broadcaster)
 	sourceSvc.SetUnitIndexes(idxMgr.Units, idxMgr.Points)
 
@@ -281,6 +289,7 @@ func main() {
 	activation.NewHandler(activationSvc).RegisterRoutes(apiMux)
 	wiki.NewHandler(wikiSvc).RegisterRoutes(apiMux)
 	concept.NewHandler(conceptSvc).RegisterRoutes(apiMux)
+	llmconfig.NewHandler(llmConfigSvc).RegisterRoutes(apiMux)
 
 	var rootHandler http.Handler = mux
 	if prefix != "" {

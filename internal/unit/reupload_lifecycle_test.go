@@ -45,17 +45,13 @@ func setupReuploadTest(t *testing.T) (*source.Service, *Service, *llm.FakeClient
 
 	cfg := &config.Config{
 		Source: config.SourceConfig{SegmentMaxChars: 4000, MinSegmentChars: 10},
-		LLM: config.LLMConfig{
-			TimeoutSeconds: 30,
-			MaxRetries:     0,
-			Models: map[string]config.ModelConfig{
-				"default":    {Model: "test", MaxInputTokens: 100000, MaxOutputTokens: 4096},
-				"extraction": {Model: "test", MaxInputTokens: 100000, MaxOutputTokens: 4096},
-			},
-		},
+	}
+	models := llm.StaticPurposeModels{
+		"default":    {Model: "test", MaxInputTokens: 100000, MaxOutputTokens: 4096},
+		"extraction": {Model: "test", MaxInputTokens: 100000, MaxOutputTokens: 4096},
 	}
 
-	sourceSvc := source.NewService(sourceStore, nil, fake, idxMgr.Outlines, q, cfg, tmpDir)
+	sourceSvc := source.NewService(sourceStore, nil, fake, models, idxMgr.Outlines, q, cfg, tmpDir)
 	sourceSvc.SetUnitIndexes(idxMgr.Units, idxMgr.Points)
 
 	unitSvc := NewService(unitStore, sourceStore, &semanticAwareFakeClient{FakeClient: fake}, idxMgr.Units, idxMgr.Points, q, cfg)

@@ -7,12 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 )
 
-func testExtractionMC(maxInput int) config.ModelConfig {
-	return config.ModelConfig{
+func testExtractionMC(maxInput int) llm.ModelParams {
+	return llm.ModelParams{
 		Model:           "test",
 		Temperature:     0,
 		MaxInputTokens:  maxInput,

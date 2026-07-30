@@ -17,7 +17,7 @@ import (
 
 	fdb "github.com/jxman78/wiki-brain/internal/foundation/db"
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
-	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/llmconfig"
 	"github.com/jxman78/wiki-brain/internal/foundation/queue"
 	"github.com/jxman78/wiki-brain/internal/retrieval"
 )
@@ -45,7 +45,7 @@ func TestIntegrationAnswerQuality(t *testing.T) {
 	}
 
 	promptsDir := filepath.Join(projectRoot, "config", "prompts")
-	llmClient, err := llm.NewOpenAIClient(&cfg.LLM, promptsDir)
+	llmClient, err := llmconfig.NewRoutingFromBootstrap(cfg.BootstrapLLM, promptsDir)
 	if err != nil {
 		t.Fatalf("create llm client: %v", err)
 	}

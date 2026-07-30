@@ -12,6 +12,7 @@ import (
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/llmconfig"
 	"github.com/jxman78/wiki-brain/internal/foundation/queue"
 )
 
@@ -21,7 +22,7 @@ func TestE2E_StructuralOutlineWithSummary(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	llmClient, err := llm.NewOpenAIClient(&cfg.LLM, "../../config/prompts")
+	llmClient, err := llmconfig.NewRoutingFromBootstrap(cfg.BootstrapLLM, "../../config/prompts")
 	if err != nil {
 		t.Fatalf("NewOpenAIClient: %v", err)
 	}
@@ -41,7 +42,7 @@ func TestE2E_StructuralOutlineWithSummary(t *testing.T) {
 
 	fv := NewFileViewClient(cfg.FileView.BaseURL, cfg.FileView.PollIntervalMs, cfg.FileView.MaxPollSeconds)
 	q := queue.New(100)
-	svc := NewService(store, fv, llmClient, idxMgr.Outlines, q, cfg, tmpDir)
+	svc := NewService(store, fv, llmClient, llmClient, idxMgr.Outlines, q, cfg, tmpDir)
 
 	// 19803e65.md — 有 H1+H2 结构的文档
 	testFile := "../../test/19803e65.md"

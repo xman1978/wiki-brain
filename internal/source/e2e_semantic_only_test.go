@@ -10,6 +10,7 @@ import (
 
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/llmconfig"
 )
 
 func runSemanticOnlyTest(t *testing.T, fileName string) {
@@ -20,7 +21,7 @@ func runSemanticOnlyTest(t *testing.T, fileName string) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	llmClient, err := llm.NewOpenAIClient(&cfg.LLM, "../../config/prompts")
+	llmClient, err := llmconfig.NewRoutingFromBootstrap(cfg.BootstrapLLM, "../../config/prompts")
 	if err != nil {
 		t.Fatalf("NewOpenAIClient: %v", err)
 	}
@@ -33,7 +34,7 @@ func runSemanticOnlyTest(t *testing.T, fileName string) {
 	lines := strings.Split(content, "\n")
 	totalRunes := RuneCount(content)
 
-	mc := cfg.LLM.ModelForPurpose("extraction")
+	mc := mustExtractionModel(t, llmClient)
 	t.Logf("file=%s lines=%d runes=%d max_input_tokens=%d", fileName, len(lines), totalRunes, mc.MaxInputTokens)
 
 	outlines, err := GenerateSemanticOutlines(

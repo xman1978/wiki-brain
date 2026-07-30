@@ -10,6 +10,7 @@ import (
 
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/llmconfig"
 )
 
 func TestE2E_SemanticWithLeafRefinement(t *testing.T) {
@@ -18,7 +19,7 @@ func TestE2E_SemanticWithLeafRefinement(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	llmClient, err := llm.NewOpenAIClient(&cfg.LLM, "../../config/prompts")
+	llmClient, err := llmconfig.NewRoutingFromBootstrap(cfg.BootstrapLLM, "../../config/prompts")
 	if err != nil {
 		t.Fatalf("NewOpenAIClient: %v", err)
 	}
@@ -30,7 +31,7 @@ func TestE2E_SemanticWithLeafRefinement(t *testing.T) {
 	content := NormalizeMarkdown(string(raw))
 	lines := strings.Split(content, "\n")
 
-	mc := cfg.LLM.ModelForPurpose("extraction")
+	mc := mustExtractionModel(t, llmClient)
 	// 用小的 segment_max_chars 强制触发叶节点细化
 	smallSegmentMax := 2000
 	t.Logf("file=44c2483c.md lines=%d runes=%d segment_max_chars=%d", len(lines), RuneCount(content), smallSegmentMax)

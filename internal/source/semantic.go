@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 )
 
@@ -47,7 +46,7 @@ type localSketchOutput struct {
 // maxInputTokens 决定单次 LLM 调用的输入上限：
 // - 全文 token 数 ≤ 可用 token 数 → 单遍
 // - 超出 → 分窗口提取局部草图 + 全局合并
-func GenerateSemanticOutlines(ctx context.Context, client llm.LLMClient, sourceID, content string, mc config.ModelConfig, segmentMaxChars int) ([]Outline, error) {
+func GenerateSemanticOutlines(ctx context.Context, client llm.LLMClient, sourceID, content string, mc llm.ModelParams, segmentMaxChars int) ([]Outline, error) {
 	lines := strings.Split(content, "\n")
 	totalLines := len(lines)
 	totalRunes := RuneCount(content)
@@ -84,7 +83,7 @@ func GenerateSemanticOutlines(ctx context.Context, client llm.LLMClient, sourceI
 // 的每个区块本身已经 ≤ segmentMaxChars（唯一例外是单个超限的不可分割元素，
 // 按"不可分割元素即使超长也不切"的要求，这个例外就是最终结果，不再进一步
 // 处理）。
-func refineOversizeLeaves(ctx context.Context, client llm.LLMClient, sourceID string, lines []string, outlines []Outline, segmentMaxChars int, mc config.ModelConfig) []Outline {
+func refineOversizeLeaves(ctx context.Context, client llm.LLMClient, sourceID string, lines []string, outlines []Outline, segmentMaxChars int, mc llm.ModelParams) []Outline {
 	var result []Outline
 
 	for i := range outlines {
@@ -140,7 +139,7 @@ type leafTitlesOutput struct {
 //
 // Returns nil if the leaf can't be usefully split by either path (e.g. one
 // giant indivisible table), so the caller keeps the original leaf as-is.
-func splitOversizeLeaf(ctx context.Context, client llm.LLMClient, sourceID string, lines []string, leaf *Outline, segmentMaxChars int, mc config.ModelConfig) []Outline {
+func splitOversizeLeaf(ctx context.Context, client llm.LLMClient, sourceID string, lines []string, leaf *Outline, segmentMaxChars int, mc llm.ModelParams) []Outline {
 	children := proposeSemanticSplit(ctx, client, sourceID, lines, leaf, segmentMaxChars)
 	if len(children) == 0 {
 		children = lengthSplitLeaf(ctx, client, sourceID, lines, leaf, segmentMaxChars, mc)
@@ -297,7 +296,7 @@ func proposeSemanticSplit(ctx context.Context, client llm.LLMClient, sourceID st
 //
 // Returns nil if the content yields a single window (e.g. one giant
 // indivisible table).
-func lengthSplitLeaf(ctx context.Context, client llm.LLMClient, sourceID string, lines []string, leaf *Outline, segmentMaxChars int, mc config.ModelConfig) []Outline {
+func lengthSplitLeaf(ctx context.Context, client llm.LLMClient, sourceID string, lines []string, leaf *Outline, segmentMaxChars int, mc llm.ModelParams) []Outline {
 	nodeLines := lines[leaf.LineStart-1 : leaf.LineEnd]
 	windows := splitWindowsByMarkdown(nodeLines, segmentMaxChars, 0, true)
 	if len(windows) <= 1 {
@@ -327,7 +326,7 @@ func lengthSplitLeaf(ctx context.Context, client llm.LLMClient, sourceID string,
 // omits, or whose whole batch call fails, gets a fallback title derived from
 // its own first line rather than being dropped: a labeling failure degrades
 // to a plain title, it never loses the block.
-func assignLeafTitles(ctx context.Context, client llm.LLMClient, sourceID string, lines []string, children []Outline, mc config.ModelConfig) {
+func assignLeafTitles(ctx context.Context, client llm.LLMClient, sourceID string, lines []string, children []Outline, mc llm.ModelParams) {
 	usableTokens := estimateUsableInputTokens(mc.MaxInputTokens)
 	availableRunes := int(float64(usableTokens) * runesPerToken)
 
@@ -600,7 +599,7 @@ func singlePassOutline(ctx context.Context, client llm.LLMClient, sourceID, cont
 // RefineLeafNodes 细化条件 E（叶节点过长，结构 outline 其余部分正常）触发的
 // 超长叶节点：对每个仍超长的叶节点调用一次 splitOversizeLeaf，不需要像旧版
 // 那样递归清理——splitOversizeLeaf 的输出本身已经满足大小要求。
-func RefineLeafNodes(ctx context.Context, client llm.LLMClient, sourceID, content string, existingOutlines []Outline, mc config.ModelConfig, segmentMaxChars int) ([]Outline, error) {
+func RefineLeafNodes(ctx context.Context, client llm.LLMClient, sourceID, content string, existingOutlines []Outline, mc llm.ModelParams, segmentMaxChars int) ([]Outline, error) {
 	lines := strings.Split(content, "\n")
 	leaves := findLeafNodes(existingOutlines)
 

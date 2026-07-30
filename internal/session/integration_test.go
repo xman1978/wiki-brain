@@ -20,7 +20,7 @@ import (
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	fdb "github.com/jxman78/wiki-brain/internal/foundation/db"
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
-	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/llmconfig"
 	"github.com/jxman78/wiki-brain/internal/foundation/queue"
 	"github.com/jxman78/wiki-brain/internal/retrieval"
 	"github.com/jxman78/wiki-brain/internal/session"
@@ -70,7 +70,7 @@ func TestIntegrationSessionFlow(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	promptsDir := filepath.Join(projectRoot, "config", "prompts")
-	llmClient, err := llm.NewOpenAIClient(&cfg.LLM, promptsDir)
+	llmClient, err := llmconfig.NewRoutingFromBootstrap(cfg.BootstrapLLM, promptsDir)
 	if err != nil {
 		t.Fatalf("create llm client: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestIntegrationSessionFlow(t *testing.T) {
 	divider := strings.Repeat("=", 120)
 	logf("Session Integration Report")
 	logf("Generated: %s", time.Now().Format("2006-01-02 15:04:05"))
-	logf("Model: %s", cfg.LLM.Models["default"].Model)
+	logf("Model: %s", bootstrapModel(t, cfg))
 	logf("%s", divider)
 
 	var allStats []turnStat
@@ -424,4 +424,15 @@ func readContent(path string, lineStart, lineEnd int) string {
 		lineEnd = len(lines)
 	}
 	return strings.Join(lines[lineStart-1:lineEnd], "\n")
+}
+
+func bootstrapModel(t *testing.T, cfg *config.Config) string {
+	t.Helper()
+	if cfg.BootstrapLLM == nil || cfg.BootstrapLLM.Models == nil {
+		return "(none)"
+	}
+	if m, ok := cfg.BootstrapLLM.Models["default"]; ok {
+		return m.Model
+	}
+	return "(none)"
 }

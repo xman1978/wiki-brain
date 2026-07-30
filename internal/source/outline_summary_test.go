@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 )
 
@@ -29,7 +28,7 @@ func TestGenerateOutlineSummaries_SingleBatch(t *testing.T) {
 
 	fake.SetResponse("outline_summary.md", llm.FakeResponse{Output: respJSON})
 
-	mc := config.ModelConfig{
+	mc := llm.ModelParams{
 		Model:           "test",
 		MaxInputTokens:  100000,
 		MaxOutputTokens: 4096,
@@ -75,7 +74,7 @@ func TestGenerateOutlineSummaries_MultipleBatches(t *testing.T) {
 	})
 
 	// Very small max_input_tokens to force multiple batches
-	mc := config.ModelConfig{
+	mc := llm.ModelParams{
 		Model:           "test",
 		MaxInputTokens:  200,
 		MaxOutputTokens: 4096,
@@ -100,7 +99,7 @@ func TestGenerateOutlineSummaries_SkipsExistingSummary(t *testing.T) {
 		outlines[i].Summary.String = "existing keywords"
 	}
 
-	mc := config.ModelConfig{Model: "test", MaxInputTokens: 100000, MaxOutputTokens: 4096}
+	mc := llm.ModelParams{Model: "test", MaxInputTokens: 100000, MaxOutputTokens: 4096}
 	GenerateOutlineSummaries(context.Background(), fake, outlines, content, mc)
 
 	// Should not call LLM since all already have summaries
