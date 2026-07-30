@@ -174,7 +174,7 @@ func (c *OpenAIClient) call(ctx context.Context, prompt *Prompt, mc ModelParams,
 	}
 	messages = append(messages, chatMessage{Role: "user", Content: prompt.User})
 
-	bodyBytes, err := marshalChatRequest(c.provider.Platform, mc, messages, jsonObject, false, c.provider.ResponseFormat)
+	bodyBytes, err := marshalChatRequest(c.provider.Platform, mc, messages, jsonObject, false, c.provider.ResponseFormat, prompt.Schema)
 	if err != nil {
 		return "", fmt.Errorf("llm: marshal request: %w", err)
 	}
@@ -282,7 +282,7 @@ func (c *OpenAIClient) CompleteStreamWithParams(ctx context.Context, promptFile 
 	}
 	messages = append(messages, chatMessage{Role: "user", Content: prompt.User})
 
-	bodyBytes, err := marshalChatRequest(c.provider.Platform, mc, messages, false, true, c.provider.ResponseFormat)
+	bodyBytes, err := marshalChatRequest(c.provider.Platform, mc, messages, false, true, c.provider.ResponseFormat, "")
 	if err != nil {
 		return nil, fmt.Errorf("llm: marshal request: %w", err)
 	}

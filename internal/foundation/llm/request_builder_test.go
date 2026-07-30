@@ -7,7 +7,7 @@ import (
 
 func TestMarshalChatRequest_DashScopeThinking(t *testing.T) {
 	mc := ModelParams{Model: "qwen", Temperature: 0, EnableThink: true}
-	body, err := marshalChatRequest(PlatformDashScope, mc, []chatMessage{{Role: "user", Content: "hi"}}, false, false, "")
+	body, err := marshalChatRequest(PlatformDashScope, mc, []chatMessage{{Role: "user", Content: "hi"}}, false, false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +22,7 @@ func TestMarshalChatRequest_DashScopeThinking(t *testing.T) {
 
 func TestMarshalChatRequest_ThinkingOffOmits(t *testing.T) {
 	mc := ModelParams{Model: "qwen", EnableThink: false}
-	body, err := marshalChatRequest(PlatformDashScope, mc, []chatMessage{{Role: "user", Content: "hi"}}, false, false, "")
+	body, err := marshalChatRequest(PlatformDashScope, mc, []chatMessage{{Role: "user", Content: "hi"}}, false, false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestMarshalChatRequest_ThinkingOffOmits(t *testing.T) {
 
 func TestMarshalChatRequest_OllamaThink(t *testing.T) {
 	mc := ModelParams{Model: "llama", EnableThink: true}
-	body, err := marshalChatRequest(PlatformOllama, mc, []chatMessage{{Role: "user", Content: "hi"}}, false, false, "")
+	body, err := marshalChatRequest(PlatformOllama, mc, []chatMessage{{Role: "user", Content: "hi"}}, false, false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,47 +49,94 @@ func TestMarshalChatRequest_OllamaThink(t *testing.T) {
 func TestMarshalChatRequest_ResponseFormat(t *testing.T) {
 	mc := ModelParams{Model: "m", Temperature: 0}
 	msgs := []chatMessage{{Role: "user", Content: "hi"}}
-	cases := []struct {
-		name           string
-		jsonObject     bool
-		responseFormat string
-		wantType       string // empty => key must be absent
-	}{
-		{"json_mode_object", true, "json_object", "json_object"},
-		{"json_mode_schema", true, "json_schema", "json_schema"},
-		{"json_mode_empty_defaults", true, "", "json_object"},
-		{"non_json_omits", false, "json_schema", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			body, err := marshalChatRequest(PlatformOpenAICompatible, mc, msgs, tc.jsonObject, false, tc.responseFormat)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var m map[string]any
-			if err := json.Unmarshal(body, &m); err != nil {
-				t.Fatal(err)
-			}
-			rf, ok := m["response_format"]
-			if tc.wantType == "" {
-				if ok {
-					t.Fatalf("response_format should be omitted, got %v", rf)
-				}
-				return
-			}
-			if !ok {
-				t.Fatal("expected response_format")
-			}
-			obj, ok := rf.(map[string]any)
-			if !ok {
-				t.Fatalf("response_format type %T", rf)
-			}
-			if obj["type"] != tc.wantType {
-				t.Fatalf("type = %v, want %s", obj["type"], tc.wantType)
-			}
-			if len(obj) != 1 {
-				t.Fatalf("response_format must only contain type, got %v", obj)
-			}
-		})
-	}
+	schema := `{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}`
+
+	t.Run("json_mode_object", func(t *testing.T) {
+		body, err := marshalChatRequest(PlatformOpenAICompatible, mc, msgs, true, false, ResponseFormatJSONObject, schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(body, &m); err != nil {
+			t.Fatal(err)
+		}
+		obj := m["response_format"].(map[string]any)
+		if obj["type"] != ResponseFormatJSONObject {
+			t.Fatalf("type = %v", obj["type"])
+		}
+		if _, ok := obj["json_schema"]; ok {
+			t.Fatal("json_object must not include json_schema payload")
+		}
+		if len(obj) != 1 {
+			t.Fatalf("want only type, got %v", obj)
+		}
+	})
+
+	t.Run("json_mode_schema_with_object", func(t *testing.T) {
+		body, err := marshalChatRequest(PlatformOpenAICompatible, mc, msgs, true, false, ResponseFormatJSONSchema, schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(body, &m); err != nil {
+			t.Fatal(err)
+		}
+		obj := m["response_format"].(map[string]any)
+		if obj["type"] != ResponseFormatJSONSchema {
+			t.Fatalf("type = %v", obj["type"])
+		}
+		js, ok := obj["json_schema"].(map[string]any)
+		if !ok {
+			t.Fatalf("json_schema missing: %v", obj)
+		}
+		if js["name"] != "response" {
+			t.Fatalf("name = %v", js["name"])
+		}
+		if js["strict"] != true {
+			t.Fatalf("strict = %v", js["strict"])
+		}
+		sch, ok := js["schema"].(map[string]any)
+		if !ok || sch["type"] != "object" {
+			t.Fatalf("schema = %v", js["schema"])
+		}
+	})
+
+	t.Run("json_mode_schema_empty_uses_object_fallback", func(t *testing.T) {
+		body, err := marshalChatRequest(PlatformOpenAICompatible, mc, msgs, true, false, ResponseFormatJSONSchema, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		json.Unmarshal(body, &m)
+		js := m["response_format"].(map[string]any)["json_schema"].(map[string]any)
+		sch := js["schema"].(map[string]any)
+		if sch["type"] != "object" {
+			t.Fatalf("fallback schema = %v", sch)
+		}
+	})
+
+	t.Run("json_mode_empty_defaults_object", func(t *testing.T) {
+		body, err := marshalChatRequest(PlatformOpenAICompatible, mc, msgs, true, false, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		json.Unmarshal(body, &m)
+		obj := m["response_format"].(map[string]any)
+		if obj["type"] != ResponseFormatJSONObject || len(obj) != 1 {
+			t.Fatalf("got %v", obj)
+		}
+	})
+
+	t.Run("non_json_omits", func(t *testing.T) {
+		body, err := marshalChatRequest(PlatformOpenAICompatible, mc, msgs, false, false, ResponseFormatJSONSchema, schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		json.Unmarshal(body, &m)
+		if _, ok := m["response_format"]; ok {
+			t.Fatal("response_format should be omitted")
+		}
+	})
 }
