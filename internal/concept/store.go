@@ -21,25 +21,34 @@ func NewStore(db *sql.DB) *Store {
 
 // ConceptInfo is a concepts row's display-relevant subset — the confirm
 // UI's "归入已有概念" picker (docs/impl/v1/kpn.md 步骤 6) needs id/name/domain
-// only, not the full concept row.
+// only, not the full concept row. Description/KPCount are additionally used
+// by the 知识领域 page's concept grid (docs/impl/v1/concept-evolution.md 未定义
+// 这块 UI，字段是纯展示性的附加信息，不影响任何匹配/确认逻辑).
 type ConceptInfo struct {
-	ConceptID string
-	Name      string
-	DomainID  string
+	ConceptID   string
+	Name        string
+	DomainID    string
+	Description string
+	KPCount     int
 }
 
 // ListActiveConcepts returns concepts with merged_into IS NULL (still a
 // valid entry point), optionally filtered to one domain. Used by the
 // concept candidate confirm UI to populate "select an existing concept"
-// pickers, not by any matching/confirm logic itself.
+// pickers, and by the 知识领域 page's concept grid.
 func (s *Store) ListActiveConcepts(domainID string) ([]ConceptInfo, error) {
-	query := `SELECT concept_id, name, domain_id FROM concepts WHERE merged_into IS NULL`
+	query := `
+		SELECT c.concept_id, c.name, c.domain_id, COALESCE(c.description, ''),
+			(SELECT COUNT(*) FROM knowledge_points kp
+			 JOIN knowledge_units ku ON ku.unit_id = kp.unit_id
+			 WHERE ku.concept_id = c.concept_id AND kp.lifecycle = 'current' AND ku.lifecycle = 'current')
+		FROM concepts c WHERE c.merged_into IS NULL`
 	var args []interface{}
 	if domainID != "" {
-		query += ` AND domain_id = ?`
+		query += ` AND c.domain_id = ?`
 		args = append(args, domainID)
 	}
-	query += ` ORDER BY name ASC`
+	query += ` ORDER BY c.name ASC`
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -50,7 +59,7 @@ func (s *Store) ListActiveConcepts(domainID string) ([]ConceptInfo, error) {
 	var results []ConceptInfo
 	for rows.Next() {
 		var c ConceptInfo
-		if err := rows.Scan(&c.ConceptID, &c.Name, &c.DomainID); err != nil {
+		if err := rows.Scan(&c.ConceptID, &c.Name, &c.DomainID, &c.Description, &c.KPCount); err != nil {
 			return nil, fmt.Errorf("concept store: scan concept: %w", err)
 		}
 		results = append(results, c)
@@ -99,6 +108,124 @@ func (s *Store) AvailablePoints(domainID string) ([]AvailablePointOption, error)
 		results = append(results, p)
 	}
 	return results, rows.Err()
+}
+
+// ConceptDetail is a concepts row plus its currently-assigned knowledge
+// points, for the 知识领域 page's concept detail/edit modal (opened by
+// clicking a confirmed concept card — a plain metadata edit, not a
+// concept-evolution candidate, so it has no confirm/reject step of its own).
+type ConceptDetail struct {
+	ConceptID   string
+	DomainID    string
+	Name        string
+	Description string
+	Points      []AvailablePointOption
+}
+
+// GetConceptDetail loads a concept's editable fields plus its current point
+// set (via ku.concept_id — the same join AvailablePoints uses in reverse).
+// Returns nil, nil if the concept doesn't exist or has been merged away
+// (merged_into IS NOT NULL — no longer a valid edit entry point).
+func (s *Store) GetConceptDetail(conceptID string) (*ConceptDetail, error) {
+	var d ConceptDetail
+	err := s.db.QueryRow(`SELECT concept_id, domain_id, name, COALESCE(description, '')
+		FROM concepts WHERE concept_id = ? AND merged_into IS NULL`, conceptID,
+	).Scan(&d.ConceptID, &d.DomainID, &d.Name, &d.Description)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("concept store: get concept detail: %w", err)
+	}
+
+	rows, err := s.db.Query(`
+		SELECT kp.point_id, kp.content, s.source_id, s.title
+		FROM knowledge_points kp
+		JOIN knowledge_units ku ON ku.unit_id = kp.unit_id
+		JOIN sources s ON s.source_id = kp.source_id
+		WHERE ku.concept_id = ? AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
+		ORDER BY kp.created_at DESC`, conceptID)
+	if err != nil {
+		return nil, fmt.Errorf("concept store: get concept detail: points: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p AvailablePointOption
+		if err := rows.Scan(&p.PointID, &p.Content, &p.SourceID, &p.SourceTitle); err != nil {
+			return nil, fmt.Errorf("concept store: get concept detail: scan point: %w", err)
+		}
+		d.Points = append(d.Points, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// UpdateConceptMeta renames/redescribes a concept in place — plain metadata
+// editing, distinct from the concept-evolution candidate flow (no structural
+// change, no confirm step).
+func (s *Store) UpdateConceptMeta(conceptID, name, description string) error {
+	res, err := s.db.Exec(`UPDATE concepts SET name = ?, description = ? WHERE concept_id = ? AND merged_into IS NULL`,
+		name, description, conceptID)
+	if err != nil {
+		return fmt.Errorf("concept store: update concept meta: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("concept store: update concept meta: concept %s not found or merged away", conceptID)
+	}
+	return nil
+}
+
+// AddConceptPoints assigns pointIDs' owning knowledge units onto conceptID,
+// same eligibility ConfirmAssign enforces (concept_id IS NULL — only
+// still-unclassified units are addable; a unit already in a different
+// concept can't be independently reassigned here).
+func (s *Store) AddConceptPoints(conceptID string, pointIDs []string) (migrated int, err error) {
+	if len(pointIDs) == 0 {
+		return 0, nil
+	}
+	q := fmt.Sprintf(`UPDATE knowledge_units SET concept_id = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE concept_id IS NULL AND unit_id IN (
+			SELECT unit_id FROM knowledge_points WHERE point_id IN (%s)
+		)`, placeholders(len(pointIDs)))
+	args := append([]interface{}{conceptID}, toArgs(pointIDs)...)
+	res, err := s.db.Exec(q, args...)
+	if err != nil {
+		return 0, fmt.Errorf("concept store: add concept points: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// RemoveConceptPoint unassigns pointID's owning knowledge unit from
+// conceptID. Note the same granularity constraint the rest of this module
+// has always had: concept_id lives on knowledge_units, not on individual
+// points, so this clears the whole unit — every other point sharing that
+// unit is unclassified too, not just pointID. The handler surfaces this via
+// the returned count so the UI can warn when it's more than 1.
+func (s *Store) RemoveConceptPoint(conceptID, pointID string) (unitPointCount int, err error) {
+	var unitID string
+	if err := s.db.QueryRow(`SELECT unit_id FROM knowledge_points WHERE point_id = ?`, pointID).Scan(&unitID); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, fmt.Errorf("concept store: remove concept point: point %s not found", pointID)
+		}
+		return 0, fmt.Errorf("concept store: remove concept point: %w", err)
+	}
+
+	res, err := s.db.Exec(`UPDATE knowledge_units SET concept_id = NULL, updated_at = CURRENT_TIMESTAMP
+		WHERE concept_id = ? AND unit_id = ?`, conceptID, unitID)
+	if err != nil {
+		return 0, fmt.Errorf("concept store: remove concept point: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return 0, fmt.Errorf("concept store: remove concept point: point %s is not currently assigned to concept %s", pointID, conceptID)
+	}
+
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_points WHERE unit_id = ?`, unitID).Scan(&unitPointCount); err != nil {
+		return 0, fmt.Errorf("concept store: remove concept point: count unit points: %w", err)
+	}
+	return unitPointCount, nil
 }
 
 func placeholders(n int) string {
@@ -221,6 +348,33 @@ func (s *Store) ListCandidatesByKindStatus(kind, status string) ([]CandidateRow,
 		WHERE kind = ? AND status = ? ORDER BY last_signal_at DESC`, kind, status)
 	if err != nil {
 		return nil, fmt.Errorf("concept store: list candidates by kind/status: %w", err)
+	}
+	defer rows.Close()
+
+	var results []CandidateRow
+	for rows.Next() {
+		c, err := scanCandidate(rows)
+		if err != nil {
+			return nil, fmt.Errorf("concept store: scan candidate: %w", err)
+		}
+		results = append(results, *c)
+	}
+	return results, rows.Err()
+}
+
+// ListDomainAddCandidates returns kind=add candidates targeting domainID that
+// are still relevant for the 知识领域 page's concept grid: pending_confirm
+// (needs a decision), rejected/expired (kept visible as a status badge on
+// their card, per the merged-grid design — there is no separate list view
+// anymore). Applied candidates are excluded: those already became real
+// concepts rows, which ListActiveConcepts covers instead.
+func (s *Store) ListDomainAddCandidates(domainID string) ([]CandidateRow, error) {
+	rows, err := s.db.Query(`SELECT `+candidateColumns+` FROM concept_candidates
+		WHERE kind = ? AND domain_id = ? AND status IN (?, ?, ?)
+		ORDER BY updated_at DESC`,
+		KindAdd, domainID, StatusPendingConfirm, StatusRejected, StatusExpired)
+	if err != nil {
+		return nil, fmt.Errorf("concept store: list domain add candidates: %w", err)
 	}
 	defer rows.Close()
 

@@ -20,14 +20,14 @@ func NewStore(db *sql.DB) *Store {
 
 const pageColumns = `page_id, page_type, concept_id, title, content, status,
 	source_point_ids, source_unit_ids, source_link_ids, observed_conditions, aliases, trigger_questions,
-	member_roles, uncovered_points, compiled_from, prompt_version, model_name,
+	member_roles, uncovered_points, compiled_from, summary, aspects, prompt_version, model_name,
 	compiled_at, published_at, created_at, updated_at`
 
 func scanPage(row interface{ Scan(...interface{}) error }) (*Page, error) {
 	var p Page
 	err := row.Scan(&p.PageID, &p.PageType, &p.ConceptID, &p.Title, &p.Content, &p.Status,
 		&p.SourcePointIDs, &p.SourceUnitIDs, &p.SourceLinkIDs, &p.ObservedConditions, &p.Aliases, &p.TriggerQuestions,
-		&p.MemberRoles, &p.UncoveredPoints, &p.CompiledFrom, &p.PromptVersion, &p.ModelName,
+		&p.MemberRoles, &p.UncoveredPoints, &p.CompiledFrom, &p.Summary, &p.Aspects, &p.PromptVersion, &p.ModelName,
 		&p.CompiledAt, &p.PublishedAt, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -57,14 +57,17 @@ func (s *Store) InsertPage(p *Page) error {
 	if p.UncoveredPoints == "" {
 		p.UncoveredPoints = "[]"
 	}
+	if p.Aspects == "" {
+		p.Aspects = "[]"
+	}
 	_, err := s.db.Exec(`INSERT INTO wiki_pages
 		(page_id, page_type, concept_id, title, content, status, source_point_ids, source_unit_ids,
 		 source_link_ids, observed_conditions, aliases, trigger_questions, member_roles, uncovered_points,
-		 compiled_from, prompt_version, model_name, compiled_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		 compiled_from, summary, aspects, prompt_version, model_name, compiled_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		p.PageID, p.PageType, p.ConceptID, p.Title, p.Content, p.Status,
 		p.SourcePointIDs, p.SourceUnitIDs, p.SourceLinkIDs, p.ObservedConditions, p.Aliases, p.TriggerQuestions,
-		p.MemberRoles, p.UncoveredPoints, p.CompiledFrom, p.PromptVersion, p.ModelName)
+		p.MemberRoles, p.UncoveredPoints, p.CompiledFrom, p.Summary, p.Aspects, p.PromptVersion, p.ModelName)
 	if err != nil {
 		return fmt.Errorf("wiki store: insert page: %w", err)
 	}
@@ -98,7 +101,7 @@ func (s *Store) GetActivePageByConceptID(conceptID string) (*Page, error) {
 	return p, nil
 }
 
-func (s *Store) ListPages(status, conceptID string, limit int) ([]Page, error) {
+func (s *Store) ListPages(status, pageType, conceptID string, limit int) ([]Page, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -107,6 +110,10 @@ func (s *Store) ListPages(status, conceptID string, limit int) ([]Page, error) {
 	if status != "" {
 		query += ` AND status = ?`
 		args = append(args, status)
+	}
+	if pageType != "" {
+		query += ` AND page_type = ?`
+		args = append(args, pageType)
 	}
 	if conceptID != "" {
 		query += ` AND concept_id = ?`
@@ -135,7 +142,122 @@ func (s *Store) ListPages(status, conceptID string, limit int) ([]Page, error) {
 // ListPublishedPages is used both by the lifecycle-triggered recompile scan
 // and Study's periodic recompile scan (docs/impl/v1/wiki.md 步骤 5).
 func (s *Store) ListPublishedPages() ([]Page, error) {
-	return s.ListPages(StatusPublished, "", 100000)
+	return s.ListPages(StatusPublished, "", "", 100000)
+}
+
+// TopicPageSummary is a topic-type Page plus its live contains-member count,
+// for the 知识地图 page's left rail (docs/impl/v1/page.md 合并页面 — 主题页
+// 列表不看 status，草稿壳页/已发布/待重编译都要能从这里进入).
+type TopicPageSummary struct {
+	Page
+	MemberCount int
+}
+
+// ListTopicPages returns every topic-type page (any status — including
+// never-compiled candidate shells, content=="") with its current member
+// count, newest first.
+func (s *Store) ListTopicPages() ([]TopicPageSummary, error) {
+	rows, err := s.db.Query(`
+		SELECT ` + prefixedPageColumns("p") + `,
+			(SELECT COUNT(*) FROM wiki_page_relations r WHERE r.from_page_id = p.page_id AND r.relation_type = 'contains')
+		FROM wiki_pages p
+		WHERE p.page_type = 'topic'
+		ORDER BY p.updated_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: list topic pages: %w", err)
+	}
+	defer rows.Close()
+
+	var results []TopicPageSummary
+	for rows.Next() {
+		var t TopicPageSummary
+		if err := rows.Scan(&t.PageID, &t.PageType, &t.ConceptID, &t.Title, &t.Content, &t.Status,
+			&t.SourcePointIDs, &t.SourceUnitIDs, &t.SourceLinkIDs, &t.ObservedConditions, &t.Aliases, &t.TriggerQuestions,
+			&t.MemberRoles, &t.UncoveredPoints, &t.CompiledFrom, &t.Summary, &t.Aspects, &t.PromptVersion, &t.ModelName,
+			&t.CompiledAt, &t.PublishedAt, &t.CreatedAt, &t.UpdatedAt, &t.MemberCount); err != nil {
+			return nil, fmt.Errorf("wiki store: scan topic page: %w", err)
+		}
+		results = append(results, t)
+	}
+	return results, rows.Err()
+}
+
+// ListTopicMemberPages returns the full Page rows of a topic's contains
+// members, in the order ContainsMembers already establishes (insertion
+// order), avoiding an N+1 GetPage per member.
+func (s *Store) ListTopicMemberPages(topicPageID string) ([]Page, error) {
+	memberIDs, err := s.ContainsMembers(topicPageID)
+	if err != nil {
+		return nil, err
+	}
+	return s.getPagesByIDsOrdered(memberIDs)
+}
+
+// ListUnassignedConceptPages returns every concept-type page not currently a
+// member of any topic page (any status) — the 知识地图 rail's pinned "未归入
+// 主题页" bucket.
+func (s *Store) ListUnassignedConceptPages() ([]Page, error) {
+	rows, err := s.db.Query(`
+		SELECT ` + pageColumns + ` FROM wiki_pages
+		WHERE page_type = 'concept'
+		AND NOT EXISTS (
+			SELECT 1 FROM wiki_page_relations r WHERE r.relation_type = 'contains' AND r.to_page_id = wiki_pages.page_id
+		)
+		ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: list unassigned concept pages: %w", err)
+	}
+	defer rows.Close()
+
+	var pages []Page
+	for rows.Next() {
+		p, err := scanPage(rows)
+		if err != nil {
+			return nil, fmt.Errorf("wiki store: scan page: %w", err)
+		}
+		pages = append(pages, *p)
+	}
+	return pages, rows.Err()
+}
+
+func (s *Store) getPagesByIDsOrdered(pageIDs []string) ([]Page, error) {
+	if len(pageIDs) == 0 {
+		return nil, nil
+	}
+	ph, args := buildPlaceholders(pageIDs)
+	rows, err := s.db.Query(`SELECT `+pageColumns+` FROM wiki_pages WHERE page_id IN (`+ph+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: get pages by ids: %w", err)
+	}
+	defer rows.Close()
+
+	byID := make(map[string]Page, len(pageIDs))
+	for rows.Next() {
+		p, err := scanPage(rows)
+		if err != nil {
+			return nil, fmt.Errorf("wiki store: scan page: %w", err)
+		}
+		byID[p.PageID] = *p
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	pages := make([]Page, 0, len(pageIDs))
+	for _, id := range pageIDs {
+		if p, ok := byID[id]; ok {
+			pages = append(pages, p)
+		}
+	}
+	return pages, nil
+}
+
+func prefixedPageColumns(alias string) string {
+	cols := strings.Split(pageColumns, ",")
+	for i, c := range cols {
+		cols[i] = alias + "." + strings.TrimSpace(c)
+	}
+	return strings.Join(cols, ", ")
 }
 
 func (s *Store) UpdatePageStatus(pageID, status string) error {
@@ -158,19 +280,20 @@ func (s *Store) PublishPage(pageID string) error {
 // ReplaceContent overwrites a page's compiled content (used by both the
 // initial compile and recompile — recompile just re-runs this on an existing
 // page_id) and resets it to draft, ready to be published again.
-func (s *Store) ReplaceContent(pageID, title, content, sourcePointIDsJSON, sourceUnitIDsJSON, sourceLinkIDsJSON, observedConditionsJSON, aliasesJSON, triggerQuestionsJSON, uncoveredPointsJSON, compiledFromJSON, promptVersion, modelName string) error {
+func (s *Store) ReplaceContent(pageID, title, content, sourcePointIDsJSON, sourceUnitIDsJSON, sourceLinkIDsJSON, observedConditionsJSON, aliasesJSON, triggerQuestionsJSON, uncoveredPointsJSON, compiledFromJSON, summary, aspectsJSON, promptVersion, modelName string) error {
 	_, err := s.db.Exec(`UPDATE wiki_pages SET
 		title = ?, content = ?, status = ?, source_point_ids = ?, source_unit_ids = ?, source_link_ids = ?, observed_conditions = ?,
 		aliases = ?, trigger_questions = ?, uncovered_points = ?,
-		compiled_from = ?, prompt_version = ?, model_name = ?, compiled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		compiled_from = ?, summary = ?, aspects = ?, prompt_version = ?, model_name = ?, compiled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE page_id = ?`,
 		title, content, StatusDraft, sourcePointIDsJSON, sourceUnitIDsJSON, sourceLinkIDsJSON, observedConditionsJSON,
-		aliasesJSON, triggerQuestionsJSON, uncoveredPointsJSON, compiledFromJSON, promptVersion, modelName, pageID)
+		aliasesJSON, triggerQuestionsJSON, uncoveredPointsJSON, compiledFromJSON, summary, aspectsJSON, promptVersion, modelName, pageID)
 	if err != nil {
 		return fmt.Errorf("wiki store: replace content: %w", err)
 	}
 	return nil
 }
+
 
 func (s *Store) InsertRevision(r *Revision) error {
 	if r.RevisionID == "" {
@@ -182,6 +305,23 @@ func (s *Store) InsertRevision(r *Revision) error {
 		return fmt.Errorf("wiki store: insert revision: %w", err)
 	}
 	return nil
+}
+
+// LatestRevisionID returns the most recently inserted wiki_revisions row for
+// pageID — used by the pre-publish quality gate to know which revision its
+// claim checks and self-check results should be filed under
+// (docs/impl/v1/wiki-generation.md 阶段 E/G). Returns "" with no error if the
+// page has no revisions yet.
+func (s *Store) LatestRevisionID(pageID string) (string, error) {
+	var id string
+	err := s.db.QueryRow(`SELECT revision_id FROM wiki_revisions WHERE page_id = ? ORDER BY created_at DESC LIMIT 1`, pageID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("wiki store: latest revision id: %w", err)
+	}
+	return id, nil
 }
 
 func (s *Store) ListRevisions(pageID string) ([]Revision, error) {
@@ -251,6 +391,83 @@ func (s *Store) ListQualifyingPoints(conceptID string) ([]QualifyingPoint, error
 		points = append(points, p)
 	}
 	return points, rows.Err()
+}
+
+// KPNConnectionCountsByType counts related/contradicts knowledge_point_relations
+// rows among pointIDs — used by computeReadiness (docs/impl/v1/wiki.md 步骤 2
+// "人工指定主题手动编译") for its informational readiness snapshot.
+// Deliberately the same query as study/store.go's KPNConnectionCountsByType
+// (intentionally parallel, not accidentally diverged — wiki can't import
+// study, since study already imports wiki, see docs/impl/v1/wiki.md 步骤 2
+// for why this is a small acceptable duplication rather than a shared helper).
+func (s *Store) KPNConnectionCountsByType(pointIDs []string) (related, contradicts int, err error) {
+	if len(pointIDs) < 2 {
+		return 0, 0, nil
+	}
+	placeholders := ""
+	args := make([]interface{}, 0, len(pointIDs)*2)
+	for i, id := range pointIDs {
+		if i > 0 {
+			placeholders += ","
+		}
+		placeholders += "?"
+		args = append(args, id)
+	}
+	args2 := make([]interface{}, len(args))
+	copy(args2, args)
+	allArgs := append(args, args2...)
+
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT relation_type, COUNT(*) FROM knowledge_point_relations
+		WHERE source_point_id IN (%s) AND target_point_id IN (%s)
+		GROUP BY relation_type`,
+		placeholders, placeholders), allArgs...)
+	if err != nil {
+		return 0, 0, fmt.Errorf("wiki store: kpn connection counts by type: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var relType string
+		var count int
+		if err := rows.Scan(&relType, &count); err != nil {
+			return 0, 0, fmt.Errorf("wiki store: scan kpn connection count: %w", err)
+		}
+		switch relType {
+		case "related":
+			related = count
+		case "contradicts":
+			contradicts = count
+		}
+	}
+	return related, contradicts, rows.Err()
+}
+
+// DaysActive counts distinct days pointIDs were seen in question_kp_cooccurrence
+// — same query as study/store.go's DaysActive, see KPNConnectionCountsByType's
+// doc comment for why this is duplicated rather than shared.
+func (s *Store) DaysActive(pointIDs []string) (int, error) {
+	if len(pointIDs) == 0 {
+		return 0, nil
+	}
+	placeholders := ""
+	args := make([]interface{}, 0, len(pointIDs))
+	for i, id := range pointIDs {
+		if i > 0 {
+			placeholders += ","
+		}
+		placeholders += "?"
+		args = append(args, id)
+	}
+
+	var count int
+	err := s.db.QueryRow(fmt.Sprintf(`
+		SELECT COUNT(DISTINCT DATE(last_seen_at)) FROM question_kp_cooccurrence
+		WHERE point_id IN (%s)`, placeholders), args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("wiki store: days active: %w", err)
+	}
+	return count, nil
 }
 
 // ListUncoveredPoints implements the uncovered_points field
@@ -329,6 +546,84 @@ func (s *Store) RelationsAmong(pointIDs []string) ([]PointRelation, error) {
 		rels = append(rels, r)
 	}
 	return rels, rows.Err()
+}
+
+// CooccurrencePairs implements the aspect-clustering usage-cooccurrence
+// signal (docs/impl/v1/wiki-generation.md 2.1 "使用共现"): for every pair of
+// pointIDs, how many distinct confident questions cited both. Keyed by
+// edgeKeyPair(a,b) so ClusterAspects' edge builder can look it up directly.
+func (s *Store) CooccurrencePairs(pointIDs []string) (map[[2]string]int, error) {
+	out := make(map[[2]string]int)
+	if len(pointIDs) < 2 {
+		return out, nil
+	}
+	ph, args := buildPlaceholders(pointIDs)
+	allArgs := append(append([]interface{}{}, args...), args...)
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT a.point_id, b.point_id, COUNT(DISTINCT a.question_terms) AS n
+		FROM question_kp_cooccurrence a
+		JOIN question_kp_cooccurrence b
+		  ON a.question_terms = b.question_terms AND a.point_id < b.point_id
+		WHERE a.confident_count > 0 AND b.confident_count > 0
+		  AND a.point_id IN (%s) AND b.point_id IN (%s)
+		GROUP BY a.point_id, b.point_id`, ph, ph), allArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: cooccurrence pairs: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var a, b string
+		var n int
+		if err := rows.Scan(&a, &b, &n); err != nil {
+			return nil, fmt.Errorf("wiki store: scan cooccurrence pair: %w", err)
+		}
+		out[edgeKeyPair(a, b)] = n
+	}
+	return out, rows.Err()
+}
+
+// PointIntents implements the aspect-clustering usage-condition signal
+// (docs/impl/v1/wiki-generation.md 2.1 "使用条件"): the set of intent values
+// from each point's verified ActivationLink's observed_conditions (point_id
+// is UNIQUE on activation_links, so at most one link per point, but that link
+// can carry several distinct observed conditions accumulated over usage).
+func (s *Store) PointIntents(pointIDs []string) (map[string][]string, error) {
+	out := make(map[string][]string)
+	if len(pointIDs) == 0 {
+		return out, nil
+	}
+	ph, args := buildPlaceholders(pointIDs)
+	rows, err := s.db.Query(fmt.Sprintf(
+		`SELECT point_id, observed_conditions FROM activation_links WHERE status = 'verified' AND point_id IN (%s)`, ph), args...)
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: point intents: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var pointID, raw string
+		if err := rows.Scan(&pointID, &raw); err != nil {
+			return nil, fmt.Errorf("wiki store: scan point intent: %w", err)
+		}
+		if raw == "" {
+			continue
+		}
+		var conds []activation.ObservedCondition
+		if err := json.Unmarshal([]byte(raw), &conds); err != nil {
+			continue
+		}
+		seen := make(map[string]bool, len(conds))
+		var intents []string
+		for _, c := range conds {
+			if c.Intent != "" && !seen[c.Intent] {
+				seen[c.Intent] = true
+				intents = append(intents, c.Intent)
+			}
+		}
+		out[pointID] = intents
+	}
+	return out, rows.Err()
 }
 
 // VerifiedLinkIDsForPoints returns the activation_links.link_id of every
@@ -495,6 +790,149 @@ func (s *Store) ConfidentQuestionsForPoints(pointIDs []string, limit int) ([]str
 	return out, nil
 }
 
+// ConceptAliases looks up real, already-verified synonym terms for a concept
+// name from subject_synonyms (docs/impl/v1/activation.md "附属表
+// subject_synonyms") — preset aliases and human-confirmed gap-mined ones are
+// both status='active' rows in the same table, so one query covers both.
+// Replaces the old LLM-generated aliases field
+// (docs/design/wiki-compilation.md "触发问法取材真实观测，检索匹配复用四元组"
+// 生成侧 修订: aliases 不应由 LLM 生成，而应直接取自系统里已经存在的真实数据).
+func (s *Store) ConceptAliases(conceptName string) ([]string, error) {
+	if strings.TrimSpace(conceptName) == "" {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`SELECT term FROM subject_synonyms WHERE canonical = ? AND status = 'active' ORDER BY term`, conceptName)
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: concept aliases: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var term string
+		if err := rows.Scan(&term); err != nil {
+			return nil, fmt.Errorf("wiki store: scan concept alias: %w", err)
+		}
+		out = append(out, term)
+	}
+	return out, rows.Err()
+}
+
+// InsertClaimCheck writes one support-verdict row (docs/impl/v1/
+// wiki-generation.md 阶段 E). CheckID is generated if empty.
+func (s *Store) InsertClaimCheck(c *ClaimCheck) error {
+	if c.CheckID == "" {
+		c.CheckID = uuid.New().String()
+	}
+	if c.CitedPointIDs == "" {
+		c.CitedPointIDs = "[]"
+	}
+	_, err := s.db.Exec(`INSERT INTO wiki_claim_checks
+		(check_id, page_id, revision_id, claim_id, claim_text, cited_point_ids, verdict, reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.CheckID, c.PageID, c.RevisionID, c.ClaimID, c.ClaimText, c.CitedPointIDs, c.Verdict, c.Reason)
+	if err != nil {
+		return fmt.Errorf("wiki store: insert claim check: %w", err)
+	}
+	return nil
+}
+
+// UnsupportedClaimCount counts verdict='unsupported' wiki_claim_checks rows
+// for (pageID, revisionID) — the publish-blocking condition
+// (docs/impl/v1/wiki-generation.md 阶段 E "处置").
+func (s *Store) UnsupportedClaimCount(pageID, revisionID string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM wiki_claim_checks WHERE page_id = ? AND revision_id = ? AND verdict = ?`,
+		pageID, revisionID, VerdictUnsupported).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("wiki store: unsupported claim count: %w", err)
+	}
+	return n, nil
+}
+
+// ListClaimChecks returns every claim check for (pageID, revisionID), in
+// insertion order — feeds the page detail view (docs/impl/v1/
+// wiki-generation.md 11 "HTTP API 变更").
+func (s *Store) ListClaimChecks(pageID, revisionID string) ([]ClaimCheck, error) {
+	rows, err := s.db.Query(`SELECT check_id, page_id, revision_id, claim_id, claim_text, cited_point_ids, verdict, reason, created_at
+		FROM wiki_claim_checks WHERE page_id = ? AND revision_id = ? ORDER BY created_at ASC`, pageID, revisionID)
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: list claim checks: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ClaimCheck
+	for rows.Next() {
+		var c ClaimCheck
+		if err := rows.Scan(&c.CheckID, &c.PageID, &c.RevisionID, &c.ClaimID, &c.ClaimText, &c.CitedPointIDs, &c.Verdict, &c.Reason, &c.CreatedAt); err != nil {
+			return nil, fmt.Errorf("wiki store: scan claim check: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// InsertQualityCheck writes one pre-publish self-check result
+// (docs/impl/v1/wiki-generation.md 阶段 G). QCID is generated if empty.
+func (s *Store) InsertQualityCheck(q *QualityCheck) error {
+	if q.QCID == "" {
+		q.QCID = uuid.New().String()
+	}
+	if q.Metrics == "" {
+		q.Metrics = "{}"
+	}
+	_, err := s.db.Exec(`INSERT INTO wiki_quality_checks (qc_id, page_id, revision_id, metrics, passed, forced)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		q.QCID, q.PageID, q.RevisionID, q.Metrics, boolToInt(q.Passed), boolToInt(q.Forced))
+	if err != nil {
+		return fmt.Errorf("wiki store: insert quality check: %w", err)
+	}
+	return nil
+}
+
+// LatestQualityCheck returns the most recent wiki_quality_checks row for
+// (pageID, revisionID), or nil if none exists yet — lets Publish reuse an
+// already-computed self-check instead of replaying LLM calls a second time
+// for the same revision (docs/impl/v1/wiki-generation.md 阶段 G "与 publish
+// 的关系": "同一 revision 重复 publish 不重跑回放").
+func (s *Store) LatestQualityCheck(pageID, revisionID string) (*QualityCheck, error) {
+	var q QualityCheck
+	var passed, forced int
+	err := s.db.QueryRow(`SELECT qc_id, page_id, revision_id, metrics, passed, forced, created_at
+		FROM wiki_quality_checks WHERE page_id = ? AND revision_id = ? ORDER BY created_at DESC LIMIT 1`,
+		pageID, revisionID).Scan(&q.QCID, &q.PageID, &q.RevisionID, &q.Metrics, &passed, &forced, &q.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: latest quality check: %w", err)
+	}
+	q.Passed = passed != 0
+	q.Forced = forced != 0
+	return &q, nil
+}
+
+// MarkQualityCheckForced flips an existing wiki_quality_checks row to
+// passed=1/forced=1 in place — used when a human overrides a failed
+// pre-publish gate (docs/impl/v1/wiki-generation.md 阶段 G). Updating in
+// place (rather than inserting a second row) keeps LatestQualityCheck's
+// "most recent row" lookup unambiguous even when both events land in the
+// same SQLite CURRENT_TIMESTAMP second.
+func (s *Store) MarkQualityCheckForced(qcID string) error {
+	_, err := s.db.Exec(`UPDATE wiki_quality_checks SET passed = 1, forced = 1 WHERE qc_id = ?`, qcID)
+	if err != nil {
+		return fmt.Errorf("wiki store: mark quality check forced: %w", err)
+	}
+	return nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 func (s *Store) GetSourceMarkdownPath(sourceID string) (string, error) {
 	var path string
 	err := s.db.QueryRow(`SELECT markdown_path FROM sources WHERE source_id = ?`, sourceID).Scan(&path)
@@ -597,6 +1035,25 @@ func (s *Store) GetConceptInfo(conceptID string) (name, description, domainID st
 		return "", "", "", fmt.Errorf("wiki store: get concept info: %w", err)
 	}
 	return name, desc.String, dom.String, nil
+}
+
+// GetDomainName resolves a domain_id to its display name for the outline
+// prompt's {{domain_name}} var (docs/impl/v1/wiki-generation.md 3.3). Returns
+// "" (not an error) if domainID is empty or not found — the outline stage
+// treats a missing domain name as cosmetic, not fatal.
+func (s *Store) GetDomainName(domainID string) (string, error) {
+	if domainID == "" {
+		return "", nil
+	}
+	var name string
+	err := s.db.QueryRow(`SELECT name FROM domains WHERE domain_id = ?`, domainID).Scan(&name)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("wiki store: get domain name: %w", err)
+	}
+	return name, nil
 }
 
 // PointDetailsForIDs resolves point_ids to their KP content, owning KU, and

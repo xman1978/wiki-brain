@@ -363,14 +363,36 @@ func linkColumnsPrefixed(alias string) string {
 type ListLinksFilter struct {
 	Status  string
 	PointID string
-	Limit   int
-	Offset  int
+	// PointIDs, when non-empty, fetches every link for a known bounded set
+	// of points in one call — the 知识地图 concept-page modal's per-KP link
+	// badges need this (up to hundreds of KPs per concept), where N calls
+	// with PointID would be prohibitive. Mutually exclusive with PointID in
+	// practice (both may be set, both apply — AND — but callers don't do
+	// that). When set and Limit is 0, defaults to a bulk-sized limit instead
+	// of ListLinks' normal browse-page default (see below).
+	PointIDs []string
+	Limit    int
+	Offset   int
+}
+
+func buildPointIDPlaceholders(ids []string) (string, []interface{}) {
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	return strings.Join(placeholders, ","), args
 }
 
 func (s *Store) ListLinks(f ListLinksFilter) ([]ActivationLinkListRow, error) {
 	limit := f.Limit
 	if limit <= 0 {
-		limit = 50
+		if len(f.PointIDs) > 0 {
+			limit = 5000
+		} else {
+			limit = 50
+		}
 	}
 
 	query := `SELECT ` + linkColumnsPrefixed("al") + `, kp.content AS point_summary, ku.center AS unit_center
@@ -386,6 +408,11 @@ func (s *Store) ListLinks(f ListLinksFilter) ([]ActivationLinkListRow, error) {
 	if f.PointID != "" {
 		query += ` AND al.point_id = ?`
 		args = append(args, f.PointID)
+	}
+	if len(f.PointIDs) > 0 {
+		ph, phArgs := buildPointIDPlaceholders(f.PointIDs)
+		query += ` AND al.point_id IN (` + ph + `)`
+		args = append(args, phArgs...)
 	}
 	query += ` ORDER BY al.created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, f.Offset)

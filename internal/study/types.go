@@ -76,6 +76,40 @@ type Report struct {
 	WikiDraftReflow        []WikiDraftReflowEntry       `json:"wiki_draft_reflow,omitempty"`
 	TopicDecompose         []TopicDecomposeEntry        `json:"topic_decompose,omitempty"`
 	QuestionComplexity     QuestionComplexitySection    `json:"question_complexity"`
+
+	// ConceptSplitSignals is report-only, same tier as
+	// OversizedTopicClusters (docs/impl/v1/wiki-generation.md 2.4, 附
+	// docs/design/wiki-compilation.md "连贯性判断还需要第三层"): a concept
+	// whose qualifying KPs otherwise clear the broad/related-connection
+	// gates but split into several unrelated Louvain communities isn't
+	// "needs more data" — it's "the concept boundary itself may need
+	// splitting". Deliberately not a learning_events row: unlike
+	// topic_decompose_signal (written by trace_write, which always has a
+	// concrete trace_id to attach to), this signal comes from Study's
+	// periodic gate computation with no per-question trace behind it, and
+	// learning_events.trace_id is NOT NULL — so it follows the same
+	// report-only precedent as oversized_topic_cluster instead. Only
+	// accumulates; does not create a concept_candidates(kind=split) row —
+	// split candidates remain deferred to V3 (docs/impl/v1/
+	// concept-evolution.md).
+	ConceptSplitSignals []ConceptSplitSignalEntry `json:"concept_split_signals,omitempty"`
+}
+
+// ConceptSplitSignalEntry is one concept whose qualifying KPs failed the
+// cohesion gate (docs/impl/v1/wiki-generation.md 2.4).
+type ConceptSplitSignalEntry struct {
+	ConceptID    string                    `json:"concept_id"`
+	ConceptName  string                    `json:"concept_name"`
+	Cohesion     float64                   `json:"cohesion"`
+	AspectCount  int                       `json:"aspect_count"`
+	Communities  []ConceptSplitCommunity   `json:"communities"`
+}
+
+// ConceptSplitCommunity is one Louvain community found within a concept's
+// qualifying KPs (docs/impl/v1/wiki-generation.md 2.3 "切面命名").
+type ConceptSplitCommunity struct {
+	PointIDs      []string `json:"point_ids"`
+	SuggestedName string   `json:"suggested_name"`
 }
 
 // OversizedTopicClusterEntry is one connected component that exceeded
@@ -229,6 +263,14 @@ type WikiCandidateStats struct {
 	RelatedConnectionCount     int `json:"related_connection_count"`
 	ContradictsConnectionCount int `json:"contradicts_connection_count"`
 	DaysActive                 int `json:"days_active"`
+	// Cohesion is the ready gate's fifth criterion (docs/design/
+	// wiki-compilation.md "连贯性判断还需要第三层"): the largest Louvain
+	// community's share of qualifying KPs, via graph.LargestShare. A low
+	// value means this concept's qualifying material splits into several
+	// unrelated clusters rather than holding together as one topic — see
+	// ConceptSplitSignalEntry, written instead of (not in addition to) a
+	// "ready" recommendation when this falls below wiki.concept_cohesion_min.
+	Cohesion float64 `json:"cohesion"`
 }
 
 type KnowledgeGapEntry struct {

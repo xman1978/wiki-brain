@@ -207,7 +207,7 @@ func TestIntegration_StudyReportFromSeedDB(t *testing.T) {
 	cfg.CandidateConfidentMin = 1 // lower thresholds for single-pass data
 	cfg.CandidateRatioMin = 0.5
 	cfg.WikiKPMin = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
 
 	result, err := svc.Run()
 	if err != nil {

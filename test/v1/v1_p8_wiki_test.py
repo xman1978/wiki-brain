@@ -43,6 +43,25 @@ P11 的既有拆分方式，本脚本把这两条也拆成两半：
 POST /wiki/compile 完成生成——这是本阶段新增的必过环节（验证两步分析-生成
 链路本身能走通），不是可选项。
 
+生成质量链路新增核验（2026-07-31，docs/impl/v1/wiki-generation.md 简化版）：
+概念页编译内部现在会先把 qualifying KP 按切面（aspect）分组、生成后做支持度
+核验（阶段 E）、发布前跑质量门回放（阶段 G），且 aliases/trigger_questions
+不再由 LLM 生成而是程序查表。这几项都不改变 analyze/compile 的外部契约
+（仍是扁平 claims[]/tensions[]，见上一段），所以不需要新增脚本步骤去驱动，
+但需要新增核验：
+  - GET /wiki/pages/:id 目前只暴露 summary/aspects，不暴露 aliases/
+    trigger_questions/claim_checks/quality_check，这几项本脚本改为直接读库
+    核对（与 v1_common.py 一贯的"API 之外的观察面读表"惯例一致）；
+  - 正文结构：应含"## 摘要"，且"## 展开说明"下按切面出现多个"### "三级标题；
+  - wiki_claim_checks：应有与 claims 数量匹配的核验行，verdict 落在
+    supported/partial/unsupported 三者之一；
+  - 发布前先显式调 POST /wiki/pages/:id/selfcheck 看 metrics/passed，
+    再走 publish——若质量门未过（真实 LLM 生成的页面大概率会过，未过属
+    观测性结果不算失败）用 force=true 覆盖，核对 wiki_quality_checks 最新一行
+    forced=1（这是 force 覆盖唯一的留痕方式：不写 learning_results 事件，
+    不进学习报告——force 是编译/发布链路内部的一次性人工决定，不是 Study 要
+    追踪的学习动作，见 wiki-generation.md 7.4 已按此口径定稿）。
+
 两层架构收紧（2026-07-30，docs/impl/v1/two-tier-task-brief.md）：
 POST /wiki/compile(/analyze) 的 page_type 现在只接受 "concept"——主题页
 （page_type=topic）已收紧为只能由二阶编译端点
@@ -240,6 +259,95 @@ def verify_page_draft(base_url, page_id):
     return page, off_whitelist
 
 
+REQUIRED_SECTIONS = ["## 摘要", "## 稳定结论", "## 展开说明", "## 待验证点", "## 依赖来源"]
+
+
+def verify_generation_quality(conn, page_id, concept_name, claims):
+    """核对 docs/impl/v1/wiki-generation.md 简化版新增的生成质量链路——切面分组
+    正文结构、支持度核验（阶段 E）落库、aliases/trigger_questions 程序化取代
+    LLM 生成。GET /wiki/pages/:id 不暴露 aliases/trigger_questions/claim_checks，
+    这几项直接读库核对（与 v1_common.py 一贯的"API 之外的观察面"惯例一致）。
+    返回一个 dict 供最终 PASS/FAIL 汇总打印，不在内部直接判定失败——多数是
+    观测性核验（真实 LLM 输出的结构完整度不是 0/1 的硬门槛，见方案里"轴一/轴二"
+    的一贯拆法）。"""
+    row = c.db_wiki_page_row(conn, page_id)
+    content = row.get("content") or ""
+
+    missing_sections = [s for s in REQUIRED_SECTIONS if s not in content]
+    expand_idx = content.find("## 展开说明")
+    verify_idx = content.find("## 待验证点")
+    expand_body = content[expand_idx:verify_idx] if expand_idx >= 0 and verify_idx > expand_idx else ""
+    aspect_subheadings = re.findall(r"^### (.+)$", expand_body, re.M)
+
+    aliases = json.loads(row.get("aliases") or "[]")
+    trigger_questions = json.loads(row.get("trigger_questions") or "[]")
+    synonyms = c.db_subject_synonyms(conn, canonical=concept_name)
+    synonym_terms = {s["term"] for s in synonyms}
+    aliases_off_table = [a for a in aliases if a not in synonym_terms]
+
+    real_questions = c.db_trace_questions(conn)
+    fabricated_triggers = [q for q in trigger_questions if q not in real_questions]
+
+    claim_checks = c.db_wiki_claim_checks(conn, page_id)
+    bad_verdicts = [r["verdict"] for r in claim_checks if r["verdict"] not in ("supported", "partial", "unsupported")]
+
+    result = {
+        "missing_sections": missing_sections,
+        "aspect_subheading_count": len(aspect_subheadings),
+        "aspect_subheadings": aspect_subheadings,
+        "aliases": aliases,
+        "aliases_off_subject_synonyms_table": aliases_off_table,
+        "trigger_questions": trigger_questions,
+        "fabricated_trigger_questions": fabricated_triggers,
+        "claim_count": len(claims),
+        "claim_check_count": len(claim_checks),
+        "claim_check_bad_verdicts": bad_verdicts,
+        "summary_nonempty": bool((row.get("summary") or "").strip()),
+        "aspects_field": row.get("aspects"),
+    }
+    print("  生成质量核验:")
+    print(f"    五节标题缺失: {missing_sections or '无（PASS）'}")
+    print(f"    展开说明下切面三级标题数: {len(aspect_subheadings)} {aspect_subheadings}")
+    print(f"    aliases={aliases}，不在 subject_synonyms 表内的: {aliases_off_table or '无（PASS，说明确实查表而非 LLM 现编）'}")
+    print(f"    trigger_questions={trigger_questions}")
+    print(f"    不是真实 traces.question 原文的 trigger_questions（疑似编造）: {fabricated_triggers or '无（PASS）'}")
+    print(f"    wiki_claim_checks: {len(claim_checks)} 行（claims 数 {len(claims)}），非法 verdict: {bad_verdicts or '无（PASS）'}")
+    print(f"    summary 非空: {result['summary_nonempty']}；aspects 字段: {result['aspects_field']}")
+    return result
+
+
+def selfcheck_then_publish(base_url, conn, page_id):
+    """阶段 G 发布前质量门（docs/impl/v1/wiki-generation.md 阶段 G）：先显式
+    调一次 selfcheck 看 metrics/passed（不改页面状态），再走 publish。
+    quality gate 未过时 publish 返回 409（ErrQualityGateFailed），这里改用
+    http_post_json_tolerant 接住而不是让脚本崩溃；未过则带 force=true 重试，
+    核对 wiki_quality_checks 最新一行 forced=1 作为覆盖留痕（当前实现里 force
+    覆盖只做到这一步，没有额外的 learning_results 事件，见脚本头部说明）。
+    真实 LLM 生成的页面大概率直接过闸——未过属观测性结果，不因此判 FAIL。"""
+    sc_resp, sc_status = c.http_post_json(base_url, f"/wiki/pages/{page_id}/selfcheck", {}, timeout=180)
+    print(f"  selfcheck: HTTP {sc_status} passed={sc_resp.get('passed')} metrics={json.dumps(sc_resp.get('metrics'), ensure_ascii=False)}")
+
+    pub_resp, pub_status = c.http_post_json_tolerant(base_url, f"/wiki/pages/{page_id}/publish", {})
+    forced = False
+    if pub_status == 409:
+        blocking = (sc_resp.get("metrics") or {}).get("blocking_reasons")
+        print(f"  publish 首次被质量门拦截（409，观测性结果非失败）: {blocking}；改用 force=true 重试")
+        pub_resp, pub_status = c.http_post_json_tolerant(base_url, f"/wiki/pages/{page_id}/publish", {"force": True})
+        forced = True
+    print(f"  publish: HTTP {pub_status} {pub_resp}")
+
+    qc_rows = c.db_wiki_quality_checks(conn, page_id)
+    latest_qc = qc_rows[0] if qc_rows else None
+    print(f"  wiki_quality_checks 最新一行: passed={latest_qc.get('passed') if latest_qc else None}, "
+          f"forced={latest_qc.get('forced') if latest_qc else None}（期望: 若上面走了 force 重试，这里应为 1）")
+    return {
+        "selfcheck": sc_resp,
+        "publish_status": pub_status,
+        "forced_override_used": forced,
+        "latest_quality_check": latest_qc,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base-url", default="http://localhost:8800")
@@ -331,15 +439,19 @@ def main():
         page, off_whitelist = verify_page_draft(args.base_url, page_id)
         print(f"  draft 页面引用越界白名单的 KP: {off_whitelist}（应为空）")
 
-        pub_resp, pub_status = c.http_post_json(args.base_url, f"/wiki/pages/{page_id}/publish", {})
-        print(f"  publish: HTTP {pub_status} {pub_resp}")
+        concept_name = c.db_concept_name(conn, cid) or ""
+        quality = verify_generation_quality(conn, page_id, concept_name, claims)
+
+        publish_info = selfcheck_then_publish(args.base_url, conn, page_id)
 
         domain_pages[label] = {
             "concept_id": cid,
             "result_id": result["result_id"],
             "page_id": page_id,
             "off_whitelist_citations": list(off_whitelist),
-            "publish_status": pub_status,
+            "generation_quality": quality,
+            "publish_status": publish_info["publish_status"],
+            "forced_override_used": publish_info["forced_override_used"],
         }
 
     print("\n--- 重问主题问题，核对 path_type=wiki 且无激活类事件 ---")
@@ -441,8 +553,17 @@ def main():
             continue
         r = reask_report.get(label) or {}
         wiki_ok = r.get("path_type") == "wiki" and not (r.get("event_types") or [])
+        publish_ok = info.get("publish_status") == 200
+        quality = info.get("generation_quality") or {}
+        structure_ok = not quality.get("missing_sections") and quality.get("aspect_subheading_count", 0) >= 1
+        claim_check_ok = quality.get("claim_check_count", 0) >= quality.get("claim_count", 0) and not quality.get("claim_check_bad_verdicts")
         print(
-            f"{label}: compile+publish 成功, 重问 path_type=wiki={'PASS' if wiki_ok else 'FAIL'}, "
+            f"{label}: compile+publish={'PASS' if publish_ok else 'FAIL'}"
+            f"{'（force 覆盖）' if info.get('forced_override_used') else ''}, "
+            f"五节+切面结构={'PASS' if structure_ok else 'FAIL/观察'}, "
+            f"支持度核验落库={'PASS' if claim_check_ok else 'FAIL/观察'}, "
+            f"aliases/trigger 疑似编造={'PASS（无）' if not (quality.get('aliases_off_subject_synonyms_table') or quality.get('fabricated_trigger_questions')) else 'FAIL/观察'}, "
+            f"重问 path_type=wiki={'PASS' if wiki_ok else 'FAIL'}, "
             f"needs_recompile 触发={'PASS' if recompile_report.get(label, {}).get('status_after_reupload') == 'needs_recompile' else 'FAIL/未测'}"
         )
 

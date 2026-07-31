@@ -92,7 +92,7 @@ Wiki-Brain 是一个知识检索系统，核心流程：文件导入 → KU/KP �
 | 5  | Retrieval  | `docs/impl/v1/retrieval.md` |
 | 6  | Evidence   | `docs/impl/v1/evidence.md`  |
 | 7  | KPN        | `docs/impl/v1/kpn.md`       |
-| 8  | Wiki       | `docs/impl/v1/wiki.md`      |
+| 8  | Wiki       | `docs/impl/v1/wiki.md`（编译链路重构见 `docs/impl/v1/wiki-generation.md`：P0 已实现；P1 切面聚类已实现，写作调用维持两次整页 LLM 调用（analyze+compile，材料按切面分组），**不做**提纲/逐节生成——该架构曾实现过一版又确认收缩，代码收缩指令见 `docs/impl/v1/wiki-generation-simplify-task-brief.md`）      |
 | 9  | Page       | `docs/impl/v1/page.md`      |
 
 总览与范围边界：`docs/impl/v1/readme.md`；设计依据：`docs/design/lifecycle.md`（记忆生命周期）、`docs/design/precompile.md`（ActivationLink）、`docs/design/study.md`（学习机制）、`docs/design/retrieval.md`（分层检索）、`docs/design/wiki-compilation.md`（Wiki 编译）。

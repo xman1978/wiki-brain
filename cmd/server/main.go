@@ -16,6 +16,7 @@ import (
 	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/answer"
 	"github.com/jxman78/wiki-brain/internal/concept"
+	"github.com/jxman78/wiki-brain/internal/domain"
 	"github.com/jxman78/wiki-brain/internal/evidence"
 	"github.com/jxman78/wiki-brain/internal/foundation"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
@@ -148,6 +149,7 @@ func main() {
 	activationStore := activation.NewStore(database)
 	wikiStore := wiki.NewStore(database)
 	conceptStore := concept.NewStore(database)
+	domainStore := domain.NewStore(database)
 
 	// ── Services ────────────────────────────────────────
 	sourceSvc := source.NewService(sourceStore, fvClient, llmClient, llmRouter, idxMgr.Outlines, q, cfg, baseDir)
@@ -173,7 +175,14 @@ func main() {
 	answerSvc := answer.NewService(answerStore, llmClient, q, retrievalSvc)
 	traceSvc := trace.NewService(traceStore, cfg.Study.ConceptNullRatioMin)
 	traceSvc.SetObservedConditionEnricher(activationSvc, cfg.Study.ObservedConditionsMax)
-	studySvc := study.NewService(studyStore, cfg.Study, activationSvc, wikiSvc, cfg.Wiki.RecompileNewKPMin, cfg.Wiki.QualifyingMinDaysActive)
+	studySvc := study.NewService(studyStore, cfg.Study, activationSvc, wikiSvc, cfg.Wiki.RecompileNewKPMin, cfg.Wiki.QualifyingMinDaysActive,
+		study.CohesionConfig{
+			Min:     cfg.Wiki.ConceptCohesionMin,
+			WRel:    cfg.Wiki.AspectWRel,
+			WCooc:   cfg.Wiki.AspectWCooc,
+			CoocSat: cfg.Wiki.AspectCoocSat,
+			Gamma:   cfg.Wiki.AspectGamma,
+		})
 
 	conceptSvc := concept.NewService(conceptStore, concept.Config{
 		AddEventMin:       cfg.Study.ConceptAddEventMin,
@@ -187,6 +196,7 @@ func main() {
 	studySvc.SetConceptSvc(conceptSvc)
 	unitSvc.SetConceptNotifier(conceptSvc)
 	conceptSvc.SetKPNRematchNotifier(unitSvc)
+	domainSvc := domain.NewService(domainStore)
 
 	// ── Queue handlers ──────────────────────────────────
 	q.RegisterHandler(queue.TaskTypeSourceProcess, func(payload interface{}) {
@@ -289,6 +299,7 @@ func main() {
 	activation.NewHandler(activationSvc).RegisterRoutes(apiMux)
 	wiki.NewHandler(wikiSvc).RegisterRoutes(apiMux)
 	concept.NewHandler(conceptSvc).RegisterRoutes(apiMux)
+	domain.NewHandler(domainSvc).RegisterRoutes(apiMux)
 	llmconfig.NewHandler(llmConfigSvc).RegisterRoutes(apiMux)
 
 	var rootHandler http.Handler = mux

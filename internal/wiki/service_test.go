@@ -13,9 +13,28 @@ import (
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 )
 
-func TestCompile_HappyPath(t *testing.T) {
+// TestCompile_LLMCallCountIsFixedAtTwo covers docs/impl/v1/wiki-generation.md
+// 完成标准: "LLM 调用次数固定为 2（analyze + compile），不随切面数量变化" —
+// the reason the outline/section-generation architecture was withdrawn.
+func TestCompile_LLMCallCountIsFixedAtTwo(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
-	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: validCompileOutput})
+
+	_, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	calls := fake.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("expected exactly 2 LLM calls (analyze + compile), got %d: %+v", len(calls), calls)
+	}
+	if calls[0].PromptFile != "wiki_analyze.md" || calls[1].PromptFile != "wiki_compile.md" {
+		t.Errorf("expected calls [wiki_analyze.md, wiki_compile.md], got [%s, %s]", calls[0].PromptFile, calls[1].PromptFile)
+	}
+}
+
+func TestCompile_HappyPath(t *testing.T) {
+	svc, _, _, _ := setupTestService(t)
 
 	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
 	if err != nil {
@@ -24,7 +43,7 @@ func TestCompile_HappyPath(t *testing.T) {
 	if page.Status != StatusDraft {
 		t.Errorf("status = %q, want draft", page.Status)
 	}
-	if page.Title != "Concept One 知识页" {
+	if page.Title != "Concept One" {
 		t.Errorf("title = %q", page.Title)
 	}
 	if !hasRequiredSections(page.Content) {
@@ -44,8 +63,7 @@ func TestCompile_HappyPath(t *testing.T) {
 }
 
 func TestCompile_RecordsVerifiedLinkIDs(t *testing.T) {
-	svc, fake, _, _ := setupTestService(t)
-	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: validCompileOutput})
+	svc, _, _, _ := setupTestService(t)
 
 	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
 	if err != nil {
@@ -70,8 +88,7 @@ func TestCompile_RecordsVerifiedLinkIDs(t *testing.T) {
 }
 
 func TestCompile_DuplicateRejected(t *testing.T) {
-	svc, fake, _, _ := setupTestService(t)
-	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: validCompileOutput})
+	svc, _, _, _ := setupTestService(t)
 
 	if _, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept}); err != nil {
 		t.Fatalf("first compile: %v", err)
@@ -82,23 +99,26 @@ func TestCompile_DuplicateRejected(t *testing.T) {
 	}
 }
 
-func TestCompile_MissingSectionsFailsAfterRetry(t *testing.T) {
+// TestCompile_MissingClaimsFailsAfterRetry covers docs/impl/v1/
+// wiki-generation.md 3.4: an analyze response with zero usable claims is
+// treated as analysis failure, retried once, and fails the compile.
+func TestCompile_MissingClaimsFailsAfterRetry(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
-	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: missingSectionsCompileOutput})
+	fake.SetResponse("wiki_analyze.md", llm.FakeResponse{Output: missingClaimsAnalyzeOutput})
 
 	_, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
 	if err == nil {
-		t.Fatal("expected compile to fail when required sections are missing")
+		t.Fatal("expected compile to fail when analysis produces no usable claims")
 	}
 
-	compileCalls := 0
+	analyzeCalls := 0
 	for _, c := range fake.Calls() {
-		if c.PromptFile == "wiki_compile.md" {
-			compileCalls++
+		if c.PromptFile == "wiki_analyze.md" {
+			analyzeCalls++
 		}
 	}
-	if compileCalls != 2 {
-		t.Errorf("expected 2 wiki_compile.md attempts, got %d", compileCalls)
+	if analyzeCalls != 2 {
+		t.Errorf("expected 2 wiki_analyze.md attempts, got %d", analyzeCalls)
 	}
 
 	page, err := svc.store.GetActivePageByConceptID("c1")
@@ -133,7 +153,6 @@ func TestCompile_HallucinatedCitationsStripped(t *testing.T) {
 
 func TestCompile_NoQualifyingPoints(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
-	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: validCompileOutput})
 
 	_, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "no-such-concept", PageType: PageTypeConcept})
 	if err == nil {
@@ -145,8 +164,7 @@ func TestCompile_NoQualifyingPoints(t *testing.T) {
 }
 
 func TestCompile_ResolvesPendingResult(t *testing.T) {
-	svc, fake, db, _ := setupTestService(t)
-	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: validCompileOutput})
+	svc, _, db, _ := setupTestService(t)
 
 	activationSvc := newTestActivationSvc(db)
 	svc.SetActivationSvc(activationSvc)
@@ -177,7 +195,6 @@ func TestCompile_ResolvesPendingResult(t *testing.T) {
 
 func publishedPage(t *testing.T, svc *Service, fake *llm.FakeClient) *Page {
 	t.Helper()
-	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: validCompileOutput})
 	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
@@ -440,17 +457,18 @@ func TestTryDirectAnswer_NoPublishedPagesNoHit(t *testing.T) {
 	}
 }
 
-const compileOutputWithTriggers = `{
-	"title": "Concept One 知识页",
-	"content": "## 稳定结论\n[p1] 内容一\n\n## 展开说明\n详细说明。\n\n## 待验证点\n暂无。\n\n## 依赖来源\n见引用。\n",
-	"cited_point_ids": ["p1"],
-	"aliases": ["别名一", "C1"],
-	"trigger_questions": ["这是一个专属触发问法"]
-}`
-
+// TestCompile_PersistsAliasesAndTriggerQuestions covers the post-P0 behavior
+// (docs/design/wiki-compilation.md "触发问法取材真实观测，检索匹配复用四元组"
+// 生成侧 修订): aliases/trigger_questions are no longer LLM output — they're
+// a program lookup (subject_synonyms) and a program sample (confident
+// traces), so the LLM response no longer needs to (and no longer can)
+// supply them.
 func TestCompile_PersistsAliasesAndTriggerQuestions(t *testing.T) {
-	svc, fake, _, _ := setupTestService(t)
-	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: compileOutputWithTriggers})
+	svc, _, db, _ := setupTestService(t)
+
+	seedSubjectSynonym(t, db, "别名一", "Concept One")
+	seedSubjectSynonym(t, db, "C1", "Concept One")
+	seedConfidentTrace(t, db, "tr1", "这是一个专属触发问法", []string{"p1"})
 
 	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
 	if err != nil {
@@ -460,8 +478,9 @@ func TestCompile_PersistsAliasesAndTriggerQuestions(t *testing.T) {
 	var aliases, triggers []string
 	json.Unmarshal([]byte(page.Aliases), &aliases)
 	json.Unmarshal([]byte(page.TriggerQuestions), &triggers)
-	if len(aliases) != 2 || aliases[0] != "别名一" {
-		t.Errorf("aliases = %v, want [别名一 C1]", aliases)
+	wantAliases := map[string]bool{"别名一": true, "C1": true}
+	if len(aliases) != 2 || !wantAliases[aliases[0]] || !wantAliases[aliases[1]] {
+		t.Errorf("aliases = %v, want [别名一 C1] in some order", aliases)
 	}
 	if len(triggers) != 1 || triggers[0] != "这是一个专属触发问法" {
 		t.Errorf("trigger_questions = %v, want [这是一个专属触发问法]", triggers)
@@ -469,24 +488,13 @@ func TestCompile_PersistsAliasesAndTriggerQuestions(t *testing.T) {
 }
 
 func TestCompile_TruncatesAliasesAndTriggerQuestionsAtMax(t *testing.T) {
-	svc, fake, _, _ := setupTestService(t)
+	svc, _, db, _ := setupTestService(t)
 
-	var aliases, triggers []string
 	for i := 0; i < 15; i++ {
-		aliases = append(aliases, fmt.Sprintf("alias%d", i))
-		triggers = append(triggers, fmt.Sprintf("trigger%d", i))
+		alias := fmt.Sprintf("alias%d", i)
+		seedSubjectSynonym(t, db, alias, "Concept One")
+		seedConfidentTrace(t, db, fmt.Sprintf("tr%d", i), fmt.Sprintf("trigger question %d", i), []string{"p1"})
 	}
-	out, err := json.Marshal(map[string]interface{}{
-		"title":             "Concept One 知识页",
-		"content":           "## 稳定结论\n[p1] 内容一\n\n## 展开说明\n详细说明。\n\n## 待验证点\n暂无。\n\n## 依赖来源\n见引用。\n",
-		"cited_point_ids":   []string{"p1"},
-		"aliases":           aliases,
-		"trigger_questions": triggers,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: string(out)})
 
 	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
 	if err != nil {
@@ -505,8 +513,8 @@ func TestCompile_TruncatesAliasesAndTriggerQuestionsAtMax(t *testing.T) {
 }
 
 func TestTryDirectAnswer_TriggerQuestionRoutesWithoutContentOverlap(t *testing.T) {
-	svc, fake, _, _ := setupTestService(t)
-	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: compileOutputWithTriggers})
+	svc, fake, db, _ := setupTestService(t)
+	seedConfidentTrace(t, db, "tr-trigger", "这是一个专属触发问法", []string{"p1"})
 	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
@@ -534,7 +542,7 @@ func TestTryDirectAnswer_TriggerQuestionRoutesWithoutContentOverlap(t *testing.T
 
 func TestTryDirectAnswer_ConceptEntryBypassesMinScore(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
-	page := publishedPage(t, svc, fake) // title "Concept One 知识页", concept name "Concept One"
+	page := publishedPage(t, svc, fake) // title == concept name "Concept One"
 
 	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"sufficient":true}`})
 
@@ -555,20 +563,23 @@ func TestTryDirectAnswer_ConceptEntryBypassesMinScore(t *testing.T) {
 
 func TestTryDirectAnswer_TopNRetriesNextCandidateOnInsufficient(t *testing.T) {
 	svc, fake, db, _ := setupTestService(t)
-	publishedPage(t, svc, fake) // c1, title "Concept One 知识页" — first candidate
+	publishedPage(t, svc, fake) // c1, title == concept name "Concept One" — first candidate
 
-	seedConcept(t, db, "c2", "d1", "Concept Two")
+	// Concept page titles are now the concept name verbatim (no LLM-chosen
+	// title — docs/impl/v1/wiki-generation.md 4.1/4.2), so this concept's
+	// name itself is crafted to share the "Concept One" phrase with c1's
+	// title, giving TryDirectAnswer two lexically-matching candidates.
+	seedConcept(t, db, "c2", "d1", "Concept One 相关补充")
 	seedKU(t, db, "u3", "s1", "c2", "Topic C", 1, 5)
 	seedKP(t, db, "p3", "u3", "s1", "point three content")
 	seedLinkCandidate(t, db, "lc3", "t3", "p3", 10)
 	seedVerifiedLink(t, db, "link-p3", "p3")
 
-	fake.SetResponse("wiki_analyze.md", llm.FakeResponse{Output: `{"claims":[{"summary":"内容三的核心结论","cited_point_ids":["p3"]}],"tensions":[]}`})
-	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: `{
-		"title": "Concept One 知识页 相关补充",
-		"content": "## 稳定结论\n[p3] 内容三\n\n## 展开说明\n详细说明。\n\n## 待验证点\n暂无。\n\n## 依赖来源\n见引用。\n",
-		"cited_point_ids": ["p3"]
+	fake.SetResponse("wiki_analyze.md", llm.FakeResponse{Output: `{
+		"claims": [{"summary": "内容三的核心结论", "cited_point_ids": ["p3"], "aspect_id": "misc"}],
+		"tensions": []
 	}`})
+	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: "## 摘要\n\n补充概念的一句话定义。\n\n## 稳定结论\n\n内容三的核心结论 [p3]\n\n## 展开说明\n\n### 核心内容\n\n详细说明三。[p3]\n\n## 待验证点\n\n暂无。\n\n## 依赖来源\n\n见引用。\n"})
 	page2, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c2", PageType: PageTypeConcept})
 	if err != nil {
 		t.Fatalf("compile c2: %v", err)
@@ -577,15 +588,15 @@ func TestTryDirectAnswer_TopNRetriesNextCandidateOnInsufficient(t *testing.T) {
 		t.Fatalf("publish c2: %v", err)
 	}
 
-	// Both pages' titles share "Concept One 知识页", so a question built from
-	// that phrase lexically hits both, giving TryDirectAnswer two candidates
-	// to try in order.
+	// Both pages' titles share "Concept One" (concept-page titles are now the
+	// concept name verbatim), so a question built from that phrase lexically
+	// hits both, giving TryDirectAnswer two candidates to try in order.
 	fake.SetResponseSequence("answer_wiki.md", []llm.FakeResponse{
 		{Output: `{"content":"","citations":[],"sufficient":false}`},
 		{Output: `{"content":"来自第二个候选页的回答","citations":[],"sufficient":true}`},
 	})
 
-	result, ok, _, err := svc.TryDirectAnswer(context.Background(), "Concept One 知识页", "", "", "", "", 0, 3)
+	result, ok, _, err := svc.TryDirectAnswer(context.Background(), "Concept One", "", "", "", "", 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -612,8 +623,7 @@ func TestTryDirectAnswer_TopNRetriesNextCandidateOnInsufficient(t *testing.T) {
 // observed_conditions should be the union of its cited KPs' verified-link
 // conditions.
 func TestCompile_AggregatesObservedConditions(t *testing.T) {
-	svc, fake, db, _ := setupTestService(t)
-	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: validCompileOutput})
+	svc, _, db, _ := setupTestService(t)
 
 	cond1 := activation.NormalizeObservedCondition("database performance tuning", "troubleshoot", "dba", "production", "qterm1", time.Now())
 	cond2 := activation.NormalizeObservedCondition("index rebuild strategy", "howto", "dba", "", "qterm2", time.Now())
@@ -635,30 +645,34 @@ func TestCompile_AggregatesObservedConditions(t *testing.T) {
 }
 
 // TestCompile_TriggerQuestionsUseRealObservedQuestions covers the same design
-// note's generation-side requirement: the generation prompt's
-// observed_questions var should contain real confirmed question text, not be
-// left for the LLM to invent from materials alone.
+// note's generation-side requirement, in its post-P0 form (docs/design/
+// wiki-compilation.md "触发问法取材真实观测，检索匹配复用四元组" 生成侧
+// 修订): trigger_questions is no longer a prompt hint the LLM picks from —
+// it's the stored field, filled directly and only from real confirmed
+// question text. (Superseded the older version of this test, which asserted
+// on a wiki_compile.md prompt var that no longer exists now that the LLM
+// isn't asked to produce trigger_questions at all; see
+// TestCompile_PersistsAliasesAndTriggerQuestions for the full assertion.)
 func TestCompile_TriggerQuestionsUseRealObservedQuestions(t *testing.T) {
-	svc, fake, db, _ := setupTestService(t)
-	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: validCompileOutput})
+	svc, _, db, _ := setupTestService(t)
 
 	seedConfidentTrace(t, db, "tr1", "这个真实问法应该出现在生成素材里", []string{"p1"})
 
-	if _, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept}); err != nil {
+	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
+	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 
-	var compileVars map[string]string
-	for _, c := range fake.Calls() {
-		if c.PromptFile == "wiki_compile.md" {
-			compileVars = c.Vars
+	var triggers []string
+	json.Unmarshal([]byte(page.TriggerQuestions), &triggers)
+	found := false
+	for _, q := range triggers {
+		if q == "这个真实问法应该出现在生成素材里" {
+			found = true
 		}
 	}
-	if compileVars == nil {
-		t.Fatal("no wiki_compile.md call recorded")
-	}
-	if !strings.Contains(compileVars["observed_questions"], "这个真实问法应该出现在生成素材里") {
-		t.Errorf("observed_questions = %q, want it to contain the seeded confident trace question", compileVars["observed_questions"])
+	if !found {
+		t.Errorf("trigger_questions = %v, want it to contain the seeded confident trace question", triggers)
 	}
 }
 
@@ -720,5 +734,153 @@ func TestTryDirectAnswer_FourTupleEmptyQueryNoMatch(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("expected an entirely empty query not to match via the four-tuple entry, even against an empty-fields condition group")
+	}
+}
+
+// TestVerifyClaims_WritesUnsupportedCheck covers docs/impl/v1/
+// wiki-generation.md 阶段 E: the support-verdict check is orthogonal to (and
+// runs in addition to) the existing citation whitelist — a claim's cited
+// point_ids can be entirely in-bounds while the check still flags it
+// unsupported. Off by default (config.WikiConfig zero value); this test
+// opts in explicitly.
+func TestVerifyClaims_WritesUnsupportedCheck(t *testing.T) {
+	svc, fake, _, _ := setupTestService(t)
+	svc.cfg.ClaimVerifyEnabled = true
+	fake.SetResponse("wiki_claim_verify.md", llm.FakeResponse{Output: `{"results":[
+		{"claim_id":"claim-1","verdict":"unsupported","reason":"材料不支持"},
+		{"claim_id":"claim-2","verdict":"supported","reason":"符合材料"}
+	]}`})
+
+	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	revs, err := svc.store.ListRevisions(page.PageID)
+	if err != nil || len(revs) != 1 {
+		t.Fatalf("expected one revision, got %v (err=%v)", revs, err)
+	}
+
+	checks, err := svc.store.ListClaimChecks(page.PageID, revs[0].RevisionID)
+	if err != nil {
+		t.Fatalf("list claim checks: %v", err)
+	}
+	if len(checks) != 2 {
+		t.Fatalf("claim checks = %v, want 2 entries", checks)
+	}
+
+	n, err := svc.store.UnsupportedClaimCount(page.PageID, revs[0].RevisionID)
+	if err != nil {
+		t.Fatalf("unsupported claim count: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("unsupported claim count = %d, want 1", n)
+	}
+}
+
+// TestVerifyClaims_DisabledByDefaultWritesNoChecks asserts the zero-value
+// config (what every other test in this file uses) performs no claim
+// verification at all — this is what keeps all the pre-existing Compile
+// tests unaffected by this feature's addition.
+func TestVerifyClaims_DisabledByDefaultWritesNoChecks(t *testing.T) {
+	svc, _, _, _ := setupTestService(t)
+
+	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	revs, _ := svc.store.ListRevisions(page.PageID)
+	checks, err := svc.store.ListClaimChecks(page.PageID, revs[0].RevisionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(checks) != 0 {
+		t.Errorf("claim checks = %v, want none when claim_verify_enabled is off", checks)
+	}
+}
+
+// compileOutputCitesOnlyP1 — the qualifying set still includes p1/p2, but
+// the generated body only ends up citing p1 (as if the model just didn't
+// use the rest of its material), so source_point_ids ends up half of the
+// qualifying set — exercising the material-usage-rate gate.
+const compileOutputCitesOnlyP1 = "## 摘要\n\nConcept One 是这个领域的核心概念。\n\n" +
+	"## 稳定结论\n\n内容一的核心结论 [p1]\n\n" +
+	"## 展开说明\n\n### 核心内容\n\n详细说明一。[p1]\n\n" +
+	"## 待验证点\n\n暂无。\n\n" +
+	"## 依赖来源\n\n见引用。\n"
+
+// TestPublish_BlockedByFailedSelfcheckThenForceOverrides covers
+// docs/impl/v1/wiki-generation.md 阶段 G: a page that only ends up citing
+// half its qualifying material fails the material-usage/uncited-sentence
+// axes and can't publish without force=true; force=true publishes anyway
+// and flips the stored check to an explicit forced override.
+func TestPublish_BlockedByFailedSelfcheckThenForceOverrides(t *testing.T) {
+	svc, fake, _, _ := setupTestService(t)
+	svc.cfg.SelfcheckEnabled = true
+	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: compileOutputCitesOnlyP1})
+
+	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	if _, err := svc.Publish(page.PageID); !errors.Is(err, ErrQualityGateFailed) {
+		t.Fatalf("publish error = %v, want ErrQualityGateFailed", err)
+	}
+
+	got, err := svc.store.GetPage(page.PageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusDraft {
+		t.Errorf("status = %q after blocked publish, want draft", got.Status)
+	}
+
+	published, err := svc.PublishWithForce(context.Background(), page.PageID, true)
+	if err != nil {
+		t.Fatalf("force publish: %v", err)
+	}
+	if published.Status != StatusPublished {
+		t.Errorf("status = %q after force publish, want published", published.Status)
+	}
+
+	revisionID, err := svc.store.LatestRevisionID(page.PageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	qc, err := svc.store.LatestQualityCheck(page.PageID, revisionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if qc == nil || !qc.Passed || !qc.Forced {
+		t.Errorf("quality check = %+v, want passed=true forced=true after override", qc)
+	}
+}
+
+// TestSelfcheck_CachesPerRevision asserts a second Selfcheck call for the
+// same unchanged revision returns the cached row instead of replaying
+// answer_wiki.md calls again (docs/impl/v1/wiki-generation.md 阶段 G "与
+// publish 的关系": "同一 revision 重复 publish 不重跑回放").
+func TestSelfcheck_CachesPerRevision(t *testing.T) {
+	svc, fake, db, _ := setupTestService(t)
+	svc.cfg.SelfcheckEnabled = true
+	seedConfidentTrace(t, db, "tr1", "问题一", []string{"p1"})
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"sufficient":true}`})
+
+	page, err := svc.Compile(context.Background(), CompileRequest{ConceptID: "c1", PageType: PageTypeConcept})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	if _, err := svc.Selfcheck(context.Background(), page.PageID); err != nil {
+		t.Fatalf("selfcheck: %v", err)
+	}
+	callsAfterFirst := len(fake.Calls())
+
+	if _, err := svc.Selfcheck(context.Background(), page.PageID); err != nil {
+		t.Fatalf("second selfcheck: %v", err)
+	}
+	if len(fake.Calls()) != callsAfterFirst {
+		t.Errorf("second selfcheck made %d new llm calls, want 0 (cached)", len(fake.Calls())-callsAfterFirst)
 	}
 }

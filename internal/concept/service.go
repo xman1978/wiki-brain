@@ -111,7 +111,7 @@ func (s *Service) ProposeAddCandidate(domainID, suggestedName, suggestedDescript
 // later through the normal Confirm path when that saved candidate is
 // opened from the 待确认 list — evidence.origin="manual" is audit-only, no
 // design doc defines a bypass of the human-confirm step.
-func (s *Service) CreateManualCandidate(domainID, suggestedName string, pointIDs []string) (candidateID string, err error) {
+func (s *Service) CreateManualCandidate(domainID, suggestedName, description string, pointIDs []string) (candidateID string, err error) {
 	var domain sql.NullString
 	if domainID != "" {
 		domain = sql.NullString{String: domainID, Valid: true}
@@ -119,7 +119,11 @@ func (s *Service) CreateManualCandidate(domainID, suggestedName string, pointIDs
 	if pointIDs == nil {
 		pointIDs = []string{}
 	}
-	evidence := ContentDrivenEvidence{Origin: "manual"}
+	// Description round-trips through evidence.description like a
+	// content_driven candidate's does — the confirm dialog prefills its
+	// editable description field from there whichever origin, so typing one
+	// on the draft form survives the save-then-reopen-to-confirm gap.
+	evidence := ContentDrivenEvidence{Origin: "manual", Description: description}
 	return s.store.InsertAddCandidate(domain, suggestedName, pointIDs, nil, evidence, "人工手动新增概念候选")
 }
 
@@ -617,6 +621,7 @@ func (s *Service) confirmAdd(c *CandidateRow, req *ConfirmAddRequest) (*ConfirmR
 	if c.DomainID.Valid {
 		domainID = c.DomainID.String
 	}
+	description := ""
 	if req != nil {
 		if req.SuggestedName != "" {
 			name = req.SuggestedName
@@ -624,6 +629,7 @@ func (s *Service) confirmAdd(c *CandidateRow, req *ConfirmAddRequest) (*ConfirmR
 		if req.DomainID != "" {
 			domainID = req.DomainID
 		}
+		description = req.Description
 	}
 	if name == "" {
 		return nil, fmt.Errorf("concept: confirm add requires a suggested_name")
@@ -634,7 +640,7 @@ func (s *Service) confirmAdd(c *CandidateRow, req *ConfirmAddRequest) (*ConfirmR
 
 	conceptID := uuid.New().String()
 	reason := fmt.Sprintf("人工确认新增概念：%s（领域 %s）", name, domainID)
-	migrated, err := s.store.ConfirmAdd(c.CandidateID, conceptID, domainID, name, "", pointIDs, reason)
+	migrated, err := s.store.ConfirmAdd(c.CandidateID, conceptID, domainID, name, description, pointIDs, reason)
 	if err != nil {
 		return nil, err
 	}
@@ -807,6 +813,42 @@ func (s *Service) Restore(candidateID string) error {
 
 func (s *Service) ListCandidates(status string) ([]CandidateRow, error) {
 	return s.store.ListCandidates(status)
+}
+
+// ListDomainCandidateViews is GET /concepts/candidates/by-domain's data
+// source — the 知识领域 page's merged concept grid folds these (pending/
+// rejected/expired kind=add candidates) in alongside real concepts, in place
+// of the old separate status-tabbed list.
+func (s *Service) ListDomainCandidateViews(domainID string) ([]CandidateView, error) {
+	rows, err := s.store.ListDomainAddCandidates(domainID)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]CandidateView, len(rows))
+	for i, r := range rows {
+		views[i] = toView(r)
+	}
+	return views, nil
+}
+
+func (s *Service) GetConceptDetail(conceptID string) (*ConceptDetail, error) {
+	return s.store.GetConceptDetail(conceptID)
+}
+
+func (s *Service) UpdateConceptMeta(conceptID, name, description string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("concept: name is required")
+	}
+	return s.store.UpdateConceptMeta(conceptID, name, strings.TrimSpace(description))
+}
+
+func (s *Service) AddConceptPoints(conceptID string, pointIDs []string) (int, error) {
+	return s.store.AddConceptPoints(conceptID, pointIDs)
+}
+
+func (s *Service) RemoveConceptPoint(conceptID, pointID string) (int, error) {
+	return s.store.RemoveConceptPoint(conceptID, pointID)
 }
 
 func (s *Service) GetCandidate(candidateID string) (*CandidateRow, error) {

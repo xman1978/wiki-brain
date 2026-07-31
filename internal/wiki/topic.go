@@ -167,7 +167,7 @@ func (s *Service) DetectTopicCandidates() ([]TopicCandidate, []OversizedCluster,
 			continue
 		}
 
-		cand, err := s.createTopicShell(members, relatedCount, contradictsCount)
+		cand, err := s.createTopicShell(members, relatedCount, contradictsCount, "[]")
 		if err != nil {
 			slog.Error("wiki: create topic shell failed", "error", err)
 			continue
@@ -178,7 +178,107 @@ func (s *Service) DetectTopicCandidates() ([]TopicCandidate, []OversizedCluster,
 	return candidates, oversized, nil
 }
 
-func (s *Service) createTopicShell(memberPageIDs []string, relatedCount, contradictsCount int) (*TopicCandidate, error) {
+// TopicReadiness is the informational snapshot returned by CreateTopicManual
+// (docs/impl/v1/wiki.md 步骤 8 "人工指定成员手动创建主题页") — same role as
+// the concept-page Analyze readiness: Study's coherence signals are shown,
+// not used as a gate.
+type TopicReadiness struct {
+	MemberCount              int `json:"member_count"`
+	RelatedConnectionCount   int `json:"related_connection_count"`
+	ContradictsConnectionCount int `json:"contradicts_connection_count"`
+	MemberMin                int `json:"member_min"`
+	MemberMax                int `json:"member_max"`
+}
+
+// ErrInvalidTopicMembers is returned by CreateTopicManual when the caller
+// supplied an empty/out-of-range/non-published-concept member set. Handler
+// maps it to HTTP 400.
+type ErrInvalidTopicMembers struct {
+	Message string
+}
+
+func (e *ErrInvalidTopicMembers) Error() string { return e.Message }
+
+// CreateTopicManual implements docs/impl/v1/wiki.md 步骤 8
+// "人工指定成员手动创建主题页": build a draft topic shell + contains from an
+// explicit published-concept-page list, then the caller drives the same
+// topic/analyze → topic/compile path Study candidates use. Study's graph /
+// coherence / uncontained checks are informational only (returned in
+// readiness); the hard gates are member count ∈ [min,max] and every member
+// being a published concept page.
+func (s *Service) CreateTopicManual(memberPageIDs []string) (*TopicCandidate, *TopicReadiness, error) {
+	memberMin := s.cfg.TopicMemberMin
+	if memberMin <= 0 {
+		memberMin = 3
+	}
+	memberMax := s.cfg.TopicMemberMax
+	if memberMax <= 0 {
+		memberMax = 8
+	}
+
+	seen := make(map[string]bool, len(memberPageIDs))
+	var unique []string
+	for _, id := range memberPageIDs {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		unique = append(unique, id)
+	}
+	if len(unique) < memberMin || len(unique) > memberMax {
+		return nil, nil, &ErrInvalidTopicMembers{
+			Message: fmt.Sprintf("wiki: topic members must number between %d and %d (got %d)", memberMin, memberMax, len(unique)),
+		}
+	}
+
+	for _, id := range unique {
+		p, err := s.store.GetPage(id)
+		if err != nil {
+			return nil, nil, fmt.Errorf("wiki: get member page %s: %w", id, err)
+		}
+		if p == nil {
+			return nil, nil, &ErrInvalidTopicMembers{Message: fmt.Sprintf("wiki: member page %s not found", id)}
+		}
+		if p.PageType != PageTypeConcept {
+			return nil, nil, &ErrInvalidTopicMembers{
+				Message: fmt.Sprintf("wiki: member page %s must be page_type=concept (got %s)", id, p.PageType),
+			}
+		}
+		if p.Status != StatusPublished {
+			return nil, nil, &ErrInvalidTopicMembers{
+				Message: fmt.Sprintf("wiki: member page %s must be status=published (got %s)", id, p.Status),
+			}
+		}
+	}
+
+	relatedCount, err := s.store.CountRelationEdgesWithin(unique, RelationRelated)
+	if err != nil {
+		return nil, nil, fmt.Errorf("wiki: count related edges: %w", err)
+	}
+	contradictsCount, err := s.store.CountRelationEdgesWithin(unique, RelationContradicts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("wiki: count contradicts edges: %w", err)
+	}
+
+	cand, err := s.createTopicShell(unique, relatedCount, contradictsCount, marshalIDs([]string{ManualTriggerSentinel}))
+	if err != nil {
+		return nil, nil, err
+	}
+	cand.Reason = fmt.Sprintf("人工指定 %d 个成员，related 边 %d 条，contradicts 边 %d 条",
+		len(unique), relatedCount, contradictsCount)
+
+	readiness := &TopicReadiness{
+		MemberCount:                len(unique),
+		RelatedConnectionCount:     relatedCount,
+		ContradictsConnectionCount: contradictsCount,
+		MemberMin:                  memberMin,
+		MemberMax:                  memberMax,
+	}
+	slog.Info("wiki: created manual topic shell", "page_id", cand.PageID, "members", len(unique))
+	return cand, readiness, nil
+}
+
+func (s *Service) createTopicShell(memberPageIDs []string, relatedCount, contradictsCount int, compiledFrom string) (*TopicCandidate, error) {
 	var titles []string
 	for _, id := range memberPageIDs {
 		p, err := s.store.GetPage(id)
@@ -188,6 +288,9 @@ func (s *Service) createTopicShell(memberPageIDs []string, relatedCount, contrad
 		titles = append(titles, p.Title)
 	}
 	placeholderTitle := strings.Join(titles, " / ")
+	if compiledFrom == "" {
+		compiledFrom = "[]"
+	}
 
 	shell := &Page{
 		PageID:        uuid.New().String(),
@@ -195,6 +298,7 @@ func (s *Service) createTopicShell(memberPageIDs []string, relatedCount, contrad
 		Title:         placeholderTitle,
 		Content:       "",
 		Status:        StatusDraft,
+		CompiledFrom:  compiledFrom,
 		PromptVersion: "",
 		ModelName:     "",
 	}
@@ -467,7 +571,7 @@ func (s *Service) CompileTopic(ctx context.Context, topicPageID string, claims [
 		marshalConditions(compiled.observedConditions),
 		marshalIDs(compiled.aliases), marshalIDs(compiled.triggerQuestions),
 		marshalUncoveredPoints(compiled.uncoveredPoints),
-		"[]", "v1", "reasoning"); err != nil {
+		"[]", "", "[]", "v1", "reasoning"); err != nil {
 		return nil, err
 	}
 	if err := s.store.UpdateMemberRoles(topicPageID, marshalMemberRoles(compiled.memberRoles)); err != nil {
@@ -528,7 +632,7 @@ func (s *Service) RecompileTopic(ctx context.Context, page *Page, reason string,
 		marshalConditions(compiled.observedConditions),
 		marshalIDs(compiled.aliases), marshalIDs(compiled.triggerQuestions),
 		marshalUncoveredPoints(compiled.uncoveredPoints),
-		marshalIDs(compiledFrom), "v1", "reasoning"); err != nil {
+		marshalIDs(compiledFrom), "", "[]", "v1", "reasoning"); err != nil {
 		return nil, err
 	}
 	if err := s.store.UpdateMemberRoles(page.PageID, marshalMemberRoles(compiled.memberRoles)); err != nil {

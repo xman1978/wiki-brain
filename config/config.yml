@@ -39,7 +39,7 @@ server:
   port:            8800                 # 监听端口
   path_prefix:     ""                   # URL 前缀，如 "/api"；为空表示根路径
   read_timeout:    "30s"
-  write_timeout:   "60s"
+  write_timeout:   "300s"  # Wiki 编译 LLM 调用预算从 2 次涨到约 10-12 次（docs/impl/v1/wiki-generation.md 阶段 0），120s 不够用
   max_concurrency: 100                  # 最大并发请求数，0 表示不限制
 
 # 日志配置
@@ -130,6 +130,29 @@ wiki:
   topic_member_min:             3    # 主题页候选的连通分量最小成员数，也是重编译后剩余成员数的下限
   topic_member_max:             8    # 连通分量成员数上限，超限不产候选、只写 oversized_topic_cluster 报告项
   topic_compile_max_chars:      24000 # 二阶编译输入上限（成员页面正文合计）
+
+  # 生成质量（docs/impl/v1/wiki-generation.md 阶段 E/G）
+  claim_verify_enabled:          true
+  selfcheck_enabled:             true
+  selfcheck_replay_n:            5
+  selfcheck_min_sufficient_rate: 0.6
+  selfcheck_min_material_usage:  0.5
+  selfcheck_max_uncited_rate:    0.3
+
+  # 概念内聚度（docs/impl/v1/wiki-generation.md 2.2/2.4，Louvain 社区检测）
+  concept_cohesion_min:          0.5
+  aspect_w_rel:                  1.0
+  aspect_w_cooc:                 1.5
+  aspect_cooc_sat:               3
+  aspect_gamma:                  1.0
+
+  # 完整切面聚类（P1，docs/impl/v1/wiki-generation.md 2.1/2.2）
+  aspect_w_intent:               1.0
+  aspect_w_unit:                 0.5
+  aspect_split_gamma_factor:     1.5
+  aspect_min_size:               2
+  aspect_max_size:               8
+  aspect_questions_max:          5
 
 # Study 模块
 study:

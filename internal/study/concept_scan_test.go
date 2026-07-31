@@ -45,7 +45,7 @@ func seedConceptGapEvent(t *testing.T, db *sql.DB, eventID, traceID string, dire
 func TestRun_WithoutConceptSvc_ReportSectionEmpty(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0)
+	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
 
 	result, err := svc.Run()
 	if err != nil {
@@ -65,7 +65,7 @@ func TestRun_WithoutConceptSvc_ReportSectionEmpty(t *testing.T) {
 func TestRun_WithConceptSvc_ScansAndReportsPendingCandidates(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0)
+	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
 
 	conceptStore := concept.NewStore(db)
 	conceptSvc := concept.NewService(conceptStore, testConceptConfig(), nil)

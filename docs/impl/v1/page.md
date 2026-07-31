@@ -59,25 +59,39 @@ candidate Tab 行内操作：
 
 ### 步骤 3：Wiki 视图
 
-顶部导航新增「Wiki」入口：
+顶部导航新增「Wiki」入口。布局对齐「知识领域」页（左侧 rail + 右侧卡片网格）：
 
 ```text
-候选区（GET /study/results?action=wiki_candidate&status=pending_confirm）：
-  显示 concept 名称、qualifying KP 数、Learning Reason；
-  [编译] → POST /wiki/compile { concept_id, page_type, result_id }
-  （page_type 下拉：topic / concept，默认 concept）；
+目录（GET /wiki/catalog）：
+  左侧按知识领域列出；计数为本领域可见 Wiki 数；
+  右侧展示该领域下全部 Wiki 卡片（含归档），不按候选/正式分区；
+  卡片字段：主题（title）、说明（description）、状态徽标
+    （待编译 / 草稿 / 待重编译 / 已发布 / 已删除）；
+  卡片来源：
+    - 概念页：归入 concept.domain_id；
+    - 主题页：归入全部成员概念所属领域（可多领域重复出现）；
+    - 待编译候选（wiki_candidate pending_confirm，且尚无非 archived 页面）；
+  排序：待编译 → 草稿 → 待重编译 → 已发布 → 已删除，同状态按更新时间倒序。
 
-页面列表（GET /wiki/pages）：
-  按 status 分组（draft / published / needs_recompile / archived）；
-  needs_recompile 页面标黄，显示标记原因；
+点击待编译卡片：
+  [分析] → POST /wiki/compile/analyze → [确认并编译] POST /wiki/compile
+  （page_type=concept；有 result_id 时一并带回）。
 
-页面阅读（GET /wiki/pages/:id）：
-  渲染 Markdown 正文；[point_id] 标注渲染为可点击引用，
-  点击在侧栏显示 KP 内容与所属 KU（GET /points/:id → GET /units/:id）；
+人工指定主题（wiki.md 步骤 2 / 步骤 8 第二条生成口径）：
+  抽屉顶栏 [+ 生成 Wiki] 提供两种模式：
+    概念页：选知识领域 → 搜索/点选单个概念 →
+      POST /wiki/compile/analyze → 确认并编译（无 result_id）；
+    主题页：多选已发布概念页（跨领域可选）→
+      POST /wiki/topics 建壳 → topic/analyze → 确认并编译；
+  不在概念详情页放入口。
+
+点击已生成页面卡片 → GET /wiki/pages/:id 打开详情弹窗：
+  渲染 Markdown 正文；[point_id] 标注可点击引用；
   操作按钮按状态显示：
     draft            → [发布] POST /wiki/pages/:id/publish
     needs_recompile  → [重编译] POST /wiki/pages/:id/recompile
     published        → [归档] POST /wiki/pages/:id/archive
+    主题页壳（content 为空）→ [分析]/[驳回]（topic/analyze|compile|archive）
   修订记录列表，点击查看历史版本
   （GET /wiki/pages/:id/revisions/:rev）。
 ```
@@ -85,12 +99,10 @@ candidate Tab 行内操作：
 两层架构扩展（wiki.md 步骤 7-10）：
 
 ```text
-候选区增加主题页候选（action=topic_page_candidate）：
-  显示壳页标题、成员概念页列表、related / contradicts 边数、Reason；
-  [分析] → POST /wiki/pages/:id/topic/analyze（展示拟采用的论断结构，
-    可微调）→ [编译] POST /wiki/pages/:id/topic/compile；
-  [驳回] → 壳页 archive；
-  成员页面存在非 published 时按钮禁用并列出待处理页面（409 前置检查）；
+主题页壳（Study topic_page_candidate 产物）出现在成员概念所属领域的卡片网格中；
+  详情弹窗内 [分析] → POST /wiki/pages/:id/topic/analyze →
+  [确认并编译] POST /wiki/pages/:id/topic/compile；[驳回] → 壳页 archive；
+  成员页面存在非 published 时编译返回 409 并列出待处理页面；
 
 页面阅读增加关系区（GET /wiki/pages/:id/relations）：
   概念页：related / contradicts 邻居页面链接（附共享 KP 数），
@@ -156,7 +168,7 @@ POST /traces/:id/feedback                    trace.md（MVP 既有）
 GET  /activation-links[/:id]                 activation.md
 POST /activation-links/:id/confirm|reject    activation.md
 GET  /study/results[/:id]                    study.md
-POST /wiki/compile、/wiki/pages/:id/publish|recompile|archive、GET /wiki/pages*   wiki.md
+POST /wiki/compile、/wiki/pages/:id/publish|recompile|archive、GET /wiki/pages*、GET /wiki/catalog   wiki.md / page.md
 POST /sources/:id/reupload、DELETE /sources/:id                             lifecycle.md
 POST /answer 响应 path_type、GET /traces 响应 path_type/activation_link_ids  retrieval.md / trace.md
 ```

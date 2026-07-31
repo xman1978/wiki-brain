@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jxman78/wiki-brain/internal/foundation/graph"
 )
 
 type Store struct {
@@ -789,6 +791,115 @@ func (s *Store) ConceptInfo(conceptID string) (conceptName, domainID string, err
 		return "", "", fmt.Errorf("study store: concept info: %w", err)
 	}
 	return
+}
+
+// PairSignals builds the weighted edge list feeding concept cohesion scoring
+// (docs/impl/v1/wiki-generation.md 2.2/2.4, docs/design/wiki-compilation.md
+// "连贯性判断还需要第三层"): for every unordered pair within pointIDs that
+// has a KPN relation (related or contradicts — both count positive, see
+// docs/impl/v1/wiki-generation.md 2.1 "contradicts 计正权": knowledge points
+// that contradict each other are still talking about the same thing) or
+// shared confident-question co-occurrence, one graph.Edge combining both
+// signals. This intentionally covers only the two signals already queried
+// elsewhere in this file; the fuller edge model (ActivationLink observed
+// intent Jaccard, same-KU bonus) is Wiki's own aspect-clustering input and
+// is deferred alongside outline/section generation
+// (docs/impl/v1/wiki-generation.md 阶段 B) — cohesion scoring only needs a
+// graph meaningfully better than raw connected components, not the
+// full-fidelity model.
+func (s *Store) PairSignals(pointIDs []string, wRel, wCooc float64, coocSat int) ([]graph.Edge, error) {
+	if len(pointIDs) < 2 {
+		return nil, nil
+	}
+	if coocSat <= 0 {
+		coocSat = 3
+	}
+
+	weights := make(map[[2]string]float64)
+	addWeight := func(a, b string, w float64) {
+		if a == b {
+			return
+		}
+		k := edgeKey(a, b)
+		weights[k] += w
+	}
+
+	ph, args := buildPlaceholders(pointIDs)
+	allArgs := append(append([]interface{}{}, args...), args...)
+	relRows, err := s.db.Query(fmt.Sprintf(`
+		SELECT DISTINCT source_point_id, target_point_id FROM knowledge_point_relations
+		WHERE source_point_id IN (%s) AND target_point_id IN (%s)`, ph, ph), allArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("study store: pair signals relations: %w", err)
+	}
+	for relRows.Next() {
+		var a, b string
+		if err := relRows.Scan(&a, &b); err != nil {
+			relRows.Close()
+			return nil, fmt.Errorf("study store: scan pair relation: %w", err)
+		}
+		addWeight(a, b, wRel)
+	}
+	if err := relRows.Err(); err != nil {
+		relRows.Close()
+		return nil, err
+	}
+	relRows.Close()
+
+	coocPh, coocArgs := buildPlaceholders(pointIDs)
+	coocAllArgs := append(append([]interface{}{}, coocArgs...), coocArgs...)
+	coocRows, err := s.db.Query(fmt.Sprintf(`
+		SELECT a.point_id, b.point_id, COUNT(DISTINCT a.question_terms) AS n
+		FROM question_kp_cooccurrence a
+		JOIN question_kp_cooccurrence b
+		  ON a.question_terms = b.question_terms AND a.point_id < b.point_id
+		WHERE a.confident_count > 0 AND b.confident_count > 0
+		  AND a.point_id IN (%s) AND b.point_id IN (%s)
+		GROUP BY a.point_id, b.point_id`, coocPh, coocPh), coocAllArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("study store: pair signals cooccurrence: %w", err)
+	}
+	for coocRows.Next() {
+		var a, b string
+		var n int
+		if err := coocRows.Scan(&a, &b, &n); err != nil {
+			coocRows.Close()
+			return nil, fmt.Errorf("study store: scan pair cooccurrence: %w", err)
+		}
+		ratio := float64(n) / float64(coocSat)
+		if ratio > 1 {
+			ratio = 1
+		}
+		addWeight(a, b, wCooc*ratio)
+	}
+	if err := coocRows.Err(); err != nil {
+		coocRows.Close()
+		return nil, err
+	}
+	coocRows.Close()
+
+	edges := make([]graph.Edge, 0, len(weights))
+	for k, w := range weights {
+		edges = append(edges, graph.Edge{A: k[0], B: k[1], Weight: w})
+	}
+	return edges, nil
+}
+
+func buildPlaceholders(ids []string) (string, []interface{}) {
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	return strings.Join(placeholders, ","), args
+}
+
+func edgeKey(a, b string) [2]string {
+	if a <= b {
+		return [2]string{a, b}
+	}
+	return [2]string{b, a}
 }
 
 // KPNConnectionCountsByType implements docs/design/wiki-compilation.md

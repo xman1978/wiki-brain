@@ -33,7 +33,7 @@ func TestAggregateSynonymCandidates_CreatesPendingConfirmWhenThresholdMet(t *tes
 	db := setupTestDB(t)
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, testConfigWithSynonym(2, 2, false), activationSvc, nil, 0, 0)
+	svc := NewService(store, testConfigWithSynonym(2, 2, false), activationSvc, nil, 0, 0, CohesionConfig{})
 
 	seedAnswer(t, db, "a1")
 	seedAnswer(t, db, "a2")
@@ -77,7 +77,7 @@ func TestAggregateSynonymCandidates_BelowThreshold_NoCandidate(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, testConfigWithSynonym(3, 2, false), activationSvc, nil, 0, 0)
+	svc := NewService(store, testConfigWithSynonym(3, 2, false), activationSvc, nil, 0, 0, CohesionConfig{})
 
 	seedAnswer(t, db, "a1")
 	seedTrace(t, db, "t1", "a1", "q1", "差旅报销", "confident", "short", nil)
@@ -96,7 +96,7 @@ func TestAggregateSynonymCandidates_AutoPromote_CreatesActiveDirectly(t *testing
 	db := setupTestDB(t)
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, testConfigWithSynonym(2, 2, true), activationSvc, nil, 0, 0)
+	svc := NewService(store, testConfigWithSynonym(2, 2, true), activationSvc, nil, 0, 0, CohesionConfig{})
 
 	seedAnswer(t, db, "a1")
 	seedAnswer(t, db, "a2")
@@ -120,7 +120,7 @@ func TestAggregateSynonymCandidates_DedupSkipsExistingTerm(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, testConfigWithSynonym(1, 1, false), activationSvc, nil, 0, 0)
+	svc := NewService(store, testConfigWithSynonym(1, 1, false), activationSvc, nil, 0, 0, CohesionConfig{})
 
 	if _, err := activationSvc.CreateActiveSynonym("", "差旅报销", "招待费报销", nil); err != nil {
 		t.Fatalf("seed existing synonym: %v", err)

@@ -3,6 +3,7 @@ package study
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/activation"
@@ -43,7 +44,7 @@ func testConfig() config.StudyConfig {
 func TestService_Run_Empty(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0)
+	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
 
 	result, err := svc.Run()
 	if err != nil {
@@ -78,7 +79,7 @@ func TestService_Run_WithData(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
 
 	// Seed prerequisite data
 	seedSource(t, db, "src1")
@@ -171,7 +172,7 @@ func TestService_GapThresholdWarning(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.GapHitThreshold = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -203,7 +204,7 @@ func TestService_RecommendationLogic(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -252,7 +253,7 @@ func TestService_WikiCandidates(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.WikiKPMin = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -306,7 +307,7 @@ func TestService_WikiCandidates_ContradictsDominantNotReady(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.WikiKPMin = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -350,6 +351,81 @@ func TestService_WikiCandidates_ContradictsDominantNotReady(t *testing.T) {
 	}
 }
 
+// TestService_WikiCandidates_LowCohesionSplitSignal covers docs/design/
+// wiki-compilation.md "连贯性判断还需要第三层" and docs/impl/v1/
+// wiki-generation.md 2.4: a concept whose qualifying KPs form two internally
+// related but mutually disconnected pairs clears breadth/related/stable yet
+// isn't one coherent topic. With the cohesion gate off (CohesionConfig{},
+// what every other test in this file uses) it must still be recommended
+// ready — this is what keeps the gate's addition from silently changing
+// every pre-existing "ready" expectation. With the gate configured on, the
+// same data must flip to needs_more_data and produce a ConceptSplitSignalEntry
+// naming both clusters.
+func TestService_WikiCandidates_LowCohesionSplitSignal(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	cfg := testConfig()
+	cfg.WikiKPMin = 2
+
+	seedSource(t, db, "src1")
+	seedDomain(t, db, "dom1", "D")
+	seedConcept(t, db, "con1", "dom1", "TestConcept")
+	seedKU(t, db, "ku1", "src1", "con1")
+	seedKP(t, db, "kp1", "ku1", "src1", "c1")
+	seedKP(t, db, "kp2", "ku1", "src1", "c2")
+	seedKP(t, db, "kp3", "ku1", "src1", "c3")
+	seedKP(t, db, "kp4", "ku1", "src1", "c4")
+	// Two internally related pairs, no edge between them at all.
+	seedKPRelation(t, db, "kp1", "kp2")
+	seedKPRelation(t, db, "kp3", "kp4")
+	seedVerifiedActivationLink(t, db, "link1", "kp1")
+	seedVerifiedActivationLink(t, db, "link2", "kp2")
+	seedVerifiedActivationLink(t, db, "link3", "kp3")
+	seedVerifiedActivationLink(t, db, "link4", "kp4")
+	for i, pid := range []string{"kp1", "kp2", "kp3", "kp4"} {
+		if _, err := db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES (?, ?, ?, ?, ?)`,
+			fmt.Sprintf("lc%d", i), fmt.Sprintf("t%d", i), pid, 10, 12); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	svcGateOff := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
+	wikisOff, _, err := svcGateOff.buildWikiCandidatesWithSplitSignals()
+	if err != nil {
+		t.Fatalf("buildWikiCandidatesWithSplitSignals (gate off): %v", err)
+	}
+	if len(wikisOff) != 1 || wikisOff[0].Recommendation != "ready" {
+		t.Fatalf("gate off: expected 1 ready candidate despite low cohesion, got %+v", wikisOff)
+	}
+	if wikisOff[0].Stats.Cohesion >= 0.99 {
+		t.Errorf("gate off: expected Stats.Cohesion to still report the low value (~0.5), got %.2f", wikisOff[0].Stats.Cohesion)
+	}
+
+	svcGateOn := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{Min: 0.6, WRel: 1.0, Gamma: 1.0})
+	wikisOn, splitSignals, err := svcGateOn.buildWikiCandidatesWithSplitSignals()
+	if err != nil {
+		t.Fatalf("buildWikiCandidatesWithSplitSignals (gate on): %v", err)
+	}
+	if len(wikisOn) != 1 || wikisOn[0].Recommendation != "needs_more_data" {
+		t.Fatalf("gate on: expected 1 needs_more_data candidate, got %+v", wikisOn)
+	}
+	if len(splitSignals) != 1 {
+		t.Fatalf("expected 1 concept split signal, got %d", len(splitSignals))
+	}
+	sig := splitSignals[0]
+	if sig.ConceptID != "con1" {
+		t.Errorf("split signal concept_id = %q, want con1", sig.ConceptID)
+	}
+	if sig.AspectCount != 2 || len(sig.Communities) != 2 {
+		t.Fatalf("expected 2 communities, got %+v", sig.Communities)
+	}
+	for _, c := range sig.Communities {
+		if len(c.PointIDs) != 2 {
+			t.Errorf("community %+v: expected 2 members, got %d", c, len(c.PointIDs))
+		}
+	}
+}
+
 // TestService_FlagWikiCandidates_RecordsEventIDs covers a P10 audit gap
 // found in V1 testing (见 memory v1-p4-p10-test-findings): every Wiki action's
 // learning_result must carry object_id/reason/event_ids, but flagWikiCandidates
@@ -360,7 +436,7 @@ func TestService_FlagWikiCandidates_RecordsEventIDs(t *testing.T) {
 	cfg := testConfig()
 	cfg.WikiKPMin = 2
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0)
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{})
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")

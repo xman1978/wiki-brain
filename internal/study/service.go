@@ -10,9 +10,29 @@ import (
 	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/concept"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
+	"github.com/jxman78/wiki-brain/internal/foundation/graph"
 	"github.com/jxman78/wiki-brain/internal/retrieval"
 	"github.com/jxman78/wiki-brain/internal/wiki"
 )
+
+// CohesionConfig bundles the concept-cohesion gate's tunables
+// (docs/impl/v1/wiki-generation.md 2.2/2.4, docs/design/wiki-compilation.md
+// "连贯性判断还需要第三层") — passed as one struct rather than five more
+// positional ints/floats on NewService. Zero value (Min<=0) leaves the gate
+// inert: Stats.Cohesion is still computed and reported, but it never turns
+// an otherwise-ready candidate into a split signal or blocks recommendation
+// — this is what every existing test's `CohesionConfig{}` call gets, so
+// pre-existing "ready" expectations built on synthetic data that doesn't
+// happen to be densely connected are unaffected. Production wiring
+// (cmd/server/main.go) passes real wiki.* config values, turning the gate
+// on.
+type CohesionConfig struct {
+	Min     float64
+	WRel    float64
+	WCooc   float64
+	CoocSat int
+	Gamma   float64
+}
 
 type Service struct {
 	store                   *Store
@@ -21,6 +41,7 @@ type Service struct {
 	wikiSvc                 *wiki.Service
 	recompileNewKPMin       int
 	qualifyingMinDaysActive int
+	cohesion                CohesionConfig
 	conceptSvc              *concept.Service
 	// lastRelationScanAt is the in-process watermark for
 	// recomputePageRelations (docs/impl/v1/wiki.md 步骤 7b) — zero value on
@@ -28,7 +49,7 @@ type Service struct {
 	lastRelationScanAt time.Time
 }
 
-func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.Service, wikiSvc *wiki.Service, recompileNewKPMin, qualifyingMinDaysActive int) *Service {
+func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.Service, wikiSvc *wiki.Service, recompileNewKPMin, qualifyingMinDaysActive int, cohesion CohesionConfig) *Service {
 	return &Service{
 		store:                   store,
 		cfg:                     cfg,
@@ -36,6 +57,7 @@ func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.
 		wikiSvc:                 wikiSvc,
 		recompileNewKPMin:       recompileNewKPMin,
 		qualifyingMinDaysActive: qualifyingMinDaysActive,
+		cohesion:                cohesion,
 	}
 }
 
@@ -183,7 +205,7 @@ func (s *Service) generateReport(actions LearningActionsSummary, conceptScan con
 		return nil, err
 	}
 
-	wikiCandidates, err := s.buildWikiCandidates()
+	wikiCandidates, conceptSplitSignals, err := s.buildWikiCandidatesWithSplitSignals()
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +263,7 @@ func (s *Service) generateReport(actions LearningActionsSummary, conceptScan con
 		WikiDraftReflow:          wikiDraftReflow,
 		TopicDecompose:           topicDecompose,
 		QuestionComplexity:       questionComplexity,
+		ConceptSplitSignals:      conceptSplitSignals,
 	}
 
 	content, err := json.Marshal(report)
@@ -360,12 +383,24 @@ func calcShortPathRate(pointID string, traces []TracePathRow) float64 {
 }
 
 func (s *Service) buildWikiCandidates() ([]WikiCandidate, error) {
+	candidates, _, err := s.buildWikiCandidatesWithSplitSignals()
+	return candidates, err
+}
+
+// buildWikiCandidatesWithSplitSignals is buildWikiCandidates plus the
+// cohesion gate's report-only byproduct (docs/impl/v1/wiki-generation.md
+// 2.4, docs/design/wiki-compilation.md "连贯性判断还需要第三层"): concepts
+// that clear every other ready criterion but whose qualifying KPs split into
+// several unrelated Louvain communities get a ConceptSplitSignalEntry
+// instead of (not in addition to) a "ready" recommendation.
+func (s *Service) buildWikiCandidatesWithSplitSignals() ([]WikiCandidate, []ConceptSplitSignalEntry, error) {
 	qualifyingByConceptMap, err := s.store.QualifyingKPsByConceptFromCandidates()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var results []WikiCandidate
+	var splitSignals []ConceptSplitSignalEntry
 	for conceptID, kps := range qualifyingByConceptMap {
 		conceptName, domainID, err := s.store.ConceptInfo(conceptID)
 		if err != nil {
@@ -393,27 +428,69 @@ func (s *Service) buildWikiCandidates() ([]WikiCandidate, error) {
 
 		related, contradicts, err := s.store.KPNConnectionCountsByType(pointIDs)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		daysActive, err := s.store.DaysActive(pointIDs)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+
+		// cohesion (docs/design/wiki-compilation.md "连贯性判断还需要第三层",
+		// docs/impl/v1/wiki-generation.md 2.2/2.4): the largest Louvain
+		// community's share of qualifying KPs. Always computed (it's cheap
+		// and informational on its own via Stats.Cohesion); only gates
+		// recommendation when s.cohesion.Min > 0 is configured — see
+		// CohesionConfig's doc comment for why the zero value must stay
+		// inert.
+		cohesion := 1.0
+		var communities [][]string
+		if len(pointIDs) > 0 {
+			edges, perr := s.store.PairSignals(pointIDs, s.cohesion.WRel, s.cohesion.WCooc, s.cohesion.CoocSat)
+			if perr != nil {
+				slog.Warn("study: pair signals for cohesion failed, treating concept as fully cohesive", "concept_id", conceptID, "error", perr)
+			} else {
+				communities = graph.Communities(pointIDs, edges, s.cohesion.Gamma)
+				cohesion = graph.LargestShare(communities)
+			}
 		}
 
 		// docs/design/wiki-compilation.md "ActivationLink 回答'这条管不管用'，
 		// Wiki 编译回答'这个主题够不够格立传'": 广度（qualifying_kp_count）、
-		// 连贯（related 连接存在且 contradicts 不反客为主）、稳定
-		// （daysActive 衡量的是跨时间跨度的持久性，不是问询频率）三者同时
-		// 满足才 ready；可靠性已经由 qualifying KP 定义里的 verified 状态
-		// 单独回答，这里不再重复检查。
-		recommendation := "needs_more_data"
-		if len(kps) >= s.cfg.WikiKPMin && related >= 1 && contradicts < related && daysActive >= s.qualifyingMinDaysActive {
-			recommendation = "ready"
-		}
+		// 连贯（related 连接存在、contradicts 不反客为主、且这批 KP 是否围绕
+		// 一个共同中心而非几个互不相干的簇）、稳定（daysActive 衡量的是跨
+		// 时间跨度的持久性，不是问询频率）三者同时满足才 ready；可靠性已经
+		// 由 qualifying KP 定义里的 verified 状态单独回答，这里不再重复检查。
+		breadthOK := len(kps) >= s.cfg.WikiKPMin
+		relatedOK := related >= 1 && contradicts < related
+		stableOK := daysActive >= s.qualifyingMinDaysActive
+		cohesionOK := s.cohesion.Min <= 0 || cohesion >= s.cohesion.Min
 
-		reason := fmt.Sprintf("%d 个 KP 达到 Wiki 阈值，KPN 连接 related=%d/contradicts=%d，活跃天数 %d 天",
-			len(kps), related, contradicts, daysActive)
+		recommendation := "needs_more_data"
+		reason := fmt.Sprintf("%d 个 KP 达到 Wiki 阈值，KPN 连接 related=%d/contradicts=%d，活跃天数 %d 天，内聚度 %.2f",
+			len(kps), related, contradicts, daysActive, cohesion)
+		if breadthOK && relatedOK && stableOK && cohesionOK {
+			recommendation = "ready"
+		} else if breadthOK && relatedOK && stableOK && !cohesionOK {
+			// Every other gate cleared — this isn't "needs more data", it's
+			// "this concept's qualifying material may not be one topic".
+			var entryCommunities []ConceptSplitCommunity
+			for _, c := range communities {
+				entryCommunities = append(entryCommunities, ConceptSplitCommunity{
+					PointIDs:      c,
+					SuggestedName: suggestAspectName(c, kps),
+				})
+			}
+			splitSignals = append(splitSignals, ConceptSplitSignalEntry{
+				ConceptID:   conceptID,
+				ConceptName: conceptName,
+				Cohesion:    cohesion,
+				AspectCount: len(communities),
+				Communities: entryCommunities,
+			})
+			reason = fmt.Sprintf("%s（内聚度 %.2f 低于门槛 %.2f，material 疑似分裂为 %d 个互不相干的簇，见 concept_split_signals）",
+				reason, cohesion, s.cohesion.Min, len(communities))
+		}
 
 		results = append(results, WikiCandidate{
 			ConceptID:          conceptID,
@@ -428,12 +505,44 @@ func (s *Service) buildWikiCandidates() ([]WikiCandidate, error) {
 				RelatedConnectionCount:     related,
 				ContradictsConnectionCount: contradicts,
 				DaysActive:                 daysActive,
+				Cohesion:                   cohesion,
 			},
 			Recommendation: recommendation,
 			Reason:         reason,
 		})
 	}
-	return results, nil
+	return results, splitSignals, nil
+}
+
+// suggestAspectName gives a Louvain community a display label for
+// ConceptSplitSignalEntry — the highest-confident_count KP's summary in that
+// community, truncated. Not the full aspect-naming scheme of
+// docs/impl/v1/wiki-generation.md 2.3 (which also factors in ActivationLink
+// intent and is part of the deferred outline-generation rewrite); this is
+// just enough for a human skimming the report to recognize which cluster is
+// which.
+func suggestAspectName(pointIDs []string, kps []QualifyingKP) string {
+	bySummary := make(map[string]string, len(kps))
+	byConfidence := make(map[string]int, len(kps))
+	for _, kp := range kps {
+		bySummary[kp.PointID] = kp.PointSummary
+		byConfidence[kp.PointID] = kp.ConfidentCount
+	}
+	best := ""
+	bestScore := -1
+	for _, pid := range pointIDs {
+		if byConfidence[pid] > bestScore {
+			bestScore = byConfidence[pid]
+			best = bySummary[pid]
+		}
+	}
+	if len(best) > 24 {
+		runes := []rune(best)
+		if len(runes) > 24 {
+			best = string(runes[:24]) + "…"
+		}
+	}
+	return best
 }
 
 // buildConceptCandidatesSection folds this cycle's concept.Scan() counts and

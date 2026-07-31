@@ -61,7 +61,7 @@ func setupStudyWithActivation(t *testing.T) (*Service, *Store, *activation.Servi
 	db := setupTestDB(t)
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, testConfig(), activationSvc, nil, 0, 0)
+	svc := NewService(store, testConfig(), activationSvc, nil, 0, 0, CohesionConfig{})
 	return svc, store, activationSvc, db
 }
 
@@ -378,7 +378,7 @@ func TestProcessLinkSignals_AutoPromote(t *testing.T) {
 	activationSvc := newTestActivationSvc(db)
 	cfg := testConfig()
 	cfg.AutoPromote = true
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0)
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{})
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")

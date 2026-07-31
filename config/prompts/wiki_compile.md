@@ -4,55 +4,26 @@ version: v1
 
 ## System
 
-根据以下已确认的论断结构和原文材料，把它组织成一个主题的 Wiki 页面正文。
+根据以下已确认的结论、张力，以及这些结论所属的「切面」分组，把它们写成一篇完整的 Wiki 页面正文。
 
 要求：
 
-1. 只使用提供的材料和论断结构，不引入材料之外的信息，不得引用已确认论断结构之外的 point_id；
-2. 页面结构固定为四节：## 稳定结论 / ## 展开说明 / ## 待验证点 / ## 依赖来源；
-3. 稳定结论逐条对应输入的 claims，每条论断末尾以 [point_id] 标注该 claim 已确认的 cited_point_ids；
-4. tensions 非空时写入"待验证点"，不要强行调和；
-5. "依赖来源"列出所用知识点所属的知识单元主题；
-6. 额外输出检索触发信息：aliases（该概念的别名、缩写、常见口语叫法）与
-   trigger_questions（这个页面能够直接回答的 5-10 个典型问法，用提问者的
-   自然措辞而非页面正文用词，覆盖不同问法角度）。
+1. 正文必须包含五个二级标题，按顺序：## 摘要 / ## 稳定结论 / ## 展开说明 / ## 待验证点 / ## 依赖来源；
+2. 「展开说明」内部必须按提供的切面分组组织，每个切面一个三级标题（### 切面标题），同一切面的结论写在同一个三级标题下，不要把一个切面的内容拆散到多处，也不要把不同切面的内容混写在同一小标题下；三级标题的措辞可以改写切面建议名，但不能改变分组本身（分组由系统依据真实使用数据算出）；
+3. 「摘要」是这个概念的一句话定义加 2-3 句概览，不含 [point_id] 标注，必须能脱离全文独立成立；
+4. 「稳定结论」逐条对应 claims，每条结论末尾以 [point_id] 标注依据；
+5. 「待验证点」对应 tensions，以及材料间未调和的矛盾；
+6. 「依赖来源」按来源归并列出涉及的 KU/Source；
+7. 只使用提供的材料与结论，不得引用未提供的 point_id。
 
-{{page_type_hint}}
-
-按以下 json 格式输出，不输出任何其他内容：
-{"title": "页面标题", "content": "Markdown 正文", "cited_point_ids": ["..."], "aliases": ["..."], "trigger_questions": ["..."]}
+直接输出 Markdown 正文，不要输出 JSON、不要输出额外说明。
 
 ## User
 
 概念：{{concept_name}}（{{concept_description}}）
-已确认的论断结构（claims）：
-{{claims}}
-已确认的张力/待验证点（tensions）：
+按切面分组的结论：
+{{claims_by_aspect}}
+张力：
 {{tensions}}
-知识点与原文材料：
-{{materials}}
-
-## Schema
-
-```json
-{
-  "type": "object",
-  "required": ["title", "content", "cited_point_ids"],
-  "properties": {
-    "title": { "type": "string", "minLength": 1 },
-    "content": { "type": "string", "minLength": 1 },
-    "cited_point_ids": {
-      "type": "array",
-      "items": { "type": "string" }
-    },
-    "aliases": {
-      "type": "array",
-      "items": { "type": "string" }
-    },
-    "trigger_questions": {
-      "type": "array",
-      "items": { "type": "string" }
-    }
-  }
-}
-```
+相关知识缺口：
+{{gaps}}

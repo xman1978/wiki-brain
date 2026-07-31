@@ -149,6 +149,12 @@ func toView(c CandidateRow) CandidateView {
 type ConfirmAddRequest struct {
 	SuggestedName string `json:"suggested_name"`
 	DomainID      string `json:"domain_id"`
+	// Description overrides the candidate's own evidence.description (if
+	// any) as the new concept row's description — editable in the confirm
+	// dialog alongside the name. Only used on the new-concept path; ignored
+	// when ConceptID is set (归入已有概念 assigns to an existing concept's
+	// own description, which is edited separately via the concept edit view).
+	Description string `json:"description"`
 	// ConceptID, when set, skips creating a new concept and instead assigns
 	// the candidate's point_ids to this already-existing concept_id
 	// (docs/impl/v1/kpn.md 步骤 6 "归入已有概念") — mutually exclusive with

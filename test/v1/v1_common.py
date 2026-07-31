@@ -65,6 +65,32 @@ def http_post_json(base_url, path, payload, timeout=180):
         return (json.loads(body) if body else None), resp.status
 
 
+def http_post_json_tolerant(base_url, path, payload, timeout=180):
+    """同 http_post_json，但 4xx/5xx 不抛异常，直接把 (body, status) 返回给调用方——
+    用于故意会触发失败分支的端点（如 P8 阶段 G 发布前质量门未过时 POST
+    /wiki/pages/:id/publish 返回 409，见 docs/impl/v1/wiki-generation.md 阶段 G
+    「与 publish 的关系」），调用方按 status 分支处理，不希望脚本因为一次
+    "预期内的失败响应"而直接崩溃退出。"""
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base_url}{path}",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+            return (json.loads(body) if body else None), resp.status
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "ignore")
+        try:
+            parsed = json.loads(body) if body else None
+        except json.JSONDecodeError:
+            parsed = {"raw": body}
+        return parsed, e.code
+
+
 def http_delete_json(base_url, path, timeout=30):
     req = urllib.request.Request(f"{base_url}{path}", method="DELETE")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -331,6 +357,11 @@ def db_kp_relations(conn, scope=None, relation_type=None):
     return [dict(r) for r in rows]
 
 
+def db_concept_name(conn, concept_id):
+    row = conn.execute("SELECT name FROM concepts WHERE concept_id = ?", (concept_id,)).fetchone()
+    return row["name"] if row else None
+
+
 def db_wiki_pages(conn, status=None):
     q = "SELECT * FROM wiki_pages WHERE 1=1"
     params = []
@@ -349,6 +380,59 @@ def db_wiki_page_relations(conn, page_id):
         (page_id, page_id),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def db_wiki_page_row(conn, page_id):
+    """完整 wiki_pages 行，含 GET /wiki/pages/:id 响应目前未暴露的 aliases /
+    trigger_questions 两列——阶段 F 把这两项从 LLM 生成改为程序查
+    subject_synonyms / 真实 confident 问法取样后（wiki-generation.md 6.3），
+    它们的正确性只能从 DB 直接核对来源，API 层没有对应字段可读。"""
+    row = conn.execute("SELECT * FROM wiki_pages WHERE page_id = ?", (page_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def db_wiki_claim_checks(conn, page_id, revision_id=None):
+    """阶段 E 支持度核验落库结果（wiki_claim_checks，见
+    docs/impl/v1/wiki-generation.md 5.3）。GET /wiki/pages/:id 目前不返回这张表
+    的内容，只能读库核对。"""
+    if revision_id:
+        rows = conn.execute(
+            "SELECT * FROM wiki_claim_checks WHERE page_id = ? AND revision_id = ? ORDER BY created_at",
+            (page_id, revision_id),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM wiki_claim_checks WHERE page_id = ? ORDER BY created_at",
+            (page_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def db_wiki_quality_checks(conn, page_id):
+    """阶段 G 发布前质量门落库结果（wiki_quality_checks），按 created_at 倒序
+    （第一条即最新一次 selfcheck/publish 触发的回放结果）。"""
+    rows = conn.execute(
+        "SELECT * FROM wiki_quality_checks WHERE page_id = ? ORDER BY created_at DESC",
+        (page_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def db_subject_synonyms(conn, canonical=None):
+    q = "SELECT * FROM subject_synonyms WHERE status = 'active'"
+    params = []
+    if canonical:
+        q += " AND canonical = ?"
+        params.append(canonical)
+    rows = conn.execute(q, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def db_trace_questions(conn):
+    """全部 traces.question 原文集合——核对 trigger_questions 是否确实取自真实
+    观测问法（而不是 LLM 编的），见 wiki-generation.md 6.3。"""
+    rows = conn.execute("SELECT DISTINCT question FROM traces").fetchall()
+    return {r["question"] for r in rows}
 
 
 def db_wiki_drafts(conn, page_id):

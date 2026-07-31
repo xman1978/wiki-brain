@@ -300,3 +300,78 @@ func TestDraft_NeverWritesBackToPage(t *testing.T) {
 		t.Errorf("page title changed after draft edit — draft -> page write-back detected!")
 	}
 }
+
+// TestCreateTopicManual_BuildsShellWithManualTrigger covers docs/impl/v1/wiki.md
+// 步骤 8 "人工指定成员手动创建主题页": hard gates on member count + published
+// concept pages; Study coherence is informational; compiled_from records
+// manual_trigger.
+func TestCreateTopicManual_BuildsShellWithManualTrigger(t *testing.T) {
+	svc, _, db, _ := setupTestService(t)
+	cfg := svc.cfg
+	cfg.TopicMemberMin = 3
+	cfg.TopicMemberMax = 8
+	svc.cfg = cfg
+
+	seedDomain(t, db, "d2", "Domain Two")
+	seedConcept(t, db, "c2", "d2", "Concept Two")
+	seedKU(t, db, "u3", "s1", "c2", "Topic C", 1, 5)
+	seedKP(t, db, "p3", "u3", "s1", "point three content")
+	seedVerifiedLink(t, db, "link-p3", "p3")
+
+	seedConcept(t, db, "c3", "d2", "Concept Three")
+	seedKU(t, db, "u4", "s1", "c3", "Topic D", 6, 10)
+	seedKP(t, db, "p4", "u4", "s1", "point four content")
+	seedVerifiedLink(t, db, "link-p4", "p4")
+
+	publishConceptPage(t, svc, "page1", "c1", "Page One", []string{"p1", "p2"})
+	publishConceptPage(t, svc, "page2", "c2", "Page Two", []string{"p3"})
+	publishConceptPage(t, svc, "page3", "c3", "Page Three", []string{"p4"})
+
+	if _, _, err := svc.CreateTopicManual([]string{"page1", "page2"}); err == nil {
+		t.Fatal("expected error for too-few members")
+	}
+
+	cand, readiness, err := svc.CreateTopicManual([]string{"page1", "page2", "page3", "page2"})
+	if err != nil {
+		t.Fatalf("CreateTopicManual: %v", err)
+	}
+	if readiness == nil || readiness.MemberCount != 3 {
+		t.Fatalf("expected readiness.member_count=3, got %+v", readiness)
+	}
+
+	page, err := svc.store.GetPage(cand.PageID)
+	if err != nil || page == nil {
+		t.Fatalf("get shell: %v", err)
+	}
+	if page.PageType != PageTypeTopic || page.Status != StatusDraft {
+		t.Errorf("expected topic/draft shell, got type=%s status=%s", page.PageType, page.Status)
+	}
+	var from []string
+	if err := json.Unmarshal([]byte(page.CompiledFrom), &from); err != nil {
+		t.Fatalf("parse compiled_from: %v", err)
+	}
+	if len(from) != 1 || from[0] != ManualTriggerSentinel {
+		t.Errorf("expected compiled_from=[%q], got %v", ManualTriggerSentinel, from)
+	}
+	members, err := svc.store.ContainsMembers(cand.PageID)
+	if err != nil {
+		t.Fatalf("contains: %v", err)
+	}
+	if len(members) != 3 {
+		t.Fatalf("expected 3 members after dedupe, got %v", members)
+	}
+
+	draftPage := &Page{
+		PageID: "page-draft", PageType: PageTypeConcept, Title: "Draft",
+		Content: "x", Status: StatusDraft, SourcePointIDs: `["p1"]`,
+		PromptVersion: "v1", ModelName: "test",
+	}
+	draftPage.ConceptID = nullableString("c1")
+	if err := svc.store.InsertPage(draftPage); err != nil {
+		t.Fatalf("insert draft concept page: %v", err)
+	}
+	if _, _, err := svc.CreateTopicManual([]string{"page1", "page2", "page-draft"}); err == nil {
+		t.Fatal("expected error when a member is not published")
+	}
+}
+

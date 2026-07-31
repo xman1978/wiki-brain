@@ -21,9 +21,15 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /wiki/compile/analyze", h.analyze)
 	mux.HandleFunc("POST /wiki/compile", h.compile)
 	mux.HandleFunc("POST /wiki/pages/{id}/publish", h.publish)
+	mux.HandleFunc("POST /wiki/pages/{id}/selfcheck", h.selfcheck)
 	mux.HandleFunc("POST /wiki/pages/{id}/recompile", h.recompile)
 	mux.HandleFunc("POST /wiki/pages/{id}/archive", h.archive)
 	mux.HandleFunc("GET /wiki/pages", h.listPages)
+	mux.HandleFunc("GET /wiki/catalog", h.listCatalog)
+	mux.HandleFunc("GET /wiki/topics", h.listTopicPages)
+	mux.HandleFunc("POST /wiki/topics", h.createTopic)
+	mux.HandleFunc("GET /wiki/topics/{id}/members", h.listTopicMembers)
+	mux.HandleFunc("GET /wiki/unassigned-concepts", h.listUnassignedConceptPages)
 	mux.HandleFunc("GET /wiki/pages/{id}", h.getPage)
 	mux.HandleFunc("GET /wiki/pages/{id}/revisions/{rev}", h.getRevision)
 
@@ -110,7 +116,41 @@ func writeTopicError(w http.ResponseWriter, err error) {
 		})
 		return
 	}
+	var badMembers *ErrInvalidTopicMembers
+	if errors.As(err, &badMembers) {
+		foundation.WriteError(w, http.StatusBadRequest, badMembers.Message)
+		return
+	}
 	writePageError(w, err)
+}
+
+// createTopic is POST /wiki/topics — docs/impl/v1/wiki.md 步骤 8
+// "人工指定成员手动创建主题页". Builds a draft shell + contains; the caller
+// then drives topic/analyze → topic/compile.
+func (h *Handler) createTopic(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MemberPageIDs []string `json:"member_page_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	cand, readiness, err := h.svc.CreateTopicManual(req.MemberPageIDs)
+	if err != nil {
+		writeTopicError(w, err)
+		return
+	}
+	title := ""
+	if page, err := h.svc.store.GetPage(cand.PageID); err == nil && page != nil {
+		title = page.Title
+	}
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"page_id":         cand.PageID,
+		"status":          StatusDraft,
+		"title":           title,
+		"member_page_ids": cand.MemberPageIDs,
+		"readiness":       readiness,
+	})
 }
 
 func (h *Handler) createDraft(w http.ResponseWriter, r *http.Request) {
@@ -241,12 +281,39 @@ func (h *Handler) compile(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {
 	pageID := r.PathValue("id")
-	page, err := h.svc.Publish(pageID)
+
+	var req struct {
+		Force bool `json:"force"`
+	}
+	json.NewDecoder(r.Body).Decode(&req) // optional body; ignore decode errors (empty body is valid)
+
+	page, err := h.svc.PublishWithForce(r.Context(), pageID, req.Force)
 	if err != nil {
 		writePageError(w, err)
 		return
 	}
 	foundation.WriteJSON(w, http.StatusOK, map[string]string{"page_id": page.PageID, "status": page.Status})
+}
+
+// selfcheck implements docs/impl/v1/wiki-generation.md 阶段 G's standalone
+// entry point: POST /wiki/pages/:id/selfcheck runs the same pre-publish
+// quality replay Publish gates on, without touching page status — useful for
+// previewing whether a draft/needs_recompile page would clear the gate
+// before attempting to publish it.
+func (h *Handler) selfcheck(w http.ResponseWriter, r *http.Request) {
+	pageID := r.PathValue("id")
+	qc, err := h.svc.Selfcheck(r.Context(), pageID)
+	if err != nil {
+		writePageError(w, err)
+		return
+	}
+	metrics, _ := qc.DecodeMetrics()
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"page_id":     qc.PageID,
+		"revision_id": qc.RevisionID,
+		"passed":      qc.Passed,
+		"metrics":     metrics,
+	})
 }
 
 func (h *Handler) recompile(w http.ResponseWriter, r *http.Request) {
@@ -307,10 +374,11 @@ func toPageListResp(p Page) pageListResp {
 
 func (h *Handler) listPages(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
+	pageType := r.URL.Query().Get("page_type")
 	conceptID := r.URL.Query().Get("concept_id")
 	limit := queryInt(r, "limit", 50)
 
-	pages, err := h.svc.store.ListPages(status, conceptID, limit)
+	pages, err := h.svc.store.ListPages(status, pageType, conceptID, limit)
 	if err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -323,9 +391,73 @@ func (h *Handler) listPages(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, resp)
 }
 
+// listCatalog is GET /wiki/catalog — Wiki drawer left rail (domains) + right
+// pane cards (concept/topic pages + pending wiki_candidates), grouped by
+// knowledge domain. Topic pages appear under every member concept's domain.
+func (h *Handler) listCatalog(w http.ResponseWriter, r *http.Request) {
+	catalog, err := h.svc.store.ListCatalog()
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if catalog == nil {
+		catalog = []CatalogDomain{}
+	}
+	foundation.WriteJSON(w, http.StatusOK, catalog)
+}
+
+// topicPageResp is a topic page plus its live member count, for the 知识地图
+// page's left rail.
+type topicPageResp struct {
+	pageListResp
+	MemberCount int `json:"member_count"`
+}
+
+func (h *Handler) listTopicPages(w http.ResponseWriter, r *http.Request) {
+	topics, err := h.svc.store.ListTopicPages()
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := make([]topicPageResp, 0, len(topics))
+	for _, t := range topics {
+		resp = append(resp, topicPageResp{pageListResp: toPageListResp(t.Page), MemberCount: t.MemberCount})
+	}
+	foundation.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) listTopicMembers(w http.ResponseWriter, r *http.Request) {
+	topicID := r.PathValue("id")
+	pages, err := h.svc.store.ListTopicMemberPages(topicID)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := make([]pageListResp, 0, len(pages))
+	for _, p := range pages {
+		resp = append(resp, toPageListResp(p))
+	}
+	foundation.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) listUnassignedConceptPages(w http.ResponseWriter, r *http.Request) {
+	pages, err := h.svc.store.ListUnassignedConceptPages()
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := make([]pageListResp, 0, len(pages))
+	for _, p := range pages {
+		resp = append(resp, toPageListResp(p))
+	}
+	foundation.WriteJSON(w, http.StatusOK, resp)
+}
+
 type pageDetailResp struct {
 	pageListResp
 	Content         string           `json:"content"`
+	Summary         string           `json:"summary"`
+	Aspects         []PageAspect     `json:"aspects"`
 	SourcePointIDs  []string         `json:"source_point_ids"`
 	SourceUnitIDs   []string         `json:"source_unit_ids"`
 	SourceLinkIDs   []string         `json:"source_link_ids"`
@@ -335,12 +467,25 @@ type pageDetailResp struct {
 	MemberRoles     []MemberRole     `json:"member_roles"`
 	UncoveredPoints []UncoveredPoint `json:"uncovered_points"`
 	Revisions       []revisionMeta   `json:"revisions"`
+	ClaimChecks     []claimCheckResp `json:"claim_checks"`
 }
 
 type revisionMeta struct {
 	RevisionID string `json:"revision_id"`
 	Reason     string `json:"reason"`
 	CreatedAt  string `json:"created_at"`
+}
+
+// claimCheckResp is one wiki_claim_checks row's response shape (docs/impl/v1/
+// wiki-generation.md 阶段 E) — lets the UI color-code [point_id] citations by
+// whether the claim citing them was actually verified as supported by its
+// material, instead of just listing aggregate verdict counts.
+type claimCheckResp struct {
+	ClaimID       string   `json:"claim_id"`
+	ClaimText     string   `json:"claim_text"`
+	CitedPointIDs []string `json:"cited_point_ids"`
+	Verdict       string   `json:"verdict"`
+	Reason        string   `json:"reason"`
 }
 
 func (h *Handler) getPage(w http.ResponseWriter, r *http.Request) {
@@ -364,12 +509,14 @@ func (h *Handler) getPage(w http.ResponseWriter, r *http.Request) {
 	var sourcePointIDs, sourceUnitIDs, sourceLinkIDs, compiledFrom []string
 	var memberRoles []MemberRole
 	var uncoveredPoints []UncoveredPoint
+	var aspects []PageAspect
 	json.Unmarshal([]byte(page.SourcePointIDs), &sourcePointIDs)
 	json.Unmarshal([]byte(page.SourceUnitIDs), &sourceUnitIDs)
 	json.Unmarshal([]byte(page.SourceLinkIDs), &sourceLinkIDs)
 	json.Unmarshal([]byte(page.CompiledFrom), &compiledFrom)
 	json.Unmarshal([]byte(page.MemberRoles), &memberRoles)
 	json.Unmarshal([]byte(page.UncoveredPoints), &uncoveredPoints)
+	json.Unmarshal([]byte(page.Aspects), &aspects)
 
 	revMeta := make([]revisionMeta, 0, len(revisions))
 	for _, rev := range revisions {
@@ -380,18 +527,47 @@ func (h *Handler) getPage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Claim checks (阶段 E 支持度核验) for the latest revision only — lets the
+	// UI mark exactly which [point_id] citations in the *current* body came
+	// from a claim that failed verification, without the client having to
+	// separately track revision ids.
+	var claimChecks []claimCheckResp
+	if len(revisions) > 0 {
+		latestRevisionID := revisions[len(revisions)-1].RevisionID
+		checks, err := h.svc.store.ListClaimChecks(pageID, latestRevisionID)
+		if err != nil {
+			foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		claimChecks = make([]claimCheckResp, 0, len(checks))
+		for _, c := range checks {
+			var cited []string
+			json.Unmarshal([]byte(c.CitedPointIDs), &cited)
+			claimChecks = append(claimChecks, claimCheckResp{
+				ClaimID:       c.ClaimID,
+				ClaimText:     c.ClaimText,
+				CitedPointIDs: nonNilStrings(cited),
+				Verdict:       c.Verdict,
+				Reason:        c.Reason,
+			})
+		}
+	}
+
 	resp := pageDetailResp{
-		pageListResp:   toPageListResp(*page),
-		Content:        page.Content,
-		SourcePointIDs: nonNilStrings(sourcePointIDs),
-		SourceUnitIDs:  nonNilStrings(sourceUnitIDs),
-		SourceLinkIDs:  nonNilStrings(sourceLinkIDs),
+		pageListResp:    toPageListResp(*page),
+		Content:         page.Content,
+		Summary:         page.Summary,
+		Aspects:         aspects,
+		SourcePointIDs:  nonNilStrings(sourcePointIDs),
+		SourceUnitIDs:   nonNilStrings(sourceUnitIDs),
+		SourceLinkIDs:   nonNilStrings(sourceLinkIDs),
 		CompiledFrom:    nonNilStrings(compiledFrom),
 		PromptVersion:   page.PromptVersion,
 		ModelName:       page.ModelName,
 		MemberRoles:     memberRoles,
 		UncoveredPoints: uncoveredPoints,
 		Revisions:       revMeta,
+		ClaimChecks:     claimChecks,
 	}
 	foundation.WriteJSON(w, http.StatusOK, resp)
 }
@@ -421,7 +597,7 @@ func writePageError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrPageNotFound):
 		foundation.WriteError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, ErrPageArchived), errors.Is(err, ErrInvalidStateTransition):
+	case errors.Is(err, ErrPageArchived), errors.Is(err, ErrInvalidStateTransition), errors.Is(err, ErrQualityGateFailed):
 		foundation.WriteError(w, http.StatusConflict, err.Error())
 	default:
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())

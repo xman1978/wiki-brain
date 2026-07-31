@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
 )
@@ -76,11 +77,20 @@ func toLinkResp(l ActivationLink, pointSummary, unitCenter string) linkResp {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+	var pointIDs []string
+	if raw := r.URL.Query().Get("point_ids"); raw != "" {
+		pointIDs = strings.Split(raw, ",")
+	}
+	defaultLimit := 50
+	if len(pointIDs) > 0 {
+		defaultLimit = 0 // let the store pick its bulk-sized default (see ListLinksFilter.PointIDs doc)
+	}
 	f := ListLinksFilter{
-		Status:  r.URL.Query().Get("status"),
-		PointID: r.URL.Query().Get("point_id"),
-		Limit:   queryInt(r, "limit", 50),
-		Offset:  queryInt(r, "offset", 0),
+		Status:   r.URL.Query().Get("status"),
+		PointID:  r.URL.Query().Get("point_id"),
+		PointIDs: pointIDs,
+		Limit:    queryInt(r, "limit", defaultLimit),
+		Offset:   queryInt(r, "offset", 0),
 	}
 
 	rows, err := h.svc.ListLinks(f)

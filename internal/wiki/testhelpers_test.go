@@ -102,13 +102,19 @@ func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *sql.DB, bleve.I
 	t.Cleanup(func() { idxMgr.Close() })
 
 	fake := llm.NewFakeClient()
-	// Default analysis response covering both qualifying KPs — Compile/
-	// Recompile always run the analysis step first (docs/impl/v1/wiki.md
-	// 步骤 2/3); tests exercising a different concept's own points override
-	// this before compiling.
+	// Default analyze/compile responses covering both qualifying KPs —
+	// Compile/Recompile always run the analysis step first (docs/impl/v1/
+	// wiki.md 步骤 2/3); tests exercising a different concept's own points
+	// override these before compiling. p1/p2 sit in different units with no
+	// KPN/cooccurrence/intent signal between them, so aspect clustering
+	// folds both into the single reserved "misc" bucket.
 	fake.SetResponse("wiki_analyze.md", llm.FakeResponse{Output: validAnalyzeOutput})
+	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: validCompileOutput})
 	store := NewStore(db)
-	cfg := config.WikiConfig{CompileMaxChars: 12000, RecompileNewKPMin: 2}
+	cfg := config.WikiConfig{
+		CompileMaxChars: 20000, RecompileNewKPMin: 2,
+		AspectGamma: 1.0, AspectMinSize: 2, AspectMaxSize: 8, AspectSplitGammaFactor: 1.5,
+	}
 	svc := NewService(store, fake, idxMgr.Wiki, cfg)
 
 	return svc, fake, db, idxMgr.Wiki
@@ -159,33 +165,54 @@ func seedConfidentTrace(t *testing.T, db *sql.DB, traceID, question string, poin
 	}
 }
 
+// seedSubjectSynonym seeds an active subject_synonyms row so
+// Store.ConceptAliases has real, already-verified alias data to return
+// (docs/design/wiki-compilation.md "触发问法取材真实观测，检索匹配复用四元组"
+// 生成侧 修订: aliases 由程序查表，不再由 LLM 生成).
+func seedSubjectSynonym(t *testing.T, db *sql.DB, term, canonical string) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO subject_synonyms (synonym_id, term, canonical, source, status)
+		VALUES (?, ?, ?, 'manual', 'active')`, "syn-"+term, term, canonical); err != nil {
+		t.Fatalf("seed subject synonym: %v", err)
+	}
+}
+
 func newTestActivationSvc(db *sql.DB) *activation.Service {
 	store := activation.NewStore(db)
 	return activation.NewService(store, activation.NewMatcher(store))
 }
 
+// validAnalyzeOutput covers both p1/p2 — with only two KPs in different
+// units and no relation/cooccurrence/intent signal between them, aspect
+// clustering folds both into the one reserved "misc" bucket (docs/impl/v1/
+// wiki-generation.md 2.2), so both claims carry aspect_id="misc".
 const validAnalyzeOutput = `{
 	"claims": [
-		{"summary": "内容一的核心结论", "cited_point_ids": ["p1"]},
-		{"summary": "内容二的核心结论", "cited_point_ids": ["p2"]}
+		{"summary": "内容一的核心结论", "cited_point_ids": ["p1"], "aspect_id": "misc"},
+		{"summary": "内容二的核心结论", "cited_point_ids": ["p2"], "aspect_id": "misc"}
 	],
 	"tensions": []
 }`
 
-const validCompileOutput = `{
-	"title": "Concept One 知识页",
-	"content": "## 稳定结论\n[p1] 内容一\n[p2] 内容二\n\n## 展开说明\n详细说明。\n\n## 待验证点\n暂无。\n\n## 依赖来源\n见引用。\n",
-	"cited_point_ids": ["p1", "p2"]
-}`
+// validCompileOutput is the default one-shot generation response — raw
+// Markdown (compileContent uses llm.Complete, not CompleteJSON), five
+// required headings, one "### " subsection under "展开说明" citing both
+// p1/p2 so the happy path is never missing citations.
+const validCompileOutput = "## 摘要\n\nConcept One 是这个领域的核心概念。\n\n" +
+	"## 稳定结论\n\n内容一的核心结论 [p1]\n内容二的核心结论 [p2]\n\n" +
+	"## 展开说明\n\n### 核心内容\n\n详细说明一。[p1] 详细说明二。[p2]\n\n" +
+	"## 待验证点\n\n暂无。\n\n" +
+	"## 依赖来源\n\n见引用。\n"
 
-const missingSectionsCompileOutput = `{
-	"title": "Concept One 知识页",
-	"content": "## 稳定结论\n[p1] 内容一\n\n## 展开说明\n详细说明。\n",
-	"cited_point_ids": ["p1"]
-}`
+// missingClaimsAnalyzeOutput produces zero usable claims, which
+// analyzeClaims treats as analysis failure and retries — used to exercise
+// the retry-then-fail path.
+const missingClaimsAnalyzeOutput = `{"claims": [], "tensions": []}`
 
-const hallucinatedCiteCompileOutput = `{
-	"title": "Concept One 知识页",
-	"content": "## 稳定结论\n[p1] 内容一 [p999] 幻觉引用\n\n## 展开说明\n详细说明。\n\n## 待验证点\n暂无。\n\n## 依赖来源\n见引用。\n",
-	"cited_point_ids": ["p1", "p999"]
-}`
+// hallucinatedCiteCompileOutput cites an out-of-whitelist point_id (p999)
+// alongside valid ones — filterContentTags must strip it.
+const hallucinatedCiteCompileOutput = "## 摘要\n\nConcept One 是这个领域的核心概念。\n\n" +
+	"## 稳定结论\n\n内容一的核心结论 [p1] [p999]\n\n" +
+	"## 展开说明\n\n### 核心内容\n\n详细说明。[p1] [p999]\n\n" +
+	"## 待验证点\n\n暂无。\n\n" +
+	"## 依赖来源\n\n见引用。\n"

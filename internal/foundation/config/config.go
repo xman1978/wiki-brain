@@ -198,6 +198,66 @@ type WikiConfig struct {
 	TopicMemberMin         int `yaml:"topic_member_min"`
 	TopicMemberMax         int `yaml:"topic_member_max"`
 	TopicCompileMaxChars   int `yaml:"topic_compile_max_chars"`
+
+	// —— 生成质量（docs/impl/v1/wiki-generation.md 阶段 E/G，P0）——
+	// ClaimVerifyEnabled toggles the post-compile support check (阶段 E):
+	// does each claim's text actually hold up against the KP material it
+	// cites, not just "are the cited point_ids in-bounds". Off by default
+	// behavior is unaffected (existing citation whitelist checks still run).
+	ClaimVerifyEnabled bool `yaml:"claim_verify_enabled"`
+	// SelfcheckEnabled toggles the pre-publish quality gate (阶段 G): replay
+	// real confident questions this page's KPs were once answered from
+	// against the compiled page itself, via the existing answer_wiki path.
+	SelfcheckEnabled bool `yaml:"selfcheck_enabled"`
+	// SelfcheckReplayN is how many sampled confident questions to replay
+	// per page (<=0 defaults to 5).
+	SelfcheckReplayN int `yaml:"selfcheck_replay_n"`
+	// SelfcheckMinSufficientRate: publish is blocked (absent force=true) if
+	// the replay's sufficient=true rate falls below this.
+	SelfcheckMinSufficientRate float64 `yaml:"selfcheck_min_sufficient_rate"`
+	// SelfcheckMinMaterialUsage: |source_point_ids| / |qualifying KP| must be
+	// at least this — a low ratio means the page left most of its qualifying
+	// material unused.
+	SelfcheckMinMaterialUsage float64 `yaml:"selfcheck_min_material_usage"`
+	// SelfcheckMaxUncitedRate caps the share of sentences in the stable-
+	// conclusions/expanded-explanation sections that carry no [point_id] tag.
+	SelfcheckMaxUncitedRate float64 `yaml:"selfcheck_max_uncited_rate"`
+
+	// —— 概念内聚度（docs/impl/v1/wiki-generation.md 2.2/2.4，P0/P1 共用的
+	// Louvain 社区检测基础设施；概念级 ready 判定第五项） ——
+	// ConceptCohesionMin gates the Study wiki-candidate "ready" recommendation
+	// on the largest Louvain community's share of qualifying KPs — a low
+	// share means the concept's qualifying material splits into several
+	// unrelated clusters rather than one coherent topic
+	// (docs/design/wiki-compilation.md "连贯性判断还需要第三层").
+	ConceptCohesionMin float64 `yaml:"concept_cohesion_min"`
+	// AspectWRel/AspectWCooc are edge weights feeding the concept-cohesion
+	// graph: KPN related/contradicts relations (both count positive — see
+	// docs/impl/v1/wiki-generation.md 2.1 "contradicts 计正权") and shared
+	// confident-question co-occurrence, saturating at AspectCoocSat.
+	AspectWRel     float64 `yaml:"aspect_w_rel"`
+	AspectWCooc    float64 `yaml:"aspect_w_cooc"`
+	AspectCoocSat  int     `yaml:"aspect_cooc_sat"`
+	AspectGamma    float64 `yaml:"aspect_gamma"`
+
+	// —— 阶段 B 完整切面聚类（P1，docs/impl/v1/wiki-generation.md 2.1/2.2）——
+	// AspectWIntent/AspectWUnit are the two edge signals P0's cohesion-only
+	// PairSignals didn't need: verified-ActivationLink intent Jaccard (usage
+	// condition similarity) and same-unit fallback (material-side, weakest).
+	AspectWIntent float64 `yaml:"aspect_w_intent"`
+	AspectWUnit   float64 `yaml:"aspect_w_unit"`
+	// AspectSplitGammaFactor multiplies AspectGamma when an oversized
+	// community is recursively re-clustered once (2.2 "后处理").
+	AspectSplitGammaFactor float64 `yaml:"aspect_split_gamma_factor"`
+	// AspectMinSize/AspectMaxSize bound a leaf aspect's point count after
+	// Louvain; undersized communities merge into their strongest neighbor or
+	// fall into the reserved "misc" bucket, oversized ones split once.
+	AspectMinSize int `yaml:"aspect_min_size"`
+	AspectMaxSize int `yaml:"aspect_max_size"`
+	// AspectQuestionsMax caps how many real confident question strings ride
+	// along per aspect into the analyze stage, and how many populate
+	// PageAspect.QuestionTypes (<=0 defaults to 5).
+	AspectQuestionsMax int `yaml:"aspect_questions_max"`
 }
 
 type StudyConfig struct {

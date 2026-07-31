@@ -2,6 +2,7 @@ package activation
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
@@ -337,6 +338,64 @@ func TestStore_ListLinks_JoinsPointAndUnit(t *testing.T) {
 	}
 	if rows[0].UnitCenter != "test topic" {
 		t.Errorf("unit_center = %q", rows[0].UnitCenter)
+	}
+}
+
+func TestStore_ListLinks_PointIDsBatchFilter(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	seedKPFull(t, db, "kp1")
+	seedKPFull(t, db, "kp2")
+	seedKPFull(t, db, "kp3")
+
+	for _, l := range []*ActivationLink{
+		{QuestionTerms: "t1", PointID: "kp1"},
+		{QuestionTerms: "t2", PointID: "kp2"},
+		{QuestionTerms: "t3", PointID: "kp3"},
+	} {
+		if err := store.InsertLink(l); err != nil {
+			t.Fatalf("insert link for %s: %v", l.PointID, err)
+		}
+	}
+
+	rows, err := store.ListLinks(ListLinksFilter{PointIDs: []string{"kp1", "kp3"}})
+	if err != nil {
+		t.Fatalf("list links: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows (kp1+kp3, not kp2), got %d", len(rows))
+	}
+	got := map[string]bool{}
+	for _, r := range rows {
+		got[r.PointID] = true
+	}
+	if !got["kp1"] || !got["kp3"] || got["kp2"] {
+		t.Errorf("unexpected point_ids in result: %+v", got)
+	}
+}
+
+func TestStore_ListLinks_PointIDsDefaultsToBulkLimit(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	var pointIDs []string
+	for i := 0; i < 60; i++ {
+		id := fmt.Sprintf("kp%d", i)
+		seedKPFull(t, db, id)
+		pointIDs = append(pointIDs, id)
+		if err := store.InsertLink(&ActivationLink{QuestionTerms: fmt.Sprintf("t%d", i), PointID: id}); err != nil {
+			t.Fatalf("insert link %d: %v", i, err)
+		}
+	}
+
+	// The default single-point/status browse limit is 50 — with 60 points
+	// each getting one link, a caller that forgot the PointIDs bulk default
+	// would silently lose 10 rows off a real concept-page modal.
+	rows, err := store.ListLinks(ListLinksFilter{PointIDs: pointIDs})
+	if err != nil {
+		t.Fatalf("list links: %v", err)
+	}
+	if len(rows) != 60 {
+		t.Fatalf("expected all 60 rows, got %d (bulk default limit not applied)", len(rows))
 	}
 }
 

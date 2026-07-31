@@ -5,6 +5,7 @@ package wiki
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -15,6 +16,11 @@ var (
 	ErrPageNotFound           = errors.New("wiki: page not found")
 	ErrPageArchived           = errors.New("wiki: page is archived")
 	ErrInvalidStateTransition = errors.New("wiki: invalid page state transition")
+	// ErrQualityGateFailed is returned by Publish when wiki.selfcheck_enabled
+	// is on, the pre-publish self-check didn't pass, and the caller didn't
+	// set force=true (docs/impl/v1/wiki-generation.md 阶段 G). handler.go
+	// maps this to HTTP 409, same tier as ErrPageAlreadyExists.
+	ErrQualityGateFailed = errors.New("wiki: pre-publish quality gate failed")
 )
 
 // Page.page_type — V1 only distinguishes title framing (see compile prompt's
@@ -50,12 +56,29 @@ type Page struct {
 	MemberRoles      string // JSON array of MemberRole — topic pages only (concept pages always "[]")
 	UncoveredPoints  string // JSON array of UncoveredPoint — field-only, never enters body/citation whitelist/gates
 	CompiledFrom     string // JSON array — learning_result / report ids that triggered this (re)compile
+	Summary          string // lead paragraph, same text as the "## 摘要" section body (docs/impl/v1/wiki-generation.md 6.2)
+	Aspects          string // JSON array of PageAspect — concept pages' aspect breakdown (docs/impl/v1/wiki-generation.md 6.4)
 	PromptVersion    string
 	ModelName        string
 	CompiledAt       sql.NullTime
 	PublishedAt      sql.NullTime
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+}
+
+// PageAspect is one wiki_pages.aspects entry — the persisted, page-level
+// projection of aspect.go's Aspect after compilation (docs/impl/v1/
+// wiki-generation.md 6.4). Same shape family as MemberRole one layer up
+// (topic page's members vs concept page's aspects); both exist so V3
+// decomposition and V1 retrieval ranking can query structured fields
+// directly instead of re-parsing Markdown. Metadata only — there is no
+// per-aspect body table (阶段 F assembles the whole page in one LLM call,
+// not one call per aspect).
+type PageAspect struct {
+	AspectID      string   `json:"aspect_id"`
+	Heading       string   `json:"heading"`
+	PointIDs      []string `json:"point_ids"`
+	QuestionTypes []string `json:"question_types"`
 }
 
 type Revision struct {
@@ -88,26 +111,61 @@ type AnalyzeRequest struct {
 	ResultID  string `json:"result_id,omitempty"`
 }
 
-// AnalyzeResult is POST /wiki/compile/analyze's response — never persisted
-// (docs/design/wiki-compilation.md "编译内部分两步"). The caller holds it
-// and, if the human confirms, sends it back verbatim (or edited) as
-// CompileRequest.Claims/Tensions.
+// AnalyzeResult is POST /wiki/compile/analyze's (and topic/analyze's)
+// response — never persisted (docs/design/wiki-compilation.md "编译内部分
+// 两步"). The caller holds it and, if the human confirms, sends it back
+// (possibly edited) as CompileRequest.Claims/Tensions. Concept and topic
+// pages share this same flat shape (docs/impl/v1/wiki-generation.md 阶段 C,
+// 3.2) — the only concept-page-specific addition is Claim.AspectID, an
+// optional field topic pages simply never populate.
 type AnalyzeResult struct {
 	ConceptID string    `json:"concept_id"`
 	PageType  string    `json:"page_type"`
 	ResultID  string    `json:"result_id,omitempty"`
 	Claims    []Claim   `json:"claims"`
 	Tensions  []Tension `json:"tensions"`
+	// Readiness is a concept-page-only, informational snapshot of the same
+	// signals Study's wiki_candidate "ready" judgment uses (docs/impl/v1/
+	// wiki.md 步骤 2 "人工指定主题手动编译") — populated whether or not
+	// ResultID came from an actual Study recommendation, so a human picking
+	// any concept directly can see "does this look ready" before confirming
+	// compile. Never gates Analyze/Compile; nil only if computing it failed
+	// outright (analysis itself still proceeds).
+	Readiness *Readiness `json:"readiness,omitempty"`
+}
+
+// Readiness mirrors (not necessarily bit-for-bit — see computeReadiness's
+// doc comment) Study's WikiCandidateStats/ready criteria: breadth
+// (QualifyingKPCount), connectedness (Related/ContradictsConnectionCount),
+// stability (DaysActive vs DaysActiveMin), and cohesion (vs CohesionMin).
+// Deliberately has no single collapsed "recommendation" bool — the human
+// looking at these numbers is the judgment call, not the system (docs/impl/v1/
+// wiki.md 步骤 2 "仅提示，不阻断").
+type Readiness struct {
+	QualifyingKPCount           int     `json:"qualifying_kp_count"`
+	RelatedConnectionCount      int     `json:"related_connection_count"`
+	ContradictsConnectionCount  int     `json:"contradicts_connection_count"`
+	DaysActive                  int     `json:"days_active"`
+	DaysActiveMin               int     `json:"days_active_min"`
+	Cohesion                    float64 `json:"cohesion"`
+	CohesionMin                 float64 `json:"cohesion_min"`
 }
 
 // Claim is one analysis-stage stable-conclusion candidate: a core idea plus
 // the point_ids it cites, fixed before generation narrows what the
 // generation prompt is allowed to reference (docs/impl/v1/wiki.md 步骤 3
 // "分析产物"). Not the same as the design doc's persisted Claim object (V2) —
-// this one is a compile-time intermediate, never stored.
+// this one is a compile-time intermediate, never stored on its own (its
+// text/citations do get persisted as part of wiki_claim_checks after 阶段 E).
 type Claim struct {
 	Summary       string   `json:"summary"`
 	CitedPointIDs []string `json:"cited_point_ids"`
+	// AspectID is an optional, non-breaking addition (docs/impl/v1/
+	// wiki-generation.md 3.2): which aspect.go Aspect this claim mainly
+	// belongs to, used by compileContent to group "展开说明" into
+	// per-aspect ### subsections. It never enters citation whitelisting —
+	// only CitedPointIDs does. Topic-page claims leave it empty.
+	AspectID string `json:"aspect_id,omitempty"`
 }
 
 // Tension is one analysis-stage material conflict / open question candidate
@@ -228,6 +286,70 @@ type SourceRef struct {
 	SourceID  string `json:"source_id"`
 	LineStart int    `json:"line_start"`
 	LineEnd   int    `json:"line_end"`
+}
+
+// wiki_claim_checks.verdict — docs/design/wiki-compilation.md "编译产物的
+// 支持度核验": a claim's cited_point_ids can be entirely in-bounds (citation
+// whitelist passes) while the claim's text still isn't actually supported by
+// that material's content. This check is orthogonal to citation whitelisting
+// and catches exactly that gap.
+const (
+	VerdictSupported   = "supported"
+	VerdictPartial     = "partial"
+	VerdictUnsupported = "unsupported"
+)
+
+// ClaimCheck is one wiki_claim_checks row — the support verdict for a single
+// claim from a single compile/recompile's revision (docs/impl/v1/
+// wiki-generation.md 阶段 E).
+type ClaimCheck struct {
+	CheckID       string
+	PageID        string
+	RevisionID    string
+	ClaimID       string
+	ClaimText     string
+	CitedPointIDs string // JSON array
+	Verdict       string
+	Reason        string
+	CreatedAt     time.Time
+}
+
+// QualityCheck is one wiki_quality_checks row — the pre-publish self-check
+// replay result for a single revision (docs/impl/v1/wiki-generation.md
+// 阶段 G). Metrics is a JSON object; see QualityMetrics for its Go shape.
+type QualityCheck struct {
+	QCID       string
+	PageID     string
+	RevisionID string
+	Metrics    string // JSON object, see QualityMetrics
+	Passed     bool
+	Forced     bool
+	CreatedAt  time.Time
+}
+
+// QualityMetrics is QualityCheck.Metrics decoded (docs/impl/v1/
+// wiki-generation.md 阶段 G "指标与门槛").
+type QualityMetrics struct {
+	ReplaySampleSize      int      `json:"replay_sample_size"`
+	ReplaySufficientCount int      `json:"replay_sufficient_count"`
+	ReplaySufficientRate  float64  `json:"replay_sufficient_rate"`
+	MaterialUsageRate     float64  `json:"material_usage_rate"`
+	UncitedSentenceRate   float64  `json:"uncited_sentence_rate"`
+	UnsupportedClaimCount int      `json:"unsupported_claim_count"`
+	FailedQuestions       []string `json:"failed_questions,omitempty"`
+	BlockingReasons       []string `json:"blocking_reasons,omitempty"`
+}
+
+// DecodeMetrics parses QualityCheck.Metrics back into QualityMetrics — a
+// convenience for callers (Publish's gate, the selfcheck HTTP handler) that
+// only have the persisted row, not the freshly-computed struct.
+func (q *QualityCheck) DecodeMetrics() (QualityMetrics, error) {
+	var m QualityMetrics
+	if q == nil || q.Metrics == "" {
+		return m, nil
+	}
+	err := json.Unmarshal([]byte(q.Metrics), &m)
+	return m, err
 }
 
 // DirectAnswerResult is what TryDirectAnswer hands back to Retrieval

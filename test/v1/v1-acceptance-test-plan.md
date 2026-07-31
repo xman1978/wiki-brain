@@ -373,6 +373,17 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 
 编译流程也改为两步（`docs/impl/v1/wiki.md` 步骤 2）：`POST /wiki/compile/analyze` 先产出拟采用的论断结构（claims/tensions，不落库），人工确认后把该结构原样（或编辑后）带回 `POST /wiki/compile`；跳过 analyze 直接调用 compile 时服务端会自动内部跑一遍分析，效果等价，仍应验收。
 
+**生成质量链路新增核验（2026-07-31，`docs/impl/v1/wiki-generation.md` 简化版，P0 已实现 + P1 切面聚类已实现）**：概念页编译内部现在会先把 qualifying KP 按「切面」分组（Louvain 社区检测，程序计算、不调 LLM）、生成后做支持度核验（判断每条结论是否真被引用材料支持，不只是引用的 point_id 合法）、发布前跑质量门回放（用该页 KP 曾被慢路径答对过的真实问法重新考一遍页面）；`aliases`/`trigger_questions` 不再由 LLM 生成，改为程序查 `subject_synonyms` 表与真实 confident 问法取样。这些都不改变 `analyze`/`compile` 的外部契约（仍是扁平 `claims[]`/`tensions[]`，只是 claim 可能带一个可选的 `aspect_id`），因此不新增编译步骤，但本阶段核验范围要新增：
+- 正文结构：应含"## 摘要"一节，且"## 展开说明"下按切面出现多个"### "三级标题（不强制断言具体切分数量，真实 LLM 输出允许合理浮动）；
+- 支持度核验：`wiki_claim_checks` 表应有与 claims 数量匹配的核验行，`verdict` 落在 supported/partial/unsupported 三者之一；
+- `aliases`/`trigger_questions`：`aliases` 应能在 `subject_synonyms`（`status='active'`）表里查到来源，`trigger_questions` 每一条都应是 `traces.question` 里真实出现过的原文，不应有 LLM 现编的问法；
+- 发布前质量门：先显式调 `POST /wiki/pages/:id/selfcheck` 看 `metrics`/`passed`，再走 `publish`；若质量门未过（真实 LLM 生成的页面大概率直接过闸，未过属观测性结果不算失败）会返回 409，用 `force=true` 覆盖后核对 `wiki_quality_checks` 最新一行 `forced=1`；
+- 概念级"ready"判定新增第五项内聚度门槛（`wiki_candidate` 的 `reason` 字段文本会带上"内聚度 X.XX"，观测记录即可，不设通过/失败判定——本阶段两个测试话题都是"围绕同一批文档密集问答"构造出来的，天然应该内聚，不预期触发 `concept_split_signals`）。
+
+以上几项里，正文结构、支持度核验落库、aliases/trigger 真实性三项计入本阶段通过标准（结构性核验，"机制是否运行"，不是"LLM 写得好不好"）；质量门 passed/force 与内聚度数值仅供观测记录，不设通过/失败判定（与既有"轴一/轴二"拆分惯例一致）。
+
+**口径说明（已按现有代码定稿，`docs/impl/v1/wiki-generation.md` 第 7.4/11 节已同步改写，非待确认落差）**：`GET /wiki/pages/:id` 只返回 `summary`/`aspects`，不返回 `aliases`/`trigger_questions`/`claim_checks[]`/`latest_quality_check`——这几项和 `learning_events` 一样，属于"API 之外的观察面"，本阶段改为直接读 `wiki_pages`/`wiki_claim_checks`/`wiki_quality_checks` 表核验（脚本已按此方式实现，见 `v1_common.py` 的 `db_wiki_page_row`/`db_wiki_claim_checks`/`db_wiki_quality_checks`）。同理，`force=true` 覆盖发布只把 `wiki_quality_checks.forced` 置 1，不写 `learning_results` 事件、不进学习报告——force 是编译/发布链路内部的一次性人工决定，不是 Study 要追踪的学习动作，本阶段只核对 `forced=1`。
+
 **两层架构收紧（`docs/impl/v1/two-tier-task-brief.md`，本阶段脚本已同步修正）**：`POST /wiki/compile`、`POST /wiki/compile/analyze` 的 `page_type` 参数现在**只接受 `concept`**——主题页（`page_type=topic`）不再由这两个端点产出，而是完全由二阶编译端点 `POST /wiki/pages/:id/topic/analyze`、`POST /wiki/pages/:id/topic/compile` 负责（详见 P12）。本阶段每个领域培养的仍是单一 concept（一个业务话题对应一个 KP 聚簇），`page_type` 传 `concept` 即可，不要再传 `topic`。
 
 1. 制度域主题「销售回款管理」：围绕应收账款文档密集问答（A9、A10、A11 及其变体，凑足 wiki_confident_min 与 wiki_kp_min）；技术域主题「Oracle RAC」：围绕 T10、T11、T18、B4 密集问答（11g/19c/问题汇总三篇文档的 KP 同 Concept 聚簇，天然满足多 KU 依赖，比单文档主题更能检验编译的综合能力）；
@@ -382,7 +393,7 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 5. `POST /wiki/pages/:id/publish` → 重问该主题问题：`path_type=wiki`，回答基于页面并附证据回链，且不产生激活类事件（wiki 直答不经激活层）；
 6. 底层变化：制度页对应收账款 source、技术页对 19c RAC source 各做一次 reupload 换血（微改任一数值）→ `POST /study/run` → 对应页面被标记 `needs_recompile`（不得自动重编译）；
 7. 人工 `POST /wiki/pages/:id/recompile` → 新版本生成（内部自动走分析→生成两步，不额外暴露 analyze 预览接口），revisions 可查旧版，编译记录可追溯到触发的 Learning Event。
-8. 通过标准：readme 描述的完整生命周期「候选→确认→编译→检索命中→底层变化→待重编译」逐环节成立，任何环节自动越过人工确认即为失败；verified 链接门槛（轴一）必须验证到位，days_active 门槛（轴二）达标与否不影响通过判定。
+8. 通过标准：readme 描述的完整生命周期「候选→确认→编译→检索命中→底层变化→待重编译」逐环节成立，任何环节自动越过人工确认即为失败；verified 链接门槛（轴一）必须验证到位，days_active 门槛（轴二）达标与否不影响通过判定；新增（生成质量链路）：正文五节+切面三级标题结构齐全、`wiki_claim_checks` 落库行数与 claims 数匹配且 verdict 合法、`aliases`/`trigger_questions` 均可溯源到 `subject_synonyms`/真实 `traces.question`（不得是 LLM 现编）——三项均为必过；quality gate 的 passed/force 与内聚度数值仅记录，不影响本阶段通过判定。
 
 ### P9 用户反馈通道（标准 8）
 
@@ -457,6 +468,7 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 | 状态迁移审计完整率 | 100%（迁移必有 result+reason+events） | P10 |
 | 缺口题幻构率 | 0（C 组不得编造引用，技术域 C3/C4 重点盯） | P1 |
 | 两层架构契约行为通过率 | 100%（page_type 拒绝、relations 结构、草稿生命周期与写回防护、回流字段落库、report 新板块，5 项全过） | P12 |
+| Wiki 生成质量链路结构通过率 | 100%（正文五节+切面三级标题结构、`wiki_claim_checks` 落库匹配、aliases/trigger_questions 可溯源三项全过；质量门 passed/force、内聚度数值仅记录不判定） | P8 |
 
 ## 7. 执行注意事项
 

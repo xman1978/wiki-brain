@@ -474,7 +474,7 @@ func TestCreateManualCandidate_BlankThenConfirmable(t *testing.T) {
 
 	// Blank args model the never-touched "新增" draft form — nothing to
 	// persist yet until the user actually fills something in.
-	candidateID, err := svc.CreateManualCandidate("", "", nil)
+	candidateID, err := svc.CreateManualCandidate("", "", "", nil)
 	if err != nil {
 		t.Fatalf("create manual candidate: %v", err)
 	}
@@ -513,7 +513,7 @@ func TestCreateManualCandidate_FilledFromDraft(t *testing.T) {
 
 	// The draft dialog's own "确认" (保存到待确认) sends whatever the user
 	// filled in — this is what CreateManualCandidate now actually receives.
-	candidateID, err := svc.CreateManualCandidate("d1", "并发编程", []string{"p1"})
+	candidateID, err := svc.CreateManualCandidate("d1", "并发编程", "", []string{"p1"})
 	if err != nil {
 		t.Fatalf("create manual candidate: %v", err)
 	}
