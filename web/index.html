@@ -585,6 +585,9 @@
 
     /* ── 知识领域 drawer: domain rail + concept grid ── */
     #conceptDrawer .drawer-body { display:flex; }
+    #activationDrawer .drawer-body { display:flex; }
+    .dcc-status-badge.status-confirmed { background:var(--green-lt); color:var(--green); border:1px solid var(--green); }
+    .dcc-status-badge.status-weakened { background:var(--surface-alt); color:var(--text-2); border:1px solid var(--border); }
     .domain-rail { width:230px; flex-shrink:0; border-right:1px solid var(--border-lt); display:flex; flex-direction:column; overflow:hidden; }
     .domain-rail-head { padding:12px; display:flex; flex-direction:column; gap:8px; border-bottom:1px solid var(--border-lt); flex-shrink:0; }
     .domain-rail-search { width:100%; padding:6px 9px; border:1px solid var(--border); border-radius:var(--radius-xs); font-size:12.5px; background:var(--bg); }
@@ -672,8 +675,9 @@
     <button class="nav-item" onclick="toggleHistoryPopover()" title="历史记录" id="historyNavBtn"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span><span class="nav-label">历史记录</span></button>
     <button class="nav-item" onclick="openFileDrawer()" title="文件管理"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span class="nav-label">文件</span></button>
     <button class="nav-item" onclick="openStudyView()" title="学习报告"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg></span><span class="nav-label">学习报告</span></button>
-    <button class="nav-item" onclick="openWikiView()" title="Wiki"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span><span class="nav-label">Wiki</span><span class="nav-badge hidden" id="wikiPendingBadge">0</span></button>
-    <button class="nav-item" onclick="openConceptView()" title="知识领域"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="7" r="3"/><circle cx="12" cy="18" r="3"/><path d="M9.5 8.5L14.5 15.5M14.5 8.5L9.5 15.5"/></svg></span><span class="nav-label">知识领域</span><span class="nav-badge hidden" id="conceptPendingBadge">0</span></button>
+    <button class="nav-item" onclick="openActivationView()" title="激活链接"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M13 2 4.5 13H11l-1 9 9.5-12H13l0-8Z"/></svg></span><span class="nav-label">激活链接</span><span class="nav-badge hidden" id="activationPendingBadge">0</span></button>
+    <button class="nav-item" onclick="openWikiView()" title="Wiki"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M2 4.5A2.5 2.5 0 0 1 4.5 2H9a3 3 0 0 1 3 3v17a3 3 0 0 0-3-3H2Z"/><path d="M22 4.5A2.5 2.5 0 0 0 19.5 2H15a3 3 0 0 0-3 3v17a3 3 0 0 1 3-3h7Z"/></svg></span><span class="nav-label">Wiki</span><span class="nav-badge hidden" id="wikiPendingBadge">0</span></button>
+    <button class="nav-item" onclick="openConceptView()" title="知识领域"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg></span><span class="nav-label">知识领域</span><span class="nav-badge hidden" id="conceptPendingBadge">0</span></button>
     <button class="nav-item" onclick="openLlmView()" title="模型设置"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg></span><span class="nav-label">模型设置</span></button>
   </div>
 
@@ -854,6 +858,36 @@
   </div>
 </div>
 
+<!-- ── ACTIVATION LINK DRAWER OVERLAY（布局对齐知识领域：左侧领域 rail → 右侧
+     激活链接卡片 → 点击打开详情弹窗做确认/驳回）─────────────────────────── -->
+<div class="file-overlay hidden" id="activationOverlay" onclick="closeActivationView()"></div>
+
+<!-- ── ACTIVATION LINK DRAWER ──────────────────────────────── -->
+<div class="file-drawer split-drawer" id="activationDrawer" style="width:min(920px,96vw)">
+  <div class="drawer-header">
+    <span>激活链接</span>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-sm" onclick="loadActivationDomainRail()">刷新</button>
+      <button class="btn-ghost" onclick="closeActivationView()">✕</button>
+    </div>
+  </div>
+  <div class="drawer-body" style="display:flex;overflow:hidden">
+    <div class="domain-rail" id="activationDomainRail">
+      <div class="domain-rail-head">
+        <input class="domain-rail-search" id="activationDomainRailSearch" placeholder="搜索领域…" oninput="filterActivationDomainRail(this.value)" />
+      </div>
+      <div class="domain-rail-list" id="activationDomainRailList">
+        <div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">加载中...</div>
+      </div>
+    </div>
+    <div class="domain-main">
+      <div class="domain-concept-pane" id="activationDomainPane" style="flex:1;overflow-y:auto">
+        <div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ── WIKI DRAWER OVERLAY（按知识领域分类：左侧领域 rail → 右侧全部 Wiki 卡片
      → 点击打开详情弹窗做发布/重编译/归档等操作）──────────────────────────── -->
 <div class="file-overlay hidden" id="wikiOverlay" onclick="closeWikiView()"></div>
@@ -1002,6 +1036,11 @@ const S = {
   lrObjectType:        '',
   lrStatus:            '',
   activationSelectedId: null,
+  activationDomainList: [],
+  activationDomainFilter: '',
+  activationDomainSelectedId: null,
+  activationLinksList: [],
+  activationDomainStats: {},
   wikiCatalog:         [],
   wikiDomainFilter:    '',
   wikiDomainSelectedId: null,
@@ -3624,7 +3663,154 @@ async function showLearningResultDetail(resultId) {
 
 // ═══════════════════════════════════════════════════════
 // ACTIVATION LINK MANAGEMENT (docs/impl/v1/page.md 步骤 2)
+// 布局对齐「知识领域」：左侧领域 rail → 右侧激活链接卡片 → 详情弹窗确认/驳回。
 // ═══════════════════════════════════════════════════════
+
+// 卡片展示用的确认态（用户可见三态），与链接内部 status 机映射：
+// candidate→待确认；verified/weakened→已确认；deprecated→已驳回。
+function activationConfirmStatus(status) {
+  if (status === 'candidate') return 'pending_confirm';
+  if (status === 'deprecated') return 'rejected';
+  return 'confirmed'; // verified / weakened
+}
+function activationConfirmStatusLabel(status) {
+  return ({ pending_confirm: '待确认', confirmed: '已确认', rejected: '已驳回' })[activationConfirmStatus(status)] || status || '';
+}
+function activationConfirmStatusSort(status) {
+  return ({ pending_confirm: 0, confirmed: 1, rejected: 2 })[activationConfirmStatus(status)] || 9;
+}
+
+function openActivationView() {
+  document.getElementById('activationDrawer').classList.add('open');
+  document.getElementById('activationOverlay').classList.remove('hidden');
+  loadActivationDomainRail();
+}
+function closeActivationView() {
+  document.getElementById('activationDrawer').classList.remove('open');
+  document.getElementById('activationOverlay').classList.add('hidden');
+}
+
+async function loadActivationDomainRail() {
+  try {
+    var r = await api('GET', '/domains');
+    S.activationDomainList = (r.ok && Array.isArray(r.data)) ? r.data : [];
+  } catch (e) { S.activationDomainList = []; }
+  if (!S.activationDomainSelectedId || !S.activationDomainList.some(function(d) { return d.domain_id === S.activationDomainSelectedId; })) {
+    S.activationDomainSelectedId = (S.activationDomainList[0] && S.activationDomainList[0].domain_id) || null;
+  }
+  renderActivationDomainRail();
+  renderActivationDomainPane();
+}
+
+function filterActivationDomainRail(v) { S.activationDomainFilter = v; renderActivationDomainRail(); }
+
+function renderActivationDomainRail() {
+  var list = document.getElementById('activationDomainRailList');
+  if (!list) return;
+  var f = (S.activationDomainFilter || '').trim().toLowerCase();
+  var items = (S.activationDomainList || []).filter(function(d) { return !f || (d.name || '').toLowerCase().indexOf(f) !== -1; });
+  if (!items.length) {
+    list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">暂无领域</div>';
+    return;
+  }
+  list.innerHTML = items.map(function(d) {
+    var stats = (S.activationDomainStats || {})[d.domain_id] || {};
+    var count = stats.total != null ? stats.total : '·';
+    var pending = stats.pending || 0;
+    return '<div class="domain-rail-item' + (d.domain_id === S.activationDomainSelectedId ? ' active' : '') + '" onclick="selectActivationDomainRail(\'' + esc(d.domain_id) + '\')">\
+      <span class="domain-rail-name">' + esc(d.name) + '</span>\
+      <span class="domain-rail-count">' + count + '</span>\
+      ' + (pending > 0 ? '<span class="domain-rail-signal" title="' + pending + ' 条待确认">' + pending + '</span>' : '') + '\
+    </div>';
+  }).join('');
+}
+
+function selectActivationDomainRail(domainId) {
+  S.activationDomainSelectedId = domainId;
+  renderActivationDomainRail();
+  renderActivationDomainPane();
+}
+
+// 领域下的激活链接 = 该领域概念挂载的 KP 对应的 activation_links（一对一）。
+async function fetchActivationLinksForDomain(domainId) {
+  var conceptsR = await api('GET', '/concepts?domain_id=' + encodeURIComponent(domainId));
+  var concepts = (conceptsR.ok && Array.isArray(conceptsR.data)) ? conceptsR.data : [];
+  if (!concepts.length) return [];
+  var detailResults = await Promise.all(concepts.map(function(c) {
+    return api('GET', '/concepts/' + encodeURIComponent(c.concept_id));
+  }));
+  var pointIds = [];
+  var seen = {};
+  detailResults.forEach(function(cr) {
+    if (!cr.ok || !cr.data) return;
+    (cr.data.points || []).forEach(function(pt) {
+      if (pt.point_id && !seen[pt.point_id]) { seen[pt.point_id] = true; pointIds.push(pt.point_id); }
+    });
+  });
+  if (!pointIds.length) return [];
+  var lr = await api('GET', '/activation-links?point_ids=' + pointIds.map(encodeURIComponent).join(','));
+  return (lr.ok && Array.isArray(lr.data)) ? lr.data : [];
+}
+
+async function renderActivationDomainPane() {
+  var pane = document.getElementById('activationDomainPane');
+  if (!pane) return;
+  var d = (S.activationDomainList || []).find(function(x) { return x.domain_id === S.activationDomainSelectedId; });
+  if (!d) {
+    pane.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">请先在「知识领域」中新增领域</div>';
+    return;
+  }
+  var domainId = d.domain_id;
+  pane.innerHTML = '\
+    <div style="min-width:0">\
+      <div style="font-size:16px;font-weight:700">' + esc(d.name) + '</div>\
+      <div style="font-size:12.5px;color:var(--text-2);margin-top:4px">' + esc(d.description || '暂无简介') + '</div>\
+      <div style="display:flex;gap:14px;margin-top:8px;font-size:12px;color:var(--text-3)">\
+        <span>激活链接 <b style="color:var(--text)" id="activationDomainLinkCount">…</b></span>\
+      </div>\
+    </div>\
+    <div class="domain-concept-grid" id="activationDomainGrid" style="margin-top:12px"><div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">加载中...</div></div>';
+
+  var links = [];
+  try { links = await fetchActivationLinksForDomain(domainId); }
+  catch (e) { links = []; }
+  if (S.activationDomainSelectedId !== domainId) return;
+
+  links.sort(function(a, b) {
+    var sa = activationConfirmStatusSort(a.status);
+    var sb = activationConfirmStatusSort(b.status);
+    if (sa !== sb) return sa - sb;
+    return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+  });
+  S.activationLinksList = links;
+  var pending = links.filter(function(l) { return activationConfirmStatus(l.status) === 'pending_confirm'; }).length;
+  S.activationDomainStats = S.activationDomainStats || {};
+  S.activationDomainStats[domainId] = { total: links.length, pending: pending };
+  renderActivationDomainRail();
+
+  var countEl = document.getElementById('activationDomainLinkCount');
+  if (countEl) countEl.textContent = String(links.length);
+
+  var grid = document.getElementById('activationDomainGrid');
+  if (!grid) return;
+  grid.innerHTML = links.length
+    ? links.map(renderActivationLinkCardHtml).join('')
+    : '<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">该领域下还没有激活链接</div>';
+}
+
+function renderActivationLinkCardHtml(l) {
+  var confirmStatus = activationConfirmStatus(l.status);
+  var label = activationConfirmStatusLabel(l.status);
+  var cls = confirmStatus === 'confirmed' ? 'confirmed' : 'candidate status-' + confirmStatus;
+  var badgeCls = 'status-' + confirmStatus;
+  var desc = l.point_summary || l.unit_center || '';
+  return '<div class="domain-concept-card ' + cls + '" onclick="selectActivationLink(\'' + esc(l.link_id) + '\')">\
+    <div class="dcc-top"><div class="dcc-name">' + esc(l.question_terms || '(未命名)') + '</div><span class="dcc-status-badge ' + badgeCls + '">' + esc(label) + '</span></div>\
+    <div class="dcc-desc">' + esc(desc) + '</div>\
+    <div class="dcc-kp">采纳 ' + (l.adopt_count || 0) + ' / 失败 ' + (l.fail_count || 0) + '</div>\
+  </div>';
+}
+
 async function selectActivationLink(linkId) {
   S.activationSelectedId = linkId;
   var detail = document.getElementById('activationLinkModalContent');
@@ -3658,10 +3844,12 @@ function linkReasonLabel(r) {
 function renderActivationLinkDetail(d) {
   var detail = document.getElementById('activationLinkModalContent');
   S.linkDetailCache = { linkId: d.link_id, questions: null, results: null };
+  var statusLabel = activationConfirmStatusLabel(d.status);
+  var statusBadgeCls = 'status-' + activationConfirmStatus(d.status);
   var actionsHtml = '<div class="modal-actions" style="margin-top:14px;justify-content:flex-start">';
   if (d.status === 'candidate') {
     actionsHtml += '\
-      <button class="btn btn-primary btn-sm" onclick="confirmActivationLink(\'' + esc(d.link_id) + '\')">确认晋升</button>\
+      <button class="btn btn-primary btn-sm" onclick="confirmActivationLink(\'' + esc(d.link_id) + '\')">确认</button>\
       <button class="btn btn-sm" style="color:var(--red)" onclick="rejectActivationLink(\'' + esc(d.link_id) + '\')">驳回</button>';
   }
   actionsHtml += '<button class="btn btn-sm" onclick="closeActivationLinkModal()">关闭</button></div>';
@@ -3673,7 +3861,7 @@ function renderActivationLinkDetail(d) {
     : '<span class="dv" style="color:var(--text-3)">' + esc(d.point_id || '') + '（知识点已不存在）</span>';
   detail.innerHTML = '\
     <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">' + esc(d.question_terms || '') + '</h2>\
-    <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="badge">' + esc(d.status) + '</span></span></div>\
+    <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="dcc-status-badge ' + statusBadgeCls + '">' + esc(statusLabel) + '</span>' + (d.status === 'weakened' ? ' <span style="color:var(--text-3);font-size:12px">（已弱化）</span>' : '') + '</span></div>\
     <div class="detail-row"><span class="dl">来源文档</span><span class="dv">' + esc(d.source_title || '-') + '</span></div>\
     <div class="detail-row"><span class="dl">知识点</span>' + kpHtml + '</div>\
     <div id="linkUnitContent"></div>\
@@ -3787,14 +3975,21 @@ async function toggleLinkUnitContent(unitId) {
   } catch(ex) { el.innerHTML = '<div class="ku-context">加载失败：' + esc(ex.message) + '</div>'; }
 }
 
+function refreshActivationViewIfOpen() {
+  if (document.getElementById('activationDrawer').classList.contains('open')) {
+    renderActivationDomainPane();
+  }
+}
+
 async function confirmActivationLink(linkId) {
-  if (!(await showConfirm('确认将该候选链接晋升为 verified？'))) return;
+  if (!(await showConfirm('确认将该激活链接标记为已确认？'))) return;
   try {
     var r = await api('POST', '/activation-links/' + linkId + '/confirm');
     if (r.ok) {
       selectActivationLink(linkId);
+      refreshActivationViewIfOpen();
       if (S.wikiConceptId) loadConceptKPLinksSection(S.wikiConceptId);
-      pollWikiPendingCount();
+      pollActivationPendingCount();
       if (document.getElementById('studyDrawer').classList.contains('open') && S.studyTab === 'overview') loadStudyReport();
     }
     else alert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
@@ -3802,29 +3997,34 @@ async function confirmActivationLink(linkId) {
 }
 
 async function rejectActivationLink(linkId) {
-  if (!(await showConfirm('确认驳回该候选链接？'))) return;
+  if (!(await showConfirm('确认驳回该激活链接？'))) return;
   try {
     var r = await api('POST', '/activation-links/' + linkId + '/reject');
     if (r.ok) {
       selectActivationLink(linkId);
+      refreshActivationViewIfOpen();
       if (S.wikiConceptId) loadConceptKPLinksSection(S.wikiConceptId);
-      pollWikiPendingCount();
+      pollActivationPendingCount();
       if (document.getElementById('studyDrawer').classList.contains('open') && S.studyTab === 'overview') loadStudyReport();
     }
     else alert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
   } catch(e) { alert('操作出错：' + e.message); }
 }
 
-// 待确认徽标：pending_confirm 的 promote/wiki_candidate/topic_page_candidate
-// 数量合并到一个 nav 徽标（docs/impl/v1/page.md 步骤 2/3），30 秒轮询，与健康
-// 检查共用定时器周期。三者原本分属"激活链接管理"与"Wiki"两个入口的徽标，
-// 合并页面后只剩一个入口，徽标也随之合一。
-async function pollWikiPendingCount() {
+// 待确认徽标：激活链接入口只计 promote pending_confirm；Wiki 入口计
+// wiki_candidate / topic_page_candidate（docs/impl/v1/page.md 步骤 2/3）。
+async function pollActivationPendingCount() {
   var total = 0;
   try {
-    var r1 = await api('GET', '/study/results?action=promote&status=pending_confirm&limit=200');
-    total += Array.isArray(r1.data) ? r1.data.length : 0;
+    var r = await api('GET', '/study/results?action=promote&status=pending_confirm&limit=200');
+    total = Array.isArray(r.data) ? r.data.length : 0;
   } catch(e) { /* ignore */ }
+  var badge = document.getElementById('activationPendingBadge');
+  if (badge) { badge.textContent = total; badge.classList.toggle('hidden', total === 0); }
+}
+
+async function pollWikiPendingCount() {
+  var total = 0;
   try {
     var r2 = await api('GET', '/study/results?action=wiki_candidate&status=pending_confirm&limit=200');
     total += Array.isArray(r2.data) ? r2.data.length : 0;
@@ -4602,7 +4802,7 @@ function toggleKPLinkSection(pointId) {
 }
 
 function linkStatusValueLabel(s) {
-  return ({ candidate: '候选', verified: '已验证', weakened: '已弱化', deprecated: '已废弃' })[s] || s || '';
+  return activationConfirmStatusLabel(s);
 }
 
 // 关系区（docs/impl/v1/page.md 步骤 3 两层架构扩展）：程序派生的只读信息，
@@ -5882,6 +6082,8 @@ checkHealth();
 setInterval(checkHealth, 30000);
 pollWikiPendingCount();
 setInterval(pollWikiPendingCount, 30000);
+pollActivationPendingCount();
+setInterval(pollActivationPendingCount, 30000);
 pollConceptPendingCount();
 setInterval(pollConceptPendingCount, 30000);
 document.getElementById('welcomeInput').focus();
