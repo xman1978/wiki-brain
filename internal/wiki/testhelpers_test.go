@@ -22,9 +22,9 @@ func seedDomain(t *testing.T, db *sql.DB, domainID, name string) {
 	}
 }
 
-func seedConcept(t *testing.T, db *sql.DB, conceptID, domainID, name string) {
+func seedEntry(t *testing.T, db *sql.DB, conceptID, domainID, name string) {
 	t.Helper()
-	if _, err := db.Exec(`INSERT INTO concepts (concept_id, domain_id, name, description) VALUES (?, ?, ?, ?)`,
+	if _, err := db.Exec(`INSERT INTO entries (entry_id, domain_id, name, description) VALUES (?, ?, ?, ?)`,
 		conceptID, domainID, name, name+" 的描述"); err != nil {
 		t.Fatalf("seed concept: %v", err)
 	}
@@ -40,7 +40,7 @@ func seedSource(t *testing.T, db *sql.DB, sourceID, markdownPath string) {
 
 func seedKU(t *testing.T, db *sql.DB, unitID, sourceID, conceptID, center string, lineStart, lineEnd int) {
 	t.Helper()
-	if _, err := db.Exec(`INSERT INTO knowledge_units (unit_id, source_id, concept_id, center, line_start, line_end, status, prompt_version)
+	if _, err := db.Exec(`INSERT INTO knowledge_units (unit_id, source_id, entry_id, center, line_start, line_end, status, prompt_version)
 		VALUES (?, ?, ?, ?, ?, ?, 'done', 'v1')`, unitID, sourceID, conceptID, center, lineStart, lineEnd); err != nil {
 		t.Fatalf("seed KU: %v", err)
 	}
@@ -71,7 +71,7 @@ func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *sql.DB, bleve.I
 	db := foundation.NewTestDB(t)
 
 	seedDomain(t, db, "d1", "Domain One")
-	seedConcept(t, db, "c1", "d1", "Concept One")
+	seedEntry(t, db, "c1", "d1", "Concept One")
 
 	tmpDir := foundation.NewTestDir(t)
 	mdPath := filepath.Join(tmpDir, "source.md")
@@ -115,7 +115,7 @@ func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *sql.DB, bleve.I
 		CompileMaxChars: 20000, RecompileNewKPMin: 2,
 		AspectGamma: 1.0, AspectMinSize: 2, AspectMaxSize: 8, AspectSplitGammaFactor: 1.5,
 	}
-	svc := NewService(store, fake, idxMgr.Wiki, cfg)
+	svc := NewService(store, fake, idxMgr.Wiki, idxMgr.Points, cfg, 0)
 
 	return svc, fake, db, idxMgr.Wiki
 }
@@ -166,7 +166,7 @@ func seedConfidentTrace(t *testing.T, db *sql.DB, traceID, question string, poin
 }
 
 // seedSubjectSynonym seeds an active subject_synonyms row so
-// Store.ConceptAliases has real, already-verified alias data to return
+// Store.EntryAliases has real, already-verified alias data to return
 // (docs/design/wiki-compilation.md "触发问法取材真实观测，检索匹配复用四元组"
 // 生成侧 修订: aliases 由程序查表，不再由 LLM 生成).
 func seedSubjectSynonym(t *testing.T, db *sql.DB, term, canonical string) {
@@ -198,7 +198,7 @@ const validAnalyzeOutput = `{
 // Markdown (compileContent uses llm.Complete, not CompleteJSON), five
 // required headings, one "### " subsection under "展开说明" citing both
 // p1/p2 so the happy path is never missing citations.
-const validCompileOutput = "## 摘要\n\nConcept One 是这个领域的核心概念。\n\n" +
+const validCompileOutput = "## 摘要\n\nEntry One 是这个领域的核心概念。\n\n" +
 	"## 稳定结论\n\n内容一的核心结论 [p1]\n内容二的核心结论 [p2]\n\n" +
 	"## 展开说明\n\n### 核心内容\n\n详细说明一。[p1] 详细说明二。[p2]\n\n" +
 	"## 待验证点\n\n暂无。\n\n" +
@@ -211,7 +211,7 @@ const missingClaimsAnalyzeOutput = `{"claims": [], "tensions": []}`
 
 // hallucinatedCiteCompileOutput cites an out-of-whitelist point_id (p999)
 // alongside valid ones — filterContentTags must strip it.
-const hallucinatedCiteCompileOutput = "## 摘要\n\nConcept One 是这个领域的核心概念。\n\n" +
+const hallucinatedCiteCompileOutput = "## 摘要\n\nEntry One 是这个领域的核心概念。\n\n" +
 	"## 稳定结论\n\n内容一的核心结论 [p1] [p999]\n\n" +
 	"## 展开说明\n\n### 核心内容\n\n详细说明。[p1] [p999]\n\n" +
 	"## 待验证点\n\n暂无。\n\n" +

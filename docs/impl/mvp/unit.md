@@ -27,7 +27,7 @@ CREATE TABLE knowledge_units (
     unit_id        TEXT PRIMARY KEY,
     source_id      TEXT NOT NULL REFERENCES sources(source_id),
     outline_id     TEXT REFERENCES source_outlines(outline_id),
-    concept_id     TEXT REFERENCES concepts(concept_id),
+    entry_id     TEXT REFERENCES entries(entry_id),
     -- 匹配到的知识概念（可为空，批量匹配后写入）
     center         TEXT NOT NULL,
     -- 'center' 是该单元的核心主题或判断，10~40 字，供检索和展示使用
@@ -454,54 +454,55 @@ KPN 生成不改变 KU / KP 的状态。
 
 ### 步骤 5：Concept 批量匹配
 
-KPN 关系生成（步骤 4）完成后，对当前 Source 下所有状态为 `completed` 的 KU 做批量 Concept 匹配，写入 `knowledge_units.concept_id`。
+KPN 关系生成（步骤 4）完成后，对当前 Source 下所有状态为 `completed` 的 KU 做批量 Concept 匹配，写入 `knowledge_units.entry_id`。
 
 **输入**：
 
 ```text
-所有 completed KU 的 unit_id + center；
+所有 completed KU 的 unit_id + center + 所属 Source 的 title/summary
+  （summary 为空时省略；用于区分不同来源实体，尤其是 fact 匹配）；
 sources.domain_id（若有，则只取该 domain 下的 concept 列表；若为 null，则取全部 concept 列表）；
-concept 列表：concept_id + name + description。
+concept 列表：entry_id + name + description。
 ```
 
-**Prompt 文件**：`config/prompts/unit_concept_match.md`
+**Prompt 文件**：`config/prompts/unit_entry_match.md`
 
 ```
 以下是一批知识单元，每条包含编号和主题描述：
 {{units_list}}
 
 以下是可用的知识概念列表：
-{{concept_list}}
+{{entry_list}}
 
-请为每个知识单元选择最匹配的概念 concept_id。若没有匹配的概念，concept_id 输出空字符串。
+请为每个知识单元选择最匹配的概念 entry_id。若没有匹配的概念，entry_id 输出空字符串。
 
 按以下 JSON Schema 输出，不输出任何其他内容：
 {{json_schema}}
 ```
 
-`{{units_list}}` 每行格式：`[unit_id] center 描述`
-`{{concept_list}}` 每行格式：`[concept_id] name：description`
+`{{units_list}}` 每行格式：`[unit_id] center | 来源标题：title [| 来源摘要：summary]`
+`{{entry_list}}` 每行格式：`[entry_id] name：description`
 
 注入 prompt 的 `{{json_schema}}` 是示例 JSON：
 
 ```json
 {
   "matches": [
-    {"unit_id": "unit_uuid_xxx", "concept_id": "xxx"}
+    {"unit_id": "unit_uuid_xxx", "entry_id": "xxx"}
   ]
 }
 ```
 
-程序将模型输出解析整合后，用 `unit_concept_match.md` 内 `## Schema` 段的 JSON Schema 校验整合结果，检查 `unit_id` 存在于当前批次 unit_id 集合中。
+程序将模型输出解析整合后，用 `unit_entry_match.md` 内 `## Schema` 段的 JSON Schema 校验整合结果，检查 `unit_id` 存在于当前批次 unit_id 集合中。
 
 **批量策略与结果处理**：
 
 ```text
 单次 LLM 调用携带不超过 50 个 KU；超出则分批，每批独立调用；
-concept_id 非空且存在于 concepts 表：写入 knowledge_units.concept_id；
-concept_id 为空或不存在：concept_id 保持 null；
-  → concept_id 为 null 的 KU 不受 concept 过滤约束；
-LLM 调用失败：记录 warn 日志，当前批次 KU 的 concept_id 保持 null，不阻塞 Source 完成。
+entry_id 非空且存在于 entries 表：写入 knowledge_units.entry_id；
+entry_id 为空或不存在：entry_id 保持 null；
+  → entry_id 为 null 的 KU 不受 concept 过滤约束；
+LLM 调用失败：记录 warn 日志，当前批次 KU 的 entry_id 保持 null，不阻塞 Source 完成。
 ```
 
 ### 步骤 6：提取并原子持久化 Rerank 语义
@@ -554,7 +555,7 @@ GET    /sources/:id/units
 GET    /units/:id
   查询单个 KnowledgeUnit 及其 KnowledgePoint
   响应：{
-    unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status,
+    unit_id, source_id, outline_id, entry_id, center, line_start, line_end, status,
     points: [{ point_id, content, point_type }]
   }
 
@@ -590,7 +591,7 @@ Rerank 语义提取或落库失败时，上一代 current KU/KP、语义和索�
 重试机制正常工作：可定位的单元业务校验失败时单元级重试一次；失败诊断只写日志，不越过原子发布边界创建 current KU；
 KPN 生成在全 Source KP 提取完成后运行，关系写入 SQLite，可通过 API 按 point_id 查询；
 KPN 生成失败不阻塞 Source 完成状态；
-Concept 批量匹配在 KPN 完成后运行，concept_id 写入 SQLite，可通过 GET /units/:id 查询；
+Concept 批量匹配在 KPN 完成后运行，entry_id 写入 SQLite，可通过 GET /units/:id 查询；
 Concept 匹配失败不阻塞 Source 完成状态；
 fake LLM client 下，提取、KPN 和 Concept 匹配路径测试可稳定运行，不依赖真实 LLM 调用。
 ```

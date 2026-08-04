@@ -74,7 +74,7 @@ func TestIntegrationTraceQuality(t *testing.T) {
 
 	ansStore := answer.NewStore(database)
 	traceStore := NewStore(database)
-	traceSvc := NewService(traceStore, cfg.Study.ConceptNullRatioMin)
+	traceSvc := NewService(traceStore, cfg.Study.EntryNullRatioMin)
 
 	// Wire up queue so trace is processed synchronously with a wait signal
 	var traceWg sync.WaitGroup

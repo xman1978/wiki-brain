@@ -44,7 +44,7 @@ func testConfig() config.StudyConfig {
 func TestService_Run_Empty(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
+	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
 
 	result, err := svc.Run()
 	if err != nil {
@@ -79,12 +79,12 @@ func TestService_Run_WithData(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
 
 	// Seed prerequisite data
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "TestDomain")
-	seedConcept(t, db, "con1", "dom1", "TestConcept")
+	seedEntry(t, db, "con1", "dom1", "TestEntry")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "知识点1")
 	seedKP(t, db, "kp2", "ku1", "src1", "知识点2")
@@ -172,11 +172,11 @@ func TestService_GapThresholdWarning(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.GapHitThreshold = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "c")
 
@@ -204,11 +204,11 @@ func TestService_RecommendationLogic(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "c1")
 
@@ -253,11 +253,11 @@ func TestService_WikiCandidates(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.WikiKPMin = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "TestConcept")
+	seedEntry(t, db, "con1", "dom1", "TestEntry")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "c1")
 	seedKP(t, db, "kp2", "ku1", "src1", "c2")
@@ -279,8 +279,8 @@ func TestService_WikiCandidates(t *testing.T) {
 	}
 
 	w := wikis[0]
-	if w.ConceptID != "con1" {
-		t.Errorf("expected concept_id=con1, got %s", w.ConceptID)
+	if w.EntryID != "con1" {
+		t.Errorf("expected entry_id=con1, got %s", w.EntryID)
 	}
 	if w.Stats.QualifyingKPCount != 2 {
 		t.Errorf("expected 2 qualifying KPs, got %d", w.Stats.QualifyingKPCount)
@@ -307,11 +307,11 @@ func TestService_WikiCandidates_ContradictsDominantNotReady(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.WikiKPMin = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "TestConcept")
+	seedEntry(t, db, "con1", "dom1", "TestEntry")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "c1")
 	seedKP(t, db, "kp2", "ku1", "src1", "c2")
@@ -359,7 +359,7 @@ func TestService_WikiCandidates_ContradictsDominantNotReady(t *testing.T) {
 // what every other test in this file uses) it must still be recommended
 // ready — this is what keeps the gate's addition from silently changing
 // every pre-existing "ready" expectation. With the gate configured on, the
-// same data must flip to needs_more_data and produce a ConceptSplitSignalEntry
+// same data must flip to needs_more_data and produce a EntrySplitSignalEntry
 // naming both clusters.
 func TestService_WikiCandidates_LowCohesionSplitSignal(t *testing.T) {
 	db := setupTestDB(t)
@@ -369,7 +369,7 @@ func TestService_WikiCandidates_LowCohesionSplitSignal(t *testing.T) {
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "TestConcept")
+	seedEntry(t, db, "con1", "dom1", "TestEntry")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "c1")
 	seedKP(t, db, "kp2", "ku1", "src1", "c2")
@@ -389,7 +389,7 @@ func TestService_WikiCandidates_LowCohesionSplitSignal(t *testing.T) {
 		}
 	}
 
-	svcGateOff := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
+	svcGateOff := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
 	wikisOff, _, err := svcGateOff.buildWikiCandidatesWithSplitSignals()
 	if err != nil {
 		t.Fatalf("buildWikiCandidatesWithSplitSignals (gate off): %v", err)
@@ -401,7 +401,7 @@ func TestService_WikiCandidates_LowCohesionSplitSignal(t *testing.T) {
 		t.Errorf("gate off: expected Stats.Cohesion to still report the low value (~0.5), got %.2f", wikisOff[0].Stats.Cohesion)
 	}
 
-	svcGateOn := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{Min: 0.6, WRel: 1.0, Gamma: 1.0})
+	svcGateOn := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{Min: 0.6, WRel: 1.0, Gamma: 1.0}, 0, 0)
 	wikisOn, splitSignals, err := svcGateOn.buildWikiCandidatesWithSplitSignals()
 	if err != nil {
 		t.Fatalf("buildWikiCandidatesWithSplitSignals (gate on): %v", err)
@@ -413,8 +413,8 @@ func TestService_WikiCandidates_LowCohesionSplitSignal(t *testing.T) {
 		t.Fatalf("expected 1 concept split signal, got %d", len(splitSignals))
 	}
 	sig := splitSignals[0]
-	if sig.ConceptID != "con1" {
-		t.Errorf("split signal concept_id = %q, want con1", sig.ConceptID)
+	if sig.EntryID != "con1" {
+		t.Errorf("split signal entry_id = %q, want con1", sig.EntryID)
 	}
 	if sig.AspectCount != 2 || len(sig.Communities) != 2 {
 		t.Fatalf("expected 2 communities, got %+v", sig.Communities)
@@ -436,11 +436,11 @@ func TestService_FlagWikiCandidates_RecordsEventIDs(t *testing.T) {
 	cfg := testConfig()
 	cfg.WikiKPMin = 2
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{})
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{}, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "TestConcept")
+	seedEntry(t, db, "con1", "dom1", "TestEntry")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "c1")
 	seedKP(t, db, "kp2", "ku1", "src1", "c2")

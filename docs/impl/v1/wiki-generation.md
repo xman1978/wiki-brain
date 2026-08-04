@@ -108,8 +108,8 @@ qualifying KP 的定义**不变**（wiki.md 步骤 3：KP 与所属 KU 均 lifec
 **source_id 的定位（重要）**：source 是**证据属性**，不是主题结构。
 
 ```text
-不按 source 分节的理由（否则违反 docs/design/wiki-compilation.md
-「Wiki 编译是对已经稳定下来的知识的再组织，而不是对原始材料的再排版」）：
+不按 source 分节的理由（否则违反 docs/design/wiki.md
+「Wiki 编译因此是对已经在真实使用中稳定下来的知识的再组织，而不是对原始材料的再排版」）：
   同一 source 内关于同一概念的 KP 常分属不同切面；
   不同 source 常在讲同一切面；
   按 source 分节 = 该合的被拆开、该拆的被合在一起，
@@ -177,7 +177,9 @@ w(p, q) = w_rel    * [存在 KPN related(p,q) 或 contradicts(p,q)]
 用 Louvain 模块度优化，不用连通分量。
 
 ```text
-为什么不能用连通分量（wiki.md 步骤 8 现用做法，同一问题在概念内更严重）：
+为什么不能用连通分量（wiki.md 步骤 8 曾经的做法，2026-08-03 起已改为对
+  真实提问的四元组聚类、不再对页面图求连通分量，见 wiki.md「主题候选
+  识别」——但下面这个问题在概念内部的切面聚类里同样存在，且更严重）：
   relation_kpn_min 默认 1，一条边即连通。低阈值图上连通分量必然退化成
   一个巨型分量 + 若干孤点——wiki.md 自己写了这个问题，并用
   topic_member_max=8 兜底，但兜底的结果是「超限就不产候选」，
@@ -209,13 +211,13 @@ aspect_count = 有效社区数（不含 misc）
 
 概念级 ready 判定在既有四项（广度 / related 连接 / contradicts 不反客为主 /
 days_active）之上新增第五项：
-  cohesion >= wiki.concept_cohesion_min（默认 0.5）
+  cohesion >= wiki.entry_cohesion_min（默认 0.5）
 
 不达标时：
   不产 wiki_candidate；
-  进学习报告的「概念边界」节（report.concept_split_signals，非 learning_events 行，
+  进学习报告的「概念边界」节（report.entry_split_signals，非 learning_events 行，
   与 topic_decompose_signal 同一先例——只累积、不驱动任何 V1 学习动作）；
-  **不建 concept_candidates(kind=split) 行**——split 候选按
+  **不建 entry_candidates(kind=split) 行**——split 候选按
   docs/impl/v1/concept-evolution.md 明确推迟到 V3。
 ```
 
@@ -277,7 +279,7 @@ count` / `contradicts_connection_count` / `days_active`（+`days_active_min`）/
 4. 材料之间的矛盾、以及 gap 列表中与本概念相关的部分，写入 tensions，
    不要在这一步强行调和。
 
-概念：{{concept_name}}（{{concept_description}}），所属领域：{{domain_name}}
+概念：{{entry_name}}（{{entry_description}}），所属领域：{{domain_name}}
 切面与材料：
 {{aspects}}
 跨切面矛盾：
@@ -331,7 +333,7 @@ Wiki 页面正文。
 6. 「依赖来源」按来源归并列出涉及的 KU/Source；
 7. 只使用提供的材料与结论，不得引用未提供的 point_id。
 
-概念：{{concept_name}}（{{concept_description}}）
+概念：{{entry_name}}（{{entry_description}}）
 按切面分组的结论：
 {{claims_by_aspect}}
 张力：
@@ -524,8 +526,19 @@ wiki.selfcheck_enabled=false 时整个阶段跳过（退回现有无门行为）
 
 ## 9. 主题页（二阶编译）的同构改造 —— 仍是 P3，未来事项
 
+> **本节「候选产生」部分已被 2026-08-03 的设计修订推翻，不要实现**：
+> `docs/design/wiki.md`「主题：从真实使用中识别，而不是从已发布词条事后
+> 聚类」否定了"对已发布概念页的图求连通分量/Louvain 社区检测"这整条路线——
+> 无论用连通分量还是 Louvain，前提都是先有一批已发布页面才能求图上的簇，
+> 这与新设计的立场（主题候选必须先于、且独立于任何页面是否已编译发布）
+> 直接冲突。当前权威口径是 `docs/impl/v1/wiki.md` 步骤 8「主题候选识别」
+> ——对真实提问的四元组聚类，不是对页面图的任何形式的图聚类。下面这段
+> "连通分量 -> Louvain" 的设想整体作废，保留原文只为存档，不要参照实现；
+> 二阶编译输入（成员页面 summary 列而非全文等）与本节其余部分不受影响，
+> 仍是有效的未来优化方向。
+
 ```text
-候选产生（步骤 8）：连通分量 -> 同一份 Louvain 实现
+候选产生（步骤 8，已作废，见上方说明）：连通分量 -> 同一份 Louvain 实现
   节点 = published 概念页；
   边权 = w_pagerel * KPN related 关系对数 + w_pageshare * 共享 KP 数；
   topic_member_min / topic_member_max 保留为**后处理约束**（同 2.2 的后处理），
@@ -572,7 +585,7 @@ wiki:
   aspect_max_size:                8
   aspect_questions_max:           5       # 每切面进分析阶段的真实问法条数，
                                           # 同时是 aspects.question_types 的截断上限
-  concept_cohesion_min:           0.5     # 最大社区占比门槛（ready 判定第五项）
+  entry_cohesion_min:           0.5     # 最大社区占比门槛（ready 判定第五项）
 
   # —— 阶段 E：支持度校验（已实现）
   claim_verify_enabled:           true
@@ -599,7 +612,7 @@ wiki:
 POST /wiki/compile/analyze      响应体 { claims, tensions }（现状既有形状，
                                 claims[] 每项新增可选 aspect_id 字段，非 breaking，
                                 前端无需改动即可正常渲染，改的话只是能额外展示分组）
-POST /wiki/compile              请求体 { concept_id, page_type, result_id?,
+POST /wiki/compile              请求体 { entry_id, page_type, result_id?,
                                 claims?, tensions? }（现状既有形状，撤回 outline 字段；
                                 缺省 claims/tensions 时服务端内部跑阶段 C，等价于
                                 「先 analyze 再原样确认」，既有约定不变）
@@ -629,7 +642,7 @@ GET  /wiki/pages/:id            响应新增 summary / aspects（已实现）；
 | 4 | 步骤 3：概念级 ready 四项判定 | 新增第五项 cohesion | 已实现，不再是待确认冲突 |
 | 5 | 步骤 3：超长按 confident_count 降序截取 KP | 按切面整体截取 | 需要：`gatherMaterials` 的截取逻辑改用阶段 B 的切面分组 |
 | 6 | 步骤 4：publish 无条件生效 | 加质量门，可 force | 已实现，不再是待确认冲突 |
-| 7 | 步骤 8：连通分量求主题页候选 | Louvain 社区检测 | P3，未来事项，暂不动 `topic.go` |
+| 7 | 步骤 8：连通分量求主题页候选 | Louvain 社区检测 | **已作废**：2026-08-03 起步骤 8 改为四元组聚类，不再对页面图求任何形式的图聚类，见第 9 节说明 |
 | 8 | 步骤 8：二阶编译输入取成员页全文 | 取 summary + 稳定结论节 | P3，未来事项 |
 
 **明确撤回的冲突**（更早版本引入、本次简化撤回，实现时应恢复到与 wiki.md 一致）：
@@ -653,7 +666,7 @@ lifecycle 只有 current / superseded / deprecated；
 主题页不直答，命中即展开成员 + 注入 skeleton_point_ids，跳过 Outline 召回；
 不存在 draft -> page 的写回接口；
 Wiki 草稿回流的三条自指防护；
-split 候选仍推迟到 V3，本方案只写 concept_split_signal 报告项。
+split 候选仍推迟到 V3，本方案只写 entry_split_signal 报告项。
 ```
 
 ## 13. 分期落地建议
@@ -674,7 +687,8 @@ P1（切面聚类落地）—— 结构计算已实现，写作调用需要从�
 
 P2  （不做，见第 8 节；只有出现具体痛点才重新评估）
 
-P3  第 9 节主题页同构改造（Louvain 替换连通分量、二阶输入改摘要）。
+P3  第 9 节主题页同构改造——候选产生部分已作废（见第 9 节说明），
+    二阶输入改摘要仍是有效的未来优化方向。
 ```
 
 ## 14. 完成标准
@@ -684,8 +698,8 @@ P3  第 9 节主题页同构改造（Louvain 替换连通分量、二阶输入�
   同一输入产出确定性划分（节点按 point_id 字典序遍历，可断言）；
   低阈值图（每对 KP 仅 1 条 related 边）上不产生覆盖全部节点的单一社区；
   孤立 KP 归入 misc 且不单独成节；
-  cohesion < concept_cohesion_min 时不产 wiki_candidate，
-    且写出 report.concept_split_signals，不创建 concept_candidates 行。
+  cohesion < entry_cohesion_min 时不产 wiki_candidate，
+    且写出 report.entry_split_signals，不创建 entry_candidates 行。
 
 分析与成文：
   analyze 返回的 claims[] 与 tensions[] 是扁平数组（非嵌套 sections），

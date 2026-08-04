@@ -44,7 +44,7 @@ MVP 不是完整的认知系统，而是验证上述四点的最小可运行闭�
 - 配置文件加载（config.yml + 环境变量覆盖）
 - 预制数据初始化（`preset/domains.json`，预载领域和概念）
 
-核心表：`domains`、`concepts`
+核心表：`domains`、`entries`
 
 ---
 
@@ -284,7 +284,7 @@ version: v1
   data/sources/markdown/<source_id>.md       规范化 Markdown（Unit 提取的唯一输入）
 
 SQLite（单文件 data/wiki-brain.db）
-  domains、concepts                  预制知识领域和概念
+  domains、entries                  预制知识领域和概念
   sources、source_outlines           Source 及目录结构
   knowledge_units、knowledge_points  知识单元和知识点
   knowledge_point_relations          KPN 关系
@@ -340,7 +340,7 @@ wiki-brain/
 │       ├── unit_extract.md
 │       ├── unit_extract_retry.md
 │       ├── kpn_extract.md
-│       ├── unit_concept_match.md
+│       ├── unit_entry_match.md
 │       ├── question_domain_match.md
 │       ├── source_filter.md
 │       ├── unit_semantics_extract.md

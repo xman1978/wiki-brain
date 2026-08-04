@@ -23,7 +23,7 @@ think.md          总体思想与核心闭环
   -> study.md      长期记忆学习
   -> concept-evolution.md  概念的新增、合并与拆分
   -> lifecycle.md  记忆生命周期
-  -> wiki-compilation.md   Wiki 编译与长期沉淀
+  -> wiki.md   Wiki 编译与长期沉淀
 ```
 
 ## 文档列表
@@ -46,7 +46,7 @@ think.md          总体思想与核心闭环
 | [study.md](./study.md) | 长期记忆学习 | 描述 Study 如何根据 Learning Event 调整长期记忆；说明 ActivationLink 演化主要由检索事件累积驱动、无需依赖用户纠正；区分 KPN 与 ActivationLink 的学习边界；说明 Working Model 结构如何经多次事件提炼为实践路径；区分材料层、认知层和表达层学习。 |
 | [concept-evolution.md](./concept-evolution.md) | 概念演化 | 定义领域下概念的新增、合并与拆分机制：演化信号来自 Learning Event 累积，候选不参与激活，晋升与合并由人工确认；说明合并时 ActivationLink、KPP 挂载和 Wiki 标记的迁移语义，以及与 preset 数据的优先级关系。 |
 | [lifecycle.md](./lifecycle.md) | 记忆生命周期 | 说明知识为何需要状态管理；描述生命周期如何影响激活、ActivationLink 和 Wiki 页面，以及如何区分当前可用与历史解释知识。 |
-| [wiki-compilation.md](./wiki-compilation.md) | Wiki 编译与长期知识沉淀 | 定义 Wiki 页面的定位与类型；定义编译的同源双产物（面向人的页面 + 面向程序的 Claim 集合）与认知包（组装视图，非独立存储）；说明 Wiki 如何由 Study 根据 Learning Event 判断重编译，而非依赖完整 Trace。 |
+| [wiki.md](./wiki.md) | Wiki 编译与长期知识沉淀 | 定义 Wiki 页面的定位与类型；定义编译的同源双产物（面向人的页面 + 面向程序的 Claim 集合）与认知包（组装视图，非独立存储）；说明主题识别如何独立于材料侧成熟度、从真实提问中识别；说明 Wiki 如何由 Study 根据 Learning Event 判断重编译，而非依赖完整 Trace。 |
 
 ## 文档关系
 
@@ -73,7 +73,7 @@ flowchart TB
   study["study.md<br/>长期记忆学习"]
   concept["concept-evolution.md<br/>概念演化"]
   lifecycle["lifecycle.md<br/>记忆生命周期"]
-  wiki["wiki-compilation.md<br/>Wiki 编译"]
+  wiki["wiki.md<br/>Wiki 编译"]
 
   think --> design
 
@@ -157,7 +157,7 @@ flowchart TB
 - `trace.md` 仅在产生学习价值时记录 Learning Event，是 Study 的事实样本来源；**检索事件（activation_success / failure / gap）是主驱动，不依赖用户纠正**。
 - `study.md` 根据 Learning Event 调整长期记忆，不是复盘每次回答或完整推理过程；**ActivationLink 演化主要由检索事件累积驱动**。
 - `concept-evolution.md` 承接 Study 的认知层结构信号：候选概念自动识别，新增、合并与拆分由人工确认后执行，挂载的链接、模式和 Wiki 标记随概念迁移。
-- `wiki-compilation.md` 是表达层学习的产物；Wiki 更新由 Study 根据 Learning Event 驱动，而非完整 Trace。
+- `wiki.md` 是表达层学习的产物；Wiki 更新由 Study 根据 Learning Event 驱动，而非完整 Trace。
 
 **横切：生命周期**
 
@@ -183,7 +183,7 @@ flowchart TB
 Only if learning value exists:
   -> Learning Event（trace）
   -> Study 根据 Learning Event 调整长期记忆（study）
-  -> 稳定结果可编译为 Wiki 页面与 Claim 集合（wiki-compilation）
+  -> 稳定结果可编译为 Wiki 页面与 Claim 集合（wiki.md）
         ↑
   生命周期管理（lifecycle）持续影响激活、学习与 Wiki 有效性
 ```

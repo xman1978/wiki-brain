@@ -9,11 +9,11 @@ version: v1
 规则：
 
 - 每个知识单元最多匹配一个概念
-- 若没有匹配的概念，concept_id 输出空字符串
-- 使用输入中提供的 unit_id 和 concept_id，不生成新 ID
+- 若没有匹配的概念，entry_id 输出空字符串
+- 使用输入中提供的 unit_id 和 entry_id，不生成新 ID
 
 按以下 json 格式输出，不输出任何其他内容：
-{"matches":[{"unit_id":"unit_uuid_xxx","concept_id":"xxx"}]}
+{"matches":[{"unit_id":"unit_uuid_xxx","entry_id":"xxx"}]}
 
 ## User
 
@@ -21,9 +21,9 @@ version: v1
 {{units_list}}
 
 以下是可用的知识概念列表：
-{{concept_list}}
+{{entry_list}}
 
-请为每个知识单元选择最匹配的概念 concept_id。若没有匹配的概念，concept_id 输出空字符串。
+请为每个知识单元选择最匹配的概念 entry_id。若没有匹配的概念，entry_id 输出空字符串。
 
 ## Schema
 
@@ -36,10 +36,10 @@ version: v1
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["unit_id", "concept_id"],
+        "required": ["unit_id", "entry_id"],
         "properties": {
           "unit_id":    { "type": "string" },
-          "concept_id": { "type": "string" }
+          "entry_id": { "type": "string" }
         }
       }
     }

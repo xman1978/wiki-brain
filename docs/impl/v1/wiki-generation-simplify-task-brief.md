@@ -1,12 +1,12 @@
 # 编码任务指令：收缩 Wiki 编译链路（撤回提纲/逐节，恢复两次整页调用）
 
 > 这是一份交给编码会话的任务说明，不是设计文档。设计与实现口径**一律以
-> `docs/impl/v1/wiki-generation.md`（已改为简化版）与 `docs/design/wiki-compilation.md`
+> `docs/impl/v1/wiki-generation.md`（已改为简化版）与 `docs/design/wiki.md`
 > 为准**，本文件只负责给出现状盘点、改动范围、步骤顺序与验收门。文档与本文件冲突时以
 > 文档为准；文档本身有歧义时**停下来问用户**，不要按直觉补全。
 >
-> 本文件取代 `docs/impl/v1/wiki-generation-p1-task-brief.md`（该文件已标记过时，
-> 保留仅供追溯）。
+> 本文件取代 `docs/impl/v1/wiki-generation-p1-task-brief.md`（该文件已过时并于
+> 2026-08-03 文档清理时删除）。
 
 ## 任务背景（先理解，再动手）
 
@@ -29,7 +29,7 @@ breaking 类型、`web/index.html` 的对应改动。
 
 ```text
 docs/impl/v1/wiki-generation.md   全文，重点第 2-4、6、8、10-14 节
-docs/design/wiki-compilation.md   「编译内部三个阶段、两次 LLM 调用」
+docs/design/wiki.md               「编译内部三个阶段、两次 LLM 调用」
                                   「为什么不做逐块独立生成」「各层对象的职责区分」
 docs/impl/v1/wiki.md              步骤 2、3、5（现行 topic 页走的就是这套扁平两次调用，
                                   可以直接抄它的模式）
@@ -56,7 +56,7 @@ internal/wiki/service.go 中这些函数：gatherMaterials / matchingGaps /
   filterContentTags / sourceUnitsForPoints / marshalUncoveredPoints /
   marshalConditions / verifyClaims（阶段 E）/ Selfcheck / publish（阶段 G）/
   Archive / MarkNeedsRecompile / cascadeToParentTopics /
-  GetActivePageByConceptID / ScanForNewQualifyingKP /
+  GetActivePageByEntryID / ScanForNewQualifyingKP /
   NotifyPointsLifecycleChanged / TryDirectAnswer 及其调用链 / indexPage /
   readUnitContent 等——这些已经是 page-type 无关的共享工具，topic.go 的扁平
   一次性编译（AnalyzeTopic/CompileTopic）本来就在用同一批函数，本次改动只是

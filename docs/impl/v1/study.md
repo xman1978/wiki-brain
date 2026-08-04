@@ -76,7 +76,7 @@ study:
   candidate_confident_min: 5
   candidate_ratio_min:     0.6
   wiki_kp_min:             4
-  # wiki_confident_min 已移除（2026-07-29 修订，见 docs/design/wiki-compilation.md
+  # wiki_confident_min 已移除（2026-07-29 修订，见 docs/design/wiki.md
   # "ActivationLink 回答'这条管不管用'，Wiki 编译回答'这个主题够不够格立传'"）——
   # 可靠性只由 ActivationLink 的 verified 状态判断，不再叠加一个次数门槛；
   # 素材排序（wiki.md 步骤 3，按 confident_count 降序截取）用的是 KP 自身的
@@ -286,31 +286,41 @@ Wiki 候选计算：qualifying KP 定义与概念级 ready 判定口径见 wiki.
   status=verified；概念级新增连贯性的 related/contradicts 区分，不再
   只看连接总数）；recommendation=ready 的候选写
   learning_results(action=wiki_candidate, status=pending_confirm,
-  object_type=wiki_page, object_id=concept_id)——Wiki 编译经人工确认触发，
+  object_type=wiki_page, object_id=entry_id)——Wiki 编译经人工确认触发，
   见 wiki.md 步骤 2；
 
 已发布 wiki 页面依赖的 KP 出现 lifecycle != current：
   标记页面 needs_recompile（调 Wiki 模块接口）并写
   learning_results(action=recompile_flag)。
 
-主题页候选（两层架构，口径见 wiki.md 步骤 8「候选产生」）：
-  取 published 概念页 + wiki_page_relations 的 related 边求连通分量，
-  满足 wiki.topic_member_min ≤ 成员数 ≤ wiki.topic_member_max、
-  contradicts 边数 < related 边数、
-  且足够多成员尚未被非 archived 主题页 contains 时，建 draft 壳页并写
+主题页候选（两层架构，口径见 wiki.md 步骤 8「主题候选识别」；2026-08-03
+  修订：不再从已发布概念页的图连通性事后推导，改为对真实提问的四元组
+  聚类，设计依据 `docs/design/wiki.md`「主题：从真实使用中识别，而不是从
+  已发布词条事后聚类」）：
+  窗口内 traces 按归一化四元组 (subject, intent, audience, constraint_text)
+  分组（口径同本节「问题复杂度观测量」的分组，含 subject 同义词归一化，
+  但不要求 confident——主题候选要回答的是"有没有人反复问"，与答没答上
+  无关）；分组同时满足 distinct_question_count ≥
+  wiki.topic_cluster_min_questions、days_active ≥
+  wiki.topic_cluster_min_days_active 时是一个主题候选；在候选范围内对
+  知识点做语义检索、筛出 qualifying 的部分、按 entry_id 分组（未发布
+  但满足概念级 ready 判定的分组随批写 wiki_candidate）、核验关联与整体
+  可靠度两项二阶准入，满足后建 draft 壳页并写
   learning_results(action=topic_page_candidate, object_type=wiki_page,
   object_id=壳页 page_id, status=pending_confirm)——object_id 用页面 id
-  而不是概念 id 或成员集合指纹，标识天然唯一、人工确认对象即一个具体页面；
+  而不是四元组分组指纹，标识天然唯一、人工确认对象即一个具体页面；
   二阶编译同样经人工确认触发，见 wiki.md 步骤 8。
 
 页面关系重算：跨 Source KPN 新增后重算涉及的页面对关系
-  （纯程序派生，不调 LLM，不产生 learning_results，见 wiki.md 步骤 7b）。
+  （纯程序派生，不调 LLM，不产生 learning_results，见 wiki.md 步骤 7b；
+  这批 related / contradicts 关系仍然计算，只是不再用于事后求连通分量
+  产生主题候选，而是用于步骤 8 的「二阶编译准入·关联」核验）。
 
 报告提示项（只进报告，不产生 learning_results）：
-  oversized_topic_cluster：连通分量成员数 > wiki.topic_member_max，
-    附成员数、代表页面、related / contradicts 边数——提示人工提高
-    relation_kpn_min / relation_shared_point_min 或按 domain 切分，
-    不自动切分（切在哪里是知识判断，不是阈值判断）；
+  topic_signal_underfilled：四元组分组满足稳定簇判定，但候选范围内没有
+    qualifying KP，或未通过二阶准入（关联 / 整体可靠度）——附四元组摘要、
+    distinct_question_count、days_active、未达标原因，作为内容采集
+    优先级信号；
   wiki_draft_reflow：origin='wiki_draft' 的 Source 及其产出 KP 数、
     被跳过的自体祖先边数（见 wiki.md 步骤 10「回流的自体循环」），
     用于发现系统在自己身上打转；

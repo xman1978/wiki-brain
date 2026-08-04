@@ -25,9 +25,9 @@ func seedDomain(t *testing.T, db *sql.DB, domainID, name string) {
 	}
 }
 
-func seedConcept(t *testing.T, db *sql.DB, conceptID, domainID, name string) {
+func seedEntry(t *testing.T, db *sql.DB, conceptID, domainID, name string) {
 	t.Helper()
-	_, err := db.Exec(`INSERT INTO concepts (concept_id, domain_id, name) VALUES (?, ?, ?)`,
+	_, err := db.Exec(`INSERT INTO entries (entry_id, domain_id, name) VALUES (?, ?, ?)`,
 		conceptID, domainID, name)
 	if err != nil {
 		t.Fatalf("seed concept: %v", err)
@@ -45,7 +45,7 @@ func seedSource(t *testing.T, db *sql.DB, sourceID string) {
 
 func seedKU(t *testing.T, db *sql.DB, unitID, sourceID, conceptID string) {
 	t.Helper()
-	_, err := db.Exec(`INSERT INTO knowledge_units (unit_id, source_id, concept_id, center, line_start, line_end, status, prompt_version)
+	_, err := db.Exec(`INSERT INTO knowledge_units (unit_id, source_id, entry_id, center, line_start, line_end, status, prompt_version)
 		VALUES (?, ?, ?, 'test topic', 1, 10, 'done', 'v1')`,
 		unitID, sourceID, conceptID)
 	if err != nil {
@@ -102,7 +102,7 @@ func seedLearningEvent(t *testing.T, db *sql.DB, eventID, traceID, eventType, pa
 
 // seedVerifiedActivationLink seeds a minimal activation_links row with
 // status=verified for pointID — the "多次验证" gate that
-// QualifyingKPsByConceptFromCandidates now requires (docs/design/
+// QualifyingKPsByEntryFromCandidates now requires (docs/design/
 // wiki-compilation.md "反复激活、多次验证、持续采用不是命中次数").
 func seedVerifiedActivationLink(t *testing.T, db *sql.DB, linkID, pointID string) {
 	t.Helper()
@@ -130,7 +130,7 @@ func TestScanCandidates_Basic(t *testing.T) {
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "TestDomain")
-	seedConcept(t, db, "con1", "dom1", "TestConcept")
+	seedEntry(t, db, "con1", "dom1", "TestEntry")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "point content 1")
 	seedKP(t, db, "kp2", "ku1", "src1", "point content 2")
@@ -167,7 +167,7 @@ func TestScanCandidates_Upsert(t *testing.T) {
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "TestDomain")
-	seedConcept(t, db, "con1", "dom1", "TestConcept")
+	seedEntry(t, db, "con1", "dom1", "TestEntry")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 
@@ -216,7 +216,7 @@ func TestGapAggregation(t *testing.T) {
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 	seedAnswer(t, db, "ans1")
@@ -299,7 +299,7 @@ func TestQueryTraceSummary(t *testing.T) {
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 	seedAnswer(t, db, "ans1")
@@ -334,7 +334,7 @@ func TestActivationBreadth(t *testing.T) {
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 
@@ -380,7 +380,7 @@ func TestHasKPNNeighbors(t *testing.T) {
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "c1")
 	seedKP(t, db, "kp2", "ku1", "src1", "c2")
@@ -413,7 +413,7 @@ func TestKPNConnectionCountsByType(t *testing.T) {
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "c1")
 	seedKP(t, db, "kp2", "ku1", "src1", "c2")
@@ -536,8 +536,8 @@ func TestQualifyingKPsByConceptFromCandidates_ExcludesMerged(t *testing.T) {
 	store := NewStore(db)
 
 	seedDomain(t, db, "d1", "Domain One")
-	seedConcept(t, db, "c-active", "d1", "Active")
-	if _, err := db.Exec(`INSERT INTO concepts (concept_id, domain_id, name, merged_into) VALUES ('c-merged', 'd1', 'Merged', 'c-active')`); err != nil {
+	seedEntry(t, db, "c-active", "d1", "Active")
+	if _, err := db.Exec(`INSERT INTO entries (entry_id, domain_id, name, merged_into) VALUES ('c-merged', 'd1', 'Merged', 'c-active')`); err != nil {
 		t.Fatal(err)
 	}
 	seedSource(t, db, "src1")
@@ -550,9 +550,9 @@ func TestQualifyingKPsByConceptFromCandidates_ExcludesMerged(t *testing.T) {
 	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc1', 't1', 'kp-active', 10, 12)`)
 	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc2', 't2', 'kp-merged', 10, 12)`)
 
-	result, err := store.QualifyingKPsByConceptFromCandidates()
+	result, err := store.QualifyingKPsByEntryFromCandidates()
 	if err != nil {
-		t.Fatalf("QualifyingKPsByConceptFromCandidates: %v", err)
+		t.Fatalf("QualifyingKPsByEntryFromCandidates: %v", err)
 	}
 	if _, ok := result["c-merged"]; ok {
 		t.Errorf("expected merged concept excluded, got %+v", result)
@@ -573,7 +573,7 @@ func TestQualifyingKPsByConceptFromCandidates_DedupsAndFiltersLifecycle(t *testi
 	store := NewStore(db)
 
 	seedDomain(t, db, "d1", "Domain One")
-	seedConcept(t, db, "c1", "d1", "Concept One")
+	seedEntry(t, db, "c1", "d1", "Concept One")
 	seedSource(t, db, "src1")
 	seedKU(t, db, "ku1", "src1", "c1")
 	seedKP(t, db, "kp-dup", "ku1", "src1", "duplicated point")
@@ -589,9 +589,9 @@ func TestQualifyingKPsByConceptFromCandidates_DedupsAndFiltersLifecycle(t *testi
 	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc2', 't2', 'kp-dup', 5, 7)`)
 	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc3', 't3', 'kp-stale', 10, 12)`)
 
-	result, err := store.QualifyingKPsByConceptFromCandidates()
+	result, err := store.QualifyingKPsByEntryFromCandidates()
 	if err != nil {
-		t.Fatalf("QualifyingKPsByConceptFromCandidates: %v", err)
+		t.Fatalf("QualifyingKPsByEntryFromCandidates: %v", err)
 	}
 	kps := result["c1"]
 	if len(kps) != 1 {
@@ -615,7 +615,7 @@ func TestConfidentTraceFieldValues_RequiresCitation(t *testing.T) {
 	store := NewStore(db)
 
 	seedDomain(t, db, "d1", "domain")
-	seedConcept(t, db, "c1", "d1", "concept")
+	seedEntry(t, db, "c1", "d1", "concept")
 	seedSource(t, db, "s1")
 	seedKU(t, db, "u1", "s1", "c1")
 	seedKP(t, db, "p-dm", "u1", "s1", "达梦 ACTIVE 会话")

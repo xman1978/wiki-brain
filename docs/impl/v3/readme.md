@@ -18,7 +18,7 @@ V2 完成后，系统拥有可供程序直接消费的认知材料：Claim、KPP
 
 V3 的验收底线继承 V2 的判据：深想路径的推理输入全部经 V2 的认知材料访问契约获取——静态认知包覆盖已编译知识，动态槽位证据解析覆盖长尾知识——而不是把复杂提示词包装成"认知系统"。
 
-设计依据：`cognitive-routing.md`、`knowledge-processing-pattern.md`、`reasoning-pattern.md`、`evidence-mining.md`、`working-model.md`、`study.md`、`lifecycle.md`、`wiki-compilation.md`、`kpn.md`、`concept-evolution.md`、`design.md` 第 7-9 节。
+设计依据：`cognitive-routing.md`、`knowledge-processing-pattern.md`、`reasoning-pattern.md`、`evidence-mining.md`、`working-model.md`、`study.md`、`lifecycle.md`、`wiki.md`、`kpn.md`、`concept-evolution.md`、`design.md` 第 7-9 节。
 
 ---
 
@@ -152,11 +152,11 @@ RP 按 V2 契约执行：六种形式（演绎 / 归纳 / 因果 / 比较 / 决�
 
 ### 10. Wiki 编译完整版
 
-在 V2 主题 / 概念页基础上补齐：方法页（实践路径输入）、经验页（反馈学习输入）、问题页（反复出现的问题类型）、决策页（高风险判断场景）；重编译全自动候选（repeated_success / repeated_failure / knowledge_conflict / user_correction / concept_boundary_signal / 知识状态变化驱动，每次附 Learning Reason）；认知预算约束引用：low 预算可直接引用 Claim，medium 检查适用边界，high 必须回到证据与 Working Model，不得只依赖 Claim 或页面。
+在 V2 主题 / 概念页基础上补齐：方法页（实践路径输入）、经验页（反馈学习输入）、问题页（反复出现的问题类型）、决策页（高风险判断场景）；重编译全自动候选（repeated_success / repeated_failure / knowledge_conflict / user_correction / entry_boundary_signal / 知识状态变化驱动，每次附 Learning Reason）；认知预算约束引用：low 预算可直接引用 Claim，medium 检查适用边界，high 必须回到证据与 Working Model，不得只依赖 Claim 或页面。
 
 ### 11. Concept / Domain 演化完整版
 
-依据 `concept-evolution.md` 与 `study.md` 第 3、8 节：concept_boundary_signal 驱动边界调整候选；反复出现、无法归入现有结构的锚点形成候选 Concept / Domain，累积验证后晋升；支持拆分与合并，挂载的链接、KPP 和 Wiki 标记随概念迁移；所有演化动作经 Learning Result 记录，可回滚。
+依据 `concept-evolution.md` 与 `study.md` 第 3、8 节：entry_boundary_signal 驱动边界调整候选；反复出现、无法归入现有结构的锚点形成候选 Concept / Domain，累积验证后晋升；支持拆分与合并，挂载的链接、KPP 和 Wiki 标记随概念迁移；所有演化动作经 Learning Result 记录，可回滚。
 
 ### 12. Agent 接入层与全自动晋升
 
@@ -238,11 +238,11 @@ V3 是材料成熟的信号来源，回流通道必须在早期阶段就打通�
   external_evidences   外部证据记录（必选持久化：URL、快照 / 版本时间、
                        发布者、来源等级、抓取时间、有效期、引用片段、
                        适用范围）
-  concept_candidates   候选 Concept / Domain 及演化记录
+  entry_candidates   候选 Concept / Domain 及演化记录
 
 扩展
   activation_links     conflicted 状态启用；learned 来源字段开始写入
-  learning_events      类型补齐：knowledge_conflict / concept_boundary_signal /
+  learning_events      类型补齐：knowledge_conflict / entry_boundary_signal /
                        mode_misjudge / slot_gap / relation_candidate 等
   sessions             当前认知视角、认知预算
   wiki_pages           四种新页面类型、视角字段

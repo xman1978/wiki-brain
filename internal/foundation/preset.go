@@ -18,10 +18,10 @@ type presetDomain struct {
 	ID          string          `json:"id"`
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
-	Concepts    []presetConcept `json:"concepts"`
+	Concepts    []presetEntry `json:"entries"`
 }
 
-type presetConcept struct {
+type presetEntry struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
 	Aliases     []string `json:"aliases"`
@@ -62,18 +62,18 @@ func LoadPresetData(db *sql.DB, filePath string) error {
 			// rewrite origin — a merged-away concept doesn't get revived by
 			// still existing in domains.json, and a human-confirmed evolved
 			// concept isn't reclassified back to preset just because preset
-			// happens to define the same concept_id
+			// happens to define the same entry_id
 			// (docs/impl/v1/concept-evolution.md 步骤 4).
 			_, err := tx.Exec(
-				`INSERT INTO concepts (concept_id, domain_id, name, description) VALUES (?, ?, ?, ?)
-				 ON CONFLICT(concept_id) DO UPDATE SET name = excluded.name, description = excluded.description`,
+				`INSERT INTO entries (entry_id, domain_id, name, description) VALUES (?, ?, ?, ?)
+				 ON CONFLICT(entry_id) DO UPDATE SET name = excluded.name, description = excluded.description`,
 				c.ID, d.ID, c.Name, c.Description,
 			)
 			if err != nil {
 				return err
 			}
 
-			if err := upsertConceptAliasSynonyms(tx, d.ID, c); err != nil {
+			if err := upsertEntryAliasSynonyms(tx, d.ID, c); err != nil {
 				return err
 			}
 		}
@@ -82,7 +82,7 @@ func LoadPresetData(db *sql.DB, filePath string) error {
 	return tx.Commit()
 }
 
-// upsertConceptAliasSynonyms feeds a concept's preset aliases into
+// upsertEntryAliasSynonyms feeds a concept's preset aliases into
 // subject_synonyms as a free, already-curated starting dictionary for
 // ActivationLink Match's subject-dimension synonym canonicalization
 // (docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md).
@@ -91,7 +91,7 @@ func LoadPresetData(db *sql.DB, filePath string) error {
 // never touches a term that a gap-mined or manually confirmed row already
 // owns (source != 'preset') — preset replay must not silently override a
 // human decision made after the fact.
-func upsertConceptAliasSynonyms(tx *sql.Tx, domainID string, c presetConcept) error {
+func upsertEntryAliasSynonyms(tx *sql.Tx, domainID string, c presetEntry) error {
 	canonical := text.Normalize(c.Name)
 	if canonical == "" {
 		return nil

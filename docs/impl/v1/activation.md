@@ -71,7 +71,7 @@ CREATE UNIQUE INDEX idx_subject_synonyms_term_active ON subject_synonyms(term) W
 CREATE INDEX idx_subject_synonyms_status ON subject_synonyms(status);
 ```
 
-只归一化 subject 一个维度，intent/audience/constraint 的精确匹配语义不变。`source=preset` 的行来自 `preset/domains.json` 每个 concept 的 `aliases` 字段（启动时随 domains/concepts 一并 UPSERT，`status=active` 无需确认）；`source=gap_mined` 的行来自 Study 对 `subject_synonym_gap` 学习事件的聚合，默认 `status=candidate`，需人工 confirm 才生效（`study.synonym_auto_promote=true` 时直接 active）。设计动机、挖掘触发条件、Match 算法调整详见 `docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md`；`domain_id` 列 V1 仅作展示，Match 不按 domain 过滤。
+只归一化 subject 一个维度，intent/audience/constraint 的精确匹配语义不变。`source=preset` 的行来自 `preset/domains.json` 每个 concept 的 `aliases` 字段（启动时随 domains/entries 一并 UPSERT，`status=active` 无需确认）；`source=gap_mined` 的行来自 Study 对 `subject_synonym_gap` 学习事件的聚合，默认 `status=candidate`，需人工 confirm 才生效（`study.synonym_auto_promote=true` 时直接 active）。设计动机、挖掘触发条件、Match 算法调整详见 `docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md`；`domain_id` 列 V1 仅作展示，Match 不按 domain 过滤。
 
 ## 状态机
 

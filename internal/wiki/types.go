@@ -23,12 +23,31 @@ var (
 	ErrQualityGateFailed = errors.New("wiki: pre-publish quality gate failed")
 )
 
-// Page.page_type — V1 only distinguishes title framing (see compile prompt's
-// {{page_type_hint}}); the compile input is identical either way.
+// Page.page_type — concept/fact are one-tier compile outputs sharing the
+// exact same pipeline (qualifying/ready gate, citation whitelist, relation
+// derivation, second-tier contains eligibility); page_type is derived from
+// the target entries row's kind (concept -> concept, fact -> fact), not
+// freely chosen by the caller (docs/impl/v1/wiki.md "数据结构"). The only
+// difference between the two is the {{entry_kind_hint}} wording nudge in
+// wiki_analyze.md/wiki_compile.md (see conceptKindHint). topic is the
+// second-tier compile output (docs/impl/v1/wiki.md 步骤 8) and is never a
+// valid page_type for POST /wiki/compile/analyze|compile.
 const (
 	PageTypeTopic   = "topic"
 	PageTypeConcept = "concept"
+	PageTypeFact    = "fact"
 )
+
+// pageTypeForKind maps a entries.kind value to the page_type its one-tier
+// compile must produce (docs/impl/v1/kpn.md 步骤 3 "类型标注"). Unknown/empty
+// kind (存量概念 default) falls back to concept, mirroring conceptKindHint's
+// own empty-defaults-to-concept behavior.
+func pageTypeForKind(kind string) string {
+	if kind == "fact" {
+		return PageTypeFact
+	}
+	return PageTypeConcept
+}
 
 // Page.status
 const (
@@ -41,7 +60,7 @@ const (
 type Page struct {
 	PageID             string
 	PageType           string
-	ConceptID          sql.NullString
+	EntryID            sql.NullString
 	Title              string
 	Content            string
 	Status             string
@@ -95,20 +114,20 @@ type Revision struct {
 // human-edited), generation is constrained to them directly; when absent,
 // Compile runs the analysis step internally before generating.
 type CompileRequest struct {
-	ConceptID string    `json:"concept_id"`
-	PageType  string    `json:"page_type"`
-	ResultID  string    `json:"result_id,omitempty"`
-	Claims    []Claim   `json:"claims,omitempty"`
-	Tensions  []Tension `json:"tensions,omitempty"`
+	EntryID  string    `json:"entry_id"`
+	PageType string    `json:"page_type"`
+	ResultID string    `json:"result_id,omitempty"`
+	Claims   []Claim   `json:"claims,omitempty"`
+	Tensions []Tension `json:"tensions,omitempty"`
 }
 
 // AnalyzeRequest is POST /wiki/compile/analyze's request body
 // (docs/impl/v1/wiki.md 步骤 2). Same shape as CompileRequest minus the
 // claims/tensions fields, which this endpoint produces rather than consumes.
 type AnalyzeRequest struct {
-	ConceptID string `json:"concept_id"`
-	PageType  string `json:"page_type"`
-	ResultID  string `json:"result_id,omitempty"`
+	EntryID  string `json:"entry_id"`
+	PageType string `json:"page_type"`
+	ResultID string `json:"result_id,omitempty"`
 }
 
 // AnalyzeResult is POST /wiki/compile/analyze's (and topic/analyze's)
@@ -119,11 +138,11 @@ type AnalyzeRequest struct {
 // 3.2) — the only concept-page-specific addition is Claim.AspectID, an
 // optional field topic pages simply never populate.
 type AnalyzeResult struct {
-	ConceptID string    `json:"concept_id"`
-	PageType  string    `json:"page_type"`
-	ResultID  string    `json:"result_id,omitempty"`
-	Claims    []Claim   `json:"claims"`
-	Tensions  []Tension `json:"tensions"`
+	EntryID  string    `json:"entry_id"`
+	PageType string    `json:"page_type"`
+	ResultID string    `json:"result_id,omitempty"`
+	Claims   []Claim   `json:"claims"`
+	Tensions []Tension `json:"tensions"`
 	// Readiness is a concept-page-only, informational snapshot of the same
 	// signals Study's wiki_candidate "ready" judgment uses (docs/impl/v1/
 	// wiki.md 步骤 2 "人工指定主题手动编译") — populated whether or not
@@ -142,13 +161,13 @@ type AnalyzeResult struct {
 // looking at these numbers is the judgment call, not the system (docs/impl/v1/
 // wiki.md 步骤 2 "仅提示，不阻断").
 type Readiness struct {
-	QualifyingKPCount           int     `json:"qualifying_kp_count"`
-	RelatedConnectionCount      int     `json:"related_connection_count"`
-	ContradictsConnectionCount  int     `json:"contradicts_connection_count"`
-	DaysActive                  int     `json:"days_active"`
-	DaysActiveMin               int     `json:"days_active_min"`
-	Cohesion                    float64 `json:"cohesion"`
-	CohesionMin                 float64 `json:"cohesion_min"`
+	QualifyingKPCount          int     `json:"qualifying_kp_count"`
+	RelatedConnectionCount     int     `json:"related_connection_count"`
+	ContradictsConnectionCount int     `json:"contradicts_connection_count"`
+	DaysActive                 int     `json:"days_active"`
+	DaysActiveMin              int     `json:"days_active_min"`
+	Cohesion                   float64 `json:"cohesion"`
+	CohesionMin                float64 `json:"cohesion_min"`
 }
 
 // Claim is one analysis-stage stable-conclusion candidate: a core idea plus

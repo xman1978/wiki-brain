@@ -20,11 +20,10 @@ point_id 聚合），不是 activation_links 的 subject 条件组，所以本�
 P11（见 test/v1/v1_p11_synonym_test.py），针对的是 ActivationLink 快路径命中，
 不是 Wiki 候选门槛。
 
-注意（2026-07-29 修订，qualifying KP 口径变更，见 docs/design/wiki-compilation.md
-"反复激活、多次验证、持续采用不是命中次数"）：qualifying KP 现在除
-confident_count 外，还要求 (a) 对应 ActivationLink 已 status=verified、
-(b) 概念级 days_active ≥ wiki.qualifying_min_days_active（默认 7）。参照
-P11 的既有拆分方式，本脚本把这两条也拆成两半：
+注意（2026-07-29 修订，qualifying KP 口径变更，见 docs/design/wiki.md）：
+qualifying KP 现在除 confident_count 外，还要求 (a) 对应 ActivationLink 已
+status=verified、(b) 词条级 days_active ≥ wiki.qualifying_min_days_active
+（默认 7）。参照 P11 的既有拆分方式，本脚本把这两条也拆成两半：
 
   轴一（确定性，必过）：verified 门槛——cultivate 产生 candidate 链接后，
     脚本显式对每个 point_id 调 POST /activation-links/:id/confirm 促成
@@ -62,26 +61,26 @@ POST /wiki/compile 完成生成——这是本阶段新增的必过环节（验�
     不进学习报告——force 是编译/发布链路内部的一次性人工决定，不是 Study 要
     追踪的学习动作，见 wiki-generation.md 7.4 已按此口径定稿）。
 
-两层架构收紧（2026-07-30，docs/impl/v1/two-tier-task-brief.md）：
-POST /wiki/compile(/analyze) 的 page_type 现在只接受 "concept"——主题页
-（page_type=topic）已收紧为只能由二阶编译端点
-POST /wiki/pages/:id/topic/analyze|compile 产出，本脚本每个领域培养的仍是
-单一 concept（一个业务话题对应一个 KP 聚簇），因此这里一直传的都是
-page_type=concept，不受影响。两层架构新增能力（页面关系、主题页候选、
-写作草稿、回流防护）的验收见 test/v1/v1_p12_two_tier_test.py（P12，依赖本
-脚本已发布的页面，不重新培养信号）。
+一阶编译 page_type（docs/impl/v1/wiki.md「概念页 / 事实页」，2026-08-03）：
+POST /wiki/compile(/analyze) 只接受 concept|fact（或省略，由 entries.kind
+派生）；主题页（page_type=topic）只能由二阶端点
+POST /wiki/pages/:id/topic/analyze|compile 产出。本脚本每个领域培养的是
+单一词条（entries 行，kind=concept 或 fact），analyze/compile 按
+db_entry_kind 传匹配的 page_type。Wiki 正式生成只有两条路径：Study 问答
+积累出 wiki_candidate → 人工确认编译，或人工指定词条直接编译（无预览
+路径）。两层架构扩展验收见 v1_p12_two_tier_test.py。
 
 流程（严格对应方案 P8 步骤 1-8）：
   1. 探测 A9/A10/A11（制度域「销售回款管理」）与 T10/T11/T18/B4（技术域「Oracle RAC」）
-     各自命中的 KP 及其 concept_id，围绕这些概念密集问答；
+     各自命中的 KP 及其 entry_id，围绕这些词条密集问答；
   2. POST /study/run → 对每个命中的 point_id 找 candidate 状态的 ActivationLink
      并逐个 POST /activation-links/:id/confirm 促成 verified（轴一，必过）；
   3. 再次 POST /study/run，核对两域各出现 action=wiki_candidate, status=pending_confirm
      （若因 days_active 仍是 needs_more_data，按轴二记为观测性缺口，不判失败）；
-  4. 若拿到 pending_confirm：POST /wiki/compile/analyze（concept_id + result_id）
-     → 核对 claims 均引用白名单内 point_id → 把 claims/tensions 带回
-     POST /wiki/compile → 核对 draft 页面要素齐全，正文引用的 KP 都在白名单
-     （source_point_ids）内；
+  4. 若拿到 pending_confirm：POST /wiki/compile/analyze（entry_id + result_id，
+     page_type 与 entries.kind 一致）→ 核对 claims 均引用白名单内 point_id →
+     把 claims/tensions 带回 POST /wiki/compile → 核对 draft 页面要素齐全，
+     正文引用的 KP 都在白名单（source_point_ids）内；
   5. POST /wiki/pages/:id/publish → 重问主题问题，核对 path_type=wiki 且不产生
      激活类事件（activation_gap/success/failure）；
   6. 对底层 source 各做一次微改 reupload（制度域改应收账款、技术域改 19c RAC）→
@@ -103,7 +102,7 @@ from pathlib import Path
 
 import v1_common as c
 
-SCRATCH_DIR = Path("/private/tmp/claude-501/-Users-jxu-Code-wiki-brain/fa63b57a-4195-46fb-855c-de7ab5a9d99b/scratchpad")
+SCRATCH_DIR = Path("/tmp/v1_p8_scratch")
 
 POLICY_TOPIC = {
     "name": "销售回款管理",
@@ -160,7 +159,7 @@ def build_bank(topic, full_text, extra_phrasings):
             for extra in extra_phrasings.get(rid, []):
                 if extra not in variants:
                     variants.append(extra)
-            bank[rid] = {"id": rid, "question_variants": variants, "point_ids": set(), "concept_ids": set()}
+            bank[rid] = {"id": rid, "question_variants": variants, "point_ids": set(), "entry_ids": set()}
     return bank
 
 
@@ -182,24 +181,23 @@ def cultivate(base_url, bank, timeout, delay, rounds, label):
                 time.sleep(delay)
 
 
-def resolve_concept_ids(conn, bank):
-    concept_ids = set()
+def resolve_entry_ids(conn, bank):
+    entry_ids = set()
     for rid, item in bank.items():
         for pid in item["point_ids"]:
             row = conn.execute(
-                "SELECT ku.concept_id FROM knowledge_points kp JOIN knowledge_units ku ON kp.unit_id = ku.unit_id WHERE kp.point_id = ?",
+                "SELECT ku.entry_id FROM knowledge_points kp JOIN knowledge_units ku ON kp.unit_id = ku.unit_id WHERE kp.point_id = ?",
                 (pid,),
             ).fetchone()
-            if row and row["concept_id"]:
-                item["concept_ids"].add(row["concept_id"])
-                concept_ids.add(row["concept_id"])
-    return concept_ids
+            if row and row["entry_id"]:
+                item["entry_ids"].add(row["entry_id"])
+                entry_ids.add(row["entry_id"])
+    return entry_ids
 
 
 def confirm_verified_links(base_url, point_ids):
     """轴一（确定性，必过）：qualifying KP 现在要求对应 ActivationLink 已
-    verified（docs/design/wiki-compilation.md "反复激活、多次验证、持续采用
-    不是命中次数"）。cultivate() 之后这些 point_id 应该已经各有一条 candidate
+    verified（docs/design/wiki.md）。cultivate() 之后这些 point_id 应该已经各有一条 candidate
     链接（由 Study 步骤 2 的共现达标创建）；这里显式把它们 confirm 成 verified，
     验证"多次验证复用既有晋升状态机"而不是空等 auto_promote。
     返回 {point_id: link_id} 供调用方核对。
@@ -220,26 +218,31 @@ def confirm_verified_links(base_url, point_ids):
     return confirmed
 
 
-def find_wiki_candidate_result(base_url, concept_id):
+def find_wiki_candidate_result(base_url, entry_id):
     results = c.http_get_json(base_url, f"/study/results?action=wiki_candidate&status=pending_confirm&limit=50")
     for r in results:
-        if r["object_id"] == concept_id:
+        if r["object_id"] == entry_id:
             return r
     return None
 
 
-def analyze_page(base_url, concept_id, result_id):
+def analyze_page(base_url, entry_id, result_id, page_type=None):
     """POST /wiki/compile/analyze（docs/impl/v1/wiki.md 步骤 2）：不落库，
-    产出拟采用的 claims/tensions 供人工确认，本脚本原样带回 compile_page。"""
-    payload = {"concept_id": concept_id, "page_type": "concept"}
+    产出拟采用的 claims/tensions 供人工确认，本脚本原样带回 compile_page。
+    page_type 省略时由服务端按 entries.kind 派生；传入时必须与 kind 一致。"""
+    payload = {"entry_id": entry_id}
+    if page_type:
+        payload["page_type"] = page_type
     if result_id:
         payload["result_id"] = result_id
     resp, status = c.http_post_json(base_url, "/wiki/compile/analyze", payload, timeout=180)
     return resp, status
 
 
-def compile_page(base_url, concept_id, result_id, claims=None, tensions=None):
-    payload = {"concept_id": concept_id, "page_type": "concept"}
+def compile_page(base_url, entry_id, result_id, claims=None, tensions=None, page_type=None):
+    payload = {"entry_id": entry_id}
+    if page_type:
+        payload["page_type"] = page_type
     if result_id:
         payload["result_id"] = result_id
     if claims is not None:
@@ -262,7 +265,7 @@ def verify_page_draft(base_url, page_id):
 REQUIRED_SECTIONS = ["## 摘要", "## 稳定结论", "## 展开说明", "## 待验证点", "## 依赖来源"]
 
 
-def verify_generation_quality(conn, page_id, concept_name, claims):
+def verify_generation_quality(conn, page_id, entry_name, claims):
     """核对 docs/impl/v1/wiki-generation.md 简化版新增的生成质量链路——切面分组
     正文结构、支持度核验（阶段 E）落库、aliases/trigger_questions 程序化取代
     LLM 生成。GET /wiki/pages/:id 不暴露 aliases/trigger_questions/claim_checks，
@@ -281,7 +284,7 @@ def verify_generation_quality(conn, page_id, concept_name, claims):
 
     aliases = json.loads(row.get("aliases") or "[]")
     trigger_questions = json.loads(row.get("trigger_questions") or "[]")
-    synonyms = c.db_subject_synonyms(conn, canonical=concept_name)
+    synonyms = c.db_subject_synonyms(conn, canonical=entry_name)
     synonym_terms = {s["term"] for s in synonyms}
     aliases_off_table = [a for a in aliases if a not in synonym_terms]
 
@@ -375,12 +378,12 @@ def main():
         cultivate(args.base_url, policy_bank, args.timeout, args.delay, args.rounds, "制度域「销售回款管理」")
         cultivate(args.base_url, tech_bank, args.timeout, args.delay, args.rounds, "技术域「Oracle RAC」")
     else:
-        print("--skip-cultivate：跳过培养，直接尝试从现有信号里找 concept。")
+        print("--skip-cultivate：跳过培养，直接尝试从现有信号里找 entry。")
 
-    policy_concepts = resolve_concept_ids(conn, policy_bank)
-    tech_concepts = resolve_concept_ids(conn, tech_bank)
-    print(f"\n制度域涉及 concept_id: {policy_concepts}")
-    print(f"技术域涉及 concept_id: {tech_concepts}")
+    policy_entries = resolve_entry_ids(conn, policy_bank)
+    tech_entries = resolve_entry_ids(conn, tech_bank)
+    print(f"\n制度域涉及 entry_id: {policy_entries}")
+    print(f"技术域涉及 entry_id: {tech_entries}")
 
     print("\n>>> POST /study/run（第 1 次：产生 candidate ActivationLink）")
     study_result, _ = c.http_post_json(args.base_url, "/study/run", {}, timeout=180)
@@ -400,12 +403,12 @@ def main():
 
     print("\n--- 核对 wiki_candidate ---")
     domain_pages = {}
-    for label, concepts in (("policy", policy_concepts), ("tech", tech_concepts)):
+    for label, entries in (("policy", policy_entries), ("tech", tech_entries)):
         found = None
-        for cid in concepts:
-            r = find_wiki_candidate_result(args.base_url, cid)
+        for eid in entries:
+            r = find_wiki_candidate_result(args.base_url, eid)
             if r:
-                found = (cid, r)
+                found = (eid, r)
                 break
         if not found:
             # 轴二（观测性，不判失败）：days_active 门槛依赖真实自然日跨度，
@@ -415,10 +418,11 @@ def main():
                   f"（观测性缺口，不算失败）或信号本身不够（需要更多轮培养/补充问法）")
             domain_pages[label] = {"error": "no wiki_candidate"}
             continue
-        cid, result = found
-        print(f"  {label}: concept_id={cid} result_id={result['result_id']} reason={result['reason']}")
+        eid, result = found
+        page_type = c.db_entry_kind(conn, eid) or "concept"
+        print(f"  {label}: entry_id={eid} kind/page_type={page_type} result_id={result['result_id']} reason={result['reason']}")
 
-        analyze_resp, analyze_status = analyze_page(args.base_url, cid, result["result_id"])
+        analyze_resp, analyze_status = analyze_page(args.base_url, eid, result["result_id"], page_type=page_type)
         print(f"  analyze: HTTP {analyze_status} {json.dumps(analyze_resp, ensure_ascii=False)[:1000]}")
         if analyze_status != 200:
             domain_pages[label] = {"error": f"analyze failed: {analyze_resp}"}
@@ -429,7 +433,7 @@ def main():
             analyze_whitelist |= set(claim.get("cited_point_ids") or [])
         print(f"  analyze claims 数: {len(claims)}, 引用 point_id 并集: {analyze_whitelist}")
 
-        resp, status = compile_page(args.base_url, cid, result["result_id"], claims=claims, tensions=analyze_resp.get("tensions"))
+        resp, status = compile_page(args.base_url, eid, result["result_id"], claims=claims, tensions=analyze_resp.get("tensions"), page_type=page_type)
         print(f"  compile: HTTP {status} {resp}")
         if status != 200:
             domain_pages[label] = {"error": f"compile failed: {resp}"}
@@ -438,14 +442,18 @@ def main():
 
         page, off_whitelist = verify_page_draft(args.base_url, page_id)
         print(f"  draft 页面引用越界白名单的 KP: {off_whitelist}（应为空）")
+        got_page_type = page.get("page_type")
+        if got_page_type and got_page_type != page_type:
+            print(f"  ! page_type 不一致: 请求={page_type} 响应={got_page_type}")
 
-        concept_name = c.db_concept_name(conn, cid) or ""
-        quality = verify_generation_quality(conn, page_id, concept_name, claims)
+        entry_name = c.db_entry_name(conn, eid) or ""
+        quality = verify_generation_quality(conn, page_id, entry_name, claims)
 
         publish_info = selfcheck_then_publish(args.base_url, conn, page_id)
 
         domain_pages[label] = {
-            "concept_id": cid,
+            "entry_id": eid,
+            "page_type": page_type,
             "result_id": result["result_id"],
             "page_id": page_id,
             "off_whitelist_citations": list(off_whitelist),
@@ -568,8 +576,8 @@ def main():
         )
 
     record = {
-        "policy_concepts": list(policy_concepts),
-        "tech_concepts": list(tech_concepts),
+        "policy_entries": list(policy_entries),
+        "tech_entries": list(tech_entries),
         "study_result": study_result,
         "domain_pages": domain_pages,
         "reask_report": reask_report,

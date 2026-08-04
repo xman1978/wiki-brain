@@ -15,7 +15,7 @@ import (
 
 	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/answer"
-	"github.com/jxman78/wiki-brain/internal/concept"
+	"github.com/jxman78/wiki-brain/internal/entry"
 	"github.com/jxman78/wiki-brain/internal/domain"
 	"github.com/jxman78/wiki-brain/internal/evidence"
 	"github.com/jxman78/wiki-brain/internal/foundation"
@@ -148,7 +148,7 @@ func main() {
 	studyStore := study.NewStore(database)
 	activationStore := activation.NewStore(database)
 	wikiStore := wiki.NewStore(database)
-	conceptStore := concept.NewStore(database)
+	entryStore := entry.NewStore(database)
 	domainStore := domain.NewStore(database)
 
 	// ── Services ────────────────────────────────────────
@@ -159,7 +159,7 @@ func main() {
 	unitSvc := unit.NewService(unitStore, sourceStore, llmClient, idxMgr.Units, idxMgr.Points, q, cfg)
 	unitSvc.SetBroadcaster(broadcaster)
 	sourceSvc.SetLifecycleSetter(unitSvc)
-	sourceSvc.SetConceptMatcher(unitSvc)
+	sourceSvc.SetEntryMatcher(unitSvc)
 
 	activationMatcher := activation.NewMatcher(activationStore)
 	activationSvc := activation.NewService(activationStore, activationMatcher)
@@ -167,35 +167,35 @@ func main() {
 
 	evidenceSvc := evidence.NewService(llmClient, cfg.Evidence)
 
-	wikiSvc := wiki.NewService(wikiStore, llmClient, idxMgr.Wiki, cfg.Wiki)
+	wikiSvc := wiki.NewService(wikiStore, llmClient, idxMgr.Wiki, idxMgr.Points, cfg.Wiki, cfg.Retrieval.WikiMinScore)
 	wikiSvc.SetActivationSvc(activationSvc)
 	unitSvc.SetWikiNotifier(wikiSvc)
 
 	retrievalSvc := retrieval.NewService(retrievalStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, activationSvc, evidenceSvc, wikiSvc)
 	answerSvc := answer.NewService(answerStore, llmClient, q, retrievalSvc)
-	traceSvc := trace.NewService(traceStore, cfg.Study.ConceptNullRatioMin)
+	traceSvc := trace.NewService(traceStore, cfg.Study.EntryNullRatioMin)
 	traceSvc.SetObservedConditionEnricher(activationSvc, cfg.Study.ObservedConditionsMax)
 	studySvc := study.NewService(studyStore, cfg.Study, activationSvc, wikiSvc, cfg.Wiki.RecompileNewKPMin, cfg.Wiki.QualifyingMinDaysActive,
 		study.CohesionConfig{
-			Min:     cfg.Wiki.ConceptCohesionMin,
+			Min:     cfg.Wiki.EntryCohesionMin,
 			WRel:    cfg.Wiki.AspectWRel,
 			WCooc:   cfg.Wiki.AspectWCooc,
 			CoocSat: cfg.Wiki.AspectCoocSat,
 			Gamma:   cfg.Wiki.AspectGamma,
-		})
+		}, cfg.Wiki.TopicClusterMinQuestions, cfg.Wiki.TopicClusterMinDaysActive)
 
-	conceptSvc := concept.NewService(conceptStore, concept.Config{
-		AddEventMin:       cfg.Study.ConceptAddEventMin,
-		AddDistinctMin:    cfg.Study.ConceptAddDistinctMin,
-		AddOverlapMin:     cfg.Study.ConceptAddOverlapMin,
-		MergeCooccurMin:   cfg.Study.ConceptMergeCooccurMin,
-		MergeOverlapMin:   cfg.Study.ConceptMergeOverlapMin,
-		CandidateIdleDays: cfg.Study.ConceptCandidateIdleDays,
-		EventWindowDays:   cfg.Study.ConceptEventWindowDays,
+	entrySvc := entry.NewService(entryStore, entry.Config{
+		AddEventMin:       cfg.Study.EntryAddEventMin,
+		AddDistinctMin:    cfg.Study.EntryAddDistinctMin,
+		AddOverlapMin:     cfg.Study.EntryAddOverlapMin,
+		MergeCooccurMin:   cfg.Study.EntryMergeCooccurMin,
+		MergeOverlapMin:   cfg.Study.EntryMergeOverlapMin,
+		CandidateIdleDays: cfg.Study.EntryCandidateIdleDays,
+		EventWindowDays:   cfg.Study.EntryEventWindowDays,
 	}, wikiSvc)
-	studySvc.SetConceptSvc(conceptSvc)
-	unitSvc.SetConceptNotifier(conceptSvc)
-	conceptSvc.SetKPNRematchNotifier(unitSvc)
+	studySvc.SetEntrySvc(entrySvc)
+	unitSvc.SetEntryNotifier(entrySvc)
+	entrySvc.SetKPNRematchNotifier(unitSvc)
 	domainSvc := domain.NewService(domainStore)
 
 	// ── Queue handlers ──────────────────────────────────
@@ -298,7 +298,7 @@ func main() {
 	session.NewHandler(sessionStore, session.NewParser(llmClient)).RegisterRoutes(apiMux)
 	activation.NewHandler(activationSvc).RegisterRoutes(apiMux)
 	wiki.NewHandler(wikiSvc).RegisterRoutes(apiMux)
-	concept.NewHandler(conceptSvc).RegisterRoutes(apiMux)
+	entry.NewHandler(entrySvc).RegisterRoutes(apiMux)
 	domain.NewHandler(domainSvc).RegisterRoutes(apiMux)
 	llmconfig.NewHandler(llmConfigSvc).RegisterRoutes(apiMux)
 

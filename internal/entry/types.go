@@ -1,12 +1,13 @@
-// Package concept implements concept evolution (docs/impl/v1/concept-evolution.md,
-// V1 顺序第 10 位): Study observes activation_gap(concept_gap) events and
+// Package entry implements entry (词条) evolution (docs/impl/v1/concept-evolution.md,
+// V1 顺序第 10 位): Study observes activation_gap(entry_gap) events and
 // cross-concept adoption co-occurrence, forms add/merge candidates, and
 // executes them — always under human confirmation — in a single transaction.
-package concept
+package entry
 
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -15,6 +16,31 @@ const (
 	KindMerge = "merge"
 )
 
+// Concept kind classification (docs/impl/v1/kpn.md 步骤 3 "类型标注",
+// 2026-08-04 新增，最小可行版本) — orthogonal to Kind (add/merge/split)
+// above, hence the distinct EntryKind* naming to avoid confusion. concept:
+// 底层理论/原理/规则，跨具体实现成立；fact：具体实现/技术/产品实例，是理论
+// 落地后的对象。
+const (
+	EntryKindConcept = "concept"
+	EntryKindFact    = "fact"
+)
+
+// ValidateEntryKind normalizes/validates a candidate or concept kind
+// value: empty defaults to EntryKindConcept (存量/未分类默认按 concept 处理,
+// per 043_entry_kind.sql's column default), anything other than the two
+// allowed values is rejected.
+func ValidateEntryKind(kind string) (string, error) {
+	switch kind {
+	case "":
+		return EntryKindConcept, nil
+	case EntryKindConcept, EntryKindFact:
+		return kind, nil
+	default:
+		return "", fmt.Errorf("concept: invalid kind %q, must be %q or %q", kind, EntryKindConcept, EntryKindFact)
+	}
+}
+
 const (
 	StatusPendingConfirm = "pending_confirm"
 	StatusApplied        = "applied"
@@ -22,15 +48,16 @@ const (
 	StatusExpired        = "expired"
 )
 
-// CandidateRow is a concept_candidates row, JSON columns kept as raw strings
+// CandidateRow is a entry_candidates row, JSON columns kept as raw strings
 // (parsed by callers that need the structured view — docs/impl/v1/concept-evolution.md
 // 数据结构).
 type CandidateRow struct {
 	CandidateID   string
 	Kind          string
+	EntryKind   string // concept / fact classification (043_entry_kind.sql entry_candidates.entry_kind) — distinct from Kind (add/merge)
 	DomainID      sql.NullString
 	SuggestedName sql.NullString
-	MergeFrom     string // JSON array of concept_id
+	MergeFrom     string // JSON array of entry_id
 	PointIDs      string // JSON array of point_id
 	Evidence      string // JSON object
 	EventIDs      string // JSON array of learning_event event_id
@@ -38,15 +65,15 @@ type CandidateRow struct {
 	LastSignalAt  time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
-	// ResolvedConceptID/CreatedNewConcept are set on confirm (kind=add only)
+	// ResolvedEntryID/CreatedNewEntry are set on confirm (kind=add only)
 	// and record whether this confirm created a brand-new concept row —
 	// the only case RestoreApplied can safely undo (assign-to-existing and
 	// merge confirms touch a concept this candidate didn't create).
-	ResolvedConceptID sql.NullString
-	CreatedNewConcept bool
+	ResolvedEntryID sql.NullString
+	CreatedNewEntry bool
 	// KPNRelationIDs is the JSON array of knowledge_point_relations.relation_id
 	// rows RematchPoints created for this candidate's confirm (kind=add only;
-	// '[]' otherwise) — RestoreAppliedNewConcept deletes exactly these on
+	// '[]' otherwise) — RestoreAppliedNewEntry deletes exactly these on
 	// restore.
 	KPNRelationIDs string
 }
@@ -62,7 +89,7 @@ type AddEvidence struct {
 // produced by KPN's cross-Source matching (docs/impl/v1/kpn.md 步骤 3),
 // as opposed to this module's own usage-driven AddEvidence — Origin is
 // always "content_driven" and lets the UI/report distinguish the two
-// sources sharing the same concept_candidates table.
+// sources sharing the same entry_candidates table.
 type ContentDrivenEvidence struct {
 	Origin      string   `json:"origin"`
 	SourceIDs   []string `json:"source_ids"`
@@ -72,9 +99,9 @@ type ContentDrivenEvidence struct {
 // MergeEvidence is the evidence JSON for kind=merge candidates. OverlapRatio
 // is a trace-occurrence overlap coefficient — cooccur_count / |traces citing
 // A or B| — not a KP-set Jaccard: a KP belongs to exactly one concept via
-// knowledge_units.concept_id, so concept A's and B's adopted-KP sets are
+// knowledge_units.entry_id, so concept A's and B's adopted-KP sets are
 // structurally disjoint and a KP-set Jaccard would always be ~0. This
-// measures instead how often the two concepts are needed together relative
+// measures instead how often the two entries are needed together relative
 // to how often either is needed at all.
 type MergeEvidence struct {
 	CooccurCount int      `json:"cooccur_count"`
@@ -86,7 +113,7 @@ type MergeEvidence struct {
 }
 
 // ScanSummary is what one Study cycle's concept-candidate scan produced,
-// folded into the study report's concept_candidates section
+// folded into the study report's entry_candidates section
 // (docs/impl/v1/concept-evolution.md 步骤 5).
 type ScanSummary struct {
 	AddCreated           int
@@ -94,7 +121,7 @@ type ScanSummary struct {
 	MergeCreated         int
 	MergeUpdated         int
 	Expired              int
-	ConceptGapEventCount int // windowed activation_gap(concept_gap) events observed this cycle
+	EntryGapEventCount int // windowed activation_gap(entry_gap) events observed this cycle
 }
 
 // CandidateView is CandidateRow with its JSON columns parsed, for API/report
@@ -102,6 +129,7 @@ type ScanSummary struct {
 type CandidateView struct {
 	CandidateID   string          `json:"candidate_id"`
 	Kind          string          `json:"kind"`
+	EntryKind   string          `json:"entry_kind"`
 	DomainID      string          `json:"domain_id,omitempty"`
 	SuggestedName string          `json:"suggested_name,omitempty"`
 	MergeFrom     []string        `json:"merge_from,omitempty"`
@@ -123,6 +151,7 @@ func toView(c CandidateRow) CandidateView {
 	v := CandidateView{
 		CandidateID:  c.CandidateID,
 		Kind:         c.Kind,
+		EntryKind:  c.EntryKind,
 		Status:       c.Status,
 		LastSignalAt: c.LastSignalAt,
 		CreatedAt:    c.CreatedAt,
@@ -138,11 +167,11 @@ func toView(c CandidateRow) CandidateView {
 	json.Unmarshal([]byte(c.MergeFrom), &v.MergeFrom)
 	json.Unmarshal([]byte(c.PointIDs), &v.PointIDs)
 	json.Unmarshal([]byte(c.EventIDs), &v.EventIDs)
-	v.Restorable = c.Status == StatusApplied && c.Kind == KindAdd && c.CreatedNewConcept
+	v.Restorable = c.Status == StatusApplied && c.Kind == KindAdd && c.CreatedNewEntry
 	return v
 }
 
-// ConfirmAddRequest is POST /concepts/candidates/:id/confirm's body for
+// ConfirmAddRequest is POST /entries/candidates/:id/confirm's body for
 // kind=add: both fields may override the candidate's own suggestion, and
 // DomainID is required when the candidate's own domain_id is NULL
 // (docs/impl/v1/concept-evolution.md 步骤 3).
@@ -152,14 +181,21 @@ type ConfirmAddRequest struct {
 	// Description overrides the candidate's own evidence.description (if
 	// any) as the new concept row's description — editable in the confirm
 	// dialog alongside the name. Only used on the new-concept path; ignored
-	// when ConceptID is set (归入已有概念 assigns to an existing concept's
+	// when EntryID is set (归入已有概念 assigns to an existing concept's
 	// own description, which is edited separately via the concept edit view).
 	Description string `json:"description"`
-	// ConceptID, when set, skips creating a new concept and instead assigns
-	// the candidate's point_ids to this already-existing concept_id
+	// EntryKind overrides the candidate's own EntryKind (concept/fact,
+	// docs/impl/v1/kpn.md 步骤 3 "类型标注") when the human edits it at confirm
+	// time — mirrors SuggestedName/Description above. Empty means "use the
+	// candidate's own suggestion, unchanged". Only used on the new-concept
+	// path; ignored when EntryID is set (归入已有概念 keeps the existing
+	// concept's own kind).
+	EntryKind string `json:"entry_kind"`
+	// EntryID, when set, skips creating a new concept and instead assigns
+	// the candidate's point_ids to this already-existing entry_id
 	// (docs/impl/v1/kpn.md 步骤 6 "归入已有概念") — mutually exclusive with
-	// SuggestedName/DomainID, which are ignored when ConceptID is set.
-	ConceptID string `json:"concept_id"`
+	// SuggestedName/DomainID, which are ignored when EntryID is set.
+	EntryID string `json:"entry_id"`
 	// PointIDs, when non-nil, replaces the candidate's own point_ids
 	// wholesale (add/remove KPs via the confirm dialog's picker). Applies to
 	// both the new-concept and "归入已有概念" execution paths. Nil (vs. an
@@ -168,8 +204,8 @@ type ConfirmAddRequest struct {
 	PointIDs []string `json:"point_ids"`
 }
 
-// ConfirmMergeRequest is POST /concepts/candidates/:id/confirm's body for
-// kind=merge: Target must be one of the candidate's merge_from concept_ids.
+// ConfirmMergeRequest is POST /entries/candidates/:id/confirm's body for
+// kind=merge: Target must be one of the candidate's merge_from entry_ids.
 type ConfirmMergeRequest struct {
 	Target string `json:"target"`
 }
@@ -178,7 +214,7 @@ type ConfirmMergeRequest struct {
 // (docs/impl/v1/concept-evolution.md 步骤 3 reason 摘要).
 type ConfirmResult struct {
 	Candidate    CandidateRow
-	ConceptID    string // kind=add: the newly created concept_id
+	EntryID    string // kind=add: the newly created entry_id
 	MigratedKUs  int
 	FlaggedPages int
 }

@@ -43,8 +43,8 @@ ALTER TABLE sources ADD COLUMN reflow_skipped_edges INTEGER NOT NULL DEFAULT 0;
 
 ALTER TABLE traces ADD COLUMN skeleton_page_id TEXT REFERENCES wiki_pages(page_id);
 
--- Pre-existing rows tagged page_type='topic' with a non-null concept_id were
+-- Pre-existing rows tagged page_type='topic' with a non-null entry_id were
 -- produced by the old single-tier compile — semantically they are concept
 -- pages; rewrite so page_type's meaning ("topic = second-tier compile output,
--- concept_id always NULL") holds for all rows going forward.
-UPDATE wiki_pages SET page_type = 'concept' WHERE page_type = 'topic' AND concept_id IS NOT NULL;
+-- entry_id always NULL") holds for all rows going forward.
+UPDATE wiki_pages SET page_type = 'concept' WHERE page_type = 'topic' AND entry_id IS NOT NULL;

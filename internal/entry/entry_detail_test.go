@@ -1,25 +1,25 @@
-package concept
+package entry
 
 import (
 	"database/sql"
 	"testing"
 )
 
-func TestStore_GetConceptDetail(t *testing.T) {
+func TestStore_GetEntryDetail(t *testing.T) {
 	_, store, db := setupService(t)
-	seedConcept(t, db, "c1", "d1", sql.NullString{})
+	seedEntry(t, db, "c1", "d1", sql.NullString{})
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{String: "c1", Valid: true})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	d, err := store.GetConceptDetail("c1")
+	d, err := store.GetEntryDetail("c1")
 	if err != nil {
 		t.Fatalf("get concept detail: %v", err)
 	}
 	if d == nil {
 		t.Fatal("expected non-nil detail")
 	}
-	if d.ConceptID != "c1" || d.DomainID != "d1" {
+	if d.EntryID != "c1" || d.DomainID != "d1" {
 		t.Fatalf("unexpected detail: %+v", d)
 	}
 	if len(d.Points) != 1 || d.Points[0].PointID != "p1" {
@@ -27,12 +27,12 @@ func TestStore_GetConceptDetail(t *testing.T) {
 	}
 }
 
-func TestStore_GetConceptDetail_MergedAwayReturnsNil(t *testing.T) {
+func TestStore_GetEntryDetail_MergedAwayReturnsNil(t *testing.T) {
 	_, store, db := setupService(t)
-	seedConcept(t, db, "target", "d1", sql.NullString{})
-	seedConcept(t, db, "merged", "d1", sql.NullString{String: "target", Valid: true})
+	seedEntry(t, db, "target", "d1", sql.NullString{})
+	seedEntry(t, db, "merged", "d1", sql.NullString{String: "target", Valid: true})
 
-	d, err := store.GetConceptDetail("merged")
+	d, err := store.GetEntryDetail("merged")
 	if err != nil {
 		t.Fatalf("get concept detail: %v", err)
 	}
@@ -41,14 +41,14 @@ func TestStore_GetConceptDetail_MergedAwayReturnsNil(t *testing.T) {
 	}
 }
 
-func TestStore_UpdateConceptMeta(t *testing.T) {
+func TestStore_UpdateEntryMeta(t *testing.T) {
 	_, store, db := setupService(t)
-	seedConcept(t, db, "c1", "d1", sql.NullString{})
+	seedEntry(t, db, "c1", "d1", sql.NullString{})
 
-	if err := store.UpdateConceptMeta("c1", "新名称", "新描述"); err != nil {
+	if err := store.UpdateEntryMeta("c1", "新名称", "新描述", EntryKindConcept); err != nil {
 		t.Fatalf("update concept meta: %v", err)
 	}
-	d, err := store.GetConceptDetail("c1")
+	d, err := store.GetEntryDetail("c1")
 	if err != nil {
 		t.Fatalf("get concept detail: %v", err)
 	}
@@ -57,31 +57,31 @@ func TestStore_UpdateConceptMeta(t *testing.T) {
 	}
 }
 
-func TestStore_UpdateConceptMeta_MergedAwayFails(t *testing.T) {
+func TestStore_UpdateEntryMeta_MergedAwayFails(t *testing.T) {
 	_, store, db := setupService(t)
-	seedConcept(t, db, "target", "d1", sql.NullString{})
-	seedConcept(t, db, "merged", "d1", sql.NullString{String: "target", Valid: true})
+	seedEntry(t, db, "target", "d1", sql.NullString{})
+	seedEntry(t, db, "merged", "d1", sql.NullString{String: "target", Valid: true})
 
-	if err := store.UpdateConceptMeta("merged", "x", "y"); err == nil {
+	if err := store.UpdateEntryMeta("merged", "x", "y", EntryKindConcept); err == nil {
 		t.Fatal("expected error updating a merged-away concept")
 	}
 }
 
-func TestStore_AddConceptPoints(t *testing.T) {
+func TestStore_AddEntryPoints(t *testing.T) {
 	_, store, db := setupService(t)
-	seedConcept(t, db, "c1", "d1", sql.NullString{})
+	seedEntry(t, db, "c1", "d1", sql.NullString{})
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{}) // unclassified
 	seedKP(t, db, "p1", "u1", "s1")
 
-	migrated, err := store.AddConceptPoints("c1", []string{"p1"})
+	migrated, err := store.AddEntryPoints("c1", []string{"p1"})
 	if err != nil {
 		t.Fatalf("add concept points: %v", err)
 	}
 	if migrated != 1 {
 		t.Fatalf("migrated = %d, want 1", migrated)
 	}
-	d, err := store.GetConceptDetail("c1")
+	d, err := store.GetEntryDetail("c1")
 	if err != nil {
 		t.Fatalf("get concept detail: %v", err)
 	}
@@ -90,15 +90,15 @@ func TestStore_AddConceptPoints(t *testing.T) {
 	}
 }
 
-func TestStore_AddConceptPoints_SkipsAlreadyClassifiedUnit(t *testing.T) {
+func TestStore_AddEntryPoints_SkipsAlreadyClassifiedUnit(t *testing.T) {
 	_, store, db := setupService(t)
-	seedConcept(t, db, "c1", "d1", sql.NullString{})
-	seedConcept(t, db, "other", "d1", sql.NullString{})
+	seedEntry(t, db, "c1", "d1", sql.NullString{})
+	seedEntry(t, db, "other", "d1", sql.NullString{})
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{String: "other", Valid: true})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	migrated, err := store.AddConceptPoints("c1", []string{"p1"})
+	migrated, err := store.AddEntryPoints("c1", []string{"p1"})
 	if err != nil {
 		t.Fatalf("add concept points: %v", err)
 	}
@@ -107,21 +107,21 @@ func TestStore_AddConceptPoints_SkipsAlreadyClassifiedUnit(t *testing.T) {
 	}
 }
 
-func TestStore_RemoveConceptPoint(t *testing.T) {
+func TestStore_RemoveEntryPoint(t *testing.T) {
 	_, store, db := setupService(t)
-	seedConcept(t, db, "c1", "d1", sql.NullString{})
+	seedEntry(t, db, "c1", "d1", sql.NullString{})
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{String: "c1", Valid: true})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	unitPointCount, err := store.RemoveConceptPoint("c1", "p1")
+	unitPointCount, err := store.RemoveEntryPoint("c1", "p1")
 	if err != nil {
 		t.Fatalf("remove concept point: %v", err)
 	}
 	if unitPointCount != 1 {
 		t.Fatalf("unit_point_count = %d, want 1", unitPointCount)
 	}
-	d, err := store.GetConceptDetail("c1")
+	d, err := store.GetEntryDetail("c1")
 	if err != nil {
 		t.Fatalf("get concept detail: %v", err)
 	}
@@ -130,15 +130,15 @@ func TestStore_RemoveConceptPoint(t *testing.T) {
 	}
 }
 
-func TestStore_RemoveConceptPoint_ReportsSiblingPoints(t *testing.T) {
+func TestStore_RemoveEntryPoint_ReportsSiblingPoints(t *testing.T) {
 	_, store, db := setupService(t)
-	seedConcept(t, db, "c1", "d1", sql.NullString{})
+	seedEntry(t, db, "c1", "d1", sql.NullString{})
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{String: "c1", Valid: true})
 	seedKP(t, db, "p1", "u1", "s1")
 	seedKP(t, db, "p2", "u1", "s1")
 
-	unitPointCount, err := store.RemoveConceptPoint("c1", "p1")
+	unitPointCount, err := store.RemoveEntryPoint("c1", "p1")
 	if err != nil {
 		t.Fatalf("remove concept point: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestService_ConfirmAdd_DescriptionFromRequest(t *testing.T) {
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
-	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic",
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept,
 		[]string{"p1"}, nil, ContentDrivenEvidence{Origin: "content_driven", Description: "原始候选描述"}, "seed")
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func TestService_ConfirmAdd_DescriptionFromRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	d, err := store.GetConceptDetail(result.ConceptID)
+	d, err := store.GetEntryDetail(result.EntryID)
 	if err != nil {
 		t.Fatalf("get concept detail: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestService_CreateManualCandidate_PersistsDescription(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.CreateManualCandidate("d1", "并发编程", "草稿阶段填写的描述", []string{"p1"})
+	candidateID, err := svc.CreateManualCandidate("d1", "并发编程", "草稿阶段填写的描述", EntryKindConcept, []string{"p1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestService_CreateManualCandidate_PersistsDescription(t *testing.T) {
 	if err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	d, err := store.GetConceptDetail(result.ConceptID)
+	d, err := store.GetEntryDetail(result.EntryID)
 	if err != nil {
 		t.Fatalf("get concept detail: %v", err)
 	}
@@ -211,25 +211,25 @@ func TestStore_ListDomainAddCandidates(t *testing.T) {
 	seedDomain(t, db, "d1")
 	seedDomain(t, db, "d2")
 
-	pending, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "pending one", nil, nil, AddEvidence{}, "seed")
+	pending, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "pending one", EntryKindConcept, nil, nil, AddEvidence{}, "seed")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rejected, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "rejected one", nil, nil, AddEvidence{}, "seed")
+	rejected, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "rejected one", EntryKindConcept, nil, nil, AddEvidence{}, "seed")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Reject(rejected); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.InsertAddCandidate(sql.NullString{String: "d2", Valid: true}, "other domain", nil, nil, AddEvidence{}, "seed"); err != nil {
+	if _, err := store.InsertAddCandidate(sql.NullString{String: "d2", Valid: true}, "other domain", EntryKindConcept, nil, nil, AddEvidence{}, "seed"); err != nil {
 		t.Fatal(err)
 	}
-	appliedID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "applied one", nil, nil, AddEvidence{}, "seed")
+	appliedID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "applied one", EntryKindConcept, nil, nil, AddEvidence{}, "seed")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ConfirmAdd(appliedID, "concept-x", "d1", "applied one", "", nil, "seed"); err != nil {
+	if _, err := store.ConfirmAdd(appliedID, "concept-x", "d1", "applied one", "", EntryKindConcept, nil, "seed"); err != nil {
 		t.Fatal(err)
 	}
 

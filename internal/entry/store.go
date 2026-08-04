@@ -1,4 +1,4 @@
-package concept
+package entry
 
 import (
 	"database/sql"
@@ -19,30 +19,31 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
-// ConceptInfo is a concepts row's display-relevant subset — the confirm
+// EntryInfo is a entries row's display-relevant subset — the confirm
 // UI's "归入已有概念" picker (docs/impl/v1/kpn.md 步骤 6) needs id/name/domain
 // only, not the full concept row. Description/KPCount are additionally used
 // by the 知识领域 page's concept grid (docs/impl/v1/concept-evolution.md 未定义
 // 这块 UI，字段是纯展示性的附加信息，不影响任何匹配/确认逻辑).
-type ConceptInfo struct {
-	ConceptID   string
+type EntryInfo struct {
+	EntryID   string
 	Name        string
 	DomainID    string
 	Description string
+	Kind        string
 	KPCount     int
 }
 
-// ListActiveConcepts returns concepts with merged_into IS NULL (still a
+// ListActiveEntries returns entries with merged_into IS NULL (still a
 // valid entry point), optionally filtered to one domain. Used by the
 // concept candidate confirm UI to populate "select an existing concept"
 // pickers, and by the 知识领域 page's concept grid.
-func (s *Store) ListActiveConcepts(domainID string) ([]ConceptInfo, error) {
+func (s *Store) ListActiveEntries(domainID string) ([]EntryInfo, error) {
 	query := `
-		SELECT c.concept_id, c.name, c.domain_id, COALESCE(c.description, ''),
+		SELECT c.entry_id, c.name, c.domain_id, COALESCE(c.description, ''), c.kind,
 			(SELECT COUNT(*) FROM knowledge_points kp
 			 JOIN knowledge_units ku ON ku.unit_id = kp.unit_id
-			 WHERE ku.concept_id = c.concept_id AND kp.lifecycle = 'current' AND ku.lifecycle = 'current')
-		FROM concepts c WHERE c.merged_into IS NULL`
+			 WHERE ku.entry_id = c.entry_id AND kp.lifecycle = 'current' AND ku.lifecycle = 'current')
+		FROM entries c WHERE c.merged_into IS NULL`
 	var args []interface{}
 	if domainID != "" {
 		query += ` AND c.domain_id = ?`
@@ -52,14 +53,14 @@ func (s *Store) ListActiveConcepts(domainID string) ([]ConceptInfo, error) {
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("concept store: list active concepts: %w", err)
+		return nil, fmt.Errorf("concept store: list active entries: %w", err)
 	}
 	defer rows.Close()
 
-	var results []ConceptInfo
+	var results []EntryInfo
 	for rows.Next() {
-		var c ConceptInfo
-		if err := rows.Scan(&c.ConceptID, &c.Name, &c.DomainID, &c.Description, &c.KPCount); err != nil {
+		var c EntryInfo
+		if err := rows.Scan(&c.EntryID, &c.Name, &c.DomainID, &c.Description, &c.Kind, &c.KPCount); err != nil {
 			return nil, fmt.Errorf("concept store: scan concept: %w", err)
 		}
 		results = append(results, c)
@@ -80,7 +81,7 @@ type AvailablePointOption struct {
 }
 
 // AvailablePoints lists knowledge_points still eligible for a kind=add
-// candidate's point_ids: concept_id IS NULL on their KU (the same
+// candidate's point_ids: entry_id IS NULL on their KU (the same
 // precondition ConfirmAdd/ConfirmAssign's migration query enforces), current
 // lifecycle on both KU and KP, in the given domain, excluding shadow Sources.
 // Capped at 200 — the confirm UI is a manual curation aid, not a full browse.
@@ -90,7 +91,7 @@ func (s *Store) AvailablePoints(domainID string) ([]AvailablePointOption, error)
 		FROM knowledge_points kp
 		JOIN knowledge_units ku ON ku.unit_id = kp.unit_id
 		JOIN sources s ON s.source_id = kp.source_id
-		WHERE ku.concept_id IS NULL AND ku.lifecycle = 'current' AND kp.lifecycle = 'current'
+		WHERE ku.entry_id IS NULL AND ku.lifecycle = 'current' AND kp.lifecycle = 'current'
 		  AND s.domain_id = ? AND s.shadow_of IS NULL
 		ORDER BY kp.created_at DESC
 		LIMIT 200`, domainID)
@@ -110,27 +111,28 @@ func (s *Store) AvailablePoints(domainID string) ([]AvailablePointOption, error)
 	return results, rows.Err()
 }
 
-// ConceptDetail is a concepts row plus its currently-assigned knowledge
+// EntryDetail is a entries row plus its currently-assigned knowledge
 // points, for the 知识领域 page's concept detail/edit modal (opened by
 // clicking a confirmed concept card — a plain metadata edit, not a
 // concept-evolution candidate, so it has no confirm/reject step of its own).
-type ConceptDetail struct {
-	ConceptID   string
+type EntryDetail struct {
+	EntryID   string
 	DomainID    string
 	Name        string
 	Description string
+	Kind        string
 	Points      []AvailablePointOption
 }
 
-// GetConceptDetail loads a concept's editable fields plus its current point
-// set (via ku.concept_id — the same join AvailablePoints uses in reverse).
+// GetEntryDetail loads a concept's editable fields plus its current point
+// set (via ku.entry_id — the same join AvailablePoints uses in reverse).
 // Returns nil, nil if the concept doesn't exist or has been merged away
 // (merged_into IS NOT NULL — no longer a valid edit entry point).
-func (s *Store) GetConceptDetail(conceptID string) (*ConceptDetail, error) {
-	var d ConceptDetail
-	err := s.db.QueryRow(`SELECT concept_id, domain_id, name, COALESCE(description, '')
-		FROM concepts WHERE concept_id = ? AND merged_into IS NULL`, conceptID,
-	).Scan(&d.ConceptID, &d.DomainID, &d.Name, &d.Description)
+func (s *Store) GetEntryDetail(conceptID string) (*EntryDetail, error) {
+	var d EntryDetail
+	err := s.db.QueryRow(`SELECT entry_id, domain_id, name, COALESCE(description, ''), kind
+		FROM entries WHERE entry_id = ? AND merged_into IS NULL`, conceptID,
+	).Scan(&d.EntryID, &d.DomainID, &d.Name, &d.Description, &d.Kind)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -143,7 +145,7 @@ func (s *Store) GetConceptDetail(conceptID string) (*ConceptDetail, error) {
 		FROM knowledge_points kp
 		JOIN knowledge_units ku ON ku.unit_id = kp.unit_id
 		JOIN sources s ON s.source_id = kp.source_id
-		WHERE ku.concept_id = ? AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
+		WHERE ku.entry_id = ? AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
 		ORDER BY kp.created_at DESC`, conceptID)
 	if err != nil {
 		return nil, fmt.Errorf("concept store: get concept detail: points: %w", err)
@@ -162,12 +164,12 @@ func (s *Store) GetConceptDetail(conceptID string) (*ConceptDetail, error) {
 	return &d, nil
 }
 
-// UpdateConceptMeta renames/redescribes a concept in place — plain metadata
+// UpdateEntryMeta renames/redescribes a concept in place — plain metadata
 // editing, distinct from the concept-evolution candidate flow (no structural
 // change, no confirm step).
-func (s *Store) UpdateConceptMeta(conceptID, name, description string) error {
-	res, err := s.db.Exec(`UPDATE concepts SET name = ?, description = ? WHERE concept_id = ? AND merged_into IS NULL`,
-		name, description, conceptID)
+func (s *Store) UpdateEntryMeta(conceptID, name, description, kind string) error {
+	res, err := s.db.Exec(`UPDATE entries SET name = ?, description = ?, kind = ? WHERE entry_id = ? AND merged_into IS NULL`,
+		name, description, kind, conceptID)
 	if err != nil {
 		return fmt.Errorf("concept store: update concept meta: %w", err)
 	}
@@ -177,16 +179,16 @@ func (s *Store) UpdateConceptMeta(conceptID, name, description string) error {
 	return nil
 }
 
-// AddConceptPoints assigns pointIDs' owning knowledge units onto conceptID,
-// same eligibility ConfirmAssign enforces (concept_id IS NULL — only
+// AddEntryPoints assigns pointIDs' owning knowledge units onto conceptID,
+// same eligibility ConfirmAssign enforces (entry_id IS NULL — only
 // still-unclassified units are addable; a unit already in a different
 // concept can't be independently reassigned here).
-func (s *Store) AddConceptPoints(conceptID string, pointIDs []string) (migrated int, err error) {
+func (s *Store) AddEntryPoints(conceptID string, pointIDs []string) (migrated int, err error) {
 	if len(pointIDs) == 0 {
 		return 0, nil
 	}
-	q := fmt.Sprintf(`UPDATE knowledge_units SET concept_id = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE concept_id IS NULL AND unit_id IN (
+	q := fmt.Sprintf(`UPDATE knowledge_units SET entry_id = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE entry_id IS NULL AND unit_id IN (
 			SELECT unit_id FROM knowledge_points WHERE point_id IN (%s)
 		)`, placeholders(len(pointIDs)))
 	args := append([]interface{}{conceptID}, toArgs(pointIDs)...)
@@ -198,13 +200,13 @@ func (s *Store) AddConceptPoints(conceptID string, pointIDs []string) (migrated 
 	return int(n), nil
 }
 
-// RemoveConceptPoint unassigns pointID's owning knowledge unit from
+// RemoveEntryPoint unassigns pointID's owning knowledge unit from
 // conceptID. Note the same granularity constraint the rest of this module
-// has always had: concept_id lives on knowledge_units, not on individual
+// has always had: entry_id lives on knowledge_units, not on individual
 // points, so this clears the whole unit — every other point sharing that
 // unit is unclassified too, not just pointID. The handler surfaces this via
 // the returned count so the UI can warn when it's more than 1.
-func (s *Store) RemoveConceptPoint(conceptID, pointID string) (unitPointCount int, err error) {
+func (s *Store) RemoveEntryPoint(conceptID, pointID string) (unitPointCount int, err error) {
 	var unitID string
 	if err := s.db.QueryRow(`SELECT unit_id FROM knowledge_points WHERE point_id = ?`, pointID).Scan(&unitID); err != nil {
 		if err == sql.ErrNoRows {
@@ -213,8 +215,8 @@ func (s *Store) RemoveConceptPoint(conceptID, pointID string) (unitPointCount in
 		return 0, fmt.Errorf("concept store: remove concept point: %w", err)
 	}
 
-	res, err := s.db.Exec(`UPDATE knowledge_units SET concept_id = NULL, updated_at = CURRENT_TIMESTAMP
-		WHERE concept_id = ? AND unit_id = ?`, conceptID, unitID)
+	res, err := s.db.Exec(`UPDATE knowledge_units SET entry_id = NULL, updated_at = CURRENT_TIMESTAMP
+		WHERE entry_id = ? AND unit_id = ?`, conceptID, unitID)
 	if err != nil {
 		return 0, fmt.Errorf("concept store: remove concept point: %w", err)
 	}
@@ -253,7 +255,7 @@ func marshal(v interface{}) string {
 }
 
 // GapPointEvent is one activation_gap learning_events row whose payload
-// classified as gap_level=concept_gap (docs/impl/v1/concept-evolution.md
+// classified as gap_level=entry_gap (docs/impl/v1/concept-evolution.md
 // activation_gap payload 扩展). The learning_events.processed flag is not
 // used to gate this query — that flag's semantics is already owned by
 // study.md 步骤 2's link-candidate consumption, which marks every
@@ -266,7 +268,7 @@ type GapPointEvent struct {
 	PointIDs     []string
 }
 
-func (s *Store) FetchConceptGapEvents(windowDays int) ([]GapPointEvent, error) {
+func (s *Store) FetchEntryGapEvents(windowDays int) ([]GapPointEvent, error) {
 	rows, err := s.db.Query(`
 		SELECT le.event_id, COALESCE(t.question_hash, ''), le.payload
 		FROM learning_events le
@@ -294,7 +296,7 @@ func (s *Store) FetchConceptGapEvents(windowDays int) ([]GapPointEvent, error) {
 		}
 		// Legacy events without gap_level default to link_gap
 		// (docs/impl/v1/concept-evolution.md 存量事件兼容策略) — not our input.
-		if p.GapLevel != "concept_gap" {
+		if p.GapLevel != "entry_gap" {
 			continue
 		}
 		events = append(events, GapPointEvent{EventID: eventID, QuestionHash: questionHash, PointIDs: p.DirectPointIDs})
@@ -303,10 +305,10 @@ func (s *Store) FetchConceptGapEvents(windowDays int) ([]GapPointEvent, error) {
 }
 
 // SeenAddEventIDs returns every learning_event event_id already attributed to
-// some kind=add concept_candidates row (any status) — the scan's own
+// some kind=add entry_candidates row (any status) — the scan's own
 // idempotency marker in place of learning_events.processed (see GapPointEvent).
 func (s *Store) SeenAddEventIDs() (map[string]bool, error) {
-	rows, err := s.db.Query(`SELECT event_ids FROM concept_candidates WHERE kind = ?`, KindAdd)
+	rows, err := s.db.Query(`SELECT event_ids FROM entry_candidates WHERE kind = ?`, KindAdd)
 	if err != nil {
 		return nil, fmt.Errorf("concept store: seen add event ids: %w", err)
 	}
@@ -331,20 +333,20 @@ func (s *Store) SeenAddEventIDs() (map[string]bool, error) {
 
 func scanCandidate(row interface{ Scan(...interface{}) error }) (*CandidateRow, error) {
 	var c CandidateRow
-	if err := row.Scan(&c.CandidateID, &c.Kind, &c.DomainID, &c.SuggestedName, &c.MergeFrom,
+	if err := row.Scan(&c.CandidateID, &c.Kind, &c.EntryKind, &c.DomainID, &c.SuggestedName, &c.MergeFrom,
 		&c.PointIDs, &c.Evidence, &c.EventIDs, &c.Status, &c.LastSignalAt, &c.CreatedAt, &c.UpdatedAt,
-		&c.ResolvedConceptID, &c.CreatedNewConcept, &c.KPNRelationIDs); err != nil {
+		&c.ResolvedEntryID, &c.CreatedNewEntry, &c.KPNRelationIDs); err != nil {
 		return nil, err
 	}
 	return &c, nil
 }
 
-const candidateColumns = `candidate_id, kind, domain_id, suggested_name, merge_from,
+const candidateColumns = `candidate_id, kind, entry_kind, domain_id, suggested_name, merge_from,
 	point_ids, evidence, event_ids, status, last_signal_at, created_at, updated_at,
-	resolved_concept_id, created_new_concept, kpn_relation_ids`
+	resolved_entry_id, created_new_entry, kpn_relation_ids`
 
 func (s *Store) ListCandidatesByKindStatus(kind, status string) ([]CandidateRow, error) {
-	rows, err := s.db.Query(`SELECT `+candidateColumns+` FROM concept_candidates
+	rows, err := s.db.Query(`SELECT `+candidateColumns+` FROM entry_candidates
 		WHERE kind = ? AND status = ? ORDER BY last_signal_at DESC`, kind, status)
 	if err != nil {
 		return nil, fmt.Errorf("concept store: list candidates by kind/status: %w", err)
@@ -367,9 +369,9 @@ func (s *Store) ListCandidatesByKindStatus(kind, status string) ([]CandidateRow,
 // (needs a decision), rejected/expired (kept visible as a status badge on
 // their card, per the merged-grid design — there is no separate list view
 // anymore). Applied candidates are excluded: those already became real
-// concepts rows, which ListActiveConcepts covers instead.
+// entries rows, which ListActiveEntries covers instead.
 func (s *Store) ListDomainAddCandidates(domainID string) ([]CandidateRow, error) {
-	rows, err := s.db.Query(`SELECT `+candidateColumns+` FROM concept_candidates
+	rows, err := s.db.Query(`SELECT `+candidateColumns+` FROM entry_candidates
 		WHERE kind = ? AND domain_id = ? AND status IN (?, ?, ?)
 		ORDER BY updated_at DESC`,
 		KindAdd, domainID, StatusPendingConfirm, StatusRejected, StatusExpired)
@@ -390,7 +392,7 @@ func (s *Store) ListDomainAddCandidates(domainID string) ([]CandidateRow, error)
 }
 
 func (s *Store) ListCandidates(status string) ([]CandidateRow, error) {
-	query := `SELECT ` + candidateColumns + ` FROM concept_candidates`
+	query := `SELECT ` + candidateColumns + ` FROM entry_candidates`
 	var args []interface{}
 	if status != "" {
 		query += ` WHERE status = ?`
@@ -416,7 +418,7 @@ func (s *Store) ListCandidates(status string) ([]CandidateRow, error) {
 }
 
 func (s *Store) GetCandidate(candidateID string) (*CandidateRow, error) {
-	row := s.db.QueryRow(`SELECT `+candidateColumns+` FROM concept_candidates WHERE candidate_id = ?`, candidateID)
+	row := s.db.QueryRow(`SELECT `+candidateColumns+` FROM entry_candidates WHERE candidate_id = ?`, candidateID)
 	c, err := scanCandidate(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -428,9 +430,9 @@ func (s *Store) GetCandidate(candidateID string) (*CandidateRow, error) {
 }
 
 // InsertAddCandidate creates a new kind=add row plus its pending_confirm
-// concept_add_candidate learning_result (docs/impl/v1/concept-evolution.md
+// entry_add_candidate learning_result (docs/impl/v1/concept-evolution.md
 // 步骤 2).
-func (s *Store) InsertAddCandidate(domainID sql.NullString, suggestedName string, pointIDs, eventIDs []string, evidence interface{}, reason string) (string, error) {
+func (s *Store) InsertAddCandidate(domainID sql.NullString, suggestedName, conceptKind string, pointIDs, eventIDs []string, evidence interface{}, reason string) (string, error) {
 	candidateID := uuid.New().String()
 	now := time.Now().UTC()
 
@@ -440,17 +442,17 @@ func (s *Store) InsertAddCandidate(domainID sql.NullString, suggestedName string
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`INSERT INTO concept_candidates
-		(candidate_id, kind, domain_id, suggested_name, merge_from, point_ids, evidence, event_ids, status, last_signal_at)
-		VALUES (?, ?, ?, ?, '[]', ?, ?, ?, ?, ?)`,
-		candidateID, KindAdd, domainID, suggestedName, marshal(pointIDs), marshal(evidence), marshal(eventIDs), StatusPendingConfirm, now); err != nil {
+	if _, err := tx.Exec(`INSERT INTO entry_candidates
+		(candidate_id, kind, entry_kind, domain_id, suggested_name, merge_from, point_ids, evidence, event_ids, status, last_signal_at)
+		VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?)`,
+		candidateID, KindAdd, conceptKind, domainID, suggestedName, marshal(pointIDs), marshal(evidence), marshal(eventIDs), StatusPendingConfirm, now); err != nil {
 		return "", fmt.Errorf("concept store: insert add candidate: %w", err)
 	}
 
 	if _, err := tx.Exec(`INSERT INTO learning_results
 		(result_id, action, object_type, object_id, reason, event_ids, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		uuid.New().String(), activation.ActionConceptAddCandidate, activation.ObjectTypeConceptCandidate, candidateID, reason, marshal(eventIDs), activation.ResultPendingConfirm); err != nil {
+		uuid.New().String(), activation.ActionEntryAddCandidate, activation.ObjectTypeEntryCandidate, candidateID, reason, marshal(eventIDs), activation.ResultPendingConfirm); err != nil {
 		return "", fmt.Errorf("concept store: insert add candidate learning result: %w", err)
 	}
 
@@ -488,7 +490,7 @@ func (s *Store) UpdateCandidateSignal(candidateID string, evidence interface{}, 
 		}
 	}
 
-	_, err = s.db.Exec(`UPDATE concept_candidates SET evidence = ?, event_ids = ?, last_signal_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+	_, err = s.db.Exec(`UPDATE entry_candidates SET evidence = ?, event_ids = ?, last_signal_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE candidate_id = ?`, marshal(evidence), marshal(eventIDs), candidateID)
 	if err != nil {
 		return fmt.Errorf("concept store: update candidate signal: %w", err)
@@ -526,7 +528,7 @@ func (s *Store) MergeAddCandidatePoints(candidateID string, morePointIDs []strin
 		}
 	}
 
-	_, err = s.db.Exec(`UPDATE concept_candidates SET point_ids = ?, evidence = ?, last_signal_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+	_, err = s.db.Exec(`UPDATE entry_candidates SET point_ids = ?, evidence = ?, last_signal_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE candidate_id = ?`, marshal(pointIDs), marshal(evidence), candidateID)
 	if err != nil {
 		return fmt.Errorf("concept store: merge add candidate points: %w", err)
@@ -539,7 +541,7 @@ func (s *Store) MergeAddCandidatePoints(candidateID string, morePointIDs []strin
 // (docs/impl/v1/kpn.md 步骤 6).
 func (s *Store) ConceptActive(conceptID string) (bool, error) {
 	var mergedInto sql.NullString
-	err := s.db.QueryRow(`SELECT merged_into FROM concepts WHERE concept_id = ?`, conceptID).Scan(&mergedInto)
+	err := s.db.QueryRow(`SELECT merged_into FROM entries WHERE entry_id = ?`, conceptID).Scan(&mergedInto)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -552,7 +554,7 @@ func (s *Store) ConceptActive(conceptID string) (bool, error) {
 // ConfirmAssign executes a kind=add candidate by assigning its point_ids to
 // an already-existing concept instead of creating a new one
 // (docs/impl/v1/kpn.md 步骤 6 "归入已有概念") — for content_driven candidates
-// that are really a unit_concept_match miss rather than a genuine taxonomy
+// that are really a unit_entry_match miss rather than a genuine taxonomy
 // gap, avoiding unnecessary concept-table growth.
 func (s *Store) ConfirmAssign(candidateID, conceptID string, pointIDs []string, reason string) (migratedKUs int, err error) {
 	tx, err := s.db.Begin()
@@ -562,8 +564,8 @@ func (s *Store) ConfirmAssign(candidateID, conceptID string, pointIDs []string, 
 	defer tx.Rollback()
 
 	if len(pointIDs) > 0 {
-		q := fmt.Sprintf(`UPDATE knowledge_units SET concept_id = ?, updated_at = CURRENT_TIMESTAMP
-			WHERE concept_id IS NULL AND unit_id IN (
+		q := fmt.Sprintf(`UPDATE knowledge_units SET entry_id = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE entry_id IS NULL AND unit_id IN (
 				SELECT unit_id FROM knowledge_points WHERE point_id IN (%s)
 			)`, placeholders(len(pointIDs)))
 		args := append([]interface{}{conceptID}, toArgs(pointIDs)...)
@@ -579,10 +581,10 @@ func (s *Store) ConfirmAssign(candidateID, conceptID string, pointIDs []string, 
 	// may have added/removed KPs from the original suggestion (concept
 	// candidate confirm dialog's KP picker), and the candidate list/detail
 	// view reads this column, not a live migration query.
-	// created_new_concept stays 0: this candidate didn't create conceptID,
+	// created_new_entry stays 0: this candidate didn't create conceptID,
 	// so it isn't eligible for the "restore applied to pending" rollback
 	// (that only undoes a candidate's own new-concept creation).
-	if _, err := tx.Exec(`UPDATE concept_candidates SET point_ids = ?, resolved_concept_id = ? WHERE candidate_id = ?`,
+	if _, err := tx.Exec(`UPDATE entry_candidates SET point_ids = ?, resolved_entry_id = ? WHERE candidate_id = ?`,
 		marshal(pointIDs), conceptID, candidateID); err != nil {
 		return 0, fmt.Errorf("concept store: confirm assign: sync point_ids: %w", err)
 	}
@@ -598,7 +600,7 @@ func (s *Store) ConfirmAssign(candidateID, conceptID string, pointIDs []string, 
 }
 
 // InsertMergeCandidate creates a new kind=merge row plus its pending_confirm
-// concept_merge_candidate learning_result.
+// entry_merge_candidate learning_result.
 func (s *Store) InsertMergeCandidate(mergeFrom []string, pointIDs []string, evidence MergeEvidence, reason string) (string, error) {
 	candidateID := uuid.New().String()
 	now := time.Now().UTC()
@@ -609,7 +611,7 @@ func (s *Store) InsertMergeCandidate(mergeFrom []string, pointIDs []string, evid
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`INSERT INTO concept_candidates
+	if _, err := tx.Exec(`INSERT INTO entry_candidates
 		(candidate_id, kind, domain_id, suggested_name, merge_from, point_ids, evidence, event_ids, status, last_signal_at)
 		VALUES (?, ?, NULL, NULL, ?, ?, ?, '[]', ?, ?)`,
 		candidateID, KindMerge, marshal(mergeFrom), marshal(pointIDs), marshal(evidence), StatusPendingConfirm, now); err != nil {
@@ -619,7 +621,7 @@ func (s *Store) InsertMergeCandidate(mergeFrom []string, pointIDs []string, evid
 	if _, err := tx.Exec(`INSERT INTO learning_results
 		(result_id, action, object_type, object_id, reason, event_ids, status)
 		VALUES (?, ?, ?, ?, ?, '[]', ?)`,
-		uuid.New().String(), activation.ActionConceptMergeCandidate, activation.ObjectTypeConceptCandidate, candidateID, reason, activation.ResultPendingConfirm); err != nil {
+		uuid.New().String(), activation.ActionEntryMergeCandidate, activation.ObjectTypeEntryCandidate, candidateID, reason, activation.ResultPendingConfirm); err != nil {
 		return "", fmt.Errorf("concept store: insert merge candidate learning result: %w", err)
 	}
 
@@ -630,7 +632,7 @@ func (s *Store) InsertMergeCandidate(mergeFrom []string, pointIDs []string, evid
 }
 
 func (s *Store) UpdateMergeCandidateSignal(candidateID string, evidence MergeEvidence) error {
-	_, err := s.db.Exec(`UPDATE concept_candidates SET evidence = ?, last_signal_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+	_, err := s.db.Exec(`UPDATE entry_candidates SET evidence = ?, last_signal_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE candidate_id = ?`, marshal(evidence), candidateID)
 	if err != nil {
 		return fmt.Errorf("concept store: update merge candidate signal: %w", err)
@@ -642,7 +644,7 @@ func (s *Store) UpdateMergeCandidateSignal(candidateID string, evidence MergeEvi
 // expired, mirroring the same status onto their learning_results row
 // (docs/impl/v1/concept-evolution.md 步骤 2 过期).
 func (s *Store) ExpireIdleCandidates(idleDays int) ([]string, error) {
-	rows, err := s.db.Query(`SELECT candidate_id FROM concept_candidates
+	rows, err := s.db.Query(`SELECT candidate_id FROM entry_candidates
 		WHERE status = ? AND last_signal_at < datetime('now', '-' || ? || ' days')`, StatusPendingConfirm, idleDays)
 	if err != nil {
 		return nil, fmt.Errorf("concept store: find idle candidates: %w", err)
@@ -676,13 +678,13 @@ func (s *Store) expireCandidate(candidateID string) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`UPDATE concept_candidates SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE candidate_id = ?`,
+	if _, err := tx.Exec(`UPDATE entry_candidates SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE candidate_id = ?`,
 		StatusExpired, candidateID); err != nil {
 		return fmt.Errorf("concept store: expire candidate: %w", err)
 	}
 	if _, err := tx.Exec(`UPDATE learning_results SET status = ?, confirmed_by = 'auto', updated_at = CURRENT_TIMESTAMP
 		WHERE object_type = ? AND object_id = ? AND status = ?`,
-		activation.ResultExpired, activation.ObjectTypeConceptCandidate, candidateID, activation.ResultPendingConfirm); err != nil {
+		activation.ResultExpired, activation.ObjectTypeEntryCandidate, candidateID, activation.ResultPendingConfirm); err != nil {
 		return fmt.Errorf("concept store: expire candidate learning result: %w", err)
 	}
 	return tx.Commit()
@@ -697,7 +699,7 @@ func (s *Store) Reject(candidateID string) error {
 	}
 	defer tx.Rollback()
 
-	res, err := tx.Exec(`UPDATE concept_candidates SET status = ?, updated_at = CURRENT_TIMESTAMP
+	res, err := tx.Exec(`UPDATE entry_candidates SET status = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE candidate_id = ? AND status = ?`, StatusRejected, candidateID, StatusPendingConfirm)
 	if err != nil {
 		return fmt.Errorf("concept store: reject: %w", err)
@@ -708,7 +710,7 @@ func (s *Store) Reject(candidateID string) error {
 
 	if _, err := tx.Exec(`UPDATE learning_results SET status = ?, confirmed_by = 'manual', updated_at = CURRENT_TIMESTAMP
 		WHERE object_type = ? AND object_id = ? AND status = ?`,
-		activation.ResultRejected, activation.ObjectTypeConceptCandidate, candidateID, activation.ResultPendingConfirm); err != nil {
+		activation.ResultRejected, activation.ObjectTypeEntryCandidate, candidateID, activation.ResultPendingConfirm); err != nil {
 		return fmt.Errorf("concept store: reject learning result: %w", err)
 	}
 
@@ -727,7 +729,7 @@ func (s *Store) DeleteCandidate(candidateID string) error {
 	}
 	defer tx.Rollback()
 
-	res, err := tx.Exec(`DELETE FROM concept_candidates WHERE candidate_id = ? AND status = ?`, candidateID, StatusPendingConfirm)
+	res, err := tx.Exec(`DELETE FROM entry_candidates WHERE candidate_id = ? AND status = ?`, candidateID, StatusPendingConfirm)
 	if err != nil {
 		return fmt.Errorf("concept store: delete candidate: %w", err)
 	}
@@ -736,7 +738,7 @@ func (s *Store) DeleteCandidate(candidateID string) error {
 	}
 
 	if _, err := tx.Exec(`DELETE FROM learning_results WHERE object_type = ? AND object_id = ?`,
-		activation.ObjectTypeConceptCandidate, candidateID); err != nil {
+		activation.ObjectTypeEntryCandidate, candidateID); err != nil {
 		return fmt.Errorf("concept store: delete candidate learning result: %w", err)
 	}
 
@@ -753,7 +755,7 @@ func (s *Store) RestoreRejected(candidateID string) error {
 	}
 	defer tx.Rollback()
 
-	res, err := tx.Exec(`UPDATE concept_candidates SET status = ?, last_signal_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+	res, err := tx.Exec(`UPDATE entry_candidates SET status = ?, last_signal_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE candidate_id = ? AND status = ?`, StatusPendingConfirm, candidateID, StatusRejected)
 	if err != nil {
 		return fmt.Errorf("concept store: restore rejected: %w", err)
@@ -764,15 +766,15 @@ func (s *Store) RestoreRejected(candidateID string) error {
 
 	if _, err := tx.Exec(`UPDATE learning_results SET status = ?, confirmed_by = 'manual', reason = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE object_type = ? AND object_id = ? AND status = ?`,
-		activation.ResultPendingConfirm, "人工从已驳回恢复至待确认", activation.ObjectTypeConceptCandidate, candidateID, activation.ResultRejected); err != nil {
+		activation.ResultPendingConfirm, "人工从已驳回恢复至待确认", activation.ObjectTypeEntryCandidate, candidateID, activation.ResultRejected); err != nil {
 		return fmt.Errorf("concept store: restore rejected learning result: %w", err)
 	}
 
 	return tx.Commit()
 }
 
-// RestoreAppliedNewConcept undoes an applied kind=add candidate that created
-// a brand-new concept: reverts pointIDs' KUs to concept_id=NULL, deletes the
+// RestoreAppliedNewEntry undoes an applied kind=add candidate that created
+// a brand-new concept: reverts pointIDs' KUs to entry_id=NULL, deletes the
 // KPN cross-Source relations this candidate's own directed rematch created
 // (relationIDs — see RematchPoints/recordKPNRelationIDs; a later, unrelated
 // Source import's own relations are never touched, since only this
@@ -780,7 +782,7 @@ func (s *Store) RestoreRejected(candidateID string) error {
 // — refusing if any other KU still references it (e.g. a later "归入已有概念"
 // confirm assigned more KPs onto it after creation), since deleting would
 // then orphan that reference.
-func (s *Store) RestoreAppliedNewConcept(candidateID, conceptID string, pointIDs, relationIDs []string, reason string) error {
+func (s *Store) RestoreAppliedNewEntry(candidateID, conceptID string, pointIDs, relationIDs []string, reason string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("concept store: restore applied: begin: %w", err)
@@ -788,8 +790,8 @@ func (s *Store) RestoreAppliedNewConcept(candidateID, conceptID string, pointIDs
 	defer tx.Rollback()
 
 	if len(pointIDs) > 0 {
-		q := fmt.Sprintf(`UPDATE knowledge_units SET concept_id = NULL, updated_at = CURRENT_TIMESTAMP
-			WHERE concept_id = ? AND unit_id IN (
+		q := fmt.Sprintf(`UPDATE knowledge_units SET entry_id = NULL, updated_at = CURRENT_TIMESTAMP
+			WHERE entry_id = ? AND unit_id IN (
 				SELECT unit_id FROM knowledge_points WHERE point_id IN (%s)
 			)`, placeholders(len(pointIDs)))
 		args := append([]interface{}{conceptID}, toArgs(pointIDs)...)
@@ -799,7 +801,7 @@ func (s *Store) RestoreAppliedNewConcept(candidateID, conceptID string, pointIDs
 	}
 
 	var remaining int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE concept_id = ?`, conceptID).Scan(&remaining); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE entry_id = ?`, conceptID).Scan(&remaining); err != nil {
 		return fmt.Errorf("concept store: restore applied: check remaining units: %w", err)
 	}
 	if remaining > 0 {
@@ -814,9 +816,9 @@ func (s *Store) RestoreAppliedNewConcept(candidateID, conceptID string, pointIDs
 	}
 
 	// Clear the candidate's own FK reference before deleting the concept row
-	// it points to — concept_candidates.resolved_concept_id REFERENCES
-	// concepts(concept_id), so this must happen first.
-	res, err := tx.Exec(`UPDATE concept_candidates SET status = ?, resolved_concept_id = NULL, created_new_concept = 0, kpn_relation_ids = '[]',
+	// it points to — entry_candidates.resolved_entry_id REFERENCES
+	// entries(entry_id), so this must happen first.
+	res, err := tx.Exec(`UPDATE entry_candidates SET status = ?, resolved_entry_id = NULL, created_new_entry = 0, kpn_relation_ids = '[]',
 		last_signal_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE candidate_id = ? AND status = ?`, StatusPendingConfirm, candidateID, StatusApplied)
 	if err != nil {
@@ -826,13 +828,13 @@ func (s *Store) RestoreAppliedNewConcept(candidateID, conceptID string, pointIDs
 		return fmt.Errorf("concept store: restore applied: candidate %s not applied", candidateID)
 	}
 
-	if _, err := tx.Exec(`DELETE FROM concepts WHERE concept_id = ?`, conceptID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM entries WHERE entry_id = ?`, conceptID); err != nil {
 		return fmt.Errorf("concept store: restore applied: delete concept: %w", err)
 	}
 
 	if _, err := tx.Exec(`UPDATE learning_results SET status = ?, confirmed_by = 'manual', reason = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE object_type = ? AND object_id = ? AND status = ?`,
-		activation.ResultPendingConfirm, reason, activation.ObjectTypeConceptCandidate, candidateID, activation.ResultApplied); err != nil {
+		activation.ResultPendingConfirm, reason, activation.ObjectTypeEntryCandidate, candidateID, activation.ResultApplied); err != nil {
 		return fmt.Errorf("concept store: restore applied learning result: %w", err)
 	}
 
@@ -847,7 +849,7 @@ func (s *Store) RestoreAppliedNewConcept(candidateID, conceptID string, pointIDs
 // but appends defensively rather than assuming call order).
 func (s *Store) SetCandidateKPNRelationIDs(candidateID string, relationIDs []string) error {
 	var existing string
-	if err := s.db.QueryRow(`SELECT kpn_relation_ids FROM concept_candidates WHERE candidate_id = ?`, candidateID).Scan(&existing); err != nil {
+	if err := s.db.QueryRow(`SELECT kpn_relation_ids FROM entry_candidates WHERE candidate_id = ?`, candidateID).Scan(&existing); err != nil {
 		return fmt.Errorf("concept store: set kpn relation ids: read existing: %w", err)
 	}
 	var ids []string
@@ -855,7 +857,7 @@ func (s *Store) SetCandidateKPNRelationIDs(candidateID string, relationIDs []str
 		return fmt.Errorf("concept store: set kpn relation ids: unmarshal existing: %w", err)
 	}
 	ids = append(ids, relationIDs...)
-	if _, err := s.db.Exec(`UPDATE concept_candidates SET kpn_relation_ids = ? WHERE candidate_id = ?`, marshal(ids), candidateID); err != nil {
+	if _, err := s.db.Exec(`UPDATE entry_candidates SET kpn_relation_ids = ? WHERE candidate_id = ?`, marshal(ids), candidateID); err != nil {
 		return fmt.Errorf("concept store: set kpn relation ids: %w", err)
 	}
 	return nil
@@ -863,17 +865,17 @@ func (s *Store) SetCandidateKPNRelationIDs(candidateID string, relationIDs []str
 
 // ConfirmAdd executes a kind=add candidate in a single transaction
 // (docs/impl/v1/concept-evolution.md 步骤 3): create the concept
-// (origin=evolved), migrate every concept_id-NULL KU behind pointIDs onto it,
+// (origin=evolved), migrate every entry_id-NULL KU behind pointIDs onto it,
 // and resolve the candidate + its learning_result to applied.
-func (s *Store) ConfirmAdd(candidateID, conceptID, domainID, name, description string, pointIDs []string, reason string) (migratedKUs int, err error) {
+func (s *Store) ConfirmAdd(candidateID, conceptID, domainID, name, description, kind string, pointIDs []string, reason string) (migratedKUs int, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("concept store: confirm add: begin: %w", err)
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`INSERT INTO concepts (concept_id, domain_id, name, description, origin) VALUES (?, ?, ?, ?, 'evolved')`,
-		conceptID, domainID, name, description); err != nil {
+	if _, err := tx.Exec(`INSERT INTO entries (entry_id, domain_id, name, description, kind, origin) VALUES (?, ?, ?, ?, ?, 'evolved')`,
+		conceptID, domainID, name, description, kind); err != nil {
 		return 0, fmt.Errorf("concept store: confirm add: insert concept: %w", err)
 	}
 
@@ -881,17 +883,17 @@ func (s *Store) ConfirmAdd(candidateID, conceptID, domainID, name, description s
 	// was actually used to create the concept — the confirm request may have
 	// overridden the LLM's original suggestion and/or added/removed KPs via
 	// the confirm dialog's picker, and the candidate list/detail view reads
-	// these columns, not concepts.name or a live migration query.
-	// created_new_concept = 1: this confirm is the one that created conceptID,
+	// these columns, not entries.name or a live migration query.
+	// created_new_entry = 1: this confirm is the one that created conceptID,
 	// so it's the only path eligible for RestoreApplied's rollback.
-	if _, err := tx.Exec(`UPDATE concept_candidates SET suggested_name = ?, point_ids = ?, resolved_concept_id = ?, created_new_concept = 1 WHERE candidate_id = ?`,
-		name, marshal(pointIDs), conceptID, candidateID); err != nil {
+	if _, err := tx.Exec(`UPDATE entry_candidates SET suggested_name = ?, entry_kind = ?, point_ids = ?, resolved_entry_id = ?, created_new_entry = 1 WHERE candidate_id = ?`,
+		name, kind, marshal(pointIDs), conceptID, candidateID); err != nil {
 		return 0, fmt.Errorf("concept store: confirm add: sync suggested_name/point_ids: %w", err)
 	}
 
 	if len(pointIDs) > 0 {
-		q := fmt.Sprintf(`UPDATE knowledge_units SET concept_id = ?, updated_at = CURRENT_TIMESTAMP
-			WHERE concept_id IS NULL AND unit_id IN (
+		q := fmt.Sprintf(`UPDATE knowledge_units SET entry_id = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE entry_id IS NULL AND unit_id IN (
 				SELECT unit_id FROM knowledge_points WHERE point_id IN (%s)
 			)`, placeholders(len(pointIDs)))
 		args := append([]interface{}{conceptID}, toArgs(pointIDs)...)
@@ -915,7 +917,7 @@ func (s *Store) ConfirmAdd(candidateID, conceptID, domainID, name, description s
 
 // ConfirmMerge executes a kind=merge candidate in a single transaction
 // (docs/impl/v1/concept-evolution.md 步骤 3): every non-target concept in
-// mergeFrom has its KUs' concept_id repointed to target and gets
+// mergeFrom has its KUs' entry_id repointed to target and gets
 // merged_into=target; wiki needs_recompile flagging happens post-commit by
 // the caller (service layer), since it goes through the Wiki module's own
 // interface rather than raw SQL in this transaction.
@@ -930,14 +932,14 @@ func (s *Store) ConfirmMerge(candidateID string, mergeFrom []string, target, rea
 		if other == target {
 			continue
 		}
-		res, err := tx.Exec(`UPDATE knowledge_units SET concept_id = ?, updated_at = CURRENT_TIMESTAMP WHERE concept_id = ?`, target, other)
+		res, err := tx.Exec(`UPDATE knowledge_units SET entry_id = ?, updated_at = CURRENT_TIMESTAMP WHERE entry_id = ?`, target, other)
 		if err != nil {
 			return 0, nil, fmt.Errorf("concept store: confirm merge: migrate units: %w", err)
 		}
 		n, _ := res.RowsAffected()
 		migratedKUs += int(n)
 
-		if _, err := tx.Exec(`UPDATE concepts SET merged_into = ? WHERE concept_id = ?`, target, other); err != nil {
+		if _, err := tx.Exec(`UPDATE entries SET merged_into = ? WHERE entry_id = ?`, target, other); err != nil {
 			return 0, nil, fmt.Errorf("concept store: confirm merge: mark merged_into: %w", err)
 		}
 		mergedAway = append(mergedAway, other)
@@ -954,7 +956,7 @@ func (s *Store) ConfirmMerge(candidateID string, mergeFrom []string, target, rea
 }
 
 func resolveCandidate(tx *sql.Tx, candidateID, status, reason string) error {
-	res, err := tx.Exec(`UPDATE concept_candidates SET status = ?, updated_at = CURRENT_TIMESTAMP
+	res, err := tx.Exec(`UPDATE entry_candidates SET status = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE candidate_id = ? AND status = ?`, status, candidateID, StatusPendingConfirm)
 	if err != nil {
 		return fmt.Errorf("concept store: resolve candidate: %w", err)
@@ -965,7 +967,7 @@ func resolveCandidate(tx *sql.Tx, candidateID, status, reason string) error {
 
 	if _, err := tx.Exec(`UPDATE learning_results SET status = ?, confirmed_by = 'manual', reason = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE object_type = ? AND object_id = ? AND status = ?`,
-		activation.ResultApplied, reason, activation.ObjectTypeConceptCandidate, candidateID, activation.ResultPendingConfirm); err != nil {
+		activation.ResultApplied, reason, activation.ObjectTypeEntryCandidate, candidateID, activation.ResultPendingConfirm); err != nil {
 		return fmt.Errorf("concept store: resolve candidate learning result: %w", err)
 	}
 	return nil
@@ -977,7 +979,7 @@ type KUInfo struct {
 	UnitID    string
 	Center    string
 	SourceID  string
-	ConceptID sql.NullString
+	EntryID sql.NullString
 }
 
 // KUInfoForPoints maps each of pointIDs to its owning KnowledgeUnit's info.
@@ -985,7 +987,7 @@ func (s *Store) KUInfoForPoints(pointIDs []string) (map[string]KUInfo, error) {
 	if len(pointIDs) == 0 {
 		return map[string]KUInfo{}, nil
 	}
-	q := fmt.Sprintf(`SELECT kp.point_id, ku.unit_id, ku.center, ku.source_id, ku.concept_id
+	q := fmt.Sprintf(`SELECT kp.point_id, ku.unit_id, ku.center, ku.source_id, ku.entry_id
 		FROM knowledge_points kp
 		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
 		WHERE kp.point_id IN (%s)`, placeholders(len(pointIDs)))
@@ -999,7 +1001,7 @@ func (s *Store) KUInfoForPoints(pointIDs []string) (map[string]KUInfo, error) {
 	for rows.Next() {
 		var pointID string
 		var info KUInfo
-		if err := rows.Scan(&pointID, &info.UnitID, &info.Center, &info.SourceID, &info.ConceptID); err != nil {
+		if err := rows.Scan(&pointID, &info.UnitID, &info.Center, &info.SourceID, &info.EntryID); err != nil {
 			return nil, fmt.Errorf("concept store: scan ku info: %w", err)
 		}
 		result[pointID] = info
@@ -1064,19 +1066,19 @@ func (s *Store) TracesInWindow(windowDays int) ([]TraceDirectPoints, error) {
 	return results, rows.Err()
 }
 
-// PointConceptMap maps each of pointIDs to its concept_id, excluding points
-// whose KU has no concept_id or whose concept has been merged_into another
+// PointEntryMap maps each of pointIDs to its entry_id, excluding points
+// whose KU has no entry_id or whose concept has been merged_into another
 // (docs/impl/v1/concept-evolution.md 步骤 2 合并统计: "排除 merged_into 非空的
 // 概念参与统计").
-func (s *Store) PointConceptMap(pointIDs []string) (map[string]string, error) {
+func (s *Store) PointEntryMap(pointIDs []string) (map[string]string, error) {
 	if len(pointIDs) == 0 {
 		return map[string]string{}, nil
 	}
-	q := fmt.Sprintf(`SELECT kp.point_id, ku.concept_id
+	q := fmt.Sprintf(`SELECT kp.point_id, ku.entry_id
 		FROM knowledge_points kp
 		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
-		JOIN concepts c ON ku.concept_id = c.concept_id
-		WHERE kp.point_id IN (%s) AND ku.concept_id IS NOT NULL AND c.merged_into IS NULL`, placeholders(len(pointIDs)))
+		JOIN entries c ON ku.entry_id = c.entry_id
+		WHERE kp.point_id IN (%s) AND ku.entry_id IS NOT NULL AND c.merged_into IS NULL`, placeholders(len(pointIDs)))
 	rows, err := s.db.Query(q, toArgs(pointIDs)...)
 	if err != nil {
 		return nil, fmt.Errorf("concept store: point concept map: %w", err)

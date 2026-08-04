@@ -18,14 +18,14 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
-const pageColumns = `page_id, page_type, concept_id, title, content, status,
+const pageColumns = `page_id, page_type, entry_id, title, content, status,
 	source_point_ids, source_unit_ids, source_link_ids, observed_conditions, aliases, trigger_questions,
 	member_roles, uncovered_points, compiled_from, summary, aspects, prompt_version, model_name,
 	compiled_at, published_at, created_at, updated_at`
 
 func scanPage(row interface{ Scan(...interface{}) error }) (*Page, error) {
 	var p Page
-	err := row.Scan(&p.PageID, &p.PageType, &p.ConceptID, &p.Title, &p.Content, &p.Status,
+	err := row.Scan(&p.PageID, &p.PageType, &p.EntryID, &p.Title, &p.Content, &p.Status,
 		&p.SourcePointIDs, &p.SourceUnitIDs, &p.SourceLinkIDs, &p.ObservedConditions, &p.Aliases, &p.TriggerQuestions,
 		&p.MemberRoles, &p.UncoveredPoints, &p.CompiledFrom, &p.Summary, &p.Aspects, &p.PromptVersion, &p.ModelName,
 		&p.CompiledAt, &p.PublishedAt, &p.CreatedAt, &p.UpdatedAt)
@@ -61,11 +61,11 @@ func (s *Store) InsertPage(p *Page) error {
 		p.Aspects = "[]"
 	}
 	_, err := s.db.Exec(`INSERT INTO wiki_pages
-		(page_id, page_type, concept_id, title, content, status, source_point_ids, source_unit_ids,
+		(page_id, page_type, entry_id, title, content, status, source_point_ids, source_unit_ids,
 		 source_link_ids, observed_conditions, aliases, trigger_questions, member_roles, uncovered_points,
 		 compiled_from, summary, aspects, prompt_version, model_name, compiled_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-		p.PageID, p.PageType, p.ConceptID, p.Title, p.Content, p.Status,
+		p.PageID, p.PageType, p.EntryID, p.Title, p.Content, p.Status,
 		p.SourcePointIDs, p.SourceUnitIDs, p.SourceLinkIDs, p.ObservedConditions, p.Aliases, p.TriggerQuestions,
 		p.MemberRoles, p.UncoveredPoints, p.CompiledFrom, p.Summary, p.Aspects, p.PromptVersion, p.ModelName)
 	if err != nil {
@@ -86,10 +86,10 @@ func (s *Store) GetPage(pageID string) (*Page, error) {
 	return p, nil
 }
 
-// GetActivePageByConceptID finds a non-archived page for conceptID — used to
+// GetActivePageByEntryID finds a non-archived page for conceptID — used to
 // reject a duplicate POST /wiki/compile (docs/impl/v1/wiki.md 步骤 2).
-func (s *Store) GetActivePageByConceptID(conceptID string) (*Page, error) {
-	row := s.db.QueryRow(`SELECT `+pageColumns+` FROM wiki_pages WHERE concept_id = ? AND status != ? LIMIT 1`,
+func (s *Store) GetActivePageByEntryID(conceptID string) (*Page, error) {
+	row := s.db.QueryRow(`SELECT `+pageColumns+` FROM wiki_pages WHERE entry_id = ? AND status != ? LIMIT 1`,
 		conceptID, StatusArchived)
 	p, err := scanPage(row)
 	if err == sql.ErrNoRows {
@@ -116,7 +116,7 @@ func (s *Store) ListPages(status, pageType, conceptID string, limit int) ([]Page
 		args = append(args, pageType)
 	}
 	if conceptID != "" {
-		query += ` AND concept_id = ?`
+		query += ` AND entry_id = ?`
 		args = append(args, conceptID)
 	}
 	query += ` ORDER BY created_at DESC LIMIT ?`
@@ -171,7 +171,7 @@ func (s *Store) ListTopicPages() ([]TopicPageSummary, error) {
 	var results []TopicPageSummary
 	for rows.Next() {
 		var t TopicPageSummary
-		if err := rows.Scan(&t.PageID, &t.PageType, &t.ConceptID, &t.Title, &t.Content, &t.Status,
+		if err := rows.Scan(&t.PageID, &t.PageType, &t.EntryID, &t.Title, &t.Content, &t.Status,
 			&t.SourcePointIDs, &t.SourceUnitIDs, &t.SourceLinkIDs, &t.ObservedConditions, &t.Aliases, &t.TriggerQuestions,
 			&t.MemberRoles, &t.UncoveredPoints, &t.CompiledFrom, &t.Summary, &t.Aspects, &t.PromptVersion, &t.ModelName,
 			&t.CompiledAt, &t.PublishedAt, &t.CreatedAt, &t.UpdatedAt, &t.MemberCount); err != nil {
@@ -193,13 +193,14 @@ func (s *Store) ListTopicMemberPages(topicPageID string) ([]Page, error) {
 	return s.getPagesByIDsOrdered(memberIDs)
 }
 
-// ListUnassignedConceptPages returns every concept-type page not currently a
-// member of any topic page (any status) — the 知识地图 rail's pinned "未归入
-// 主题页" bucket.
-func (s *Store) ListUnassignedConceptPages() ([]Page, error) {
+// ListUnassignedEntryPages returns every 词条页 (concept or fact page)
+// not currently a member of any topic page (any status) — the 知识地图 rail's
+// pinned "未归入主题页" bucket. Name kept for call-site stability; it no
+// longer means "concept-kind pages only".
+func (s *Store) ListUnassignedEntryPages() ([]Page, error) {
 	rows, err := s.db.Query(`
 		SELECT ` + pageColumns + ` FROM wiki_pages
-		WHERE page_type = 'concept'
+		WHERE page_type != 'topic'
 		AND NOT EXISTS (
 			SELECT 1 FROM wiki_page_relations r WHERE r.relation_type = 'contains' AND r.to_page_id = wiki_pages.page_id
 		)
@@ -294,7 +295,6 @@ func (s *Store) ReplaceContent(pageID, title, content, sourcePointIDsJSON, sourc
 	return nil
 }
 
-
 func (s *Store) InsertRevision(r *Revision) error {
 	if r.RevisionID == "" {
 		r.RevisionID = uuid.New().String()
@@ -372,7 +372,7 @@ func (s *Store) ListQualifyingPoints(conceptID string) ([]QualifyingPoint, error
 		FROM link_candidates lc
 		JOIN knowledge_points kp ON lc.point_id = kp.point_id
 		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
-		WHERE ku.concept_id = ? AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
+		WHERE ku.entry_id = ? AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
 			AND EXISTS (SELECT 1 FROM activation_links al WHERE al.point_id = kp.point_id AND al.status = 'verified')
 		GROUP BY kp.point_id
 		ORDER BY max_confident DESC`, conceptID)
@@ -479,7 +479,7 @@ func (s *Store) ListUncoveredPoints(conceptID string) ([]UncoveredPoint, error) 
 		SELECT kp.point_id, kp.content
 		FROM knowledge_points kp
 		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
-		WHERE ku.concept_id = ? AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
+		WHERE ku.entry_id = ? AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
 			AND NOT EXISTS (SELECT 1 FROM activation_links al WHERE al.point_id = kp.point_id AND al.status = 'verified')`, conceptID)
 	if err != nil {
 		return nil, fmt.Errorf("wiki store: list uncovered points: %w", err)
@@ -790,14 +790,14 @@ func (s *Store) ConfidentQuestionsForPoints(pointIDs []string, limit int) ([]str
 	return out, nil
 }
 
-// ConceptAliases looks up real, already-verified synonym terms for a concept
+// EntryAliases looks up real, already-verified synonym terms for a concept
 // name from subject_synonyms (docs/impl/v1/activation.md "附属表
 // subject_synonyms") — preset aliases and human-confirmed gap-mined ones are
 // both status='active' rows in the same table, so one query covers both.
 // Replaces the old LLM-generated aliases field
 // (docs/design/wiki-compilation.md "触发问法取材真实观测，检索匹配复用四元组"
 // 生成侧 修订: aliases 不应由 LLM 生成，而应直接取自系统里已经存在的真实数据).
-func (s *Store) ConceptAliases(conceptName string) ([]string, error) {
+func (s *Store) EntryAliases(conceptName string) ([]string, error) {
 	if strings.TrimSpace(conceptName) == "" {
 		return nil, nil
 	}
@@ -951,34 +951,34 @@ func (s *Store) GetSourceTitle(sourceID string) (string, error) {
 	return title, nil
 }
 
-// PublishedConceptPage is one (concept name, page_id) pair for a published
+// PublishedEntryPage is one (concept name, page_id) pair for a published
 // page tied to a concept — the concept entry's candidate source
 // (docs/impl/v1/wiki.md 步骤 4b, retrieval.md 第 0 层): the question is
 // matched against concept names in Go (word-lexical contains, not a DB
 // query) since it needs the shared foundation/text normalizer.
-type PublishedConceptPage struct {
-	ConceptID string
-	Name      string
-	PageID    string
+type PublishedEntryPage struct {
+	EntryID string
+	Name    string
+	PageID  string
 }
 
-// ListPublishedConceptPages backs the concept entry: every published page
-// with a non-null concept_id, joined to its concept name.
-func (s *Store) ListPublishedConceptPages() ([]PublishedConceptPage, error) {
+// ListPublishedEntryPages backs the concept entry: every published page
+// with a non-null entry_id, joined to its concept name.
+func (s *Store) ListPublishedEntryPages() ([]PublishedEntryPage, error) {
 	rows, err := s.db.Query(`
-		SELECT c.concept_id, c.name, w.page_id
+		SELECT c.entry_id, c.name, w.page_id
 		FROM wiki_pages w
-		JOIN concepts c ON c.concept_id = w.concept_id
+		JOIN entries c ON c.entry_id = w.entry_id
 		WHERE w.status = ?`, StatusPublished)
 	if err != nil {
 		return nil, fmt.Errorf("wiki store: list published concept pages: %w", err)
 	}
 	defer rows.Close()
 
-	var out []PublishedConceptPage
+	var out []PublishedEntryPage
 	for rows.Next() {
-		var p PublishedConceptPage
-		if err := rows.Scan(&p.ConceptID, &p.Name, &p.PageID); err != nil {
+		var p PublishedEntryPage
+		if err := rows.Scan(&p.EntryID, &p.Name, &p.PageID); err != nil {
 			return nil, fmt.Errorf("wiki store: scan published concept page: %w", err)
 		}
 		out = append(out, p)
@@ -1027,14 +1027,20 @@ func (s *Store) ListPublishedPagesWithConditions() ([]PageConditions, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) GetConceptInfo(conceptID string) (name, description, domainID string, err error) {
+// GetEntryInfo also returns kind (concept/fact, docs/impl/v1/kpn.md 步骤
+// 3 "类型标注"): it nudges the analyze/compile prompts' writing register via
+// {{entry_kind_hint}}, and determines the compiled page's page_type
+// (pageTypeForKind) — it does not affect any qualifying/ready gate, citation
+// whitelist, or relation-derivation logic, which are identical for both
+// kinds (docs/impl/v1/wiki.md「概念页 / 事实页」).
+func (s *Store) GetEntryInfo(conceptID string) (name, description, domainID, kind string, err error) {
 	var desc, dom sql.NullString
-	err = s.db.QueryRow(`SELECT name, description, domain_id FROM concepts WHERE concept_id = ?`, conceptID).
-		Scan(&name, &desc, &dom)
+	err = s.db.QueryRow(`SELECT name, description, domain_id, kind FROM entries WHERE entry_id = ?`, conceptID).
+		Scan(&name, &desc, &dom, &kind)
 	if err != nil {
-		return "", "", "", fmt.Errorf("wiki store: get concept info: %w", err)
+		return "", "", "", "", fmt.Errorf("wiki store: get concept info: %w", err)
 	}
-	return name, desc.String, dom.String, nil
+	return name, desc.String, dom.String, kind, nil
 }
 
 // GetDomainName resolves a domain_id to its display name for the outline

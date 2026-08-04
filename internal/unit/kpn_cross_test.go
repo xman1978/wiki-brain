@@ -18,9 +18,9 @@ func seedDomain(t *testing.T, db *sql.DB, domainID, name string) {
 	}
 }
 
-func seedConcept(t *testing.T, db *sql.DB, conceptID, domainID, name string) {
+func seedEntry(t *testing.T, db *sql.DB, conceptID, domainID, name string) {
 	t.Helper()
-	if _, err := db.Exec(`INSERT INTO concepts (concept_id, domain_id, name) VALUES (?, ?, ?)`, conceptID, domainID, name); err != nil {
+	if _, err := db.Exec(`INSERT INTO entries (entry_id, domain_id, name) VALUES (?, ?, ?)`, conceptID, domainID, name); err != nil {
 		t.Fatalf("seed concept: %v", err)
 	}
 }
@@ -42,11 +42,11 @@ func nullableString(s string) any {
 	return s
 }
 
-func seedKUWithConcept(t *testing.T, store *Store, unitID, sourceID, conceptID, center string) {
+func seedKUWithEntry(t *testing.T, store *Store, unitID, sourceID, conceptID, center string) {
 	t.Helper()
 	ku := &KnowledgeUnit{UnitID: unitID, SourceID: sourceID, Center: center, LineStart: 1, LineEnd: 5, Status: "completed", PromptVersion: "v1"}
 	if conceptID != "" {
-		ku.ConceptID = sql.NullString{String: conceptID, Valid: true}
+		ku.EntryID = sql.NullString{String: conceptID, Valid: true}
 	}
 	if err := store.InsertUnit(ku); err != nil {
 		t.Fatalf("seed ku: %v", err)
@@ -66,14 +66,14 @@ func TestCrossSourceKPN_MatchByConcept(t *testing.T) {
 	store := NewStore(db)
 
 	seedDomain(t, db, "d1", "D")
-	seedConcept(t, db, "c1", "d1", "C")
+	seedEntry(t, db, "c1", "d1", "C")
 	seedSourceWithDomain(t, db, "new-src", "d1")
 	seedSourceWithDomain(t, db, "existing-src", "d1")
 
-	seedKUWithConcept(t, store, "ku-new", "new-src", "c1", "new topic")
+	seedKUWithEntry(t, store, "ku-new", "new-src", "c1", "new topic")
 	seedKP(t, store, "kp-new", "ku-new", "new-src", "new content")
 
-	seedKUWithConcept(t, store, "ku-existing", "existing-src", "c1", "existing topic")
+	seedKUWithEntry(t, store, "ku-existing", "existing-src", "c1", "existing topic")
 	seedKP(t, store, "kp-existing", "ku-existing", "existing-src", "existing content")
 
 	fake.SetResponse("kpn_cross_match.md", llm.FakeResponse{
@@ -110,46 +110,50 @@ func TestCrossSourceKPN_MatchByConcept(t *testing.T) {
 	}
 }
 
-// fakeConceptNotifier stands in for concept.Service in unit-package tests
+// fakeEntryNotifier stands in for entry.Service in unit-package tests
 // (docs/impl/v1/kpn.md 步骤 3: orphan KPs are handed to the concept
 // evolution module instead of falling back to a same-domain candidate pool).
-type fakeConceptNotifier struct {
-	calls []fakeConceptProposeCall
+type fakeEntryNotifier struct {
+	calls []fakeEntryProposeCall
 	err   error
 }
 
-type fakeConceptProposeCall struct {
-	domainID, suggestedName, suggestedDescription, sourceID string
-	pointIDs                                                []string
+type fakeEntryProposeCall struct {
+	domainID, suggestedName, suggestedDescription, kind, sourceID string
+	pointIDs                                                      []string
 }
 
-func (f *fakeConceptNotifier) ProposeAddCandidate(domainID, suggestedName, suggestedDescription string, pointIDs []string, sourceID string) (string, error) {
+func (f *fakeEntryNotifier) ProposeAddCandidate(domainID, suggestedName, suggestedDescription, kind string, pointIDs []string, sourceID string) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}
-	f.calls = append(f.calls, fakeConceptProposeCall{domainID, suggestedName, suggestedDescription, sourceID, pointIDs})
+	f.calls = append(f.calls, fakeEntryProposeCall{domainID, suggestedName, suggestedDescription, kind, sourceID, pointIDs})
 	return "candidate-1", nil
 }
 
-func TestCrossSourceKPN_OrphanPointsRouteToConceptCandidate_WhenNoConcept(t *testing.T) {
+func (f *fakeEntryNotifier) ListActiveEntryNames(domainID string) ([]string, error) {
+	return nil, nil
+}
+
+func TestCrossSourceKPN_OrphanPointsRouteToEntryCandidate_WhenNoConcept(t *testing.T) {
 	svc, fake, db := setupTestService(t)
 	store := NewStore(db)
-	notifier := &fakeConceptNotifier{}
-	svc.SetConceptNotifier(notifier)
+	notifier := &fakeEntryNotifier{}
+	svc.SetEntryNotifier(notifier)
 
 	seedDomain(t, db, "d1", "D")
 	seedSourceWithDomain(t, db, "new-src", "d1")
 	seedSourceWithDomain(t, db, "existing-src", "d1")
 
-	// Neither KU has a concept_id — must NOT fall back to domain grouping;
+	// Neither KU has a entry_id — must NOT fall back to domain grouping;
 	// both points route to the concept evolution module instead.
-	seedKUWithConcept(t, store, "ku-new", "new-src", "", "new topic")
+	seedKUWithEntry(t, store, "ku-new", "new-src", "", "new topic")
 	seedKP(t, store, "kp-new", "ku-new", "new-src", "new content")
-	seedKUWithConcept(t, store, "ku-existing", "existing-src", "", "existing topic")
+	seedKUWithEntry(t, store, "ku-existing", "existing-src", "", "existing topic")
 	seedKP(t, store, "kp-existing", "ku-existing", "existing-src", "existing content")
 
-	fake.SetResponse("kpn_concept_propose.md", llm.FakeResponse{
-		Output: `{"suggested_name": "新主题", "suggested_description": "描述"}`,
+	fake.SetResponse("kpn_entry_propose.md", llm.FakeResponse{
+		Output: `{"clusters": [{"suggested_name": "新主题", "suggested_description": "描述", "kind": "fact", "point_ids": ["kp-new"]}]}`,
 	})
 
 	result, err := svc.CrossSourceKPN(context.Background(), "new-src")
@@ -157,10 +161,10 @@ func TestCrossSourceKPN_OrphanPointsRouteToConceptCandidate_WhenNoConcept(t *tes
 		t.Fatalf("CrossSourceKPN: %v", err)
 	}
 	if result.RelationsCreated != 0 || result.Batches != 0 {
-		t.Fatalf("expected no cross-Source relations without concept_id, got %+v", result)
+		t.Fatalf("expected no cross-Source relations without entry_id, got %+v", result)
 	}
-	if result.ConceptCandidatesTouched != 1 {
-		t.Fatalf("expected 1 concept candidate touched, got %d", result.ConceptCandidatesTouched)
+	if result.EntryCandidatesTouched != 1 {
+		t.Fatalf("expected 1 concept candidate touched, got %d", result.EntryCandidatesTouched)
 	}
 	if len(notifier.calls) != 1 {
 		t.Fatalf("expected 1 ProposeAddCandidate call, got %d", len(notifier.calls))
@@ -175,23 +179,72 @@ func TestCrossSourceKPN_OrphanPointsRouteToConceptCandidate_WhenNoConcept(t *tes
 	if len(call.pointIDs) != 1 || call.pointIDs[0] != "kp-new" {
 		t.Errorf("expected only new-src's own orphan point (kp-new), got %v", call.pointIDs)
 	}
+	if call.kind != "fact" {
+		t.Errorf("kind = %q, want the cluster's own kind=fact threaded through", call.kind)
+	}
 }
 
-func TestCrossSourceKPN_NoOrphanProposal_WhenNoConceptNotifierSet(t *testing.T) {
+func TestProposeEntriesForDomainOrphans_MultiSourceClusterSplitsBySource(t *testing.T) {
+	svc, fake, db := setupTestService(t)
+	store := NewStore(db)
+	notifier := &fakeEntryNotifier{}
+	svc.SetEntryNotifier(notifier)
+
+	seedDomain(t, db, "d1", "D")
+	seedSourceWithDomain(t, db, "src-a", "d1")
+	seedSourceWithDomain(t, db, "src-b", "d1")
+
+	// Orphans from two different Sources in the same domain — unlike the
+	// per-Source KPN pipeline pass, the domain-wide trigger must see both.
+	seedKUWithEntry(t, store, "ku-a", "src-a", "", "topic a")
+	seedKP(t, store, "kp-a", "ku-a", "src-a", "content a")
+	seedKUWithEntry(t, store, "ku-b", "src-b", "", "topic b")
+	seedKP(t, store, "kp-b", "ku-b", "src-b", "content b")
+
+	fake.SetResponse("kpn_entry_propose.md", llm.FakeResponse{
+		Output: `{"clusters": [{"suggested_name": "共同主题", "suggested_description": "desc", "point_ids": ["kp-a", "kp-b"]}]}`,
+	})
+
+	touched, err := svc.ProposeEntriesForDomainOrphans(context.Background(), "d1")
+	if err != nil {
+		t.Fatalf("ProposeEntriesForDomainOrphans: %v", err)
+	}
+	if touched != 1 {
+		t.Fatalf("expected 1 cluster touched, got %d", touched)
+	}
+	// One LLM-proposed cluster spanning two Sources must fan out into one
+	// ProposeAddCandidate call per source so evidence.source_ids ends up
+	// complete via the existing per-source merge path.
+	if len(notifier.calls) != 2 {
+		t.Fatalf("expected 2 ProposeAddCandidate calls (one per source), got %d: %+v", len(notifier.calls), notifier.calls)
+	}
+	bySource := map[string][]string{}
+	for _, c := range notifier.calls {
+		bySource[c.sourceID] = c.pointIDs
+	}
+	if got := bySource["src-a"]; len(got) != 1 || got[0] != "kp-a" {
+		t.Errorf("src-a call point_ids = %v, want [kp-a]", got)
+	}
+	if got := bySource["src-b"]; len(got) != 1 || got[0] != "kp-b" {
+		t.Errorf("src-b call point_ids = %v, want [kp-b]", got)
+	}
+}
+
+func TestCrossSourceKPN_NoOrphanProposal_WhenNoEntryNotifierSet(t *testing.T) {
 	svc, fake, db := setupTestService(t)
 	store := NewStore(db)
 
 	seedDomain(t, db, "d1", "D")
 	seedSourceWithDomain(t, db, "new-src", "d1")
-	seedKUWithConcept(t, store, "ku-new", "new-src", "", "new topic")
+	seedKUWithEntry(t, store, "ku-new", "new-src", "", "new topic")
 	seedKP(t, store, "kp-new", "ku-new", "new-src", "new content")
 
 	result, err := svc.CrossSourceKPN(context.Background(), "new-src")
 	if err != nil {
 		t.Fatalf("CrossSourceKPN: %v", err)
 	}
-	if result.ConceptCandidatesTouched != 0 {
-		t.Errorf("expected 0 touched without a notifier, got %d", result.ConceptCandidatesTouched)
+	if result.EntryCandidatesTouched != 0 {
+		t.Errorf("expected 0 touched without a notifier, got %d", result.EntryCandidatesTouched)
 	}
 	if len(fake.Calls()) != 0 {
 		t.Errorf("expected no LLM calls, got %d", len(fake.Calls()))
@@ -208,7 +261,7 @@ func TestCrossSourceKPN_SkipsWhenNoConceptOrDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed source: %v", err)
 	}
-	seedKUWithConcept(t, store, "ku-new", "new-src", "", "new topic")
+	seedKUWithEntry(t, store, "ku-new", "new-src", "", "new topic")
 	seedKP(t, store, "kp-new", "ku-new", "new-src", "new content")
 
 	result, err := svc.CrossSourceKPN(context.Background(), "new-src")
@@ -228,12 +281,12 @@ func TestCrossSourceKPN_Idempotent(t *testing.T) {
 	store := NewStore(db)
 
 	seedDomain(t, db, "d1", "D")
-	seedConcept(t, db, "c1", "d1", "C")
+	seedEntry(t, db, "c1", "d1", "C")
 	seedSourceWithDomain(t, db, "new-src", "d1")
 	seedSourceWithDomain(t, db, "existing-src", "d1")
-	seedKUWithConcept(t, store, "ku-new", "new-src", "c1", "new topic")
+	seedKUWithEntry(t, store, "ku-new", "new-src", "c1", "new topic")
 	seedKP(t, store, "kp-new", "ku-new", "new-src", "new content")
-	seedKUWithConcept(t, store, "ku-existing", "existing-src", "c1", "existing topic")
+	seedKUWithEntry(t, store, "ku-existing", "existing-src", "c1", "existing topic")
 	seedKP(t, store, "kp-existing", "ku-existing", "existing-src", "existing content")
 
 	fake.SetResponse("kpn_cross_match.md", llm.FakeResponse{
@@ -262,12 +315,12 @@ func TestCrossSourceKPN_RejectsWrongDirection(t *testing.T) {
 	store := NewStore(db)
 
 	seedDomain(t, db, "d1", "D")
-	seedConcept(t, db, "c1", "d1", "C")
+	seedEntry(t, db, "c1", "d1", "C")
 	seedSourceWithDomain(t, db, "new-src", "d1")
 	seedSourceWithDomain(t, db, "existing-src", "d1")
-	seedKUWithConcept(t, store, "ku-new", "new-src", "c1", "new topic")
+	seedKUWithEntry(t, store, "ku-new", "new-src", "c1", "new topic")
 	seedKP(t, store, "kp-new", "ku-new", "new-src", "new content")
-	seedKUWithConcept(t, store, "ku-existing", "existing-src", "c1", "existing topic")
+	seedKUWithEntry(t, store, "ku-existing", "existing-src", "c1", "existing topic")
 	seedKP(t, store, "kp-existing", "ku-existing", "existing-src", "existing content")
 
 	// Reversed: from=existing (B group), to=new (A group) — must be rejected.
@@ -289,12 +342,12 @@ func TestCrossSourceKPN_ExcludesNonCurrentOppositeKP(t *testing.T) {
 	store := NewStore(db)
 
 	seedDomain(t, db, "d1", "D")
-	seedConcept(t, db, "c1", "d1", "C")
+	seedEntry(t, db, "c1", "d1", "C")
 	seedSourceWithDomain(t, db, "new-src", "d1")
 	seedSourceWithDomain(t, db, "existing-src", "d1")
-	seedKUWithConcept(t, store, "ku-new", "new-src", "c1", "new topic")
+	seedKUWithEntry(t, store, "ku-new", "new-src", "c1", "new topic")
 	seedKP(t, store, "kp-new", "ku-new", "new-src", "new content")
-	seedKUWithConcept(t, store, "ku-existing", "existing-src", "c1", "existing topic")
+	seedKUWithEntry(t, store, "ku-existing", "existing-src", "c1", "existing topic")
 	seedKP(t, store, "kp-existing", "ku-existing", "existing-src", "existing content")
 	db.Exec(`UPDATE knowledge_points SET lifecycle = 'superseded' WHERE point_id = 'kp-existing'`)
 
@@ -315,12 +368,12 @@ func TestCrossSourceKPN_ContradictsRelation(t *testing.T) {
 	store := NewStore(db)
 
 	seedDomain(t, db, "d1", "D")
-	seedConcept(t, db, "c1", "d1", "C")
+	seedEntry(t, db, "c1", "d1", "C")
 	seedSourceWithDomain(t, db, "new-src", "d1")
 	seedSourceWithDomain(t, db, "existing-src", "d1")
-	seedKUWithConcept(t, store, "ku-new", "new-src", "c1", "new topic")
+	seedKUWithEntry(t, store, "ku-new", "new-src", "c1", "new topic")
 	seedKP(t, store, "kp-new", "ku-new", "new-src", "new content")
-	seedKUWithConcept(t, store, "ku-existing", "existing-src", "c1", "existing topic")
+	seedKUWithEntry(t, store, "ku-existing", "existing-src", "c1", "existing topic")
 	seedKP(t, store, "kp-existing", "ku-existing", "existing-src", "existing content")
 
 	fake.SetResponse("kpn_cross_match.md", llm.FakeResponse{
@@ -347,21 +400,21 @@ func TestCrossSourceKPN_BatchCapEnforced(t *testing.T) {
 	svc.cfg.KPN.CrossMaxBatches = 1
 
 	seedDomain(t, db, "d1", "D")
-	seedConcept(t, db, "c1", "d1", "C1")
-	seedConcept(t, db, "c2", "d1", "C2")
+	seedEntry(t, db, "c1", "d1", "C1")
+	seedEntry(t, db, "c2", "d1", "C2")
 	seedSourceWithDomain(t, db, "new-src", "d1")
 	seedSourceWithDomain(t, db, "existing-src", "d1")
 
 	// Two separate concept groups, each with a matching opposite — would be
 	// 2 batches without the cap.
-	seedKUWithConcept(t, store, "ku-new-1", "new-src", "c1", "topic1")
+	seedKUWithEntry(t, store, "ku-new-1", "new-src", "c1", "topic1")
 	seedKP(t, store, "kp-new-1", "ku-new-1", "new-src", "content1")
-	seedKUWithConcept(t, store, "ku-existing-1", "existing-src", "c1", "topic1")
+	seedKUWithEntry(t, store, "ku-existing-1", "existing-src", "c1", "topic1")
 	seedKP(t, store, "kp-existing-1", "ku-existing-1", "existing-src", "content1")
 
-	seedKUWithConcept(t, store, "ku-new-2", "new-src", "c2", "topic2")
+	seedKUWithEntry(t, store, "ku-new-2", "new-src", "c2", "topic2")
 	seedKP(t, store, "kp-new-2", "ku-new-2", "new-src", "content2")
-	seedKUWithConcept(t, store, "ku-existing-2", "existing-src", "c2", "topic2")
+	seedKUWithEntry(t, store, "ku-existing-2", "existing-src", "c2", "topic2")
 	seedKP(t, store, "kp-existing-2", "ku-existing-2", "existing-src", "content2")
 
 	fake.SetResponse("kpn_cross_match.md", llm.FakeResponse{Output: `{"relations": []}`})
@@ -421,8 +474,8 @@ func TestGroupPointsForCrossMatch_SeparatesOrphans(t *testing.T) {
 		{PointID: "p2", UnitID: "u2"},
 		{PointID: "p3", UnitID: "u3"},
 	}
-	unitConceptMap := map[string]string{"u1": "c1"} // u2, u3 have no concept
-	groups, orphans := groupPointsForCrossMatch(points, unitConceptMap)
+	unitEntryMap := map[string]string{"u1": "c1"} // u2, u3 have no concept
+	groups, orphans := groupPointsForCrossMatch(points, unitEntryMap)
 
 	if len(groups) != 1 || groups[0].id != "c1" || len(groups[0].points) != 1 {
 		t.Fatalf("expected 1 concept group (c1, 1 point), got %+v", groups)
@@ -438,12 +491,12 @@ func TestHandler_TriggerCrossKPN(t *testing.T) {
 	handler := NewHandler(svc)
 
 	seedDomain(t, db, "d1", "D")
-	seedConcept(t, db, "c1", "d1", "C")
+	seedEntry(t, db, "c1", "d1", "C")
 	seedSourceWithDomain(t, db, "new-src", "d1")
 	seedSourceWithDomain(t, db, "existing-src", "d1")
-	seedKUWithConcept(t, store, "ku-new", "new-src", "c1", "new topic")
+	seedKUWithEntry(t, store, "ku-new", "new-src", "c1", "new topic")
 	seedKP(t, store, "kp-new", "ku-new", "new-src", "new content")
-	seedKUWithConcept(t, store, "ku-existing", "existing-src", "c1", "existing topic")
+	seedKUWithEntry(t, store, "ku-existing", "existing-src", "c1", "existing topic")
 	seedKP(t, store, "kp-existing", "ku-existing", "existing-src", "existing content")
 
 	fake.SetResponse("kpn_cross_match.md", llm.FakeResponse{

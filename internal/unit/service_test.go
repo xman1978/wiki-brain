@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
@@ -306,7 +307,7 @@ func TestExtract_KPNGeneration(t *testing.T) {
 	}
 }
 
-func TestExtract_ConceptMatch(t *testing.T) {
+func TestExtract_EntryMatch(t *testing.T) {
 	svc, fake, db := setupTestService(t)
 	tmpDir := t.TempDir()
 
@@ -315,7 +316,7 @@ func TestExtract_ConceptMatch(t *testing.T) {
 	insertOutlines(t, db, "src-1")
 
 	db.Exec(`INSERT INTO domains (domain_id, name) VALUES ('d-1', 'TestDomain')`)
-	db.Exec(`INSERT INTO concepts (concept_id, domain_id, name, description) VALUES ('c-1', 'd-1', '知识管理', '知识管理领域')`)
+	db.Exec(`INSERT INTO entries (entry_id, domain_id, name, description) VALUES ('c-1', 'd-1', '知识管理', '知识管理领域')`)
 
 	extractResp := extractOutput{
 		Units:  []llmUnit{{UnitID: "1", Center: "知识管理概述", LineStart: 1, FirstLineAnchor: "# 第一章", LineEnd: 10, LastLineAnchor: "知识管理的核心目标是提高组织的创新能力和竞争力。"}},
@@ -332,7 +333,12 @@ func TestExtract_ConceptMatch(t *testing.T) {
 	// For this test, we just verify the call was made
 	conceptResp := conceptMatchOutput{Matches: []conceptMatch{}}
 	conceptJSON, _ := json.Marshal(conceptResp)
-	fake.SetResponse("unit_concept_match.md", llm.FakeResponse{Output: string(conceptJSON)})
+	fake.SetResponse("unit_entry_match.md", llm.FakeResponse{Output: string(conceptJSON)})
+
+	if _, err := db.Exec(`UPDATE sources SET title = ?, summary = ? WHERE source_id = ?`,
+		"达梦数据库优化", "达梦数据库参数与 SQL 优化实践", "src-1"); err != nil {
+		t.Fatalf("set source title/summary: %v", err)
+	}
 
 	err := svc.Extract(t.Context(), "src-1")
 	if err != nil {
@@ -342,8 +348,15 @@ func TestExtract_ConceptMatch(t *testing.T) {
 	calls := fake.Calls()
 	conceptCalled := false
 	for _, c := range calls {
-		if c.PromptFile == "unit_concept_match.md" {
+		if c.PromptFile == "unit_entry_match.md" {
 			conceptCalled = true
+			unitsList := c.Vars["units_list"]
+			if !strings.Contains(unitsList, "来源标题：达梦数据库优化") {
+				t.Errorf("units_list missing source title, got:\n%s", unitsList)
+			}
+			if !strings.Contains(unitsList, "来源摘要：达梦数据库参数与 SQL 优化实践") {
+				t.Errorf("units_list missing source summary, got:\n%s", unitsList)
+			}
 		}
 	}
 	if !conceptCalled {

@@ -49,7 +49,7 @@ HTTP API 框架
 
 迁移脚本按版本号命名，放在 `internal/foundation/db/migrations/` 目录下。各表建表 SQL 如下：
 
-**预制数据表（`domains`、`concepts`）**
+**预制数据表（`domains`、`entries`）**
 
 ```sql
 CREATE TABLE domains (
@@ -59,15 +59,15 @@ CREATE TABLE domains (
     created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE concepts (
-    concept_id   TEXT PRIMARY KEY,
+CREATE TABLE entries (
+    entry_id   TEXT PRIMARY KEY,
     domain_id    TEXT NOT NULL REFERENCES domains(domain_id),
     name         TEXT NOT NULL,
     description  TEXT,
     created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_concepts_domain_id ON concepts(domain_id);
+CREATE INDEX idx_entries_domain_id ON entries(domain_id);
 ```
 
 **会话表（`sessions`、`session_turns`）**
@@ -402,7 +402,7 @@ HTTP API 遵循 OpenAPI 描述，接口定义先于实现完成。
 
 ### 步骤 9：预制数据初始化
 
-服务启动时，在 SQLite 初始化（步骤 2）完成后，自动从 `preset/domains.json` 读取预制的领域和概念数据，写入 `domains` 和 `concepts` 表。
+服务启动时，在 SQLite 初始化（步骤 2）完成后，自动从 `preset/domains.json` 读取预制的领域和概念数据，写入 `domains` 和 `entries` 表。
 
 **`domains.json` 格式**：
 
@@ -413,7 +413,7 @@ HTTP API 遵循 OpenAPI 描述，接口定义先于实现完成。
       "id": "software-engineering",
       "name": "软件工程",
       "description": "软件设计、开发、部署和运维",
-      "concepts": [
+      "entries": [
         {"id": "deployment", "name": "部署", "description": "应用程序发布和运行环境配置"},
         {"id": "architecture", "name": "架构设计", "description": "系统结构和模块划分"}
       ]
@@ -426,7 +426,7 @@ HTTP API 遵循 OpenAPI 描述，接口定义先于实现完成。
 
 ```text
 遍历 domains 数组，按 domain_id UPSERT（INSERT OR IGNORE）到 domains 表；
-遍历每个 domain 下的 concepts，按 concept_id UPSERT 到 concepts 表；
+遍历每个 domain 下的 entries，按 entry_id UPSERT 到 entries 表；
 UPSERT 策略：已存在则跳过（不覆盖运行时修改），不存在则插入；
 文件不存在或解析失败：记录 warn 日志，不阻断启动。
 ```

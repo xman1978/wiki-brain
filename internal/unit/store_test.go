@@ -325,21 +325,21 @@ func TestUpdateUnitConceptID(t *testing.T) {
 	}
 
 	got, _ := store.GetUnitByID(ku.UnitID)
-	if got.ConceptID.Valid {
-		t.Error("concept_id should be null initially")
+	if got.EntryID.Valid {
+		t.Error("entry_id should be null initially")
 	}
 
 	store.db.Exec(`INSERT INTO domains (domain_id, name) VALUES ('d-1', 'TestDomain')`)
-	store.db.Exec(`INSERT INTO concepts (concept_id, domain_id, name) VALUES ('c-1', 'd-1', 'TestConcept')`)
+	store.db.Exec(`INSERT INTO entries (entry_id, domain_id, name) VALUES ('c-1', 'd-1', 'TestEntry')`)
 
 	cid := "c-1"
-	if err := store.UpdateUnitConceptID(ku.UnitID, &cid); err != nil {
-		t.Fatalf("update concept_id: %v", err)
+	if err := store.UpdateUnitEntryID(ku.UnitID, &cid); err != nil {
+		t.Fatalf("update entry_id: %v", err)
 	}
 
 	got, _ = store.GetUnitByID(ku.UnitID)
-	if !got.ConceptID.Valid || got.ConceptID.String != "c-1" {
-		t.Errorf("concept_id = %v, want c-1", got.ConceptID)
+	if !got.EntryID.Valid || got.EntryID.String != "c-1" {
+		t.Errorf("entry_id = %v, want c-1", got.EntryID)
 	}
 }
 
@@ -363,27 +363,27 @@ func TestGetUnitsBySourceID(t *testing.T) {
 	}
 }
 
-// TestGetConceptsByDomainID_ExcludesMerged covers docs/impl/v1/concept-evolution.md
-// 步骤 4: a merged concept must not appear in unit_concept_match's candidate list.
-func TestGetConceptsByDomainID_ExcludesMerged(t *testing.T) {
+// TestGetEntriesByDomainID_ExcludesMerged covers docs/impl/v1/concept-evolution.md
+// 步骤 4: a merged concept must not appear in unit_entry_match's candidate list.
+func TestGetEntriesByDomainID_ExcludesMerged(t *testing.T) {
 	store := setupTestStore(t)
 
 	if _, err := store.db.Exec(`INSERT INTO domains (domain_id, name) VALUES ('d1', 'Domain One')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`INSERT INTO concepts (concept_id, domain_id, name) VALUES ('c-active', 'd1', 'Active')`); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO entries (entry_id, domain_id, name) VALUES ('c-active', 'd1', 'Active')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`INSERT INTO concepts (concept_id, domain_id, name, merged_into) VALUES ('c-merged', 'd1', 'Merged', 'c-active')`); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO entries (entry_id, domain_id, name, merged_into) VALUES ('c-merged', 'd1', 'Merged', 'c-active')`); err != nil {
 		t.Fatal(err)
 	}
 
-	concepts, err := store.GetConceptsByDomainID("d1")
+	entries, err := store.GetEntriesByDomainID("d1")
 	if err != nil {
-		t.Fatalf("get concepts: %v", err)
+		t.Fatalf("get entries: %v", err)
 	}
-	if len(concepts) != 1 || concepts[0].ConceptID != "c-active" {
-		t.Errorf("expected only c-active, got %+v", concepts)
+	if len(entries) != 1 || entries[0].EntryID != "c-active" {
+		t.Errorf("expected only c-active, got %+v", entries)
 	}
 }
 

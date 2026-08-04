@@ -198,13 +198,13 @@ func (s *Store) SaveLearningEvent(traceID, eventType, payload string) error {
 	return nil
 }
 
-// ConceptNullRatio computes, for a set of KnowledgePoint IDs, the share
+// EntryNullRatio computes, for a set of KnowledgePoint IDs, the share
 // without a current concept anchor — either the owning KnowledgeUnit has no
-// concept_id, or it does but that concept has been merged_into another one
+// entry_id, or it does but that concept has been merged_into another one
 // (docs/impl/v1/concept-evolution.md activation_gap payload 扩展). One join,
 // no LLM call. Empty input reports ratio 0 (link_gap by construction, since
 // no threshold triggers on a zero ratio).
-func (s *Store) ConceptNullRatio(pointIDs []string) (float64, error) {
+func (s *Store) EntryNullRatio(pointIDs []string) (float64, error) {
 	if len(pointIDs) == 0 {
 		return 0, nil
 	}
@@ -219,10 +219,10 @@ func (s *Store) ConceptNullRatio(pointIDs []string) (float64, error) {
 	query := fmt.Sprintf(`
 		SELECT
 			COUNT(*),
-			SUM(CASE WHEN ku.concept_id IS NULL OR c.merged_into IS NOT NULL THEN 1 ELSE 0 END)
+			SUM(CASE WHEN ku.entry_id IS NULL OR c.merged_into IS NOT NULL THEN 1 ELSE 0 END)
 		FROM knowledge_points kp
 		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
-		LEFT JOIN concepts c ON ku.concept_id = c.concept_id
+		LEFT JOIN entries c ON ku.entry_id = c.entry_id
 		WHERE kp.point_id IN (%s)`, strings.Join(placeholders, ","))
 
 	var total int

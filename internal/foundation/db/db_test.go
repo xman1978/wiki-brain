@@ -38,14 +38,14 @@ func TestOpenAndMigrate(t *testing.T) {
 		t.Fatalf("insert into domains: %v", err)
 	}
 
-	// Verify concepts table with foreign key
-	_, err = db.Exec("INSERT INTO concepts (concept_id, domain_id, name) VALUES ('c1', 'test', 'Test Concept')")
+	// Verify entries table with foreign key
+	_, err = db.Exec("INSERT INTO entries (entry_id, domain_id, name) VALUES ('c1', 'test', 'Test Concept')")
 	if err != nil {
-		t.Fatalf("insert into concepts: %v", err)
+		t.Fatalf("insert into entries: %v", err)
 	}
 
 	// Verify foreign key constraint
-	_, err = db.Exec("INSERT INTO concepts (concept_id, domain_id, name) VALUES ('c2', 'nonexistent', 'Bad')")
+	_, err = db.Exec("INSERT INTO entries (entry_id, domain_id, name) VALUES ('c2', 'nonexistent', 'Bad')")
 	if err == nil {
 		t.Fatal("expected foreign key error")
 	}

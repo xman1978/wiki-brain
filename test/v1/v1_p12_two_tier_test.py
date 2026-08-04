@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
 V1 验收测试方案（test/v1/v1-acceptance-test-plan.md）P12：Wiki 两层架构扩展
-（docs/impl/v1/two-tier-task-brief.md，页面关系 / 主题页候选 / 二阶编译 /
+（docs/impl/v1/wiki.md 步骤 7-10，页面关系 / 主题页候选 / 二阶编译 /
 检索骨架注入 / 写作草稿 / 回流防护）。
 
-前提：依赖 P8 已经跑过并各产出一个 published 的 concept 页（制度域「销售回款
-管理」、技术域「Oracle RAC」）——本阶段从 test/v1/results/ 里读取最近一次
-v1_p8_wiki_*.jsonl 拿 concept_id/page_id，不重新培养信号。若找不到，提示先跑
-P8，非致命错误直接退出。
+前提：依赖 P8 已经跑过并各产出一个 published 的一阶页（concept 或 fact，
+制度域「销售回款管理」、技术域「Oracle RAC」）——本阶段从 test/v1/results/
+里读取最近一次 v1_p8_wiki_*.jsonl 拿 entry_id/page_id，不重新培养信号。
+若找不到，提示先跑 P8，非致命错误直接退出。
 
 同 P8/P11 的既有拆分方式，本阶段也分两条轴：
 
   轴一（确定性，必过）：两层架构新增端点/字段的契约行为——
     - POST /wiki/compile、/wiki/compile/analyze 传 page_type=topic 必须被拒绝
-      （docs/impl/v1/wiki.md 步骤 8：主题页只能走 topic/analyze|compile，
-      一阶编译端点收紧为仅接受 concept）；
+      （docs/impl/v1/wiki.md：一阶端点只接受 concept|fact，主题页只能走
+      topic/analyze|compile）；
     - GET /wiki/pages/:id/relations 结构正确（可为空——P8 的制度/技术两页
       分属不同领域，天然不会有 KPN 关系，为空是预期，不是失败）；
     - 写作草稿全生命周期：POST drafts → GET（evidence_index 非空）→
@@ -30,10 +30,11 @@ P8，非致命错误直接退出。
     - 检查 knowledge_point_relations 里是否已有可供页面关系派生的行
       （P7 阶段的跨 Source fixture 可能已产生）、对应 wiki_page_relations
       是否已派生；
-    - 检查 learning_results 里是否已出现 topic_page_candidate（需要
-      topic_member_min=3 个同域已发布概念页互相 related 且 contradicts 不
-      反客为主——P8 目前每个领域只发布了 1 个概念页，单次运行大概率观测
-      不到，属预期中的观测性缺口，不判失败）。
+    - 检查 learning_results 里是否已出现 topic_page_candidate。主题候选现
+      按真实提问四元组聚类（docs/design/wiki.md），不再从已发布页面求连通
+      分量；单次 P8 后问答样本通常不够 topic_cluster_min_*，大概率为 0，
+      属预期观测性缺口，不判失败。人工指定主题走 POST /wiki/topics，本阶
+      段不强制验收二阶全文编译（成本同 P8 days_active 轴二）。
 
 用法：
   python3 test/v1/v1_p12_two_tier_test.py
@@ -60,11 +61,11 @@ def load_latest_p8_result():
 
 
 def axis1_reject_topic_page_type(base_url):
-    """POST /wiki/compile(/analyze) 必须拒绝 page_type=topic（docs/impl/v1/wiki.md
-    步骤 8：一阶编译端点收紧为仅接受 concept，主题页只能走 topic/analyze|compile）。"""
+    """POST /wiki/compile(/analyze) 必须拒绝 page_type=topic（docs/impl/v1/wiki.md：
+    一阶端点只接受 concept|fact，主题页只能走 topic/analyze|compile）。"""
     results = {}
     for path in ("/wiki/compile/analyze", "/wiki/compile"):
-        resp, status = c.http_post_json(base_url, path, {"concept_id": "nonexistent", "page_type": "topic"})
+        resp, status = c.http_post_json(base_url, path, {"entry_id": "nonexistent", "page_type": "topic"})
         results[path] = {"status": status, "rejected": status != 200}
         print(f"  {path} page_type=topic: HTTP {status} rejected={status != 200} resp={resp}")
     return results
@@ -168,7 +169,7 @@ def axis2_relation_and_topic_candidate_observation(conn, base_url):
 
     topic_candidates = c.http_get_json(base_url, "/study/results?action=topic_page_candidate&status=pending_confirm&limit=50")
     print(f"  [观测] topic_page_candidate pending_confirm 数={len(topic_candidates)}"
-          f"（P8 每域仅发布 1 个概念页，< topic_member_min=3，单次运行大概率为 0，属预期观测性缺口）")
+          f"（主题候选按提问四元组聚类，P8 后样本通常不够 topic_cluster_min_*，大概率为 0，属预期观测性缺口）")
     return {
         "kpn_relation_count": len(kpn_rows),
         "wiki_page_relation_count": wpr_rows,

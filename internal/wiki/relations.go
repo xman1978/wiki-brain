@@ -1,6 +1,6 @@
 // Page relation derivation (docs/impl/v1/wiki.md 步骤 7): related/contradicts
-// rows between published concept pages, derived purely from
-// knowledge_point_relations + shared source_point_ids — no LLM call.
+// rows between published 词条页 (concept or fact pages), derived purely
+// from knowledge_point_relations + shared source_point_ids — no LLM call.
 package wiki
 
 import (
@@ -10,19 +10,21 @@ import (
 )
 
 // RecomputeRelationsForPage implements docs/impl/v1/wiki.md 步骤 7a: on
-// publish of a concept page, fully rewrite its related/contradicts rows
-// against every other published concept page. Only ever touches rows
-// involving pageID — other pages' relations to each other are untouched.
+// publish of a concept or fact page, fully rewrite its related/contradicts
+// rows against every other published 词条页 (concept and fact pages alike —
+// e.g. a principle's concept page and a representative implementation's
+// fact page can be related). Only ever touches rows involving pageID —
+// other pages' relations to each other are untouched.
 func (s *Service) RecomputeRelationsForPage(pageID string) error {
 	page, err := s.store.GetPage(pageID)
 	if err != nil {
 		return fmt.Errorf("wiki: recompute relations: get page: %w", err)
 	}
-	if page == nil || page.Status != StatusPublished || page.PageType != PageTypeConcept {
+	if page == nil || page.Status != StatusPublished || page.PageType == PageTypeTopic {
 		return nil
 	}
 
-	others, err := s.store.ListPublishedConceptPagesWithPoints()
+	others, err := s.store.ListPublishedEntryPagesWithPoints()
 	if err != nil {
 		return fmt.Errorf("wiki: recompute relations: list published concept pages: %w", err)
 	}
@@ -94,7 +96,7 @@ func (s *Service) RecomputeRelationsForPoints(pointIDs []string) error {
 		return nil
 	}
 	affected := make(map[string]bool)
-	pages, err := s.store.ListPublishedConceptPagesWithPoints()
+	pages, err := s.store.ListPublishedEntryPagesWithPoints()
 	if err != nil {
 		return fmt.Errorf("wiki: recompute relations for points: list pages: %w", err)
 	}

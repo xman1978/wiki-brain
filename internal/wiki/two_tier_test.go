@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/blevesearch/bleve/v2"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 )
 
-// publishConceptPage inserts+publishes a concept page directly (bypassing the
+// publishEntryPage inserts+publishes a concept page directly (bypassing the
 // LLM compile pipeline, which is already covered elsewhere) so relation/
 // topic-candidate tests can set up multiple published pages cheaply.
-func publishConceptPage(t *testing.T, svc *Service, pageID, conceptID, title string, pointIDs []string) *Page {
+func publishEntryPage(t *testing.T, svc *Service, pageID, conceptID, title string, pointIDs []string) *Page {
 	t.Helper()
 	p := &Page{
 		PageID:         pageID,
@@ -24,7 +25,7 @@ func publishConceptPage(t *testing.T, svc *Service, pageID, conceptID, title str
 		PromptVersion:  "v1",
 		ModelName:      "test",
 	}
-	p.ConceptID = nullableString(conceptID)
+	p.EntryID = nullableString(conceptID)
 	if err := svc.store.InsertPage(p); err != nil {
 		t.Fatalf("insert page %s: %v", pageID, err)
 	}
@@ -59,14 +60,14 @@ func TestPageRelations_DerivedFromKPN(t *testing.T) {
 	svc.cfg = cfg
 
 	seedDomain(t, db, "d2", "Domain Two")
-	seedConcept(t, db, "c2", "d2", "Concept Two")
+	seedEntry(t, db, "c2", "d2", "Concept Two")
 	seedKU(t, db, "u3", "s1", "c2", "Topic C", 1, 5)
 	seedKP(t, db, "p3", "u3", "s1", "point three content")
 	seedVerifiedLink(t, db, "link-p3", "p3")
 
-	publishConceptPage(t, svc, "page1", "c1", "Page One", []string{"p1", "p2"})
+	publishEntryPage(t, svc, "page1", "c1", "Page One", []string{"p1", "p2"})
 	seedKPRelation(t, db, "rel1", "p1", "p3", "related")
-	publishConceptPage(t, svc, "page2", "c2", "Page Two", []string{"p3"})
+	publishEntryPage(t, svc, "page2", "c2", "Page Two", []string{"p3"})
 
 	rels, err := svc.store.ListPageRelations("page1")
 	if err != nil {
@@ -106,47 +107,70 @@ func TestPageRelations_DerivedFromKPN(t *testing.T) {
 	}
 }
 
-// TestTopicCandidates_ConnectedComponentAndSecondTierCompile implements
-// docs/impl/v1/wiki.md 完成标准 两层架构扩展: connected-component detection,
+// indexPointForSearch puts a minimal current-lifecycle doc into the points
+// Bleve index so topic-candidate range retrieval (DetectTopicCandidate 步骤
+// 3, a bleve search over pointsIndex) can find it — production indexing is
+// unit.Service's job; tests exercising the wiki-side consumer seed the index
+// directly.
+func indexPointForSearch(t *testing.T, idx bleve.Index, pointID, content string) {
+	t.Helper()
+	if err := idx.Index(pointID, map[string]interface{}{
+		"point_id": pointID, "content": content, "lifecycle": "current",
+	}); err != nil {
+		t.Fatalf("index point %s for search: %v", pointID, err)
+	}
+}
+
+// TestDetectTopicCandidate_QuadrupleClusterAndSecondTierCompile implements
+// docs/impl/v1/wiki.md 完成标准 两层架构扩展 (2026-08-03 修订): candidate-range
+// retrieval, qualifying filter, concept grouping, second-tier admission,
 // contains wiring, and second-tier compile producing the five required
 // sections with member_roles and a citation whitelist confined to the
 // members' source_point_ids union.
-func TestTopicCandidates_ConnectedComponentAndSecondTierCompile(t *testing.T) {
+func TestDetectTopicCandidate_QuadrupleClusterAndSecondTierCompile(t *testing.T) {
 	svc, fake, db, _ := setupTestService(t)
 	cfg := svc.cfg
 	cfg.TopicMemberMin = 3
-	cfg.TopicMemberMax = 8
 	cfg.RelationSharedPointMin = 1 // let shared-point-count derive "related" without needing KPN rows
+	cfg.TopicCandidateKPMax = 50
+	cfg.TopicReliabilityMin = 0 // this test's focus is grouping/compile, not reliability tuning
 	svc.cfg = cfg
+	svc.topicSearchMinScore = 0
 
 	seedDomain(t, db, "d2", "Domain Two")
-	seedConcept(t, db, "c2", "d2", "Concept Two")
+	seedEntry(t, db, "c2", "d2", "Concept Two")
 	seedKU(t, db, "u3", "s1", "c2", "Topic C", 1, 5)
 	seedKP(t, db, "p3", "u3", "s1", "point three content")
 	seedVerifiedLink(t, db, "link-p3", "p3")
 
-	seedConcept(t, db, "c3", "d2", "Concept Three")
+	seedEntry(t, db, "c3", "d2", "Concept Three")
 	seedKU(t, db, "u4", "s1", "c3", "Topic D", 6, 10)
 	seedKP(t, db, "p4", "u4", "s1", "point four content")
 	seedVerifiedLink(t, db, "link-p4", "p4")
 
-	// Three concept pages, chained by a shared point so all three land in one
-	// connected component: page1(p1,p2) - page2(p2,p3) - page3(p3,p4).
-	publishConceptPage(t, svc, "page1", "c1", "Page One", []string{"p1", "p2"})
-	publishConceptPage(t, svc, "page2", "c2", "Page Two", []string{"p2", "p3"})
-	publishConceptPage(t, svc, "page3", "c3", "Page Three", []string{"p3", "p4"})
+	// Three concept pages, chained by a shared point: page1(p1,p2) -
+	// page2(p2,p3) - page3(p3,p4). The candidate-range search below returns
+	// all four points, grouping into three entries (c1/c2/c3), each already
+	// published.
+	publishEntryPage(t, svc, "page1", "c1", "Page One", []string{"p1", "p2"})
+	publishEntryPage(t, svc, "page2", "c2", "Page Two", []string{"p2", "p3"})
+	publishEntryPage(t, svc, "page3", "c3", "Page Three", []string{"p3", "p4"})
 
-	candidates, oversized, err := svc.DetectTopicCandidates()
+	for _, id := range []string{"p1", "p2", "p3", "p4"} {
+		indexPointForSearch(t, svc.pointsIndex, id, "测试主题相关内容 "+id)
+	}
+
+	cand, underfilled, err := svc.DetectTopicCandidate("测试主题", "了解", "", "", 3, 7, 1)
 	if err != nil {
-		t.Fatalf("detect topic candidates: %v", err)
+		t.Fatalf("detect topic candidate: %v", err)
 	}
-	if len(oversized) != 0 {
-		t.Errorf("expected no oversized clusters, got %+v", oversized)
+	if underfilled != nil {
+		t.Fatalf("expected a candidate, got underfilled signal: %+v", underfilled)
 	}
-	if len(candidates) != 1 {
-		t.Fatalf("expected exactly 1 topic candidate, got %d: %+v", len(candidates), candidates)
+	if cand == nil {
+		t.Fatal("expected a topic candidate, got nil")
 	}
-	shellID := candidates[0].PageID
+	shellID := cand.PageID
 
 	members, err := svc.store.ContainsMembers(shellID)
 	if err != nil {
@@ -157,7 +181,7 @@ func TestTopicCandidates_ConnectedComponentAndSecondTierCompile(t *testing.T) {
 	}
 
 	// Members (page1/page2/page3) are already published via
-	// publishConceptPage above, satisfying the topic compile precondition.
+	// publishEntryPage above, satisfying the topic compile precondition.
 
 	compileOutput := `{
 		"title": "主题：一二三",
@@ -207,7 +231,7 @@ func TestTopicPage_NeverDirectlyAnswered(t *testing.T) {
 	// Build a topic shell page containing page1 (concept, published) as its
 	// only searchable member so we don't need a full connected-component
 	// detection pass for this test.
-	page1 := publishConceptPage(t, svc, "page1", "c1", "Page One", []string{"p1", "p2"})
+	page1 := publishEntryPage(t, svc, "page1", "c1", "Page One", []string{"p1", "p2"})
 
 	shell := &Page{PageID: "topic1", PageType: PageTypeTopic, Title: "Topic Shell", Content: "", Status: StatusDraft}
 	if err := svc.store.InsertPage(shell); err != nil {
@@ -275,7 +299,7 @@ func TestTopicPage_NeverDirectlyAnswered(t *testing.T) {
 // draft's content never changes the page it was derived from.
 func TestDraft_NeverWritesBackToPage(t *testing.T) {
 	svc, _, _, _ := setupTestService(t)
-	page1 := publishConceptPage(t, svc, "page1", "c1", "Page One", []string{"p1", "p2"})
+	page1 := publishEntryPage(t, svc, "page1", "c1", "Page One", []string{"p1", "p2"})
 	originalContent := page1.Content
 
 	draft, err := svc.CreateDraft("page1", DraftModePage)
@@ -301,37 +325,44 @@ func TestDraft_NeverWritesBackToPage(t *testing.T) {
 	}
 }
 
-// TestCreateTopicManual_BuildsShellWithManualTrigger covers docs/impl/v1/wiki.md
-// 步骤 8 "人工指定成员手动创建主题页": hard gates on member count + published
-// concept pages; Study coherence is informational; compiled_from records
-// manual_trigger.
-func TestCreateTopicManual_BuildsShellWithManualTrigger(t *testing.T) {
+// TestCreateTopicManual_BuildsShellFromScopeSearch covers docs/impl/v1/wiki.md
+// 步骤 8 "人工手动指定主题" (2026-08-03 修订): the request gives a topic
+// scope (name/description), not a member-page list; the shell is built from
+// whatever qualifying entries the scope search turns up that already have a
+// published page. compiled_from records manual_trigger; readiness is
+// informational, never a gate.
+func TestCreateTopicManual_BuildsShellFromScopeSearch(t *testing.T) {
 	svc, _, db, _ := setupTestService(t)
 	cfg := svc.cfg
 	cfg.TopicMemberMin = 3
-	cfg.TopicMemberMax = 8
+	cfg.TopicCandidateKPMax = 50
 	svc.cfg = cfg
+	svc.topicSearchMinScore = 0
 
 	seedDomain(t, db, "d2", "Domain Two")
-	seedConcept(t, db, "c2", "d2", "Concept Two")
+	seedEntry(t, db, "c2", "d2", "Concept Two")
 	seedKU(t, db, "u3", "s1", "c2", "Topic C", 1, 5)
 	seedKP(t, db, "p3", "u3", "s1", "point three content")
 	seedVerifiedLink(t, db, "link-p3", "p3")
 
-	seedConcept(t, db, "c3", "d2", "Concept Three")
+	seedEntry(t, db, "c3", "d2", "Concept Three")
 	seedKU(t, db, "u4", "s1", "c3", "Topic D", 6, 10)
 	seedKP(t, db, "p4", "u4", "s1", "point four content")
 	seedVerifiedLink(t, db, "link-p4", "p4")
 
-	publishConceptPage(t, svc, "page1", "c1", "Page One", []string{"p1", "p2"})
-	publishConceptPage(t, svc, "page2", "c2", "Page Two", []string{"p3"})
-	publishConceptPage(t, svc, "page3", "c3", "Page Three", []string{"p4"})
+	publishEntryPage(t, svc, "page1", "c1", "Page One", []string{"p1", "p2"})
+	publishEntryPage(t, svc, "page2", "c2", "Page Two", []string{"p3"})
+	publishEntryPage(t, svc, "page3", "c3", "Page Three", []string{"p4"})
 
-	if _, _, err := svc.CreateTopicManual([]string{"page1", "page2"}); err == nil {
-		t.Fatal("expected error for too-few members")
+	for _, id := range []string{"p1", "p2", "p3", "p4"} {
+		indexPointForSearch(t, svc.pointsIndex, id, "手动主题测试内容 "+id)
 	}
 
-	cand, readiness, err := svc.CreateTopicManual([]string{"page1", "page2", "page3", "page2"})
+	if _, _, err := svc.CreateTopicManual("", "空主题名不允许", ""); err == nil {
+		t.Fatal("expected error for empty topic_name")
+	}
+
+	cand, readiness, err := svc.CreateTopicManual("手动主题测试", "范围描述", "")
 	if err != nil {
 		t.Fatalf("CreateTopicManual: %v", err)
 	}
@@ -358,20 +389,32 @@ func TestCreateTopicManual_BuildsShellWithManualTrigger(t *testing.T) {
 		t.Fatalf("contains: %v", err)
 	}
 	if len(members) != 3 {
-		t.Fatalf("expected 3 members after dedupe, got %v", members)
+		t.Fatalf("expected 3 members (one per published concept), got %v", members)
 	}
+}
 
-	draftPage := &Page{
-		PageID: "page-draft", PageType: PageTypeConcept, Title: "Draft",
-		Content: "x", Status: StatusDraft, SourcePointIDs: `["p1"]`,
-		PromptVersion: "v1", ModelName: "test",
+// TestQualifyingPointsByIDs_DoesNotRequireVerified locks docs/impl/v1/wiki.md
+// 步骤 8 第 4 步 (2026-08-04): topic-scope material only needs lifecycle=current
+// (+ non-null entry_id). Verified ActivationLink stays a first-tier /
+// reliability / publish concern, not a topic-scope inclusion gate.
+func TestQualifyingPointsByIDs_DoesNotRequireVerified(t *testing.T) {
+	svc, _, db, _ := setupTestService(t)
+	seedKP(t, db, "p-unver", "u1", "s1", "unverified current kp")
+	// p1 already has a verified link from setupTestService; p-unver has none.
+
+	got, err := svc.store.QualifyingPointsByIDs([]string{"p1", "p-unver", "missing"})
+	if err != nil {
+		t.Fatalf("QualifyingPointsByIDs: %v", err)
 	}
-	draftPage.ConceptID = nullableString("c1")
-	if err := svc.store.InsertPage(draftPage); err != nil {
-		t.Fatalf("insert draft concept page: %v", err)
+	ids := map[string]bool{}
+	for _, r := range got {
+		ids[r.PointID] = true
 	}
-	if _, _, err := svc.CreateTopicManual([]string{"page1", "page2", "page-draft"}); err == nil {
-		t.Fatal("expected error when a member is not published")
+	if !ids["p1"] || !ids["p-unver"] {
+		t.Fatalf("expected both current KPs (with and without verified link), got %v", got)
+	}
+	if ids["missing"] {
+		t.Fatal("unexpected missing point_id in result")
 	}
 }
 

@@ -7,7 +7,7 @@
       "name": "金融股票",
       "description": "用于理解金融市场、股票投资、公司基本面、交易规则和风险控制。",
       "status": "active",
-      "concepts": [
+      "entries": [
         {
           "id": "stock_market",
           "name": "股票市场",
@@ -55,7 +55,7 @@
       "name": "制度规范",
       "description": "用于理解规章制度、流程规范、管理办法、合规要求和执行边界。",
       "status": "active",
-      "concepts": [
+      "entries": [
         {
           "id": "policy_scope",
           "name": "适用范围",
@@ -103,7 +103,7 @@
       "name": "数据库运维",
       "description": "用于理解数据库部署、备份恢复、性能优化、高可用、归档日志管理和故障处理。",
       "status": "active",
-      "concepts": [
+      "entries": [
         {
           "id": "backup_restore",
           "name": "备份恢复",
@@ -159,7 +159,7 @@
       "name": "操作系统运维",
       "description": "用于理解 Linux/Windows 系统安装、配置、监控、性能、安全和故障处理。",
       "status": "active",
-      "concepts": [
+      "entries": [
         {
           "id": "process_management",
           "name": "进程管理",
@@ -207,7 +207,7 @@
       "name": "中间件运维",
       "description": "用于理解 Web 服务、消息队列、缓存、网关、服务注册和中间件故障处理。",
       "status": "active",
-      "concepts": [
+      "entries": [
         {
           "id": "web_server",
           "name": "Web 服务",
@@ -255,7 +255,7 @@
       "name": "程序开发",
       "description": "用于理解编码、调试、测试、构建、接口实现和工程实践。",
       "status": "active",
-      "concepts": [
+      "entries": [
         {
           "id": "code_structure",
           "name": "代码结构",
@@ -303,7 +303,7 @@
       "name": "软件设计",
       "description": "用于理解软件架构、模块划分、设计模式、数据模型和质量属性。",
       "status": "active",
-      "concepts": [
+      "entries": [
         {
           "id": "module_decomposition",
           "name": "模块划分",
@@ -351,7 +351,7 @@
       "name": "AI 基础知识",
       "description": "用于理解机器学习、深度学习、模型训练、评估和大模型基础概念。",
       "status": "active",
-      "concepts": [
+      "entries": [
         {
           "id": "machine_learning",
           "name": "机器学习",
@@ -399,7 +399,7 @@
       "name": "AI 应用开发",
       "description": "用于理解基于大模型和 AI 能力构建应用的架构、检索、工具调用和评估。",
       "status": "active",
-      "concepts": [
+      "entries": [
         {
           "id": "prompt_engineering",
           "name": "提示词工程",
@@ -447,7 +447,7 @@
       "name": "AI 工具使用",
       "description": "用于理解各类 AI 工具的使用方法、工作流、限制和实践经验。",
       "status": "active",
-      "concepts": [
+      "entries": [
         {
           "id": "chat_assistant",
           "name": "对话助手",
@@ -495,7 +495,7 @@
       "name": "Docker 容器维护",
       "description": "用于理解 Docker 容器运行、镜像管理、网络配置、数据卷、日志监控、故障处理，以及 Docker Swarm / Kubernetes 等多机容器集群的部署、节点角色管理和集群编排。",
       "status": "active",
-      "concepts": [
+      "entries": [
         {
           "id": "container_lifecycle",
           "name": "容器生命周期",

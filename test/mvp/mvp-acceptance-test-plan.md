@@ -173,7 +173,7 @@ llm:
 1. Unit 提取随导入自动完成，逐 source 验证：
    - 每篇 KU>0、KP>0；KU 的 `line_start/line_end`（1-based inclusive）切片对得上规范化 Markdown 原文——技术文档重点抽命令块与参数表，制度文档重点抽条款；
    - 关键事实落点抽查（同 V1 方案 P0 清单：45 天/-5 分/256 元/6%/25% + 2377 端口/containerd/MAX_SESSION_STATEMENT 20000/MAX_CONNECTIONS 128/srvctl 五步/chmod u+s）；
-   - Concept 匹配：抽 10 个 KU 核对 concept 归属合理（达梦优化 KU 不应挂到"报销"概念）；
+   - Entry 匹配：抽 10 个 KU 核对 `entry_id` 归属合理（达梦优化 KU 不应挂到"报销"词条）；
    - KPN：`knowledge_point_relations` 关系类型**只有** related/contradicts 两种，direction 全部 bidirectional（出现第三种类型或 directed 即失败——这是 CLAUDE.md 明确的设计决策）；MVP 只做单 Source 内关系，不应出现跨 source 的 KP 对；
    - Bleve：units/points 索引用「归档」「报销期限」「MAX_CONNECTIONS」各查一次有命中，outlines 索引查「奖金计算办法」命中项目考核的节点。
 2. 通过标准：全部成立；提取遗漏的关键事实记录清单（M3/M4 对应题目预期将失败，归因提取期）。
@@ -210,7 +210,7 @@ llm:
    - `link_candidates` 出现上述 KP，未达阈值的 KP 不出现；
    - 报告四块齐全：质量分布 / ActivationLink 候选 / Wiki 候选 / 知识盲区；
    - **统计公式核对**（标准 6 的核心）：抽 3 条候选，人工 SQL 重算 signal_purity（confident/hit）、activation_breadth（distinct question_terms）、short_path_rate（confident traces 中含该 KP 且 path=short 占比）、has_kpn_neighbors，与报告值一致；strong/candidate 分级符合「purity≥0.7 且 breadth≥3 且 short_rate≥0.6」规则；
-   - Wiki 候选：围绕「应收账款回款」或「Oracle RAC」概念密集问答后应出现候选，附 kpn_connection_count 与 ready/needs_more_data 结论；
+   - Wiki 候选：围绕「应收账款回款」或「Oracle RAC」词条密集问答后应出现候选（`object_id=entry_id`），附 kpn_connection_count 与 ready/needs_more_data 结论；
    - 知识盲区：C1 重复问 3 次（达 gap_hit_threshold）后进入高频 gap 列表；
    - 报告生成不调 LLM（日志核对）；report_max_keep 生效。
 3. 通过标准：全部成立，统计 0 偏差。

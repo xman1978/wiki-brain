@@ -7,10 +7,10 @@ import "testing"
 // contains-member count.
 func TestListTopicPages_IncludesShellsAndMemberCount(t *testing.T) {
 	svc, _, db, _ := setupTestService(t)
-	seedConcept(t, db, "c2", "d1", "Concept Two")
+	seedEntry(t, db, "c2", "d1", "Concept Two")
 
-	p1 := publishConceptPage(t, svc, "p1", "c1", "概念一", []string{"pt1"})
-	p2 := publishConceptPage(t, svc, "p2", "c2", "概念二", []string{"pt2"})
+	p1 := publishEntryPage(t, svc, "p1", "c1", "概念一", []string{"pt1"})
+	p2 := publishEntryPage(t, svc, "p2", "c2", "概念二", []string{"pt2"})
 	_ = p2
 
 	shell := &Page{PageID: "topic1", PageType: PageTypeTopic, Title: "壳页", Content: "", Status: StatusDraft}
@@ -38,10 +38,10 @@ func TestListTopicPages_IncludesShellsAndMemberCount(t *testing.T) {
 
 func TestListTopicMemberPages_ReturnsFullPageRows(t *testing.T) {
 	svc, _, db, _ := setupTestService(t)
-	seedConcept(t, db, "c2", "d1", "Concept Two")
+	seedEntry(t, db, "c2", "d1", "Concept Two")
 
-	p1 := publishConceptPage(t, svc, "p1", "c1", "概念一", []string{"pt1"})
-	p2 := publishConceptPage(t, svc, "p2", "c2", "概念二", []string{"pt2"})
+	p1 := publishEntryPage(t, svc, "p1", "c1", "概念一", []string{"pt1"})
+	p2 := publishEntryPage(t, svc, "p2", "c2", "概念二", []string{"pt2"})
 
 	shell := &Page{PageID: "topic1", PageType: PageTypeTopic, Title: "壳页", Content: "", Status: StatusDraft}
 	if err := svc.store.InsertPage(shell); err != nil {
@@ -73,12 +73,12 @@ func TestListTopicMemberPages_ReturnsFullPageRows(t *testing.T) {
 	}
 }
 
-func TestListUnassignedConceptPages_ExcludesTopicMembers(t *testing.T) {
+func TestListUnassignedEntryPages_ExcludesTopicMembers(t *testing.T) {
 	svc, _, db, _ := setupTestService(t)
-	seedConcept(t, db, "c2", "d1", "Concept Two")
+	seedEntry(t, db, "c2", "d1", "Concept Two")
 
-	standalone := publishConceptPage(t, svc, "p1", "c1", "独立概念", []string{"pt1"})
-	member := publishConceptPage(t, svc, "p2", "c2", "已归属概念", []string{"pt2"})
+	standalone := publishEntryPage(t, svc, "p1", "c1", "独立概念", []string{"pt1"})
+	member := publishEntryPage(t, svc, "p2", "c2", "已归属概念", []string{"pt2"})
 
 	shell := &Page{PageID: "topic1", PageType: PageTypeTopic, Title: "壳页", Content: "", Status: StatusDraft}
 	if err := svc.store.InsertPage(shell); err != nil {
@@ -88,7 +88,7 @@ func TestListUnassignedConceptPages_ExcludesTopicMembers(t *testing.T) {
 		t.Fatalf("insert contains: %v", err)
 	}
 
-	unassigned, err := svc.store.ListUnassignedConceptPages()
+	unassigned, err := svc.store.ListUnassignedEntryPages()
 	if err != nil {
 		t.Fatalf("list unassigned concept pages: %v", err)
 	}

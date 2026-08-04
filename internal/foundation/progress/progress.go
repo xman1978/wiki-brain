@@ -30,7 +30,7 @@ const (
 	StepUnitExtract       = "unit_extract"
 	StepUnitSemantics     = "unit_semantics"
 	StepKPNGenerate       = "kpn_generate"
-	StepConceptMatch      = "concept_match"
+	StepEntryMatch      = "concept_match"
 	StepKPNCrossMatch     = "kpn_cross_match"
 )
 

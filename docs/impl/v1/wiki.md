@@ -4,9 +4,13 @@
 
 实现主题页 / 概念页的最小闭环：Study 产出的 Wiki 候选经人工确认后触发 LLM 编译，生成带证据回链的页面；人工发布后进入独立 Bleve 索引，作为检索的 Wiki 直答层；底层 KU/KP 状态变化时标记待重编译。
 
-**两层架构扩展（步骤 7-10）**：概念页为一阶编译（KP → 页面），主题页为二阶编译（已发布概念页 → 页面），两者由程序派生的页面关系（`related` / `contradicts` / `contains`）串成知识架构；写作出口是页面派生的草稿，页面本身保持只由编译产生。设计依据见 `docs/design/wiki-compilation.md`「页面关系与两层知识架构」。
+**两层架构扩展（步骤 7-10）**：词条页（概念页 / 事实页）为一阶编译（KP → 页面），主题页为二阶编译，两者由程序派生的页面关系（`related` / `contradicts` / `contains`）串成知识架构；写作出口是页面派生的草稿，页面本身保持只由编译产生。设计依据见 `docs/design/wiki.md`「页面关系只有三种，层级由 contains 承载」。
 
-方法页 / 经验页 / 问题页 / 决策页与视角化编译推迟到 V3；Claim 双产物与防固化要素补齐属 V2（见 docs/impl/v2/readme.md）。复杂问题的拆解与子结论聚合属深想路径 / Working Model，是 V3 能力——V1 只建结构并记录 `topic_decompose_signal`（步骤 9）。
+**概念页 / 事实页（2026-08-03 修订，V1 正式实现，替代此前"事实页推迟到 V3"的口径）**：一阶编译按知识点的归属判断结果分岔成概念页和事实页两条产出——归属判断依据见 `kpn.md` 步骤 3「类型标注」，落在 `entries.kind` 字段（concept / fact，migration 043）。概念页与事实页是**同一条一阶编译链路**（analyze → 确认 → 生成 → 发布 → 重编译 → 关系派生 → 二阶接入，即本文档步骤 1-9）的两个产出分支，不是两套并行的实现：qualifying/ready 判定、citation 白名单、页面关系派生、二阶主题页接入的判据逻辑完全共用，唯一的分岔点是 `wiki_pages.page_type` 由目标 concept 行的 `kind` 决定（kind=concept → page_type=concept，kind=fact → page_type=fact），以及编译 Prompt 依据 kind 调整生成措辞（见步骤 3）。下文「概念」在指代一阶编译输入的归属对象时，等同于「概念或事实（按 entries.kind 区分）」，仅在需要专门说明两者差异处才写全「概念/事实」。
+
+**主题候选识别机制（2026-08-03 修订）**：步骤 8 的主题候选不再从"已发布概念页的图连通性"事后推导——设计依据变更为 `docs/design/wiki.md`「主题：从真实使用中识别，而不是从已发布词条事后聚类」，主题候选改为直接对真实提问的四元组（`traces.subject/intent/audience/constraint_text`）聚类，与材料侧当前是否已有已发布页面无关；候选范围确定后才在其中检索知识点、按归属分组，尚未独立发布的概念可随主题候选一并推进一阶编译。这一条修改了步骤 8 的候选产生机制、`POST /wiki/topics` 的人工指定语义，并影响 CLAUDE.md「V1 关键设计决策」第 6 条；**具体阈值配置（`wiki.topic_cluster_min_questions` 等）与"随批推进一阶编译"的落库细节是本次文档修订新提出的实现方案，设计文档只确立机制方向，未固定这些参数，编码前建议再核对一遍**。旧的连通分量口径已从本文档移除，`internal/study/`、`internal/wiki/` 中对应实现尚未跟进，此前引用旧口径的代码注释暂时失配，见步骤 8 说明。
+
+方法页 / 经验页 / 问题页 / 决策页已从设计中删除（此前只是名义上的分类，从未接入过具体的编译流程，详见 `docs/design/wiki.md`「Wiki 页面类型」一节），不是推迟；视角化编译推迟到 V3；Claim 双产物与防固化要素补齐属 V2（见 docs/impl/v2/readme.md）。复杂问题的拆解与子结论聚合属深想路径 / Working Model，是 V3 能力——V1 只建结构并记录 `topic_decompose_signal`（步骤 9）。
 
 ## 数据结构
 
@@ -14,8 +18,10 @@
 CREATE TABLE wiki_pages (
     page_id          TEXT PRIMARY KEY,
     page_type        TEXT NOT NULL,
-    -- topic / concept（V1 两种；编译输入相同，区别在标题组织，见步骤 3）
-    concept_id       TEXT REFERENCES concepts(concept_id),
+    -- concept / fact / topic（V1 三种；concept/fact 编译输入与流程
+    -- 完全相同，由目标 concept 行的 kind 决定取值，区别在生成措辞提示；
+    -- topic 是二阶编译产物，区别见步骤 3）
+    entry_id       TEXT REFERENCES entries(entry_id),
     title            TEXT NOT NULL,
     content          TEXT NOT NULL,
     -- 页面正文 Markdown（含防固化要素，见步骤 3）
@@ -27,7 +33,7 @@ CREATE TABLE wiki_pages (
     source_link_ids  TEXT NOT NULL DEFAULT '[]',
     -- JSON 数组：编译时 source_point_ids 上已存在的 verified ActivationLink id
     -- （migration 028）。纯依赖回链元数据，不进编译输入/prompt——呼应
-    -- docs/design/wiki-compilation.md 防固化要素"依赖的 ActivationLink"，
+    -- docs/design/wiki.md 防固化要素"依赖的 ActivationLink"，
     -- 用于页面详情展示和未来生命周期追溯，不驱动重编译判断。
     aliases          TEXT NOT NULL DEFAULT '[]',
     -- JSON 数组：概念别名/缩写/口语叫法（migration 029，编译时 LLM 生成，
@@ -36,7 +42,7 @@ CREATE TABLE wiki_pages (
     -- JSON 数组：该页面能回答的典型问法（migration 029，5-10 条），
     -- 用于弥合用户措辞与页面用词的词汇鸿沟（Wiki = Answer + Retrieval Index）。
     -- 生成素材改为真实观测问法（见下方"编译输入"新增一项），LLM 角色从
-    -- "凭材料想象"变为"从真实问法里挑选/归纳"（docs/design/wiki-compilation.md
+    -- "凭材料想象"变为"从真实问法里挑选/归纳"（docs/design/wiki.md
     -- "触发问法取材真实观测，检索匹配复用四元组"）。
     observed_conditions TEXT NOT NULL DEFAULT '[]',
     -- JSON 数组：编译/重编译时，source_point_ids 上各 verified ActivationLink
@@ -57,7 +63,7 @@ CREATE TABLE wiki_pages (
 );
 
 CREATE INDEX idx_wiki_status  ON wiki_pages(status);
-CREATE INDEX idx_wiki_concept ON wiki_pages(concept_id);
+CREATE INDEX idx_wiki_entry ON wiki_pages(entry_id);
 
 CREATE TABLE wiki_revisions (
     revision_id  TEXT PRIMARY KEY,
@@ -73,7 +79,7 @@ CREATE INDEX idx_wiki_rev_page ON wiki_revisions(page_id);
 ```
 
 **两层架构扩展**（migration 编号按实现时当前最大版本号 +1，下称 035；设计依据见
-docs/design/wiki-compilation.md「页面关系与两层知识架构」）：
+docs/design/wiki.md「页面关系只有三种，层级由 contains 承载」）：
 
 ```sql
 CREATE TABLE wiki_page_relations (
@@ -85,7 +91,7 @@ CREATE TABLE wiki_page_relations (
     --   由程序从 KPN 派生（步骤 7），不调 LLM；
     -- contains：有向，from=主题页、to=成员概念页，二阶编译时写入（步骤 8）。
     -- 只有这 3 种，不引入 broader / narrower——KPN 只有 related/contradicts
-    -- 且 direction 恒 bidirectional，concepts 表在 domain 下平铺无父子，
+    -- 且 direction 恒 bidirectional，entries 表在 domain 下平铺无父子，
     -- 都派生不出层级；层级唯一来源是 contains。
     derived_from  TEXT NOT NULL,
     -- kpn（related / contradicts）/ compile（contains）
@@ -154,19 +160,33 @@ ALTER TABLE sources ADD COLUMN origin_page_id TEXT REFERENCES wiki_pages(page_id
 `wiki_pages.page_type` 的语义随之收紧（不再是「只差 title 提示词」）：
 
 ```text
-concept  一阶编译产物，输入是 qualifying KP，concept_id 必填；
-topic    二阶编译产物，输入是已发布的 concept 页，concept_id 恒为 NULL
-         （成员概念经 contains -> 成员页面 -> concept_id 反查）。
+concept  一阶编译产物，输入是 qualifying KP，entry_id 必填且指向
+         entries.kind='concept' 的行；
+fact     一阶编译产物，输入是 qualifying KP，entry_id 必填且指向
+         entries.kind='fact' 的行；与 concept 页共用完全相同的
+         编译/发布/重编译/关系派生/二阶接入逻辑，仅 page_type 取值
+         与生成措辞提示不同（见步骤 3）；
+topic    二阶编译产物，输入是已发布的词条页（concept 或 fact），
+         entry_id 恒为 NULL（成员词条经 contains -> 成员页面 ->
+         entry_id 反查，反查到的 entries 行 kind 不限）。
 
-存量处理：migration 035 把已有 page_type='topic' 且 concept_id 非空的行
+服务端在 POST /wiki/compile 处理 page_type=concept|fact 时，校验
+请求携带的 entry_id 对应 entries 行的 kind 与请求的 page_type 一致
+（kind=concept 对应 page_type=concept，kind=fact 对应
+page_type=fact），不一致返回 400——page_type 不是调用方自由指定的
+展示标签，必须与 entries.kind 的归属判断保持一致。
+
+存量处理：migration 035 把已有 page_type='topic' 且 entry_id 非空的行
   一次性改写为 page_type='concept'——它们是按旧口径由一阶编译产生的，
-  语义上就是概念页，改写不影响正文、索引与依赖字段。
+  语义上就是概念页，改写不影响正文、索引与依赖字段（这批存量行对应的
+  entries.kind 迁移前统一为 concept 默认值，故改写目标固定为
+  page_type='concept'，不涉及 fact 分支）。
 ```
 
 Bleve 新增 `wiki` 索引（使用 `wiki_brain` analyzer）：
 
 ```text
-写入字段：page_id、title、content、aliases、trigger_questions、concept_id、
+写入字段：page_id、title、content、aliases、trigger_questions、entry_id、
          page_type、status
 （aliases / trigger_questions 拼接为文本参与分词检索，放宽召回入口；
   误命中由直答阶段的 sufficient 判断兜底，见步骤 4；
@@ -179,15 +199,15 @@ Bleve 新增 `wiki` 索引（使用 `wiki_brain` analyzer）：
 
 ### 步骤 1：候选产生（Study 侧，已定义）
 
-Study 报告的 wiki_candidates（recommendation=ready）写入 `learning_results(action=wiki_candidate, status=pending_confirm, object_id=concept_id)`，见 study.md 步骤 6。
+Study 报告的 wiki_candidates（recommendation=ready）写入 `learning_results(action=wiki_candidate, status=pending_confirm, object_id=entry_id)`，见 study.md 步骤 6。
 
 ### 步骤 2：人工确认与编译触发（分析 → 确认 → 生成）
 
-编译内部拆成两个 LLM 步骤（见 docs/design/wiki-compilation.md "编译内部分两步"）：先分析出拟采用的论断结构供人工查看确认，确认后自动接着生成正文。分析产物不落库——它只存在于 `POST /wiki/compile/analyze` 的请求-响应往返中，人工确认时由调用方原样带回，服务端不做任何持久化或过期管理。
+编译内部拆成两个 LLM 步骤（见 docs/design/wiki.md "编译内部三个阶段、两次 LLM 调用"）：先分析出拟采用的论断结构供人工查看确认，确认后自动接着生成正文。分析产物不落库——它只存在于 `POST /wiki/compile/analyze` 的请求-响应往返中，人工确认时由调用方原样带回，服务端不做任何持久化或过期管理。
 
 ```text
 POST /wiki/compile/analyze
-  请求：{ "concept_id": "...", "page_type": "topic|concept",
+  请求：{ "entry_id": "...", "page_type": "topic|concept|fact",
           "result_id": "..." }
   处理：
     1. 不改变任何状态（不置 wiki_candidate 为 applied，允许反复调用/重新分析）；
@@ -196,21 +216,21 @@ POST /wiki/compile/analyze
        结构（见步骤 3「分析产物」），做与生成阶段相同的
        cited_point_ids 白名单校验（越界剔除并记录 warn）；
     3. LLM 调用失败或校验后 claims 为空 → 500，不返回分析产物。
-  响应：{ concept_id, page_type, result_id,
+  响应：{ entry_id, page_type, result_id,
           claims: [{ summary, cited_point_ids, aspect_id? }],
           tensions: [{ description, related_point_ids }],
           readiness?: {...}  # 仅 concept 页，见下「人工指定主题手动编译」}
 
 POST /wiki/compile
-  请求：{ "concept_id": "...", "page_type": "topic|concept",
+  请求：{ "entry_id": "...", "page_type": "topic|concept|fact",
           "result_id": "...",
           "claims": [...], "tensions": [...]  # 可选，见下 }
   处理：
     1. result_id 对应的 pending_confirm wiki_candidate 置 applied
-       （confirmed_by=manual）；无 result_id 时允许直接指定 concept_id
+       （confirmed_by=manual）；无 result_id 时允许直接指定 entry_id
        编译（见下「人工指定主题手动编译」，2026-07-31 起是正式支持的第二条
        生成口径，不再只是"调试用途"）；
-    2. 同 concept_id 已有非 archived 页面 → 拒绝（409），
+    2. 同 entry_id 已有非 archived 页面 → 拒绝（409），
        重编译走步骤 5 流程；
     3. 请求体带 claims → 直接作为生成输入（人工确认/微调过的分析产物，
        不再重新调用分析 Prompt）；未带 claims（调试路径或客户端跳过分析
@@ -264,7 +284,7 @@ readiness 的 cohesion 与 Study 侧 Stats.Cohesion 不保证数值完全一致�
 
 ```text
 qualifying KP：该 concept 下同时满足以下条件的 KP（与 Study 候选口径一致，
-  见 docs/design/wiki-compilation.md "ActivationLink 回答'这条管不管用'，
+  见 docs/design/wiki.md "ActivationLink 回答'这条管不管用'，
   Wiki 编译回答'这个主题够不够格立传'"）：
     lifecycle=current（KP 与所属 KU）；
     该 KP 存在对应 ActivationLink 且 status=verified
@@ -281,7 +301,7 @@ KU 正文：qualifying KP 所属 KU 按行号切片（单页输入合计 ≤
 KPN 关系：qualifying KP 之间的 relations（含 cross）；
 knowledge_gaps：question_terms 与该 concept 名称/KP 内容有词项重合的
   gap 条目（作为"待验证点"素材）；
-真实观测问法（docs/design/wiki-compilation.md "触发问法取材真实观测，检索
+真实观测问法（docs/design/wiki.md "触发问法取材真实观测，检索
   匹配复用四元组"）：对每个 qualifying KP 的 point_id，查
   retrieval_quality='confident' 且 direct_point_ids 含该 point_id 的
   traces.question（同 study.md ConfidentTraceQuadruples 的查询口径，只是
@@ -292,8 +312,8 @@ knowledge_gaps：question_terms 与该 concept 名称/KP 内容有词项重合�
   要求 verified 链接，但防御性处理）时跳过，不影响整体编译。
 ```
 
-**概念级 ready 判定**（Study 侧计算，决定是否写 wiki_candidate，见步骤 1；
-对应 docs/design/wiki-compilation.md 拆出的三件事：广度与连贯、稳定，
+**词条级 ready 判定**（概念、事实通用同一套判据，不区分 kind；Study 侧计算，决定是否写 wiki_candidate，见步骤 1；
+对应 docs/design/wiki.md 拆出的三件事：广度与连贯、稳定，
 可靠性已由上面的 qualifying KP 定义单独回答）：
 
 ```text
@@ -311,18 +331,18 @@ knowledge_gaps：question_terms 与该 concept 名称/KP 内容有词项重合�
   时间跨度，不是"被问得勤"的频率——沿用已有 DaysActive 计算口径）；
 
 内聚（P1 新增第五项，见 docs/impl/v1/wiki-generation.md 2.2/2.4、
-  docs/design/wiki-compilation.md "连贯性判断还需要第三层"，已实现）：
+  docs/design/wiki.md "连贯性判断还需要第三层"，已实现）：
   qualifying KP 的 Louvain 社区检测（`internal/foundation/graph`，边权
   = KPN related/contradicts 关系 + 共享 confident 问题共现，contradicts
-  同样计正权）最大社区占比 ≥ wiki.concept_cohesion_min；
+  同样计正权）最大社区占比 ≥ wiki.entry_cohesion_min；
   不达标时（前四项均满足但内聚不满足）不写 wiki_candidate，改为在学习
-  报告 concept_split_signals 节记录各簇成员与建议名，供人工判断是否需要
-  拆分概念（不建 concept_candidates(kind=split) 行，split 候选仍属 V3，
-  详见 concept-evolution.md）；wiki.concept_cohesion_min ≤ 0 时该项恒真
+  报告 entry_split_signals 节记录各簇成员与建议名，供人工判断是否需要
+  拆分概念（不建 entry_candidates(kind=split) 行，split 候选仍属 V3，
+  详见 concept-evolution.md）；wiki.entry_cohesion_min ≤ 0 时该项恒真
   （门禁关闭，仅 Stats.Cohesion 展示，不影响 recommendation）。
 
 以上五项同时满足 → ready，否则 needs_more_data（其中前四项满足、仅内聚
-不满足时额外写 concept_split_signals）。
+不满足时额外写 entry_split_signals）。
 ```
 
 **分析产物**（步骤 2 `POST /wiki/compile/analyze` 的输出，不落库）：
@@ -337,17 +357,19 @@ knowledge_gaps：question_terms 与该 concept 名称/KP 内容有词项重合�
 **Prompt 文件（分析）**：`config/prompts/wiki_analyze.md`
 
 ```
-根据以下知识点和原文材料，分析这个概念/主题值得沉淀为 Wiki 页面的
-论断结构，不要写最终正文。
+根据以下知识点和原文材料，分析这个{{entry_kind_label}}/主题值得沉淀为
+Wiki 页面的论断结构，不要写最终正文。
+
+{{entry_kind_hint}}
 
 要求：
 1. 只使用提供的材料，不引入材料之外的信息；
 2. 每条 claim 是一个独立的稳定结论要点，标注其依据的 point_id
    （只能使用材料中出现的 point_id）；
-3. 材料之间存在张力、或 gap 列表非空且与该概念相关时，写入 tensions，
-   不要在这一步强行调和或替换为某个 claim。
+3. 材料之间存在张力、或 gap 列表非空且与该{{entry_kind_label}}相关时，
+   写入 tensions，不要在这一步强行调和或替换为某个 claim。
 
-概念：{{concept_name}}（{{concept_description}}）
+{{entry_kind_label}}：{{entry_name}}（{{entry_description}}）
 知识点与原文材料：
 {{materials}}
 相关知识缺口：
@@ -355,6 +377,20 @@ knowledge_gaps：question_terms 与该 concept 名称/KP 内容有词项重合�
 
 按以下 JSON Schema 输出，不输出任何其他内容：
 {{json_schema}}
+```
+
+`{{entry_kind_label}}` 与 `{{entry_kind_hint}}` 由 page_type 决定
+（page_type=topic 时不使用本 Prompt，走 wiki_topic_analyze.md）：
+
+```text
+page_type=concept：entry_kind_label="概念"；entry_kind_hint 提示
+  "这是一个概念页，围绕通用规律/原理/规则组织论断，claim 应回答
+  '这个概念的定义、边界、内部逻辑是什么'，不要陷入某一个具体实现
+  的细节"；
+page_type=fact：entry_kind_label="事实"；entry_kind_hint 提示
+  "这是一个事实页，围绕这个具体、可唯一指认的对象组织论断，claim
+  应回答'这是什么、当前状态如何、和哪些概念或其他事实存在关联'，
+  不要泛化成脱离这个具体对象的通用规律"。
 ```
 
 **分析后校验**（程序执行，同 citation 校验思想）：
@@ -374,23 +410,32 @@ cited_point_ids 并集反查得到的 KU 正文切片——生成阶段的引用
 **Prompt 文件（生成）**：`config/prompts/wiki_compile.md`
 
 ```
-根据以下已确认的论断结构和原文材料，把它组织成一个主题的 Wiki 页面正文。
+根据以下已确认的论断结构和原文材料，把它组织成一个{{entry_kind_label}}的
+Wiki 页面正文。
+
+{{entry_kind_hint}}
 
 要求：
 1. 只使用提供的材料和论断结构，不引入材料之外的信息，
    不得引用 claims / tensions 之外的 point_id；
-2. 页面结构固定为四节：## 稳定结论 / ## 展开说明 / ## 待验证点 / ## 依赖来源；
+2. 页面结构固定为四节：## 稳定结论 / ## 展开说明 / ## 待验证点 / ## 依赖来源
+   （此结构已被 `docs/impl/v1/wiki-generation.md` 阶段 F 修订为五节，
+   新增 `## 摘要`；本节保留供步骤 2 分析阶段字段参考，正文小节数以
+   `wiki-generation.md` 第 6.1 节 / 冲突清单为准；概念页与事实页共用
+   同一套小节结构，事实页"稳定结论"聚焦"这是什么/当前状态/关联对象"，
+   "展开说明"承载版本、别名等事实专属细节，不新增小节）；
 3. 稳定结论逐条对应输入的 claims，每条论断末尾以 [point_id] 标注该
    claim 已确认的 cited_point_ids；
 4. tensions 非空时写入"待验证点"，不要强行调和；
 5. "依赖来源"列出所用知识点所属的知识单元主题；
-6. 额外输出检索触发信息：aliases（该概念的别名、缩写、常见口语叫法）
+6. 额外输出检索触发信息：aliases（该{{entry_kind_label}}的别名、缩写、
+   常见口语叫法或曾用名——事实页的旧称/俗称降级为别名正落在这个字段）
    与 trigger_questions（这个页面能够直接回答的 5-10 个典型问法）——
    trigger_questions 应从下方"真实观测问法"里挑选/归纳，不要凭材料
    臆造未出现过的表达方式；真实问法不足 5 条时才允许适度归纳补充，
    补充部分也要贴近已观测问法的措辞。
 
-概念：{{concept_name}}（{{concept_description}}）
+{{entry_kind_label}}：{{entry_name}}（{{entry_description}}）
 已确认的论断结构：
 {{claims}}
 {{tensions}}
@@ -440,7 +485,7 @@ observed_conditions = source_link_ids 对应链接的 observed_conditions 并集
 
 **调用参数**：reasoning 模型（页面编译是 V1 唯一的长文生成任务），temperature 0.3，记录 prompt_version / model_name。
 
-`page_type=concept` 与 `topic` 的差别仅在 title 生成提示（concept 页以概念名为题，topic 页允许模型按材料聚合主题命名），prompt 通过 `{{page_type_hint}}` 变量区分，不用两份文件。
+`page_type=concept`/`fact` 与 `topic` 的差别在 title 生成提示（concept/fact 页以概念/事实名为题，topic 页允许模型按材料聚合主题命名）；`concept` 与 `fact` 之间额外由 `{{entry_kind_label}}`/`{{entry_kind_hint}}` 区分生成措辞（见上）。三者共用 `wiki_analyze.md` / `wiki_compile.md` 同一份文件（topic 页走独立的 `wiki_topic_analyze.md`/`wiki_topic_compile.md`，见步骤 8），变量按 page_type 取值切换，不拆多份文件。
 
 ### 步骤 4：发布与检索接入
 
@@ -463,15 +508,15 @@ POST /wiki/pages/:id/publish
   响应：{ page_id, status: "published" }
 
 检索接入（retrieval.md 第 0 层）——直答候选采集，三个入口，均不调 LLM
-（docs/design/wiki-compilation.md "触发问法取材真实观测，检索匹配复用
+（docs/design/wiki.md "触发问法取材真实观测，检索匹配复用
 四元组"）：
 
   a. 词法入口：对问题分词后查询 wiki index（title/content/aliases/
      trigger_questions 均参与打分；TermQuery status=published 已由索引
      写入策略保证），取分数 ≥ retrieval.wiki_min_score 的页面按分数降序；
-  b. 概念入口：问题分词结果与 concepts 表的概念名称做词法匹配
+  b. 概念入口：问题分词结果与 entries 表的概念名称做词法匹配
      （精确/包含，不调 LLM），命中概念存在 published 页面
-     （wiki_pages.concept_id）→ 该页面直接进入候选，不看 Bleve 分数；
+     （wiki_pages.entry_id）→ 该页面直接进入候选，不看 Bleve 分数；
   c. 四元组入口（新增）：Session 已解析出的 qc.Subject/Intent/Audience/
      Constraint（问题经 Session 补全后才进入检索总流程，第 0 层和第 1 层
      共用同一次解析结果，见 retrieval.md 检索总流程），对每个 published
@@ -549,13 +594,13 @@ POST /wiki/compile               步骤 2
 POST /wiki/pages/:id/publish           步骤 4
 POST /wiki/pages/:id/recompile         步骤 5
 POST /wiki/pages/:id/archive           status=archived，从索引删除
-GET  /wiki/pages                 查询参数：status、concept_id、limit
+GET  /wiki/pages                 查询参数：status、entry_id、limit
                                  响应：[{ page_id, page_type, title, status,
-                                          concept_id, compiled_at, published_at }]
+                                          entry_id, compiled_at, published_at }]
 GET  /wiki/catalog               按知识领域分组的 Wiki 目录（Page 模块 Wiki 视图）
                                  响应：[{ domain_id, name, description, wiki_count,
                                           pages: [{ kind, page_id?, page_type?,
-                                            concept_id?, result_id?, title,
+                                            entry_id?, result_id?, title,
                                             description, status, updated_at? }] }]
                                  status ∈ pending_compile|draft|needs_recompile|
                                    published|archived；主题页按成员概念领域多归属
@@ -567,13 +612,18 @@ GET  /wiki/pages/:id/revisions/:rev  单版本正文
 GET  /wiki/pages/:id/relations   该页的 related / contradicts / contains 关系
                                  响应：[{ relation_type, other_page_id, title,
                                           derived_from, evidence }]
-POST /wiki/topics                步骤 8，人工指定成员创建主题页壳
-                                 请求：{ member_page_ids: ["...", ...] }
+POST /wiki/topics                步骤 8，人工指定主题范围创建主题页壳
+                                 （2026-08-03 修订：给范围，不再要求给
+                                   已发布成员页面 id 列表）
+                                 请求：{ topic_name, topic_description,
+                                          domain_id?: "..." }
                                  响应：{ page_id, status, title, member_page_ids,
+                                          uncovered_entries,
                                           readiness?: { member_count,
                                             related_connection_count,
                                             contradicts_connection_count,
-                                            member_min, member_max } }
+                                            reliability_ratio,
+                                            reliability_min } }
 GET  /wiki/topics                主题页列表（含未编译壳页）
 POST /wiki/pages/:id/topic/analyze    步骤 8，二阶编译的分析步骤，不落库
 POST /wiki/pages/:id/topic/compile    步骤 8，二阶编译
@@ -595,13 +645,17 @@ DELETE /wiki/drafts/:id
 ### 步骤 7：页面关系派生（程序派生，不调 LLM）
 
 ```text
-时机（两处，都是纯 SQL + 内存计算，无 LLM）：
-  a. 概念页 publish 时：以该页 source_point_ids 为一侧，与其余 published
-     概念页两两比对，全量重写该页涉及的 related / contradicts 行；
+时机（两处，都是纯 SQL + 内存计算，无 LLM；概念页与事实页一视同仁，
+  统称"词条页"，不区分 kind）：
+  a. 词条页（概念页或事实页）publish 时：以该页 source_point_ids 为
+     一侧，与其余 published 词条页（含另一种 kind）两两比对，全量
+     重写该页涉及的 related / contradicts 行——概念页与事实页之间
+     同样可以产生 related/contradicts（例如某原理概念页与其代表性
+     实现的事实页），不限同 kind 才比对；
   b. Study 周期扫描：跨 Source KPN 新增后（kpn.md），只重算涉及新增
      knowledge_point_relations 的页面对，不做全库两两扫描。
 
-判定（A、B 为两个 published 概念页的 source_point_ids 集合）：
+判定（A、B 为两个 published 词条页的 source_point_ids 集合）：
   related：A×B 之间 knowledge_point_relations.relation_type='related'
     的关系对数 ≥ wiki.relation_kpn_min（默认 1，scope 不限 intra / cross），
     或 |A ∩ B| ≥ wiki.relation_shared_point_min（默认 2）；
@@ -624,58 +678,155 @@ lifecycle 过滤：判定只使用 lifecycle=current 的 KP 与 published 页面
 
 ### 步骤 8：主题页候选与二阶编译
 
-**候选产生（Study 侧，周期扫描）**：
+**主题候选识别（Study 侧，周期扫描；2026-08-03 修订，设计依据
+`docs/design/wiki.md`「主题：从真实使用中识别，而不是从已发布词条事后聚类」）**：
+
+不再从"已发布概念页的图连通性"事后推导候选——那要求先有一批已发布页面才能求连通分量，会让"有真实需求、材料还没跟上"的领域永远无法被看见。改为直接对真实提问的四元组聚类，候选产生早于、且独立于任何概念页是否已经编译发布。
+
+> 以下具体阈值与流程细节是本次修订按 `docs/design/wiki.md` 机制方向新提出的实现方案（设计文档只确立"从真实提问识别，不依赖材料侧成熟度"这一立场，未固定参数）；`internal/study/`、`internal/wiki/` 中对应的连通分量实现尚未跟进这次修订，编码前应重新核对一遍本节，不要直接照搬旧实现的变量/表结构。
 
 ```text
-1. 取全部 published 概念页 + wiki_page_relations 的 related 行构成无向图
-   （忽略 contradicts 边），求连通分量；
-2. 分量筛选（与概念级 ready 判定的连贯口径同源，见步骤 3）：
-     成员数 ≥ wiki.topic_member_min（默认 3）；
-     成员数 ≤ wiki.topic_member_max（默认 8）——**上限是必需的**：
-       relation_kpn_min 默认 1，意味着两页只要有一对 KP 有 related
-       关系就连边，这种低阈值的图在几百个概念页规模上几乎必然长出一个
-       覆盖大半知识库的巨型分量，主题页会退化成「什么都装」的垃圾桶。
-       超限时不产候选，写报告项 oversized_topic_cluster
-       （成员数、代表页面、边数），提示人工提高 relation_kpn_min /
-       relation_shared_point_min 或按 domain 切分——不自动切分，
-       因为切在哪里是知识判断，不是阈值判断；
-     分量内 contradicts 边数 < related 边数（矛盾不能反客为主）；
-     分量内至少 wiki.topic_member_min 个成员尚未被任何非 archived
-       主题页 contains（避免对同一批页面反复产候选）；
-3. 满足 → 在一个事务里建 draft 壳页并写 contains：
-     wiki_pages(page_type='topic', concept_id=NULL, title=占位（成员页
-       标题拼接，编译时由 LLM 覆盖）, content='', status='draft',
-       prompt_version / model_name 留空，compiled_at=NULL)；
-     每个成员一行 wiki_page_relations(relation_type='contains',
-       from=壳页, to=成员页, derived_from='compile')；
-   壳页 content 为空但不会误入检索——索引只收 status=published；
-4. learning_results(action='topic_page_candidate', object_type='wiki_page',
-     object_id=壳页 page_id, status='pending_confirm')，reason 说明分量成员
-     与 related / contradicts 边数。object_id 用 page_id 而不是概念 id 或
-     成员集合指纹：标识天然唯一，人工确认的对象就是一个具体页面；
-5. 人工驳回 → 壳页 archive + 删除其 contains 行 + learning_result 置
-     rejected，不留悬空壳页。
+1. 四元组聚类：窗口内（study.event_window_days）的 traces，按归一化
+   四元组 (subject, intent, audience, constraint_text) 分组——归一化
+   口径与 study.md「问题复杂度观测量」的分组完全一致（含 subject 同义词
+   归一化，见 study.md 步骤 2a），保证"同一类问题"在检索侧、学习侧、
+   Wiki 侧是同一个定义。**不要求** retrieval_quality=confident、不要求
+   direct_point_ids 非空——这是与既有 ConfidentTraceQuadruples / 问题
+   复杂度观测量分组的关键差异：后两者只消费 confident 样本，主题识别
+   消费全部样本，因为主题候选要回答的是"有没有人反复问"，不是"答没
+   答上、引用了哪些知识点"；
+
+2. 稳定簇判定：分组同时满足——
+     distinct_question_count ≥ wiki.topic_cluster_min_questions
+       （默认 3，与 study.complexity_min_questions 同量级但独立配置——
+       两者语义不同，一个是"够格观测"，一个是"够格识别为主题候选"）；
+     days_active ≥ wiki.topic_cluster_min_days_active（默认 7，衡量
+       "反复以不同措辞被问到、跨越足够长时间"，计算方式与
+       wiki.qualifying_min_days_active 相同的 DaysActive 口径，只是
+       输入换成该分组内 traces.created_at 而不是激活事件）；
+   两项均满足 → 该分组是一个主题候选，此刻不涉及任何知识点；
+   已被某个非 archived 的 topic_page_candidate 覆盖（见「去重」）→ 跳过；
+
+3. 候选范围检索：以该分组的 subject/intent/audience/constraint_text
+   拼接为查询词，对知识点全文索引做语义检索——不限领域、不限概念，
+   不要求历史上已被任何 trace 引用过，取分数 ≥ retrieval.wiki_min_score
+   的知识点，上限 wiki.topic_candidate_kp_max（默认 50，超出按分数
+   降序截取）；
+
+4. 从检索结果中筛出**主题范围材料 KP**（lifecycle=current，且已归属到
+   词条 `entry_id IS NOT NULL`；**不**要求 ActivationLink 已 verified——
+   主题范围只定位"哪些 current 知识点落在这个主题里"，以便人工/Study
+   先看到需求并组装草稿；verified 仍用于步骤 3 一阶材料 qualifying、
+   词条级 ready、步骤 7 整体可靠度，以及发布正式化，除非强制发布）；
+   一条主题范围材料 KP 都没有 → 候选标记 needs_more_data（"有需求、
+   缺材料"），写入学习报告 topic_signal_underfilled 节（四元组摘要、
+   distinct_question_count、days_active），作为内容采集优先级信号，
+   不再往下走，也不产生 wiki_page 壳页；
+
+5. 按归属（entry_id）分组主题范围材料 KP——归属可以是概念，也可以是
+   事实（`entries.kind` 区分，判断依据同 kpn.md 步骤 3「类型标注」），
+   V1 正式实现两种词条类型，不再只做概念页（此前"事实页推迟到 V3"的
+   口径已由 2026-08-03 修订取代）；方法页/经验页/问题页/决策页仍已从
+   设计中删除，不是推迟，详见 `docs/design/wiki.md`「Wiki 页面类型」
+   一节——V1 的词条页类型只有 concept 与 fact 两种；
+
+6. 逐个 concept 分组（不论其 kind 是 concept 还是 fact）处理：
+     该 concept 已有 published 词条页 → 直接复用为候选成员；
+     尚无 published 页面，但组内**一阶 qualifying KP**（current 且
+       verified，口径同步骤 3）满足步骤 3「词条级 ready
+       判定」四项（广度/连贯/稳定/内聚）→ 一并写该 concept 的
+       wiki_candidate（action=wiki_candidate，口径同步骤 1，page_type
+       由该 concept 行的 kind 决定），作为本次主题候选的"待发布成员"
+       随人工确认一起推进；
+     不满足 → 该分组不进候选成员集合，计入候选的 uncovered_entries
+       清单（随候选写入 learning_result.reason，命名沿用既有字段，
+       实际可能是概念也可能是事实），供后续材料积累后重新纳入；
+
+7. 二阶编译准入（对候选内已具备 published 词条页的成员集合执行；
+   成员数 < 2 时无意义，直接跳过——单一词条只产出该词条页本身，
+   不构成主题）：
+     关联：这批成员词条页（概念页与事实页混合不受限）两两之间 wiki_page_relations（步骤 7 派生）
+       中 related 连接数 ≥ contradicts 连接数，且至少存在 1 条 related
+       连接——口径与步骤 3 连贯判据同源，但只核验这批候选成员之间的
+       关系，不再对全库概念页求连通分量；
+     整体可靠度：候选范围检索出的**全部**知识点（步骤 4，不只是已进入
+       某个成员页面 qualifying 集合的那部分）中，verified ActivationLink
+       覆盖占比 ≥ wiki.topic_reliability_min（默认 0.5）——衡量"这批
+       材料整体上验证得有多扎实"，不重复回答"有没有需求"（已在步骤
+       1-2 由真实提问回答过）；
+   两项均满足 → 进入候选创建（步骤 8）；否则标记 needs_more_data，
+     原因区分"关联不够"还是"整体可靠度不够"，写入 learning_result.reason；
+
+8. 满足 → 在一个事务里：
+     步骤 6 中新写的成员 wiki_candidate 保持 pending_confirm（随本次
+       主题候选一起展示，不单独由人工逐个确认）；
+     建 draft 壳页并写 contains：
+       wiki_pages(page_type='topic', entry_id=NULL, title=占位（成员页
+         标题拼接，编译时由 LLM 覆盖）, content='', status='draft',
+         prompt_version / model_name 留空, compiled_at=NULL)；
+       每个**已发布**成员一行 wiki_page_relations(relation_type='contains',
+         from=壳页, to=成员页, derived_from='compile')；尚未发布的成员
+         （步骤 6 随批新写的 wiki_candidate）暂不写 contains，待其概念页
+         编译发布后由步骤 7 页面关系派生流程补写——人工先子后父，
+         与既有约束一致，主题页壳本身不因成员未全部发布而阻塞创建；
+     壳页 content 为空但不会误入检索——索引只收 status=published；
+
+9. learning_results(action='topic_page_candidate', object_type='wiki_page',
+     object_id=壳页 page_id, status='pending_confirm')，reason 说明四元组
+     聚类摘要（distinct_question_count、days_active、代表问法）、关联/
+     可靠度核验结果、uncovered_entries。object_id 用 page_id 而不是
+     四元组分组指纹：标识天然唯一，人工确认的对象就是一个具体页面；
+
+10. 人工驳回 → 壳页 archive + 删除其 contains 行 + learning_result 置
+     rejected，不留悬空壳页；已随批创建的成员 wiki_candidate 不受影响——
+     成员概念页是否独立发布是另一件事，不因主题候选被驳回而撤销。
+
+去重：同一四元组分组（或归一化后等价的分组）已产生非 archived 的
+  topic_page_candidate（无论 pending_confirm、applied，还是已发布成员
+  仍在 uncovered_entries 清单中）→ 不重复产候选，避免对同一批真实
+  需求反复报告。
 ```
 
-**人工指定成员手动创建主题页（第二条生成口径，复用同一条二阶编译链路）**：
-与概念页的「人工指定主题手动编译」同构——Study 产候选与人工挑选是同一条
-analyze→confirm→generate 链路的两个入口，**不是两套生成逻辑**。人工不等
-Study 推荐、直接挑选若干已发布概念页作为成员，调用
-`POST /wiki/topics` 建 draft 壳页 + contains，再走下面同一组
-`topic/analyze` + `topic/compile`：
+**人工手动指定主题（第二条生成口径，复用同一条二阶编译链路；2026-08-03
+修订，设计依据 `docs/design/wiki.md`「主题候选的产生：两条来源」）**：
+与概念页的「人工指定主题手动编译」同构——Study 产候选与人工指定是同一条
+后续机制（材料组织、关联核验、二阶编译、支持度核验、发布前验收）的两个
+触发入口，**不是两套生成逻辑**，区别只在触发方式。
+
+旧版 `POST /wiki/topics` 要求人工直接给出一批**已发布概念页**作为成员
+（`member_page_ids`），这与新设计冲突——新设计要求人工手动指定同样可以
+"不要求这些知识点所属的词条已经独立发布"（`docs/design/wiki.md` 原文）。
+`POST /wiki/topics` 的请求语义因此改为**给主题范围**，不是给成员页面：
 
 ```text
-唯一硬门槛（不可绕过）：
-  成员数 ∈ [topic_member_min, topic_member_max]（默认 3/8）；
-  每个 member_page_id 必须存在、page_type='concept'、status='published'
-  （与二阶编译「人工先子后父」一致——没有已发布概念页就没有主题页材料）；
-  去重后写入；不接受主题页作成员（只有两层）。
+请求：{ "topic_name": "...", "topic_description": "...", "domain_id"?: "..." }
+  人工直接给出一个主题的名称/范围描述（domain_id 可选，限定检索领域）；
 
-Study 的连通分量 / contradicts < related / 「足够未归入成员」判定在人工
-  触发时改为仅展示、不阻断：创建响应附带可选字段
-  readiness = { member_count, related_connection_count,
-  contradicts_connection_count, member_min, member_max }——信号照样算出来
-  给人看，人工自己判断是否"够格"，不由系统替人工做决定。
+处理：
+  1. 以 topic_name + topic_description 为查询词，对知识点全文索引做
+     语义检索（domain_id 非空时限定该领域），口径同步骤 8「候选范围
+     检索」；筛主题范围材料 KP（lifecycle=current，不要求 verified，
+     同步骤 8 第 4 步）；手动生成的是草稿，正式化仍看使用验证 /
+     强制发布；
+  2. 按归属分组，已发布概念页直接复用，未发布但满足概念级 ready 判定
+     （ready 仍依赖一阶 qualifying = current 且 verified）的分组一并写
+     wiki_candidate（同步骤 8 第 6 步）；
+  3. 在一个事务里建 draft 壳页并写 contains（同步骤 8 第 8 步，已发布
+     成员写 contains，未发布成员待各自发布后由步骤 7 补写）；
+  4. 用「这批材料确实是在回答同一类问题」这一真实使用证据来确认候选，
+     而不是仅凭语义相似——响应内附带该主题范围内匹配到的真实确证问法
+     摘要（检索范围内主题范围材料 KP 各自的确证 trace 问法，供人工判断
+     这批材料是否真的构成一个主题，而不是恰好共享了一些用词）。
+
+Study 的关联 / 整体可靠度判定（步骤 8 第 7 步）在人工触发时改为仅展示、
+  不阻断：响应附带可选字段 readiness = { member_count,
+  related_connection_count, contradicts_connection_count,
+  reliability_ratio, reliability_min }——信号照样算出来给人看，人工自己
+  判断是否"够格"，不由系统替人工做决定。
+
+不设成员数硬性区间：新机制的候选范围由真实提问的语义边界决定，不再是
+  从全库图连通性里截出来的分量，"覆盖大半知识库"的风险结构上已经
+  显著降低；member_count 仍会算出展示，但不作为拒绝创建的门槛。
 
 来源留痕：壳页 compiled_from 存哨兵值 "manual_trigger"（与一阶人工编译
   同口径）；不写 topic_page_candidate learning_result（无 pending_confirm
@@ -719,7 +870,7 @@ POST /wiki/pages/:id/topic/compile
   source_point_ids 数量降序截取成员（排序权重，不是门槛）；
 不取 KU 正文、不取 KP 原文、不取 knowledge_gaps——二阶编译只重组
   已编译结论，事实层的准入在一阶已经回答过（见 docs/design/
-  wiki-compilation.md「证据回链必须穿透两层」）。
+  wiki.md「证据回链必须穿透两层」）。
 ```
 
 **Prompt 文件**：`config/prompts/wiki_topic_analyze.md` / `wiki_topic_compile.md`
@@ -812,7 +963,7 @@ path_type 不新增：直答成功仍是 path_type=wiki（命中的是概念页�
 传导（步骤 5 标记来源 c）：概念页 → needs_recompile / archived 时，
   经 contains 反查父主题页 → MarkNeedsRecompile(pageID,
   reason='member_page_changed:<member_page_id>')；主题页不再向上传导
-  （只有两层，见 docs/design/wiki-compilation.md「当前阶段只做两层」）。
+  （只有两层，见 docs/design/wiki.md「当前阶段只做两层」）。
 
 主题页重编译前置检查（POST /wiki/pages/:id/recompile 对 page_type='topic'）：
   全部 contains 成员 status='published' → 允许执行；
@@ -888,7 +1039,7 @@ GET /wiki/drafts/:id     附 stale 标记：source_revision_id 是否仍是
   草稿不进 wiki index、不参与检索与直答；
   草稿不参与 lifecycle 传导、不产生 learning_events；
   不存在任何 draft → wiki_pages 的写回接口，wiki_pages.content
-    仍然只由编译产生（docs/design/wiki-compilation.md「复杂问题与写作：
+    仍然只由编译产生（docs/design/wiki.md「复杂问题与写作：
     两个出口的定位」，与 Claim 不可独立编辑同一条约束）；
   页面 archive 时其草稿保留（写作产物不该因页面归档而丢失），
     只在 GET 响应里标注来源页面已 archived。
@@ -916,10 +1067,10 @@ GET /wiki/drafts/:id     附 stale 标记：source_revision_id 是否仍是
      origin='wiki_draft' 的 Source，另一侧属于 origin_page_id 页面的
      source_point_ids（含该页面历史 revision 引用过的 point_id），
      **不建立关系**——这不是知识之间的关系，是同一份知识的复印件；
-  3. 统计排除：概念级 ready 判定、页面关系派生、连通分量计算都不计入
-     被第 2 条跳过的边。回流 KP 本身仍正常参与激活、验证、与**其他**
-     知识建立关系并可成为 qualifying——排除的只是自体祖先边，
-     不是回流内容本身，否则回流就失去意义。
+  3. 统计排除：概念级 ready 判定、页面关系派生、主题候选的关联 / 整体
+     可靠度核验都不计入被第 2 条跳过的边。回流 KP 本身仍正常参与激活、
+     验证、与**其他**知识建立关系并可成为 qualifying——排除的只是自体
+     祖先边，不是回流内容本身，否则回流就失去意义。
 
 可观测：学习报告单列 origin='wiki_draft' 的 Source 及其产出 KP 数、
   被跳过的祖先边数，便于人工发现"系统在自己身上打转"的苗头。
@@ -939,12 +1090,20 @@ wiki:
   # 两层架构（步骤 7-9）
   relation_kpn_min:             1    # 派生 related 所需的 KPN related 关系对数
   relation_shared_point_min:    2    # 派生 related 的另一条件：共享 KP 数
-  topic_member_min:             3    # 主题页候选的连通分量最小成员数，
-                                     # 也是重编译后剩余成员数的下限
-  topic_member_max:             8    # 连通分量成员数上限，超限不产候选、
-                                     # 只写 oversized_topic_cluster 报告项
-                                     # （防止巨型分量把主题页变成垃圾桶）
+  topic_member_min:             3    # 重编译后主题页剩余成员数的下限
+                                     # （2026-08-03 起不再兼作候选创建时的
+                                     # 成员数门槛——新机制的候选范围来自
+                                     # 四元组聚类，不设创建时的成员数上限）
   topic_compile_max_chars:      24000 # 二阶编译输入上限（成员页面正文合计）
+
+  # 主题候选识别（步骤 8，2026-08-03 新增，四元组聚类替代连通分量）
+  topic_cluster_min_questions:  3    # 稳定簇判定：分组内不同问法数下限
+  topic_cluster_min_days_active: 7   # 稳定簇判定：分组激活时间跨度下限
+                                     # （与 qualifying_min_days_active
+                                     # 相同的 DaysActive 计算口径）
+  topic_candidate_kp_max:       50   # 候选范围语义检索的知识点数上限
+  topic_reliability_min:        0.5  # 二阶准入「整体可靠度」：候选范围
+                                     # 全部知识点中 verified 覆盖占比下限
 ```
 
 ## 依赖
@@ -970,6 +1129,13 @@ Source：   草稿内容回流走既有 POST /sources 导入链路，wiki 侧不
 ## 完成标准
 
 ```text
+entry_id 指向 entries.kind='fact' 的行时，POST /wiki/compile/analyze
+  与 POST /wiki/compile 正确产出 page_type='fact' 的页面，Prompt 使用
+  事实专属的 entry_kind_hint 措辞；page_type 与 entries.kind 不一致的
+  请求（如对 kind=concept 的行请求 page_type=fact）返回 400；
+  事实页与概念页共用同一条 qualifying/ready 判定、citation 白名单、
+  发布/重编译、页面关系派生、二阶主题接入逻辑（可用集成测试断言：
+  两种 kind 的页面在这几步的代码路径完全一致，只 page_type 取值不同）；
 候选确认 → analyze（拟采用论断结构）→ 确认 → 生成 → draft 的链路可走通，
   分析产物不落库、生成阶段的 citation 白名单收窄到已确认 claims 的并集；
 未先调用 analyze 直接 POST /wiki/compile 时，内部自动分析后生成，
@@ -1005,15 +1171,20 @@ fake LLM 下编译、校验失败、直答、回落、重编译路径测试稳�
   自动派生出对应的 wiki_page_relations 行，方向归一化后无重复行，
   evidence 可核对到具体 shared_point_ids / 关系对数；
 关系派生全程不调 LLM，且只有 related / contradicts / contains 三种类型；
-related 连通分量满足成员数与「contradicts 边数 < related 边数」时，
-  Study 产出 topic_page_candidate 并留下 draft 壳页 + contains 关系；
-  人工驳回后壳页 archive、contains 行清空，不留悬空壳页；
-人工指定成员（POST /wiki/topics）可跳过 Study 建壳：成员数落在
-  [topic_member_min, topic_member_max]、且全部为 published 概念页时
-  建 draft 壳 + contains，compiled_from 含 manual_trigger；连通性信号
-  仅作 readiness 展示不阻断；随后复用 topic/analyze|compile；
-连通分量成员数超过 topic_member_max 时不产候选，只出
-  oversized_topic_cluster 报告项；
+四元组分组同时满足 distinct_question_count / days_active 两项稳定簇
+  判定、且候选范围检索出的 qualifying KP 分组满足关联与整体可靠度
+  两项二阶准入时，Study 产出 topic_page_candidate 并留下 draft 壳页 +
+  contains 关系（已发布成员）；分组内未发布但满足概念级 ready 判定的
+  成员随批写 wiki_candidate；人工驳回后壳页 archive、contains 行清空，
+  不留悬空壳页，但随批创建的成员 wiki_candidate 不受影响；
+不满足稳定簇判定或候选范围内没有主题范围材料 KP（current）时不产候选，写
+
+  topic_signal_underfilled 报告项（四元组摘要、distinct_question_count、
+  days_active）；
+人工指定主题（POST /wiki/topics，给 topic_name/topic_description，
+  不再要求给已发布成员页面 id）可跳过 Study 建壳：走同一套候选范围检索
+  + 归属分组 + 二阶准入计算，关联/整体可靠度信号仅作 readiness 展示
+  不阻断；随后复用 topic/analyze|compile；
 二阶编译输入只含成员页面正文与关系，不含 KU 正文 / KP 原文；
 主题页正文的 [point_id] 全部落在成员页面 source_point_ids 并集内，
   越界标注被剔除；随机抽取一条标注可沿
@@ -1041,6 +1212,6 @@ member_roles 落库且 member_page_id 全部在 contains 成员集合内；
   的写回路径（可用测试断言无该接口）；
 回流防护：把某主题页的草稿导出后以 origin='wiki_draft' 导入，
   新 KP 与 origin_page_id 页面已引用的 KP 之间不产生 KPN 关系，
-  该概念的 qualifying 计数与连通分量不因这次回流而增长；
+  该概念的 qualifying 计数、页面关系派生与主题候选核验不因这次回流而增长；
   同一批回流 KP 与**其他**知识之间的关系照常建立。
 ```

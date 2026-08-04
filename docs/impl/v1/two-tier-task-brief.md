@@ -12,8 +12,11 @@
 **必读文档**（先全部读完再动手，不要边读边写）：
 
 ```text
-docs/design/wiki-compilation.md   「页面关系与两层知识架构」「主题页是召回骨架，
-                                   不是直答单元」「写作产出回流必须防自指」
+docs/design/wiki.md               「页面关系只有三种，层级由 contains 承载」「主题页
+                                   是召回骨架，不是直答单元」「写作产出回流必须防自指」
+                                   「主题：从真实使用中识别，而不是从已发布词条事后
+                                   聚类」（2026-08-03 起主题候选识别的权威依据，取代
+                                   下面 wiki.md 步骤 4 曾经的"连通分量"口径）
 docs/design/retrieval.md          「分层检索路径」「表达层的两种参与方式」「检索路径全图」
 docs/design/cognitive-routing.md  「复杂度是相对已有知识而言的」「三种"复杂"分别由谁承接」
 docs/impl/v1/wiki.md              数据结构 + 步骤 3、4、5、7、8、9、10（主体）
@@ -43,7 +46,7 @@ CLAUDE.md                         「V1 关键设计决策」全部条目
      wiki_page_relations、wiki_drafts 建表；
      wiki_pages 增 member_roles / uncovered_points；
      sources 增 origin / origin_page_id；traces 增 skeleton_page_id；
-     存量 page_type='topic' 且 concept_id 非空的行改写为 'concept'；
+     存量 page_type='topic' 且 entry_id 非空的行改写为 'concept'；
      口径见 wiki.md「数据结构」两层架构扩展段。
 
 2. 概念页 uncovered_points（wiki.md 步骤 3 生成后校验段）
@@ -53,10 +56,19 @@ CLAUDE.md                         「V1 关键设计决策」全部条目
      publish 时全量重写该页关系行；Study 侧按新增 KPN 增量重算；
      无向关系按 page_id 字典序归一化；纯 SQL + 内存计算，禁止 LLM。
 
-4. 主题页候选（wiki.md 步骤 8「候选产生」+ study.md 步骤 6）
-     related 连通分量 → 成员数区间与连贯性筛选 → draft 壳页 + contains +
-     learning_results(action=topic_page_candidate, object_id=壳页 page_id)；
-     超上限只写 oversized_topic_cluster 报告项，不自动切分。
+4. 主题页候选（wiki.md 步骤 8「主题候选识别」+ study.md 步骤 6；
+   2026-08-03 起改为四元组聚类，不再是 related 连通分量）
+     traces 按归一化四元组 (subject, intent, audience, constraint_text)
+       分组 → 稳定簇判定（distinct_question_count / days_active）→
+       候选范围内知识点语义检索 → qualifying 筛选 → 按 entry_id 分组
+       （未发布但满足概念级 ready 判定的分组随批写 wiki_candidate）→
+       二阶准入（关联 + 整体可靠度）→ draft 壳页 + contains（已发布
+       成员）+ learning_results(action=topic_page_candidate,
+       object_id=壳页 page_id)；
+     不满足稳定簇判定或候选范围内无 qualifying KP 时写
+       topic_signal_underfilled 报告项，不产壳页；
+     人工手动指定（POST /wiki/topics）改为给 topic_name/topic_description，
+       不再要求给已发布 member_page_ids。
 
 5. 二阶编译（wiki.md 步骤 8）
      新增 config/prompts/wiki_topic_analyze.md / wiki_topic_compile.md；
@@ -107,6 +119,14 @@ A. 骨架注入时 domain(1) + source(1) 两次预过滤是否也跳过？
 B. 骨架注入要不要灰度开关（类似 retrieval.fast_path）？
    注入把召回质量押在主题页成员边界上，边界偏窄会漏且 sufficient 兜不住。
    建议加开关、默认关闭，观测 resolved_outside_count 后再打开。
+
+C. 主题候选识别的四元组聚类是 2026-08-03 才从"连通分量"改过来的新机制，
+   `wiki.topic_cluster_min_questions` / `topic_cluster_min_days_active` /
+   `topic_candidate_kp_max` / `topic_reliability_min` 这几个阈值是 wiki.md
+   本次修订按设计方向新提出的实现方案，不是设计文档钦定的数字，也未经过
+   任何真实数据验证。开工前应与用户确认这批阈值是否可用作起点，以及"候选
+   范围语义检索"具体复用哪一套现成的全文检索实现（wiki.md 未指定，只写了
+   "对知识点全文索引做语义检索"）。
 ```
 
 ## 硬约束（最容易被"顺手"违反的条目，逐条对照）
@@ -114,7 +134,7 @@ B. 骨架注入要不要灰度开关（类似 retrieval.fast_path）？
 ```text
 页面关系只有 related / contradicts / contains 三种。
   禁止引入 broader / narrower——KPN 只有 2 种关系且恒 bidirectional、
-  concepts 在 domain 下平铺无父子，派生不出层级，层级唯一来源是 contains。
+  entries 在 domain 下平铺无父子，派生不出层级，层级唯一来源是 contains。
 
 主题页命中后不调 answer_wiki。
   它是召回骨架，不是直答单元。不要"顺手"让它也试一次直答。

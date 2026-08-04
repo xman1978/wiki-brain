@@ -207,7 +207,7 @@ func TestIntegration_StudyReportFromSeedDB(t *testing.T) {
 	cfg.CandidateConfidentMin = 1 // lower thresholds for single-pass data
 	cfg.CandidateRatioMin = 0.5
 	cfg.WikiKPMin = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{})
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
 
 	result, err := svc.Run()
 	if err != nil {
@@ -312,11 +312,11 @@ func TestIntegration_StudyReportFromSeedDB(t *testing.T) {
 	t.Run("WikiCandidates", func(t *testing.T) {
 		t.Logf("Wiki candidates: %d", len(report.WikiCandidates))
 		for _, w := range report.WikiCandidates {
-			if w.ConceptID == "" {
-				t.Error("wiki candidate with empty concept_id")
+			if w.EntryID == "" {
+				t.Error("wiki candidate with empty entry_id")
 			}
 			if w.ConceptName == "" {
-				t.Error("wiki candidate with empty concept_name")
+				t.Error("wiki candidate with empty entry_name")
 			}
 			if w.DomainID == "" {
 				t.Error("wiki candidate with empty domain_id")

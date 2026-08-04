@@ -61,7 +61,7 @@ func setupStudyWithActivation(t *testing.T) (*Service, *Store, *activation.Servi
 	db := setupTestDB(t)
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, testConfig(), activationSvc, nil, 0, 0, CohesionConfig{})
+	svc := NewService(store, testConfig(), activationSvc, nil, 0, 0, CohesionConfig{}, 0, 0)
 	return svc, store, activationSvc, db
 }
 
@@ -70,7 +70,7 @@ func TestCreateCandidates_SourceA_Cooccurrence(t *testing.T) {
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 	seedCooccurrence(t, db, "并发 问题", "kp1", 10, 8)
@@ -134,7 +134,7 @@ func TestCreateCandidates_Idempotent(t *testing.T) {
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 	seedCooccurrence(t, db, "并发 问题", "kp1", 10, 8)
@@ -165,7 +165,7 @@ func TestCreateCandidates_RejectsRecreateOfDeprecated(t *testing.T) {
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 	seedCooccurrence(t, db, "并发 问题", "kp1", 10, 8)
@@ -199,7 +199,7 @@ func TestCreateCandidates_SourceA_AggregatesAcrossLabels(t *testing.T) {
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 	// 三个标签各自 confident < 5，聚合后 3+2+2=7 ≥ 5，ratio 7/7=1.0。
@@ -262,7 +262,7 @@ func TestCreateCandidates_SourceB_ActivationGap(t *testing.T) {
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 	seedCooccurrence(t, db, "分布式 系统", "kp1", 2, 2)
@@ -295,7 +295,7 @@ func TestCreateCandidates_SourceB_BelowThreshold_NoLink(t *testing.T) {
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 	seedCooccurrence(t, db, "分布式 系统", "kp1", 1, 1) // only 1 confident occurrence
@@ -321,7 +321,7 @@ func TestProcessLinkSignals_PromoteToPendingConfirm(t *testing.T) {
 	svc, _, activationSvc, db := setupStudyWithActivation(t)
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 
@@ -378,11 +378,11 @@ func TestProcessLinkSignals_AutoPromote(t *testing.T) {
 	activationSvc := newTestActivationSvc(db)
 	cfg := testConfig()
 	cfg.AutoPromote = true
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{})
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{}, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 
@@ -413,7 +413,7 @@ func TestProcessLinkSignals_Weaken(t *testing.T) {
 	svc, _, activationSvc, db := setupStudyWithActivation(t)
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 
@@ -452,7 +452,7 @@ func TestProcessLinkSignals_Reverify(t *testing.T) {
 	svc, _, activationSvc, db := setupStudyWithActivation(t)
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 
@@ -491,7 +491,7 @@ func TestProcessLinkSignals_UserCorrectionCountsWithWeight(t *testing.T) {
 	svc, _, activationSvc, db := setupStudyWithActivation(t)
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 
@@ -529,7 +529,7 @@ func TestProcessLinkSignals_SkipsPromotionWhenKPNotCurrent(t *testing.T) {
 	svc, _, activationSvc, db := setupStudyWithActivation(t)
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 	db.Exec(`UPDATE knowledge_points SET lifecycle = 'superseded' WHERE point_id = 'kp1'`)
@@ -565,7 +565,7 @@ func TestProcessLinkSignals_WeakenStillAppliesWhenKPNotCurrent(t *testing.T) {
 	svc, _, activationSvc, db := setupStudyWithActivation(t)
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 
@@ -604,7 +604,7 @@ func TestEvictIdle_Candidate(t *testing.T) {
 	svc, _, activationSvc, db := setupStudyWithActivation(t)
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 
@@ -631,7 +631,7 @@ func TestEvictIdle_CandidateWithRecentSignal_NotEvicted(t *testing.T) {
 	svc, _, activationSvc, db := setupStudyWithActivation(t)
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 
@@ -658,7 +658,7 @@ func TestEvictIdle_Weakened(t *testing.T) {
 	svc, _, activationSvc, db := setupStudyWithActivation(t)
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 
@@ -691,7 +691,7 @@ func TestEvictIdle_WeakenedWithRecentSuccess_NotEvicted(t *testing.T) {
 	svc, _, activationSvc, db := setupStudyWithActivation(t)
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 
@@ -724,7 +724,7 @@ func TestRun_ReportIncludesLearningActionsAndFastPathRate(t *testing.T) {
 	svc, store, _, db := setupStudyWithActivation(t)
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 	seedCooccurrence(t, db, "并发 问题", "kp1", 10, 8)
@@ -776,7 +776,7 @@ func TestHandler_ListResults_And_GetResult(t *testing.T) {
 	handler := NewHandler(svc)
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku1", "src1", "con1")
 	seedKP(t, db, "kp1", "ku1", "src1", "content")
 

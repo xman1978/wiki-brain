@@ -434,7 +434,7 @@ func (h *Handler) getUnit(w http.ResponseWriter, r *http.Request) {
 		UnitID             string      `json:"unit_id"`
 		SourceID           string      `json:"source_id"`
 		OutlineID          string      `json:"outline_id,omitempty"`
-		ConceptID          string      `json:"concept_id,omitempty"`
+		EntryID          string      `json:"entry_id,omitempty"`
 		Center             string      `json:"center"`
 		LineStart          int         `json:"line_start"`
 		LineEnd            int         `json:"line_end"`
@@ -465,8 +465,8 @@ func (h *Handler) getUnit(w http.ResponseWriter, r *http.Request) {
 	if ku.OutlineID.Valid {
 		resp.OutlineID = ku.OutlineID.String
 	}
-	if ku.ConceptID.Valid {
-		resp.ConceptID = ku.ConceptID.String
+	if ku.EntryID.Valid {
+		resp.EntryID = ku.EntryID.String
 	}
 	if ku.LifecycleChangedAt.Valid {
 		t := ku.LifecycleChangedAt.Time.Format("2006-01-02T15:04:05Z")

@@ -35,7 +35,7 @@ type Service struct {
 	baseDir         string
 	broadcaster     *progress.Broadcaster
 	lifecycleSetter LifecycleSetter
-	conceptMatcher  ConceptMatcher
+	conceptMatcher  EntryMatcher
 }
 
 // LifecycleSetter is implemented by the unit package's Service. Source depends
@@ -58,17 +58,17 @@ type LifecycleSetter interface {
 	ReindexSource(sourceID string) error
 }
 
-// ConceptMatcher is implemented by the unit package's Service. SetDomain uses
+// EntryMatcher is implemented by the unit package's Service. SetDomain uses
 // it to re-run concept matching for a source's current KUs after a manual
-// domain reassignment — matchDomain/matchConcepts normally run once, back to
-// back, during unit_extract, so a KU's concept_id otherwise keeps pointing at
+// domain reassignment — matchDomain/matchEntries normally run once, back to
+// back, during unit_extract, so a KU's entry_id otherwise keeps pointing at
 // a concept from whatever domain the source had at extraction time even after
 // a human corrects the domain (docs/impl/v1/lifecycle.md's domain-fix flow,
 // added per user feedback 2026-07-16). Async and best-effort: SetDomain does
 // not wait on it, matching the existing "go func(){ TouchLastUsed }" pattern
 // in tryFastPath.
-type ConceptMatcher interface {
-	MatchConcepts(ctx context.Context, sourceID, domainID string)
+type EntryMatcher interface {
+	MatchEntries(ctx context.Context, sourceID, domainID string)
 }
 
 func NewService(store *Store, fv FileViewClient, lc llm.LLMClient, pm llm.PurposeModels, outlineIdx bleve.Index, q *queue.Queue, cfg *config.Config, baseDir string) *Service {
@@ -104,7 +104,7 @@ func (s *Service) SetLifecycleSetter(ls LifecycleSetter) {
 	s.lifecycleSetter = ls
 }
 
-func (s *Service) SetConceptMatcher(cm ConceptMatcher) {
+func (s *Service) SetEntryMatcher(cm EntryMatcher) {
 	s.conceptMatcher = cm
 }
 
@@ -551,8 +551,8 @@ func (s *Service) matchDomain(ctx context.Context, sourceID string) {
 // domain definitions don't clearly cover its topic, so a human correction has
 // to be possible without waiting on a re-import. An empty domainID clears the
 // assignment back to unclassified. When the domain actually changes, this
-// also kicks off async concept re-matching (see ConceptMatcher) so the
-// source's KUs stop pointing at concepts from their old domain.
+// also kicks off async concept re-matching (see EntryMatcher) so the
+// source's KUs stop pointing at entries from their old domain.
 func (s *Service) SetDomain(sourceID, domainID string) error {
 	src, err := s.store.GetByID(sourceID)
 	if err != nil {
@@ -584,7 +584,7 @@ func (s *Service) SetDomain(sourceID, domainID string) error {
 	}
 
 	if domainID != oldDomainID && s.conceptMatcher != nil {
-		go s.conceptMatcher.MatchConcepts(context.Background(), sourceID, domainID)
+		go s.conceptMatcher.MatchEntries(context.Background(), sourceID, domainID)
 	}
 	return nil
 }

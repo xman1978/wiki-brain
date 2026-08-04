@@ -25,13 +25,13 @@ func insertTestKP(t *testing.T, db *sql.DB, pointID string) {
 	}
 }
 
-// insertTestKPWithConcept creates a KP whose owning KU is anchored to
+// insertTestKPWithEntry creates a KP whose owning KU is anchored to
 // conceptID (in its own dedicated unit, so different point_ids can carry
 // different concept anchors within one test).
-func insertTestKPWithConcept(t *testing.T, db *sql.DB, pointID, unitID, conceptID string) {
+func insertTestKPWithEntry(t *testing.T, db *sql.DB, pointID, unitID, conceptID string) {
 	t.Helper()
 	db.Exec(`INSERT OR IGNORE INTO sources (source_id, title, format, file_name, original_path, markdown_path, status) VALUES ('s-test', 'test', 'markdown', 'test.md', '/test.md', '/test.md', 'completed')`)
-	_, err := db.Exec(`INSERT OR IGNORE INTO knowledge_units (unit_id, source_id, concept_id, center, line_start, line_end, status, prompt_version) VALUES (?, 's-test', ?, 'test', 1, 10, 'completed', 'v1')`, unitID, conceptID)
+	_, err := db.Exec(`INSERT OR IGNORE INTO knowledge_units (unit_id, source_id, entry_id, center, line_start, line_end, status, prompt_version) VALUES (?, 's-test', ?, 'test', 1, 10, 'completed', 'v1')`, unitID, conceptID)
 	if err != nil {
 		t.Fatalf("insert test unit with concept: %v", err)
 	}
@@ -41,10 +41,10 @@ func insertTestKPWithConcept(t *testing.T, db *sql.DB, pointID, unitID, conceptI
 	}
 }
 
-func insertTestConcept(t *testing.T, db *sql.DB, conceptID string, mergedInto sql.NullString) {
+func insertTestEntry(t *testing.T, db *sql.DB, conceptID string, mergedInto sql.NullString) {
 	t.Helper()
 	db.Exec(`INSERT OR IGNORE INTO domains (domain_id, name) VALUES ('d-test', 'test domain')`)
-	_, err := db.Exec(`INSERT OR IGNORE INTO concepts (concept_id, domain_id, name, merged_into) VALUES (?, 'd-test', ?, ?)`,
+	_, err := db.Exec(`INSERT OR IGNORE INTO entries (entry_id, domain_id, name, merged_into) VALUES (?, 'd-test', ?, ?)`,
 		conceptID, conceptID, mergedInto)
 	if err != nil {
 		t.Fatalf("insert test concept: %v", err)

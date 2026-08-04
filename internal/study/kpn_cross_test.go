@@ -12,7 +12,7 @@ func TestListCrossSourceConflicts(t *testing.T) {
 	db.Exec(`UPDATE sources SET title = 'Source A' WHERE source_id = 'src-a'`)
 	db.Exec(`UPDATE sources SET title = 'Source B' WHERE source_id = 'src-b'`)
 	seedDomain(t, db, "dom1", "D")
-	seedConcept(t, db, "con1", "dom1", "C")
+	seedEntry(t, db, "con1", "dom1", "C")
 	seedKU(t, db, "ku-a", "src-a", "con1")
 	seedKU(t, db, "ku-b", "src-b", "con1")
 	seedKP(t, db, "kp-a", "ku-a", "src-a", "content A")

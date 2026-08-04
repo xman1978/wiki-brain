@@ -21,22 +21,22 @@ func TestListCatalog_GroupsByDomain(t *testing.T) {
 	if _, err := db.Exec(`UPDATE domains SET description = ? WHERE domain_id = ?`, "甲的说明", "d1"); err != nil {
 		t.Fatal(err)
 	}
-	seedConcept(t, db, "c1", "d1", "概念甲")
-	seedConcept(t, db, "c2", "d2", "概念乙")
-	seedConcept(t, db, "c3", "d1", "概念丙")
+	seedEntry(t, db, "c1", "d1", "概念甲")
+	seedEntry(t, db, "c2", "d2", "概念乙")
+	seedEntry(t, db, "c3", "d1", "概念丙")
 
 	now := time.Now().UTC()
 	mustInsertPage(t, store, &Page{
-		PageID: "p-pub", PageType: PageTypeConcept, ConceptID: nullStr("c1"),
+		PageID: "p-pub", PageType: PageTypeConcept, EntryID: nullStr("c1"),
 		Title: "已发布页", Content: "body", Status: StatusPublished, Summary: "发布摘要",
 		CompiledAt: sqlNullTime(now),
 	})
 	mustInsertPage(t, store, &Page{
-		PageID: "p-draft", PageType: PageTypeConcept, ConceptID: nullStr("c2"),
+		PageID: "p-draft", PageType: PageTypeConcept, EntryID: nullStr("c2"),
 		Title: "草稿页", Content: "body", Status: StatusDraft, Summary: "",
 	})
 	mustInsertPage(t, store, &Page{
-		PageID: "p-arch", PageType: PageTypeConcept, ConceptID: nullStr("c1"),
+		PageID: "p-arch", PageType: PageTypeConcept, EntryID: nullStr("c1"),
 		Title: "归档页", Content: "body", Status: StatusArchived, Summary: "旧摘要",
 	})
 

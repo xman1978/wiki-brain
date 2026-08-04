@@ -193,13 +193,13 @@ func TestProcessTrace_FullPath_ConfidentNoHits_ProducesActivationGap(t *testing.
 	if len(pids) != 1 || pids[0] != "p1" {
 		t.Errorf("direct_point_ids = %v, want [p1]", payload["direct_point_ids"])
 	}
-	// insertTestKP leaves the KU's concept_id NULL, so the point is 100%
+	// insertTestKP leaves the KU's entry_id NULL, so the point is 100%
 	// unanchored — above the 0.7 threshold configured in setupService.
-	if payload["gap_level"] != "concept_gap" {
-		t.Errorf("gap_level = %v, want concept_gap", payload["gap_level"])
+	if payload["gap_level"] != "entry_gap" {
+		t.Errorf("gap_level = %v, want entry_gap", payload["gap_level"])
 	}
-	if ratio, ok := payload["null_concept_ratio"].(float64); !ok || ratio != 1.0 {
-		t.Errorf("null_concept_ratio = %v, want 1.0", payload["null_concept_ratio"])
+	if ratio, ok := payload["null_entry_ratio"].(float64); !ok || ratio != 1.0 {
+		t.Errorf("null_entry_ratio = %v, want 1.0", payload["null_entry_ratio"])
 	}
 
 	successEvents, _ := store.ListLearningEvents("activation_success", 0, 20)
@@ -213,8 +213,8 @@ func TestProcessTrace_FullPath_ConfidentNoHits_ProducesActivationGap(t *testing.
 func TestProcessTrace_FullPath_ConceptAnchored_ProducesLinkGap(t *testing.T) {
 	svc, store, db := setupService(t)
 	insertTestAnswer(t, db, "a-full-concept")
-	insertTestConcept(t, db, "c-anchored", sql.NullString{})
-	insertTestKPWithConcept(t, db, "p-anchored", "u-anchored", "c-anchored")
+	insertTestEntry(t, db, "c-anchored", sql.NullString{})
+	insertTestKPWithEntry(t, db, "p-anchored", "u-anchored", "c-anchored")
 
 	r := &answer.AnswerResult{
 		AnswerID:  "a-full-concept",
@@ -238,17 +238,17 @@ func TestProcessTrace_FullPath_ConceptAnchored_ProducesLinkGap(t *testing.T) {
 	if payload["gap_level"] != "link_gap" {
 		t.Errorf("gap_level = %v, want link_gap", payload["gap_level"])
 	}
-	if ratio, ok := payload["null_concept_ratio"].(float64); !ok || ratio != 0.0 {
-		t.Errorf("null_concept_ratio = %v, want 0.0", payload["null_concept_ratio"])
+	if ratio, ok := payload["null_entry_ratio"].(float64); !ok || ratio != 0.0 {
+		t.Errorf("null_entry_ratio = %v, want 0.0", payload["null_entry_ratio"])
 	}
 }
 
 func TestProcessTrace_FullPath_MergedConceptAnchor_CountsAsNull(t *testing.T) {
 	svc, store, db := setupService(t)
 	insertTestAnswer(t, db, "a-full-merged")
-	insertTestConcept(t, db, "c-target", sql.NullString{})
-	insertTestConcept(t, db, "c-merged", sql.NullString{String: "c-target", Valid: true})
-	insertTestKPWithConcept(t, db, "p-merged", "u-merged", "c-merged")
+	insertTestEntry(t, db, "c-target", sql.NullString{})
+	insertTestEntry(t, db, "c-merged", sql.NullString{String: "c-target", Valid: true})
+	insertTestKPWithEntry(t, db, "p-merged", "u-merged", "c-merged")
 
 	r := &answer.AnswerResult{
 		AnswerID:  "a-full-merged",
@@ -270,12 +270,12 @@ func TestProcessTrace_FullPath_MergedConceptAnchor_CountsAsNull(t *testing.T) {
 	}
 	payload := decodePayload(t, events[0].Payload)
 	// The KP's concept was merged into another one, so it no longer counts
-	// as a current anchor — same treatment as concept_id being NULL.
-	if payload["gap_level"] != "concept_gap" {
-		t.Errorf("gap_level = %v, want concept_gap (merged concept doesn't count as anchored)", payload["gap_level"])
+	// as a current anchor — same treatment as entry_id being NULL.
+	if payload["gap_level"] != "entry_gap" {
+		t.Errorf("gap_level = %v, want entry_gap (merged concept doesn't count as anchored)", payload["gap_level"])
 	}
-	if ratio, ok := payload["null_concept_ratio"].(float64); !ok || ratio != 1.0 {
-		t.Errorf("null_concept_ratio = %v, want 1.0", payload["null_concept_ratio"])
+	if ratio, ok := payload["null_entry_ratio"].(float64); !ok || ratio != 1.0 {
+		t.Errorf("null_entry_ratio = %v, want 1.0", payload["null_entry_ratio"])
 	}
 }
 

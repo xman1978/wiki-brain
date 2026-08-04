@@ -29,7 +29,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /wiki/topics", h.listTopicPages)
 	mux.HandleFunc("POST /wiki/topics", h.createTopic)
 	mux.HandleFunc("GET /wiki/topics/{id}/members", h.listTopicMembers)
-	mux.HandleFunc("GET /wiki/unassigned-concepts", h.listUnassignedConceptPages)
+	mux.HandleFunc("GET /wiki/unassigned-entries", h.listUnassignedEntryPages)
 	mux.HandleFunc("GET /wiki/pages/{id}", h.getPage)
 	mux.HandleFunc("GET /wiki/pages/{id}/revisions/{rev}", h.getRevision)
 
@@ -42,6 +42,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /wiki/drafts/{id}", h.getDraft)
 	mux.HandleFunc("PATCH /wiki/drafts/{id}", h.patchDraft)
 	mux.HandleFunc("DELETE /wiki/drafts/{id}", h.deleteDraft)
+
 }
 
 type relationResp struct {
@@ -125,17 +126,21 @@ func writeTopicError(w http.ResponseWriter, err error) {
 }
 
 // createTopic is POST /wiki/topics — docs/impl/v1/wiki.md 步骤 8
-// "人工指定成员手动创建主题页". Builds a draft shell + contains; the caller
-// then drives topic/analyze → topic/compile.
+// "人工手动指定主题" (2026-08-03 修订): the request gives a topic *scope*
+// (name/description[/domain]), not a member-page list. Builds a draft shell
+// + contains for already-published qualifying entries; the caller then
+// drives topic/analyze → topic/compile.
 func (h *Handler) createTopic(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		MemberPageIDs []string `json:"member_page_ids"`
+		TopicName        string `json:"topic_name"`
+		TopicDescription string `json:"topic_description"`
+		DomainID         string `json:"domain_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	cand, readiness, err := h.svc.CreateTopicManual(req.MemberPageIDs)
+	cand, readiness, err := h.svc.CreateTopicManual(req.TopicName, req.TopicDescription, req.DomainID)
 	if err != nil {
 		writeTopicError(w, err)
 		return
@@ -145,11 +150,13 @@ func (h *Handler) createTopic(w http.ResponseWriter, r *http.Request) {
 		title = page.Title
 	}
 	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"page_id":         cand.PageID,
-		"status":          StatusDraft,
-		"title":           title,
-		"member_page_ids": cand.MemberPageIDs,
-		"readiness":       readiness,
+		"page_id":           cand.PageID,
+		"status":            StatusDraft,
+		"title":             title,
+		"member_page_ids":   cand.MemberPageIDs,
+		"pending_concepts":  cand.PendingEntries,
+		"uncovered_entries": cand.UncoveredEntries,
+		"readiness":         readiness,
 	})
 }
 
@@ -232,13 +239,13 @@ func (h *Handler) analyze(w http.ResponseWriter, r *http.Request) {
 		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.ConceptID == "" {
-		foundation.WriteError(w, http.StatusBadRequest, "concept_id is required")
+	if req.EntryID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "entry_id is required")
 		return
 	}
-	if req.PageType == "" {
-		req.PageType = PageTypeConcept
-	}
+	// page_type left empty is fine — Service.Analyze derives it from the
+	// concept's kind (docs/impl/v1/wiki.md「概念页 / 事实页」); only an
+	// explicit, wrong value (e.g. "topic") is rejected there.
 
 	result, err := h.svc.Analyze(r.Context(), req)
 	if err != nil {
@@ -254,13 +261,13 @@ func (h *Handler) compile(w http.ResponseWriter, r *http.Request) {
 		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.ConceptID == "" {
-		foundation.WriteError(w, http.StatusBadRequest, "concept_id is required")
+	if req.EntryID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "entry_id is required")
 		return
 	}
-	if req.PageType == "" {
-		req.PageType = PageTypeConcept
-	}
+	// page_type left empty is fine — Service.Compile derives it from the
+	// concept's kind (docs/impl/v1/wiki.md「概念页 / 事实页」); only an
+	// explicit, wrong value (e.g. "topic") is rejected there.
 
 	page, err := h.svc.Compile(r.Context(), req)
 	if err != nil {
@@ -351,15 +358,15 @@ type pageListResp struct {
 	PageType    string  `json:"page_type"`
 	Title       string  `json:"title"`
 	Status      string  `json:"status"`
-	ConceptID   string  `json:"concept_id,omitempty"`
+	EntryID     string  `json:"entry_id,omitempty"`
 	CompiledAt  *string `json:"compiled_at,omitempty"`
 	PublishedAt *string `json:"published_at,omitempty"`
 }
 
 func toPageListResp(p Page) pageListResp {
 	r := pageListResp{PageID: p.PageID, PageType: p.PageType, Title: p.Title, Status: p.Status}
-	if p.ConceptID.Valid {
-		r.ConceptID = p.ConceptID.String
+	if p.EntryID.Valid {
+		r.EntryID = p.EntryID.String
 	}
 	if p.CompiledAt.Valid {
 		s := p.CompiledAt.Time.Format("2006-01-02T15:04:05Z07:00")
@@ -375,7 +382,7 @@ func toPageListResp(p Page) pageListResp {
 func (h *Handler) listPages(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	pageType := r.URL.Query().Get("page_type")
-	conceptID := r.URL.Query().Get("concept_id")
+	conceptID := r.URL.Query().Get("entry_id")
 	limit := queryInt(r, "limit", 50)
 
 	pages, err := h.svc.store.ListPages(status, pageType, conceptID, limit)
@@ -440,8 +447,8 @@ func (h *Handler) listTopicMembers(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) listUnassignedConceptPages(w http.ResponseWriter, r *http.Request) {
-	pages, err := h.svc.store.ListUnassignedConceptPages()
+func (h *Handler) listUnassignedEntryPages(w http.ResponseWriter, r *http.Request) {
+	pages, err := h.svc.store.ListUnassignedEntryPages()
 	if err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return

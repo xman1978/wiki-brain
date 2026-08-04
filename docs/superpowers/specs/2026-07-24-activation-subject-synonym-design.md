@@ -10,7 +10,7 @@
 2. **仅 subject 并集**：范围收窄，但同样制造"新主题 + 旧意图"的虚假组合，且不可信的召回增量恰恰集中在 subject 不同义的场景。
 3. **Subject 同义词归一化（本设计）**：不改变 observed_conditions 的"组内精确、组间 OR"不变式，只在比较 subject 前把同义措辞收敛到同一表达，intent/audience/constraint 仍逐字段精确匹配。方向可行，代价可控。
 
-关键发现：`preset/domains.json` 的每个 concept 已经带 `aliases` 字段（如 `stock_market` 的 `["证券市场", "二级市场"]`），但 `internal/foundation/preset.go` 的 `presetConcept` 目前只解析 `id/name/description`，`aliases` 完全没有被使用。这是一批已经存在、已经人工审核过的同义词，不需要额外撰写就能作为起步词表。
+关键发现：`preset/domains.json` 的每个 concept 已经带 `aliases` 字段（如 `stock_market` 的 `["证券市场", "二级市场"]`），但 `internal/foundation/preset.go` 的 `presetEntry` 目前只解析 `id/name/description`，`aliases` 完全没有被使用。这是一批已经存在、已经人工审核过的同义词，不需要额外撰写就能作为起步词表。
 
 同义词维护的成本必须和收益挂钩：enrichment（`AppendObservedCondition`，见 2026-07-22 spec）已经保证"一种新措辞慢路径成功一次后，第二次就能走快路径"，所以同义词表能省下的只是"新措辞首次即命中"这一次，以及"一条归一化规则对所有 KP 生效"（enrichment 是逐 link 学习）。为了让投入正比于收益，本设计要求同义词候选必须从真实发生的漏配（gap）中挖掘，而不是预先凭空编写。
 
@@ -75,7 +75,7 @@ CREATE INDEX idx_subject_synonyms_status ON subject_synonyms(status);
 ### preset 数据接入（`internal/foundation/preset.go`）
 
 ```go
-type presetConcept struct {
+type presetEntry struct {
     ID          string   `json:"id"`
     Name        string   `json:"name"`
     Aliases     []string `json:"aliases"`   // 新增字段
@@ -83,7 +83,7 @@ type presetConcept struct {
 }
 ```
 
-`LoadPresetData` 在原有 UPSERT domains/concepts 之后，对每个 concept 的每个 alias 额外执行：
+`LoadPresetData` 在原有 UPSERT domains/entries 之后，对每个 concept 的每个 alias 额外执行：
 
 ```text
 term      = text.Normalize(alias)
@@ -92,11 +92,11 @@ term == canonical → 跳过
 否则 INSERT INTO subject_synonyms (synonym_id, domain_id, term, canonical, source, status)
      VALUES (uuid, domain.ID, term, canonical, 'preset', 'active')
      ON CONFLICT ... DO UPDATE SET canonical = excluded.canonical
-     -- 与 concepts UPSERT 同一理由：重跑 preset 应刷新映射，
+     -- 与 entries UPSERT 同一理由：重跑 preset 应刷新映射，
      -- 但不覆盖人工确认产生的 gap_mined 行（WHERE source = 'preset'）
 ```
 
-启动时与 `domains`/`concepts` 的 UPSERT 在同一事务内执行，失败即整体回滚（复用现有 `LoadPresetData` 事务边界）。
+启动时与 `domains`/`entries` 的 UPSERT 在同一事务内执行，失败即整体回滚（复用现有 `LoadPresetData` 事务边界）。
 
 ## Match 算法调整
 
@@ -244,7 +244,7 @@ study:
 | 位置 | 动作 |
 |------|------|
 | `internal/foundation/db/migrations/033_subject_synonyms.sql` | **新增** 建表 |
-| `internal/foundation/preset.go` → `presetConcept` / `LoadPresetData` | **改**：解析 `aliases`，UPSERT `subject_synonyms` |
+| `internal/foundation/preset.go` → `presetEntry` / `LoadPresetData` | **改**：解析 `aliases`，UPSERT `subject_synonyms` |
 | `preset/domains.json` | 不改（aliases 字段已存在） |
 | `internal/activation/synonyms.go` | **新增** `SynonymResolver`、`Canonicalize` |
 | `internal/activation/matcher.go` → `Match` / `conditionGroupMatches` | **改**：subject 比较前经 `resolver.Canonicalize` |

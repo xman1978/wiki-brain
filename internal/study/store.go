@@ -670,11 +670,11 @@ func (s *Store) ListLinkCandidates() ([]LinkCandidateRow, error) {
 	rows, err := s.db.Query(`
 		SELECT lc.candidate_id, lc.question_terms, lc.point_id, lc.confident_count, lc.hit_count,
 			kp.content AS point_summary, ku.center AS unit_topic,
-			COALESCE(ku.concept_id, '') AS concept_id, COALESCE(c.name, '') AS concept_name
+			COALESCE(ku.entry_id, '') AS entry_id, COALESCE(c.name, '') AS entry_name
 		FROM link_candidates lc
 		JOIN knowledge_points kp ON lc.point_id = kp.point_id
 		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
-		LEFT JOIN concepts c ON ku.concept_id = c.concept_id`)
+		LEFT JOIN entries c ON ku.entry_id = c.entry_id`)
 	if err != nil {
 		return nil, fmt.Errorf("study store: list candidates: %w", err)
 	}
@@ -684,7 +684,7 @@ func (s *Store) ListLinkCandidates() ([]LinkCandidateRow, error) {
 	for rows.Next() {
 		var r LinkCandidateRow
 		if err := rows.Scan(&r.CandidateID, &r.QuestionTerms, &r.PointID, &r.ConfidentCount, &r.HitCount,
-			&r.PointSummary, &r.UnitTopic, &r.ConceptID, &r.ConceptName); err != nil {
+			&r.PointSummary, &r.UnitTopic, &r.EntryID, &r.ConceptName); err != nil {
 			return nil, fmt.Errorf("study store: scan candidate: %w", err)
 		}
 		results = append(results, r)
@@ -737,10 +737,10 @@ func (s *Store) HasKPNNeighbors(pointID string) (bool, error) {
 
 // Wiki candidates
 
-// QualifyingKPsByConceptFromCandidates excludes concepts with merged_into
+// QualifyingKPsByEntryFromCandidates excludes entries with merged_into
 // set — a merged concept is no longer a valid Wiki candidate entry point
 // (docs/impl/v1/concept-evolution.md 步骤 4). In practice a merge's own
-// transaction already repoints every KU off the merged concept_id, so this
+// transaction already repoints every KU off the merged entry_id, so this
 // join is a defensive backstop rather than the primary guarantee.
 //
 // The verified-ActivationLink requirement implements docs/design/wiki-compilation.md
@@ -752,14 +752,14 @@ func (s *Store) HasKPNNeighbors(pointID string) (bool, error) {
 // verified already answered. confident_count is still selected (MAX) for
 // QualifyingKP.ConfidentCount, used only for material-ordering downstream
 // (docs/impl/v1/wiki.md 步骤 3), not as a filter.
-func (s *Store) QualifyingKPsByConceptFromCandidates() (map[string][]QualifyingKP, error) {
+func (s *Store) QualifyingKPsByEntryFromCandidates() (map[string][]QualifyingKP, error) {
 	rows, err := s.db.Query(`
-		SELECT ku.concept_id, lc.point_id, MAX(lc.confident_count) AS max_confident, kp.content AS point_summary
+		SELECT ku.entry_id, lc.point_id, MAX(lc.confident_count) AS max_confident, kp.content AS point_summary
 		FROM link_candidates lc
 		JOIN knowledge_points kp ON lc.point_id = kp.point_id
 		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
-		JOIN concepts c ON ku.concept_id = c.concept_id
-		WHERE ku.concept_id IS NOT NULL AND ku.concept_id != '' AND c.merged_into IS NULL
+		JOIN entries c ON ku.entry_id = c.entry_id
+		WHERE ku.entry_id IS NOT NULL AND ku.entry_id != '' AND c.merged_into IS NULL
 			AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
 			AND EXISTS (SELECT 1 FROM activation_links al WHERE al.point_id = lc.point_id AND al.status = 'verified')
 		GROUP BY lc.point_id`)
@@ -784,8 +784,8 @@ func (s *Store) QualifyingKPsByConceptFromCandidates() (map[string][]QualifyingK
 	return result, rows.Err()
 }
 
-func (s *Store) ConceptInfo(conceptID string) (conceptName, domainID string, err error) {
-	err = s.db.QueryRow(`SELECT name, domain_id FROM concepts WHERE concept_id = ?`, conceptID).
+func (s *Store) EntryInfo(conceptID string) (conceptName, domainID string, err error) {
+	err = s.db.QueryRow(`SELECT name, domain_id FROM entries WHERE entry_id = ?`, conceptID).
 		Scan(&conceptName, &domainID)
 	if err != nil {
 		return "", "", fmt.Errorf("study store: concept info: %w", err)
@@ -1280,6 +1280,64 @@ func (s *Store) ComplexityTraces(windowDays int) ([]ComplexityTraceRow, error) {
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+// TopicClusterTraceRow is one trace's quadruple + question + timestamp,
+// consumed by flagTopicPageCandidates' quadruple clustering
+// (docs/impl/v1/wiki.md 步骤 8, 2026-08-03 修订 "四元组聚类"). Deliberately
+// does NOT filter to retrieval_quality='confident' or require non-empty
+// direct_point_ids — unlike ConfidentTraceQuadruples/ComplexityTraces, topic
+// candidate identification answers "有没有人反复问", not "答没答上、引用了
+// 哪些知识点", so it consumes every trace in the window.
+type TopicClusterTraceRow struct {
+	Subject    string
+	Intent     string
+	Audience   string
+	Constraint string
+	Question   string
+	CreatedAt  time.Time
+}
+
+// TopicClusterTraces implements docs/impl/v1/wiki.md 步骤 8 第 1 步.
+func (s *Store) TopicClusterTraces(windowDays int) ([]TopicClusterTraceRow, error) {
+	rows, err := s.db.Query(`
+		SELECT subject, intent, audience, constraint_text, question, created_at
+		FROM traces WHERE created_at >= datetime('now', ?)`,
+		fmt.Sprintf("-%d days", windowDays))
+	if err != nil {
+		return nil, fmt.Errorf("study store: topic cluster traces: %w", err)
+	}
+	defer rows.Close()
+
+	var out []TopicClusterTraceRow
+	for rows.Next() {
+		var r TopicClusterTraceRow
+		if err := rows.Scan(&r.Subject, &r.Intent, &r.Audience, &r.Constraint, &r.Question, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("study store: scan topic cluster trace: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// HasNonRejectedTopicCandidate implements docs/impl/v1/wiki.md 步骤 8's
+// "去重": a topic_page_candidate learning_result whose reason carries this
+// quadruple's fingerprint and isn't status='rejected' means this quadruple
+// already has a live candidate (pending_confirm or applied) — don't produce
+// another one for the same real-use signal.
+func (s *Store) HasNonRejectedTopicCandidate(fingerprint string) (bool, error) {
+	var exists int
+	err := s.db.QueryRow(`SELECT 1 FROM learning_results
+		WHERE action = 'topic_page_candidate' AND status != 'rejected'
+			AND reason LIKE ? LIMIT 1`,
+		"[topic_fp:"+fingerprint+"]%").Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("study store: has non-rejected topic candidate: %w", err)
+	}
+	return true, nil
 }
 
 type WikiDraftReflowRow struct {

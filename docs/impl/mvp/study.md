@@ -92,8 +92,8 @@ CREATE TABLE study_reports (
       "point_id":           "kp_xxx",
       "point_summary":      "KP 摘要文本",
       "unit_topic":         "所属 KU 主题",
-      "concept_id":         "concept_xxx",
-      "concept_name":       "概念名称",
+      "entry_id":         "concept_xxx",
+      "entry_name":       "概念名称",
       "stats": {
         "confident_count":      12,
         "hit_count":            15,
@@ -110,8 +110,8 @@ CREATE TABLE study_reports (
 
   "wiki_candidates": [
     {
-      "concept_id":          "concept_xxx",
-      "concept_name":        "概念名称",
+      "entry_id":          "concept_xxx",
+      "entry_name":        "概念名称",
       "domain_id":           "domain_xxx",
       "qualifying_point_ids": ["kp_1", "kp_2", "kp_3", "kp_4"],
       "qualifying_points": [
@@ -279,7 +279,7 @@ hit_count 首次达到 study.gap_hit_threshold：
   short_path_rate / has_kpn_neighbors，JOIN knowledge_points / knowledge_units 补充展示信息，
   按 recommendation 分组排序（strong 优先）；
 计算 wiki_candidates：
-  按 concept_id 分组 qualifying KP，计算 kpn_connection_count / days_active；
+  按 entry_id 分组 qualifying KP，计算 kpn_connection_count / days_active；
 计算 knowledge_gaps：
   取 hit_count 最高的前 20 条；
 组装为报告 JSON，INSERT INTO study_reports；
@@ -320,7 +320,7 @@ GET    /study/reports/latest
 
 GET    /study/candidates
   查询参数：recommendation（strong / candidate）、limit（默认 50）
-  响应：link_candidates 列表，附 point_summary / unit_topic / concept_name
+  响应：link_candidates 列表，附 point_summary / unit_topic / entry_name
 
 GET    /study/gaps
   查询参数：min_hit_count、limit（默认 50）
@@ -334,7 +334,7 @@ GET    /study/gaps
 Trace：依赖 question_kp_cooccurrence、learning_events、traces 表（只读）
 Unit：JOIN knowledge_points / knowledge_units 补充候选展示信息（只读）
        JOIN knowledge_point_relations 计算 has_kpn_neighbors 和 kpn_connection_count（只读）
-Foundation：JOIN concepts、domains 补充 Wiki 候选归属信息（只读）
+Foundation：JOIN entries、domains 补充 Wiki 候选归属信息（只读）
 ```
 
 ## 完成标准

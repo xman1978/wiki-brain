@@ -4,5 +4,5 @@
 -- new-concept path is restorable: reverting an assign-to-existing-concept
 -- confirm would touch a concept this candidate didn't create).
 
-ALTER TABLE concept_candidates ADD COLUMN resolved_concept_id TEXT REFERENCES concepts(concept_id);
-ALTER TABLE concept_candidates ADD COLUMN created_new_concept INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE entry_candidates ADD COLUMN resolved_entry_id TEXT REFERENCES entries(entry_id);
+ALTER TABLE entry_candidates ADD COLUMN created_new_entry INTEGER NOT NULL DEFAULT 0;

@@ -46,6 +46,55 @@ func TestMarshalChatRequest_OllamaThink(t *testing.T) {
 	}
 }
 
+func TestMarshalChatRequest_DeepSeekDoubaoThinking(t *testing.T) {
+	msgs := []chatMessage{{Role: "user", Content: "hi"}}
+	for _, platform := range []Platform{PlatformDeepSeek, PlatformDoubao} {
+		t.Run(string(platform)+"_on", func(t *testing.T) {
+			mc := ModelParams{Model: "m", EnableThink: true}
+			body, err := marshalChatRequest(platform, mc, msgs, false, false, "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var m map[string]any
+			if err := json.Unmarshal(body, &m); err != nil {
+				t.Fatal(err)
+			}
+			th, ok := m["thinking"].(map[string]any)
+			if !ok || th["type"] != "enabled" {
+				t.Fatalf("thinking = %v", m["thinking"])
+			}
+		})
+		t.Run(string(platform)+"_off", func(t *testing.T) {
+			mc := ModelParams{Model: "m", EnableThink: false}
+			body, err := marshalChatRequest(platform, mc, msgs, false, false, "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var m map[string]any
+			if err := json.Unmarshal(body, &m); err != nil {
+				t.Fatal(err)
+			}
+			th, ok := m["thinking"].(map[string]any)
+			if !ok || th["type"] != "disabled" {
+				t.Fatalf("thinking = %v, want type=disabled", m["thinking"])
+			}
+		})
+	}
+}
+
+func TestMarshalChatRequest_ZhipuThinkingOffOmits(t *testing.T) {
+	mc := ModelParams{Model: "glm", EnableThink: false}
+	body, err := marshalChatRequest(PlatformZhipu, mc, []chatMessage{{Role: "user", Content: "hi"}}, false, false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	json.Unmarshal(body, &m)
+	if _, ok := m["thinking"]; ok {
+		t.Fatal("zhipu should omit thinking when false")
+	}
+}
+
 func TestMarshalChatRequest_ResponseFormat(t *testing.T) {
 	mc := ModelParams{Model: "m", Temperature: 0}
 	msgs := []chatMessage{{Role: "user", Content: "hi"}}

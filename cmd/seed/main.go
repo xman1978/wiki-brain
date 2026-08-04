@@ -65,15 +65,15 @@ func main() {
 	}
 	llmClient := llmRouter
 
-	// Load preset domains/concepts
+	// Load preset domains/entries
 	presetPath, _ := filepath.Abs("preset/domains.json")
 	if err := foundation.LoadPresetData(db, presetPath); err != nil {
 		log.Fatalf("load preset data: %v", err)
 	}
 	var domainCount, conceptCount int
 	db.QueryRow("SELECT COUNT(*) FROM domains").Scan(&domainCount)
-	db.QueryRow("SELECT COUNT(*) FROM concepts").Scan(&conceptCount)
-	fmt.Printf("Preset loaded: %d domains, %d concepts\n", domainCount, conceptCount)
+	db.QueryRow("SELECT COUNT(*) FROM entries").Scan(&conceptCount)
+	fmt.Printf("Preset loaded: %d domains, %d entries\n", domainCount, conceptCount)
 
 	sourceStore := source.NewStore(db)
 	unitStore := unit.NewStore(db)
@@ -322,7 +322,7 @@ func printStats(db *sql.DB) {
 	db.QueryRow("SELECT COUNT(*) FROM sources WHERE domain_id IS NOT NULL").Scan(&domainMatched)
 
 	var conceptMatched int
-	db.QueryRow("SELECT COUNT(*) FROM knowledge_units WHERE concept_id IS NOT NULL").Scan(&conceptMatched)
+	db.QueryRow("SELECT COUNT(*) FROM knowledge_units WHERE entry_id IS NOT NULL").Scan(&conceptMatched)
 
 	fmt.Printf("Sources:    %d (domain matched: %d)\n", srcCount, domainMatched)
 	fmt.Printf("Outlines:   %d\n", olCount)

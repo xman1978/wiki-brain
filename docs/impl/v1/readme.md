@@ -14,7 +14,7 @@ V1 的目标是让系统**基本具备学习转化能力**：
 
 一句话概括：MVP 验证「信号能积累」，V1 实现「积累能转化、转化能生效」。
 
-设计依据：`docs/design/study.md`（检索事件驱动学习）、`docs/design/precompile.md`（ActivationLink）、`docs/design/retrieval.md`（分层检索）、`docs/design/evidence-mining.md`（片段级证据挖掘）、`docs/design/lifecycle.md`（记忆状态，V1 完整实现——3 状态模型即完整设计，非子集）、`docs/design/wiki-compilation.md`（Wiki 编译，V1 实现初版）、`docs/design/concept-evolution.md`（概念演化，V1 实现新增与合并）。
+设计依据：`docs/design/study.md`（检索事件驱动学习）、`docs/design/precompile.md`（ActivationLink）、`docs/design/retrieval.md`（分层检索）、`docs/design/evidence-mining.md`（片段级证据挖掘）、`docs/design/lifecycle.md`（记忆状态，V1 完整实现——3 状态模型即完整设计，非子集）、`docs/design/wiki.md`（Wiki 编译，V1 实现初版）、`docs/design/concept-evolution.md`（概念演化，V1 实现新增与合并）。
 
 ---
 
@@ -168,15 +168,15 @@ candidate / needs_verification / conflicted / historical / retracted 均已从�
 
 ### 8. Wiki 编译初版
 
-依据 `wiki-compilation.md`。V1 只做两种页面类型的最小闭环：
+依据 `wiki.md`。V1 只做两种页面类型的最小闭环：
 
-- **主题页 / 概念页**：Study 识别的 Wiki 候选（同 Concept 下多个高置信 KP + KPN 连接，沿用 MVP 候选逻辑）经人工在 Page 上确认后，触发 LLM 编译生成页面；
+- **概念页**：Study 识别的 Wiki 候选（同 Concept 下多个高置信 KP + KPN 连接，沿用 MVP 候选逻辑）经人工在 Page 上确认后，触发 LLM 编译生成页面；主题页候选机制见下方「两层架构（扩展）」——不是同一套逻辑；
 - 页面要素（防固化最小集）：稳定结论、证据来源（回链 KP / KU / source_ref）、待验证点、最近更新时间、依赖的核心 KU 列表；
 - **重编译**：底层 KU/KP 状态变化或新的 wiki_update_candidate 信号时，Study 标记页面「待重编译」，人工确认后执行；每次编译记录触发来源，可追溯到 Learning Event；
 - **检索接入**：已发布 Wiki 页面建立独立 Bleve 索引，作为快路径的直接命中层——同主题问题可直接引用 Wiki 结论并附证据回链（`study.md` 2.5 节所述正向反馈）。
 - **两层架构（扩展）**：概念页为一阶编译（KP → 页面），主题页为二阶编译（已发布概念页 → 页面）；页面之间由程序从 KPN 派生 `related` / `contradicts` 关系，`contains` 由二阶编译写入，三者构成知识架构。**主题页在检索里的角色是召回骨架而非直答单元**——命中后展开成员概念页进候选，并把成员知识点注入慢路径 Rerank、跳过 Outline 召回（零额外 LLM 调用，这是复杂问题在 V1 唯一的实际收益）。写作出口是页面派生的草稿（`wiki_drafts`，主题页默认组装成员正文 + 只读证据清单），页面正文仍只由编译产生，无回写通道；草稿回流导入要打 `origin='wiki_draft'` 以阻断自体循环。详见 `wiki.md` 步骤 7-10。
 
-方法页 / 经验页 / 问题页 / 决策页、认知视角差异化页面，推迟到 V3。复杂问题的拆解与子结论聚合同样属 V3（深想 / Working Model）——V1 只准备好主题页结构，并记录 `topic_decompose_signal` 供后续使用。
+方法页 / 经验页 / 问题页 / 决策页已从设计中删除（这四种类型此前只是名义上的分类，从未被接入过具体的编译流程，详见 `docs/design/wiki.md`「Wiki 页面类型」一节），不是推迟到 V3。认知视角差异化页面推迟到 V3。复杂问题的拆解与子结论聚合同样属 V3（深想 / Working Model）——V1 只准备好主题页结构，并记录 `topic_decompose_signal` 供后续使用。
 
 ### 9. 用户反馈通道
 
@@ -293,7 +293,6 @@ conflict 槽位处理与条件化结论（基于 contradicts 关系的正反证�
   （V1 概念演化只做新增 / 合并，合并信号用离线共同采用统计，
   见 concept-evolution.md「与设计文档的 V1 适配」）
 Domain 层面的新增与合并（门槛与影响面更大，机制同概念演化）
-Wiki 方法 / 经验 / 问题 / 决策页
 Agent 接入层（service / agent 架构对外开放）
 ```
 

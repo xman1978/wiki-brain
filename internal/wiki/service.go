@@ -37,12 +37,18 @@ type Service struct {
 	store         *Store
 	llmClient     llm.LLMClient
 	wikiIndex     bleve.Index
+	pointsIndex   bleve.Index
 	cfg           config.WikiConfig
 	activationSvc *activation.Service
+	// topicSearchMinScore is retrieval.wiki_min_score (docs/impl/v1/wiki.md
+	// 步骤 8 第 3 步 "候选范围检索": score >= retrieval.wiki_min_score) —
+	// injected rather than duplicated into wiki.Config since it's owned by
+	// retrieval's config section and reused verbatim here.
+	topicSearchMinScore float64
 }
 
-func NewService(store *Store, llmClient llm.LLMClient, wikiIndex bleve.Index, cfg config.WikiConfig) *Service {
-	return &Service{store: store, llmClient: llmClient, wikiIndex: wikiIndex, cfg: cfg}
+func NewService(store *Store, llmClient llm.LLMClient, wikiIndex, pointsIndex bleve.Index, cfg config.WikiConfig, topicSearchMinScore float64) *Service {
+	return &Service{store: store, llmClient: llmClient, wikiIndex: wikiIndex, pointsIndex: pointsIndex, cfg: cfg, topicSearchMinScore: topicSearchMinScore}
 }
 
 // SetActivationSvc wires the (optional) dependency Compile needs to resolve
@@ -62,29 +68,42 @@ func (s *Service) Analyze(ctx context.Context, req AnalyzeRequest) (*AnalyzeResu
 	// page_type=topic is exclusively a second-tier compile output now
 	// (docs/impl/v1/wiki.md 步骤 8, "数据结构" 两层架构扩展): topic pages are
 	// produced only by POST /wiki/pages/:id/topic/analyze|compile, which
-	// takes already-published concept pages as material, not KPs. This
-	// KP-based one-tier path only ever produces concept pages.
-	if req.PageType != PageTypeConcept {
+	// takes already-published word pages as material, not KPs. This
+	// KP-based one-tier path only ever produces concept or fact pages
+	// (docs/impl/v1/wiki.md「概念页 / 事实页」，2026-08-03 修订).
+	if req.PageType != "" && req.PageType != PageTypeConcept && req.PageType != PageTypeFact {
 		return nil, fmt.Errorf("wiki: invalid page_type %q (topic pages are compiled via POST /wiki/pages/:id/topic/analyze|compile)", req.PageType)
 	}
 
-	in, err := s.gatherAnalyzeInputs(req.ConceptID)
+	in, err := s.gatherAnalyzeInputs(req.EntryID)
 	if err != nil {
 		return nil, err
 	}
+	// page_type is derived from the target entries row's kind, not freely
+	// chosen by the caller (docs/impl/v1/wiki.md「数据结构」page_type 语义).
+	// Callers that don't know the kind ahead of time (e.g. the manual-compile
+	// UI picking a concept off a catalog card) can just omit page_type and
+	// let it be derived; a caller that does supply one is still held to it
+	// matching, as defense against a stale/wrong value.
+	want := pageTypeForKind(in.conceptKind)
+	if req.PageType == "" {
+		req.PageType = want
+	} else if req.PageType != want {
+		return nil, fmt.Errorf("wiki: page_type %q does not match concept %s's kind (expected %q)", req.PageType, req.EntryID, want)
+	}
 	readiness := s.computeReadiness(in)
 
-	claims, tensions, err := s.analyzeClaimsWithInputs(ctx, req.ConceptID, in)
+	claims, tensions, err := s.analyzeClaimsWithInputs(ctx, req.EntryID, in)
 	if err != nil {
 		return nil, err
 	}
 	return &AnalyzeResult{
-		ConceptID:  req.ConceptID,
-		PageType:   req.PageType,
-		ResultID:   req.ResultID,
-		Claims:     claims,
-		Tensions:   tensions,
-		Readiness:  readiness,
+		EntryID:   req.EntryID,
+		PageType:  req.PageType,
+		ResultID:  req.ResultID,
+		Claims:    claims,
+		Tensions:  tensions,
+		Readiness: readiness,
 	}, nil
 }
 
@@ -128,20 +147,32 @@ func (s *Service) computeReadiness(in *analyzeInputs) *Readiness {
 	cohesion := graph.LargestShare(partition)
 
 	return &Readiness{
-		QualifyingKPCount:           len(in.qualifying),
-		RelatedConnectionCount:      related,
-		ContradictsConnectionCount:  contradicts,
-		DaysActive:                  daysActive,
-		DaysActiveMin:               s.cfg.QualifyingMinDaysActive,
-		Cohesion:                    cohesion,
-		CohesionMin:                 s.cfg.ConceptCohesionMin,
+		QualifyingKPCount:          len(in.qualifying),
+		RelatedConnectionCount:     related,
+		ContradictsConnectionCount: contradicts,
+		DaysActive:                 daysActive,
+		DaysActiveMin:              s.cfg.QualifyingMinDaysActive,
+		Cohesion:                   cohesion,
+		CohesionMin:                s.cfg.EntryCohesionMin,
 	}
 }
 
 // Compile implements docs/impl/v1/wiki.md 步骤 2-3: POST /wiki/compile.
 func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error) {
-	if req.PageType != PageTypeConcept {
+	if req.PageType != "" && req.PageType != PageTypeConcept && req.PageType != PageTypeFact {
 		return nil, fmt.Errorf("wiki: invalid page_type %q (topic pages are compiled via POST /wiki/pages/:id/topic/analyze|compile)", req.PageType)
+	}
+	_, _, _, conceptKind, err := s.store.GetEntryInfo(req.EntryID)
+	if err != nil {
+		return nil, fmt.Errorf("wiki: get concept info: %w", err)
+	}
+	// See Analyze's identical comment: page_type is derived when omitted,
+	// validated when supplied.
+	want := pageTypeForKind(conceptKind)
+	if req.PageType == "" {
+		req.PageType = want
+	} else if req.PageType != want {
+		return nil, fmt.Errorf("wiki: page_type %q does not match concept %s's kind (expected %q)", req.PageType, req.EntryID, want)
 	}
 
 	if req.ResultID != "" {
@@ -151,10 +182,10 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 			}
 		}
 	} else {
-		slog.Info("wiki: compile triggered without result_id (manual trigger, docs/impl/v1/wiki.md 步骤 2)", "concept_id", req.ConceptID)
+		slog.Info("wiki: compile triggered without result_id (manual trigger, docs/impl/v1/wiki.md 步骤 2)", "entry_id", req.EntryID)
 	}
 
-	if existing, err := s.store.GetActivePageByConceptID(req.ConceptID); err != nil {
+	if existing, err := s.store.GetActivePageByEntryID(req.EntryID); err != nil {
 		return nil, fmt.Errorf("wiki: check existing page: %w", err)
 	} else if existing != nil {
 		return nil, ErrPageAlreadyExists
@@ -167,13 +198,13 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 		// path) — run it internally so generation is still constrained to an
 		// analysis result, not raw material access.
 		var err error
-		claims, tensions, err = s.analyzeClaims(ctx, req.ConceptID)
+		claims, tensions, err = s.analyzeClaims(ctx, req.EntryID)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	compiled, err := s.compileContent(ctx, req.ConceptID, req.PageType, claims, tensions)
+	compiled, err := s.compileContent(ctx, req.EntryID, req.PageType, claims, tensions)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +237,7 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 		PromptVersion:      "v1",
 		ModelName:          "reasoning",
 	}
-	page.ConceptID = nullableString(req.ConceptID)
+	page.EntryID = nullableString(req.EntryID)
 
 	if err := s.store.InsertPage(page); err != nil {
 		return nil, err
@@ -215,10 +246,10 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 	if err := s.store.InsertRevision(rev); err != nil {
 		slog.Error("wiki: insert initial revision failed", "page_id", page.PageID, "error", err)
 	} else {
-		s.verifyClaims(ctx, page.PageID, rev.RevisionID, req.ConceptID, claims)
+		s.verifyClaims(ctx, page.PageID, rev.RevisionID, req.EntryID, claims)
 	}
 
-	slog.Info("wiki: compiled draft page", "page_id", page.PageID, "concept_id", req.ConceptID,
+	slog.Info("wiki: compiled draft page", "page_id", page.PageID, "entry_id", req.EntryID,
 		"source_point_ids", len(compiled.sourcePointIDs))
 	return s.store.GetPage(page.PageID)
 }
@@ -242,8 +273,8 @@ func (s *Service) Recompile(ctx context.Context, pageID, reason string, compiled
 	}
 
 	conceptID := ""
-	if page.ConceptID.Valid {
-		conceptID = page.ConceptID.String
+	if page.EntryID.Valid {
+		conceptID = page.EntryID.String
 	}
 
 	// Recompile has no exposed analyze-preview step (docs/impl/v1/wiki.md
@@ -301,12 +332,39 @@ type compiledContent struct {
 	aspectsJSON        string
 }
 
+// entryKindLabel returns the Chinese page-kind label injected as
+// {{entry_kind_label}} in wiki_analyze / wiki_compile
+// (docs/impl/v1/wiki.md 步骤 3): 概念 or 事实. Unknown/empty kind defaults to
+// 概念, matching ValidateEntryKind / pageTypeForKind.
+func entryKindLabel(kind string) string {
+	if kind == "fact" {
+		return "事实"
+	}
+	return "概念"
+}
+
+// conceptKindHint renders the analyze/compile prompts' {{entry_kind_hint}}
+// var from the concept's kind (docs/impl/v1/wiki.md 步骤 3 entry_kind_hint,
+// docs/impl/v1/kpn.md 步骤 3 "类型标注"): a wording nudge only — it does not
+// change page_type, the required section structure, or any qualifying/ready
+// gate. Unknown/empty kind falls back to the concept-page hint, same as
+// entry.ValidateEntryKind's own empty-defaults-to-concept behavior.
+func conceptKindHint(kind string) string {
+	switch kind {
+	case "fact":
+		return "这是一个事实页，围绕这个具体、可唯一指认的对象组织论断，claim 应回答'这是什么、当前状态如何、和哪些概念或其他事实存在关联'，不要泛化成脱离这个具体对象的通用规律。"
+	default:
+		return "这是一个概念页，围绕通用规律/原理/规则组织论断，claim 应回答'这个概念的定义、边界、内部逻辑是什么'，不要陷入某一个具体实现的细节。"
+	}
+}
+
 // analyzeInputs bundles 阶段 A/B's material-gathering output for the
 // analysis stage (docs/impl/v1/wiki-generation.md 3.1): qualifying KPs
 // grouped by aspect.go's clustering instead of a flat list.
 type analyzeInputs struct {
 	conceptName    string
 	conceptDesc    string
+	conceptKind    string
 	domainName     string
 	qualifying     []QualifyingPoint
 	aspects        []Aspect          // after budget truncation (whole aspects, not individual KPs)
@@ -322,13 +380,13 @@ type analyzeInputs struct {
 // so whatever survives still forms complete aspects (docs/impl/v1/
 // wiki-generation.md 3.1).
 func (s *Service) gatherAnalyzeInputs(conceptID string) (*analyzeInputs, error) {
-	conceptName, conceptDesc, domainID, err := s.store.GetConceptInfo(conceptID)
+	conceptName, conceptDesc, domainID, conceptKind, err := s.store.GetEntryInfo(conceptID)
 	if err != nil {
 		return nil, fmt.Errorf("wiki: get concept info: %w", err)
 	}
 	domainName, err := s.store.GetDomainName(domainID)
 	if err != nil {
-		slog.Warn("wiki: get domain name failed, continuing without it", "concept_id", conceptID, "error", err)
+		slog.Warn("wiki: get domain name failed, continuing without it", "entry_id", conceptID, "error", err)
 	}
 
 	qualifying, err := s.store.ListQualifyingPoints(conceptID)
@@ -370,16 +428,17 @@ func (s *Service) gatherAnalyzeInputs(conceptID string) (*analyzeInputs, error) 
 	aspectsText := s.renderAspectsText(kept, byID, aspectsMax)
 	contradictionsText, err := s.renderContradictions(kept, whitelist)
 	if err != nil {
-		slog.Warn("wiki: render contradictions failed, continuing without them", "concept_id", conceptID, "error", err)
+		slog.Warn("wiki: render contradictions failed, continuing without them", "entry_id", conceptID, "error", err)
 	}
 	gapsText, err := s.matchingGaps(conceptName, qualifying)
 	if err != nil {
-		slog.Warn("wiki: gather gaps failed, continuing without them", "concept_id", conceptID, "error", err)
+		slog.Warn("wiki: gather gaps failed, continuing without them", "entry_id", conceptID, "error", err)
 	}
 
 	return &analyzeInputs{
 		conceptName:    conceptName,
 		conceptDesc:    conceptDesc,
+		conceptKind:    conceptKind,
 		domainName:     domainName,
 		qualifying:     qualifying,
 		aspects:        kept,
@@ -504,12 +563,14 @@ func (s *Service) analyzeClaims(ctx context.Context, conceptID string) ([]Claim,
 // points twice.
 func (s *Service) analyzeClaimsWithInputs(ctx context.Context, conceptID string, in *analyzeInputs) ([]Claim, []Tension, error) {
 	vars := map[string]string{
-		"concept_name":        in.conceptName,
-		"concept_description": in.conceptDesc,
-		"domain_name":         in.domainName,
-		"aspects":             in.aspectsText,
-		"contradictions":      in.contradictions,
-		"gaps":                in.gapsText,
+		"entry_name":        in.conceptName,
+		"entry_description": in.conceptDesc,
+		"domain_name":       in.domainName,
+		"aspects":           in.aspectsText,
+		"contradictions":    in.contradictions,
+		"gaps":              in.gapsText,
+		"entry_kind_label":  entryKindLabel(in.conceptKind),
+		"entry_kind_hint":   conceptKindHint(in.conceptKind),
 	}
 
 	var lastErr error
@@ -517,7 +578,7 @@ func (s *Service) analyzeClaimsWithInputs(ctx context.Context, conceptID string,
 		raw, err := s.llmClient.CompleteJSON(ctx, "wiki_analyze.md", vars, "reasoning")
 		if err != nil {
 			lastErr = fmt.Errorf("llm call: %w", err)
-			slog.Warn("wiki: analyze llm call failed", "attempt", attempt, "concept_id", conceptID, "error", err)
+			slog.Warn("wiki: analyze llm call failed", "attempt", attempt, "entry_id", conceptID, "error", err)
 			continue
 		}
 
@@ -527,7 +588,7 @@ func (s *Service) analyzeClaimsWithInputs(ctx context.Context, conceptID string,
 		}
 		if err := json.Unmarshal(raw, &output); err != nil {
 			lastErr = fmt.Errorf("parse: %w", err)
-			slog.Warn("wiki: analyze parse failed", "attempt", attempt, "concept_id", conceptID, "error", err)
+			slog.Warn("wiki: analyze parse failed", "attempt", attempt, "entry_id", conceptID, "error", err)
 			continue
 		}
 
@@ -535,7 +596,7 @@ func (s *Service) analyzeClaimsWithInputs(ctx context.Context, conceptID string,
 		tensions := filterTensions(output.Tensions, in.whitelist, conceptID)
 		if len(claims) == 0 {
 			lastErr = fmt.Errorf("wiki: analysis produced no usable claims")
-			slog.Warn("wiki: analyze produced no usable claims", "attempt", attempt, "concept_id", conceptID)
+			slog.Warn("wiki: analyze produced no usable claims", "attempt", attempt, "entry_id", conceptID)
 			continue
 		}
 
@@ -684,7 +745,7 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 		byID[p.PointID] = p
 	}
 
-	conceptName, conceptDesc, _, err := s.store.GetConceptInfo(conceptID)
+	conceptName, conceptDesc, _, conceptKind, err := s.store.GetEntryInfo(conceptID)
 	if err != nil {
 		return nil, fmt.Errorf("wiki: get concept info: %w", err)
 	}
@@ -729,15 +790,17 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 
 	gapsText, err := s.matchingGaps(conceptName, qualifying)
 	if err != nil {
-		slog.Warn("wiki: gather gaps failed, continuing without them", "concept_id", conceptID, "error", err)
+		slog.Warn("wiki: gather gaps failed, continuing without them", "entry_id", conceptID, "error", err)
 	}
 
 	vars := map[string]string{
-		"concept_name":        conceptName,
-		"concept_description": conceptDesc,
-		"claims_by_aspect":    claimsByAspectText,
-		"tensions":            tensionsJSON,
-		"gaps":                gapsText,
+		"entry_name":        conceptName,
+		"entry_description": conceptDesc,
+		"claims_by_aspect":  claimsByAspectText,
+		"tensions":          tensionsJSON,
+		"gaps":              gapsText,
+		"entry_kind_label":  entryKindLabel(conceptKind),
+		"entry_kind_hint":   conceptKindHint(conceptKind),
 	}
 
 	triggerMax := s.cfg.TriggerQuestionsMax
@@ -750,9 +813,9 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 	// 修订): both are retrieval metadata backed by data the system already
 	// has verified, not knowledge expression — best-effort, failure just
 	// means the page stores an empty list for that field.
-	aliases, err := s.store.ConceptAliases(conceptName)
+	aliases, err := s.store.EntryAliases(conceptName)
 	if err != nil {
-		slog.Warn("wiki: fetch concept aliases failed, storing empty", "concept_id", conceptID, "error", err)
+		slog.Warn("wiki: fetch concept aliases failed, storing empty", "entry_id", conceptID, "error", err)
 	}
 
 	var lastErr error
@@ -760,42 +823,42 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 		content, err := s.llmClient.Complete(ctx, "wiki_compile.md", vars, "reasoning")
 		if err != nil {
 			lastErr = fmt.Errorf("llm call: %w", err)
-			slog.Warn("wiki: compile llm call failed", "attempt", attempt, "concept_id", conceptID, "error", err)
+			slog.Warn("wiki: compile llm call failed", "attempt", attempt, "entry_id", conceptID, "error", err)
 			continue
 		}
 
 		filteredContent, citedInContent, stripped := filterContentTags(content, whitelist)
 		if len(stripped) > 0 {
-			slog.Warn("wiki: stripped out-of-whitelist point_id tags from content", "concept_id", conceptID, "ids", stripped)
+			slog.Warn("wiki: stripped out-of-whitelist point_id tags from content", "entry_id", conceptID, "ids", stripped)
 		}
 
 		if !hasRequiredSections(filteredContent) {
 			lastErr = fmt.Errorf("wiki: compiled content missing required sections")
-			slog.Warn("wiki: compile missing required sections", "attempt", attempt, "concept_id", conceptID)
+			slog.Warn("wiki: compile missing required sections", "attempt", attempt, "entry_id", conceptID)
 			continue
 		}
 		if len(citedInContent) == 0 {
 			lastErr = fmt.Errorf("wiki: compiled content has no whitelisted citations")
-			slog.Warn("wiki: compile produced no usable citations", "attempt", attempt, "concept_id", conceptID)
+			slog.Warn("wiki: compile produced no usable citations", "attempt", attempt, "entry_id", conceptID)
 			continue
 		}
 
 		sourceUnitIDs := sourceUnitsForPoints(citedInContent, qualifying)
 		sourceLinkIDs, err := s.store.VerifiedLinkIDsForPoints(citedInContent)
 		if err != nil {
-			slog.Warn("wiki: lookup verified link ids for cited points failed", "concept_id", conceptID, "error", err)
+			slog.Warn("wiki: lookup verified link ids for cited points failed", "entry_id", conceptID, "error", err)
 		}
 		observedConditions, err := s.store.VerifiedLinksObservedConditions(citedInContent)
 		if err != nil {
-			slog.Warn("wiki: lookup observed conditions for cited points failed", "concept_id", conceptID, "error", err)
+			slog.Warn("wiki: lookup observed conditions for cited points failed", "entry_id", conceptID, "error", err)
 		}
 		triggerQuestions, err := s.store.ConfidentQuestionsForPoints(citedInContent, triggerMax)
 		if err != nil {
-			slog.Warn("wiki: fetch confident questions failed, storing empty", "concept_id", conceptID, "error", err)
+			slog.Warn("wiki: fetch confident questions failed, storing empty", "entry_id", conceptID, "error", err)
 		}
 		uncoveredPoints, err := s.store.ListUncoveredPoints(conceptID)
 		if err != nil {
-			slog.Warn("wiki: list uncovered points failed, storing empty", "concept_id", conceptID, "error", err)
+			slog.Warn("wiki: list uncovered points failed, storing empty", "entry_id", conceptID, "error", err)
 		}
 
 		aspectQuestionsMax := s.cfg.AspectQuestionsMax
@@ -817,13 +880,13 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 		}
 		aspectsJSON, err := json.Marshal(pageAspects)
 		if err != nil {
-			slog.Warn("wiki: marshal page aspects failed, storing empty", "concept_id", conceptID, "error", err)
+			slog.Warn("wiki: marshal page aspects failed, storing empty", "entry_id", conceptID, "error", err)
 			aspectsJSON = []byte("[]")
 		}
 
 		if len(aliases) == 0 || len(triggerQuestions) == 0 {
 			slog.Info("wiki: no programmatic aliases/trigger_questions available, storing empty",
-				"concept_id", conceptID, "aliases", len(aliases), "trigger_questions", len(triggerQuestions))
+				"entry_id", conceptID, "aliases", len(aliases), "trigger_questions", len(triggerQuestions))
 		}
 
 		return &compiledContent{
@@ -872,7 +935,6 @@ func marshalConditions(conds []activation.ObservedCondition) string {
 	return string(b)
 }
 
-
 // filterClaims drops any cited_point_id outside whitelist (warn), then drops
 // whole claims left with zero citations — an uncited claim can't be enforced
 // by the generation whitelist downstream.
@@ -896,10 +958,10 @@ func filterClaims(claims []Claim, whitelist map[string]bool, conceptID string) [
 		out = append(out, Claim{Summary: c.Summary, CitedPointIDs: kept})
 	}
 	if len(droppedIDs) > 0 {
-		slog.Warn("wiki: dropped out-of-whitelist cited_point_ids in analysis", "concept_id", conceptID, "ids", droppedIDs)
+		slog.Warn("wiki: dropped out-of-whitelist cited_point_ids in analysis", "entry_id", conceptID, "ids", droppedIDs)
 	}
 	if droppedClaims > 0 {
-		slog.Warn("wiki: dropped claims with no whitelisted citations after filtering", "concept_id", conceptID, "count", droppedClaims)
+		slog.Warn("wiki: dropped claims with no whitelisted citations after filtering", "entry_id", conceptID, "count", droppedClaims)
 	}
 	return out
 }
@@ -922,7 +984,7 @@ func filterTensions(tensions []Tension, whitelist map[string]bool, conceptID str
 		out = append(out, Tension{Description: t.Description, RelatedPointIDs: kept})
 	}
 	if len(dropped) > 0 {
-		slog.Warn("wiki: dropped out-of-whitelist related_point_ids in analysis", "concept_id", conceptID, "ids", dropped)
+		slog.Warn("wiki: dropped out-of-whitelist related_point_ids in analysis", "entry_id", conceptID, "ids", dropped)
 	}
 	return out
 }
@@ -940,7 +1002,6 @@ func claimsWhitelist(claims []Claim) map[string]bool {
 	}
 	return w
 }
-
 
 // gatherMaterials implements docs/impl/v1/wiki.md 步骤 3's KU text budget:
 // group qualifying points by KU (avoiding re-reading a KU's text twice),
@@ -1219,8 +1280,8 @@ func uncitedSentenceRate(content string) float64 {
 }
 
 func conceptIDOf(page *Page) string {
-	if page.ConceptID.Valid {
-		return page.ConceptID.String
+	if page.EntryID.Valid {
+		return page.EntryID.String
 	}
 	return ""
 }
@@ -1409,13 +1470,13 @@ func (s *Service) publish(ctx context.Context, pageID string, force bool) (*Page
 		slog.Error("wiki: index page after publish failed", "page_id", pageID, "error", err)
 	}
 
-	if page.PageType == PageTypeConcept {
+	if page.PageType != PageTypeTopic {
 		if err := s.RecomputeRelationsForPage(pageID); err != nil {
 			slog.Error("wiki: recompute relations after publish failed", "page_id", pageID, "error", err)
 		}
 	}
 
-	slog.Info("wiki: published page", "page_id", pageID, "concept_id", page.ConceptID.String)
+	slog.Info("wiki: published page", "page_id", pageID, "entry_id", page.EntryID.String)
 	return s.store.GetPage(pageID)
 }
 
@@ -1468,16 +1529,17 @@ func (s *Service) MarkNeedsRecompile(pageID, reason string) error {
 	return nil
 }
 
-// cascadeToParentTopics implements docs/impl/v1/wiki.md 步骤 9: a concept
-// page entering needs_recompile or archived propagates to its containing
-// topic page(s) (needs_recompile only — topic pages don't propagate further,
-// "只有两层"). No-op for topic pages themselves (contains is only ever
-// concept -> topic in the ContainingTopics lookup direction, so this is
-// naturally a no-op when called with a topic page id, but the page_type
-// check makes the intent explicit and avoids an extra store round-trip).
+// cascadeToParentTopics implements docs/impl/v1/wiki.md 步骤 9: a concept or
+// fact page entering needs_recompile or archived propagates to its
+// containing topic page(s) (needs_recompile only — topic pages don't
+// propagate further, "只有两层"). No-op for topic pages themselves (contains
+// is only ever concept/fact -> topic in the ContainingTopics lookup
+// direction, so this is naturally a no-op when called with a topic page id,
+// but the page_type check makes the intent explicit and avoids an extra
+// store round-trip).
 func (s *Service) cascadeToParentTopics(memberPageID, memberReason string) {
 	page, err := s.store.GetPage(memberPageID)
-	if err != nil || page == nil || page.PageType != PageTypeConcept {
+	if err != nil || page == nil || page.PageType == PageTypeTopic {
 		return
 	}
 	topics, err := s.store.ContainingTopics(memberPageID)
@@ -1492,20 +1554,20 @@ func (s *Service) cascadeToParentTopics(memberPageID, memberReason string) {
 	}
 }
 
-// GetActivePageByConceptID exposes the store lookup for callers outside this
+// GetActivePageByEntryID exposes the store lookup for callers outside this
 // package (docs/impl/v1/concept-evolution.md 步骤 3 merge 执行: find the page
 // tied to a concept being merged so it can be flagged needs_recompile).
-func (s *Service) GetActivePageByConceptID(conceptID string) (*Page, error) {
-	return s.store.GetActivePageByConceptID(conceptID)
+func (s *Service) GetActivePageByEntryID(conceptID string) (*Page, error) {
+	return s.store.GetActivePageByEntryID(conceptID)
 }
 
 // RecompileFlag is one page ScanForNewQualifyingKP marked needs_recompile,
 // returned so the caller (Study) can write the recompile_flag audit trail
 // (docs/impl/v1/study.md 步骤 6, docs/impl/v1/wiki.md 步骤 5b).
 type RecompileFlag struct {
-	PageID    string
-	ConceptID string
-	Reason    string
+	PageID  string
+	EntryID string
+	Reason  string
 }
 
 // ScanForNewQualifyingKP implements docs/impl/v1/wiki.md 步骤 5b: for every
@@ -1523,10 +1585,10 @@ func (s *Service) ScanForNewQualifyingKP(currentQualifyingCounts map[string]int,
 
 	var flagged []RecompileFlag
 	for _, p := range pages {
-		if !p.ConceptID.Valid {
+		if !p.EntryID.Valid {
 			continue
 		}
-		current, ok := currentQualifyingCounts[p.ConceptID.String]
+		current, ok := currentQualifyingCounts[p.EntryID.String]
 		if !ok {
 			continue
 		}
@@ -1540,7 +1602,7 @@ func (s *Service) ScanForNewQualifyingKP(currentQualifyingCounts map[string]int,
 			slog.Error("wiki: mark needs_recompile from new qualifying kp failed", "page_id", p.PageID, "error", err)
 			continue
 		}
-		flagged = append(flagged, RecompileFlag{PageID: p.PageID, ConceptID: p.ConceptID.String, Reason: reason})
+		flagged = append(flagged, RecompileFlag{PageID: p.PageID, EntryID: p.EntryID.String, Reason: reason})
 	}
 	return flagged, nil
 }
@@ -1687,7 +1749,7 @@ func (s *Service) gatherDirectAnswerCandidates(question, subject, intent, audien
 		rawHits = append(rawHits, hit.ID)
 	}
 
-	conceptHits, err := s.matchConceptEntry(question)
+	conceptHits, err := s.matchEntryRow(question)
 	if err != nil {
 		slog.Warn("wiki: concept entry lookup failed, continuing with lexical candidates only", "error", err)
 	}
@@ -1705,7 +1767,7 @@ func (s *Service) gatherDirectAnswerCandidates(question, subject, intent, audien
 	// members, inserted at the slot the topic page held; a member already
 	// present from another entry keeps its existing (higher-priority) slot.
 	var candidates []string
-	seenConcept := make(map[string]bool)
+	seenEntry := make(map[string]bool)
 	var skeleton *SkeletonInfo
 	for _, pageID := range rawHits {
 		page, err := s.store.GetPage(pageID)
@@ -1713,8 +1775,8 @@ func (s *Service) gatherDirectAnswerCandidates(question, subject, intent, audien
 			continue
 		}
 		if page.PageType != PageTypeTopic {
-			if !seenConcept[pageID] {
-				seenConcept[pageID] = true
+			if !seenEntry[pageID] {
+				seenEntry[pageID] = true
 				candidates = append(candidates, pageID)
 			}
 			continue
@@ -1730,8 +1792,8 @@ func (s *Service) gatherDirectAnswerCandidates(question, subject, intent, audien
 		}
 		skeleton.Members = append(skeleton.Members, members...)
 		for _, m := range orderedMemberIDs {
-			if !seenConcept[m] {
-				seenConcept[m] = true
+			if !seenEntry[m] {
+				seenEntry[m] = true
 				candidates = append(candidates, m)
 			}
 		}
@@ -1875,13 +1937,13 @@ func (s *Service) matchFourTupleEntry(subject, intent, audience, constraint stri
 	return pageIDs, nil
 }
 
-// matchConceptEntry implements docs/impl/v1/wiki.md 步骤 4's concept入口:
+// matchEntryRow implements docs/impl/v1/wiki.md 步骤 4's concept入口:
 // word-lexical containment (not embedding, not LLM) between the question and
 // every published page's concept name, so a question mentioning the concept
 // but not the page's wording (or the wiki index's aliases/trigger_questions)
 // still finds the page.
-func (s *Service) matchConceptEntry(question string) ([]string, error) {
-	pages, err := s.store.ListPublishedConceptPages()
+func (s *Service) matchEntryRow(question string) ([]string, error) {
+	pages, err := s.store.ListPublishedEntryPages()
 	if err != nil {
 		return nil, fmt.Errorf("wiki: list published concept pages: %w", err)
 	}
@@ -1963,7 +2025,7 @@ func (s *Service) indexPage(page *Page) error {
 		"content":           page.Content,
 		"aliases":           strings.Join(aliases, " "),
 		"trigger_questions": strings.Join(triggerQuestions, " "),
-		"concept_id":        page.ConceptID.String,
+		"entry_id":          page.EntryID.String,
 		"status":            StatusPublished,
 	}
 	return s.wikiIndex.Index(page.PageID, doc)

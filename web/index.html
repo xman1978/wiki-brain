@@ -492,13 +492,9 @@
     #llmDrawer select.llm-field { cursor:pointer; }
     #llmDrawer .llm-field:focus { border-color:var(--text-3); }
     #llmDrawer select.llm-field-bind { flex:1; width:auto; min-width:0; }
-    #llmDrawer .panel-section h3 {
-      font-size:12px;
-      color:#000;
-    }
     #llmDrawer .llm-purpose-fold {
       border:1px solid var(--border-lt);
-      border-radius:8px;
+      border-radius:var(--radius-sm);
       overflow:hidden;
       background:var(--bg);
     }
@@ -549,6 +545,31 @@
       display:grid;
       gap:8px;
       border-top:1px solid var(--border-lt);
+    }
+    #llmDrawer .llm-bind-provider-row {
+      display:flex;
+      align-items:center;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+    #llmDrawer .llm-bind-provider-row > .llm-bind-provider-label {
+      font-size:12px;
+      color:var(--text-3);
+      flex-shrink:0;
+    }
+    #llmDrawer .llm-bind-provider-row > select.llm-field-bind {
+      flex:0 1 200px;
+      width:auto;
+      min-width:140px;
+    }
+    #llmDrawer .llm-bind-provider-row > .llm-bind-think {
+      display:flex;
+      align-items:center;
+      gap:6px;
+      font-size:12px;
+      white-space:nowrap;
+      margin:0;
+      cursor:pointer;
     }
     ::-webkit-scrollbar { width:6px; }
     ::-webkit-scrollbar-thumb { background:#d9d9d4; border-radius:3px; }
@@ -844,7 +865,7 @@
 
 <!-- ── LLM SETTINGS DRAWER ───────────────────────────── -->
 <div class="file-overlay hidden" id="llmOverlay" onclick="closeLlmView()"></div>
-<div class="file-drawer" id="llmDrawer" style="width:min(720px,95vw)">
+<div class="file-drawer" id="llmDrawer" style="width:min(540px,95vw)">
   <div class="drawer-header">
     <span>模型设置</span>
     <div style="display:flex;gap:6px;align-items:center">
@@ -893,11 +914,11 @@
 <div class="file-overlay hidden" id="wikiOverlay" onclick="closeWikiView()"></div>
 
 <!-- ── WIKI DRAWER ───────────────────────────────────────── -->
-<div class="file-drawer split-drawer" id="wikiDrawer" style="width:min(960px,96vw)">
+<div class="file-drawer split-drawer" id="wikiDrawer" style="width:min(980px,96vw)">
   <div class="drawer-header">
     <span>Wiki</span>
     <div style="display:flex;gap:6px;align-items:center">
-      <button class="btn btn-sm btn-primary" onclick="openManualWikiCompilePicker()" title="指定一个概念主题，按现有规则编译 Wiki 概念页">+ 生成 Wiki</button>
+      <button class="btn btn-sm btn-primary" onclick="openManualWikiCompilePicker()" title="人工手动指定主题范围，检索知识点并直接触发编译（未经 Study 推荐）">+ 生成 Wiki</button>
       <button class="btn btn-sm" onclick="loadWikiCatalog()">刷新</button>
       <button class="btn-ghost" onclick="closeWikiView()">✕</button>
     </div>
@@ -965,12 +986,12 @@
 </div>
 
 <!-- ── CONCEPT DETAIL / EDIT MODAL（已确认概念：改名/改描述/增删知识点）── -->
-<div class="modal-overlay hidden" id="conceptEditModal" onclick="if(event.target===this)closeConceptEditModal()">
+<div class="modal-overlay hidden" id="conceptEditModal" onclick="if(event.target===this)closeEntryEditModal()">
   <div class="modal-box" id="conceptEditModalContent" style="width:560px"></div>
 </div>
 
 <!-- ── CONCEPT CANDIDATE DETAIL MODAL ─────────────────── -->
-<div class="modal-overlay hidden" id="conceptDetailModal" onclick="if(event.target===this)closeConceptDetailModal()">
+<div class="modal-overlay hidden" id="conceptDetailModal" onclick="if(event.target===this)closeEntryDetailModal()">
   <div class="modal-box" id="conceptDetailModalContent" style="width:560px"></div>
 </div>
 
@@ -1047,12 +1068,6 @@ const S = {
   wikiCandidateList:   [],
   wikiSelectedId:      null,
   wikiConceptId:       null,
-  wikiManualPickerDomainId: null,
-  wikiManualPickerConcepts: [],
-  wikiManualPickerFilter: '',
-  wikiManualMode: 'concept',
-  wikiManualTopicSelected: {},
-  wikiManualTopicDomainPinned: false,
   conceptKPLinksCache: null,
   conceptStatus:       'pending_confirm',
   conceptCandidates:   [],
@@ -1068,6 +1083,11 @@ const S = {
   conceptEditData:     null,
   conceptEditAvailablePoints: null,
   conceptEditShowAddPicker:   false,
+  // Pending name/description/kind edits while the form is open. KP add/remove
+  // reloads the point list from the server and re-renders the modal; without
+  // this draft those meta fields snap back to the last saved server values,
+  // so "edit title+desc and add/remove KP then 保存" cannot persist together.
+  conceptEditDraft:    null,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -2938,11 +2958,15 @@ function llmPlatformLabel(platformId) {
   var p = (llmState.platforms || []).find(function(x) { return x.id === platformId; });
   return p ? p.label : platformId;
 }
-var llmState = { providers: [], bindings: {}, platforms: [], editingId: null, openPurposes: { default: true } };
+var llmState = { providers: [], bindings: {}, platforms: [], editingId: null, openPurposes: {} };
 
 function openLlmView() {
   document.getElementById('llmDrawer').classList.add('open');
   document.getElementById('llmOverlay').classList.remove('hidden');
+  // 每次打开都从全收起状态开始——用途绑定条目多起来后一次性全展开会很长，
+  // 需要哪个用途再点开哪个。
+  llmState.openPurposes = {};
+  llmState.editingId = null;
   loadLlmSettings();
 }
 function closeLlmView() {
@@ -2961,7 +2985,7 @@ async function loadLlmSettings() {
     if (!Array.isArray(llmState.platforms)) llmState.platforms = [];
     renderLlmSettings();
   } catch (e) {
-    body.innerHTML = '<div style="color:var(--danger)">加载失败: ' + esc(e.message) + '</div>';
+    body.innerHTML = '<div style="color:var(--red)">加载失败: ' + esc(e.message) + '</div>';
   }
 }
 
@@ -3041,19 +3065,21 @@ function renderLlmSettings() {
     html += '<summary><span class="llm-purpose-fold-title">' + llmPurposeLabel(purpose) + '</span>';
     html += '<span class="llm-purpose-hint">' + esc(bindingSummaryHint(b)) + '</span></summary>';
     html += '<div class="llm-purpose-fold-body">';
-    html += '<label style="display:block"><div style="font-size:11px;color:var(--text-3);margin-bottom:4px">服务商</div>';
+    html += '<div class="llm-bind-provider-row">';
+    html += '<span class="llm-bind-provider-label">服务商</span>';
     html += '<select id="bind_provider_' + purpose + '" class="llm-field llm-field-bind">';
     html += '<option value="">（未绑定）</option>';
     llmState.providers.forEach(function(pr) {
       var sel = b.provider_id === pr.provider_id ? ' selected' : '';
       html += '<option value="' + esc(pr.provider_id) + '"' + sel + '>' + esc(pr.name) + '</option>';
     });
-    html += '</select></label>';
+    html += '</select>';
+    html += '<label class="llm-bind-think"><input type="checkbox" id="bind_think_' + purpose + '"' + (b.enable_think ? ' checked' : '') + '> 开启思考模式</label>';
+    html += '</div>';
     html += modelNameField('bind', purpose, b.model);
     html += miniField('温度', 'bind_temp_' + purpose, b.temperature);
     html += miniField('输入 token 上限', 'bind_in_' + purpose, b.input_max_tokens);
     html += miniField('输出 token 上限', 'bind_out_' + purpose, b.output_max_tokens);
-    html += '<label style="display:flex;align-items:center;gap:6px;margin-top:2px;font-size:12px"><input type="checkbox" id="bind_think_' + purpose + '"' + (b.enable_think ? ' checked' : '') + '> 开启思考模式</label>';
     html += '</div></details>';
   });
   html += '<button class="btn btn-sm" style="margin-top:8px" onclick="saveLlmBindings()">保存绑定</button></div></div>';
@@ -3064,11 +3090,11 @@ function renderLlmSettings() {
   }
   llmState.providers.forEach(function(pr) {
     var open = llmState.editingId === pr.provider_id;
-    html += '<div style="border:1px solid var(--border-lt);border-radius:8px;padding:12px;margin-bottom:10px">';
+    html += '<div style="border:1px solid var(--border-lt);border-radius:var(--radius-sm);padding:12px;margin-bottom:10px">';
     html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><strong>' + esc(pr.name) + '</strong>';
     html += '<div style="display:flex;gap:6px"><button type="button" class="btn btn-sm" data-llm-test="' + esc(pr.provider_id) + '">测试</button>';
     html += '<button type="button" class="btn btn-sm" data-llm-edit="' + esc(pr.provider_id) + '">' + (open ? '收起' : '编辑') + '</button>';
-    html += '<button type="button" class="btn btn-sm" style="color:var(--danger)" data-llm-delete="' + esc(pr.provider_id) + '">删除</button></div></div>';
+    html += '<button type="button" class="btn btn-sm" style="color:var(--red)" data-llm-delete="' + esc(pr.provider_id) + '">删除</button></div></div>';
     html += '<div style="font-size:12px;color:var(--text-3);margin-top:4px">' + esc(llmPlatformLabel(pr.platform)) + ' · ' + esc(pr.base_url) + '</div>';
     if (open) html += renderLlmProviderForm(pr);
     html += '</div>';
@@ -3109,25 +3135,40 @@ function miniField(label, elId, val) {
   return '<label style="font-size:12px;display:block">' + label + '<input id="' + elId + '" class="llm-field" value="' + esc(String(val != null ? val : '')) + '" style="margin-top:4px"></label>';
 }
 
+// 模型名称输入框和"选择模型"下拉框共用同一个位置——点「获取模型列表」时
+// 编辑框本身换成下拉框供选择（而不是在下方另起一个下拉框，选完还要回填到
+// 上面），选好后可以点「手动输入」换回文本框自己改。真正存值的还是那个
+// input（只是显示/隐藏切换），保存逻辑读的是同一个 id，不用改。
 function modelNameField(formId, purpose, modelVal) {
   var inputId = 'llm_m_model_' + formId + '_' + purpose;
   var pickId = 'llm_model_pick_' + formId + '_' + purpose;
   var statusId = 'llm_model_pick_status_' + formId + '_' + purpose;
+  var btnId = 'llm_model_toggle_' + formId + '_' + purpose;
   return '<label style="font-size:12px">模型名称' +
     '<div style="display:flex;gap:6px;margin-top:2px;align-items:center">' +
     '<input id="' + inputId + '" class="llm-field llm-field-inline" value="' + esc(String(modelVal != null ? modelVal : '')) + '">' +
-    '<button type="button" class="btn btn-sm" onclick="fetchLlmModelList(\'' + esc(formId) + '\',\'' + esc(purpose) + '\')">获取模型列表</button>' +
+    '<select id="' + pickId + '" class="llm-field llm-field-inline" style="display:none" onchange="applyLlmModelPick(\'' + esc(formId) + '\',\'' + esc(purpose) + '\')">' +
+    '<option value="">— 选择模型 —</option></select>' +
+    '<button type="button" id="' + btnId + '" class="btn btn-sm" onclick="toggleLlmModelPicker(\'' + esc(formId) + '\',\'' + esc(purpose) + '\')">获取模型列表</button>' +
     '</div>' +
-    '<select id="' + pickId + '" class="llm-field" style="display:none;margin-top:6px" onchange="applyLlmModelPick(\'' + esc(formId) + '\',\'' + esc(purpose) + '\')">' +
-    '<option value="">— 选择模型填入上方 —</option></select>' +
     '<div id="' + statusId + '" style="font-size:11px;color:var(--text-3);margin-top:4px"></div></label>';
 }
 
-async function fetchLlmModelList(formId, purpose) {
-  var statusEl = document.getElementById('llm_model_pick_status_' + formId + '_' + purpose);
+// 按钮的两种状态：还没拉过列表（或当前是手动输入模式）时点击去拉取模型列表
+// 并切到下拉框；已经在下拉框模式时点击切回手动输入，不重新拉取。
+async function toggleLlmModelPicker(formId, purpose) {
+  var inputEl = document.getElementById('llm_m_model_' + formId + '_' + purpose);
   var pickEl = document.getElementById('llm_model_pick_' + formId + '_' + purpose);
+  var btnEl = document.getElementById('llm_model_toggle_' + formId + '_' + purpose);
+  var statusEl = document.getElementById('llm_model_pick_status_' + formId + '_' + purpose);
+  if (pickEl.style.display !== 'none') {
+    pickEl.style.display = 'none';
+    inputEl.style.display = '';
+    if (btnEl) btnEl.textContent = '获取模型列表';
+    if (statusEl) statusEl.textContent = '';
+    return;
+  }
   if (statusEl) statusEl.textContent = '正在获取…';
-  pickEl.style.display = 'none';
   try {
     var models;
     if (formId === '__new__') {
@@ -3149,10 +3190,15 @@ async function fetchLlmModelList(formId, purpose) {
       if (statusEl) statusEl.textContent = '未返回任何模型';
       return;
     }
-    pickEl.innerHTML = '<option value="">— 选择模型填入上方 —</option>' +
-      models.map(function(m) { return '<option value="' + esc(m) + '">' + esc(m) + '</option>'; }).join('');
-    pickEl.style.display = 'block';
-    if (statusEl) statusEl.textContent = '共 ' + models.length + ' 个模型，请从下拉选择';
+    var current = inputEl.value;
+    pickEl.innerHTML = models.map(function(m) {
+      return '<option value="' + esc(m) + '"' + (m === current ? ' selected' : '') + '>' + esc(m) + '</option>';
+    }).join('');
+    inputEl.style.display = 'none';
+    pickEl.style.display = '';
+    if (btnEl) btnEl.textContent = '手动输入';
+    if (statusEl) statusEl.textContent = '共 ' + models.length + ' 个模型';
+    if (pickEl.value) applyLlmModelPick(formId, purpose);
   } catch (e) {
     if (statusEl) statusEl.textContent = '获取失败: ' + e.message;
     toast('获取模型列表失败: ' + e.message, true);
@@ -3164,7 +3210,6 @@ function applyLlmModelPick(formId, purpose) {
   var inputEl = document.getElementById('llm_m_model_' + formId + '_' + purpose);
   if (pickEl && pickEl.value && inputEl) {
     inputEl.value = pickEl.value;
-    toast('已填入模型: ' + pickEl.value);
   }
 }
 
@@ -3348,7 +3393,7 @@ function renderStudyReport(report, container) {
   var wcPage = wc.slice(wcStart, wcStart + STUDY_WC_PAGE_SIZE);
   var gpStart = S.gapPage * STUDY_GAP_PAGE_SIZE;
   var gpPage = gp.slice(gpStart, gpStart + STUDY_GAP_PAGE_SIZE);
-  var cc = report.concept_candidates || {};
+  var cc = report.entry_candidates || {};
   var ccPendingAdd = cc.pending_add || [];
   var ccPendingMerge = cc.pending_merge || [];
   function rt(n,t) { return t ? (n/t*100).toFixed(0)+'%' : '-'; }
@@ -3366,7 +3411,7 @@ function renderStudyReport(report, container) {
         var st = c.stats || {};
         return '<tr style="cursor:pointer" title="点击查看 ActivationLink 详情" onclick="openStudyActivationCandidate(\'' + esc(c.point_id||'') + '\')">\
           <td><code style="font-size:11px">' + esc(c.question_terms||'') + '</code></td>\
-          <td style="font-size:12px">' + esc(c.concept_name||'') + '</td>\
+          <td style="font-size:12px">' + esc(c.entry_name||'') + '</td>\
           <td>' + (st.hit_count||0) + '</td>\
           <td>' + (st.confident_count||0) + '</td>\
           <td>' + (st.signal_purity!=null?(st.signal_purity*100).toFixed(0)+'%':'-') + '</td>\
@@ -3381,8 +3426,8 @@ function renderStudyReport(report, container) {
       <thead><tr><th>概念</th><th>达标 KP 数</th><th>平均置信</th><th>KPN 连接数</th><th>活跃天数</th><th>状态</th></tr></thead>\
       <tbody>' + wcPage.map(function(w) {
         var ws = w.stats || {};
-        return '<tr style="cursor:pointer" title="点击查看 Wiki 候选详情" onclick="openStudyWikiCandidate(\'' + esc(w.concept_id||'') + '\')">\
-          <td><b>' + esc(w.concept_name||'') + '</b></td>\
+        return '<tr style="cursor:pointer" title="点击查看 Wiki 候选详情" onclick="openStudyWikiCandidate(\'' + esc(w.entry_id||'') + '\')">\
+          <td><b>' + esc(w.entry_name||'') + '</b></td>\
           <td>' + (ws.qualifying_kp_count||0) + '</td>\
           <td>' + (ws.avg_confident_count ? ws.avg_confident_count.toFixed(1) : '-') + '</td>\
           <td>' + (ws.kpn_connection_count||0) + '</td>\
@@ -3405,7 +3450,7 @@ function renderStudyReport(report, container) {
       ' + studyPagerHtml(S.gapPage, gp.length, STUDY_GAP_PAGE_SIZE, 'setGapPage') + '</div>' : '') + '\
     <div class="study-card"><h2 style="margin:0 0 10px">概念演化</h2>\
       <div class="study-summary-grid">\
-        <div class="summary-stat"><div class="ss-val">' + (cc.concept_gap_event_count||0) + '</div><div class="ss-label">概念缺口</div></div>\
+        <div class="summary-stat"><div class="ss-val">' + (cc.entry_gap_event_count||0) + '</div><div class="ss-label">概念缺口</div></div>\
         <div class="summary-stat confident"><div class="ss-val">' + (cc.add_created||0) + '</div><div class="ss-label">本轮新增候选</div></div>\
         <div class="summary-stat confident"><div class="ss-val">' + (cc.merge_created||0) + '</div><div class="ss-label">本轮合并候选</div></div>\
         <div class="summary-stat partial"><div class="ss-val">' + (ccPendingAdd.length + ccPendingMerge.length) + '</div><div class="ss-label">待确认候选</div></div>\
@@ -3451,7 +3496,7 @@ async function openStudyActivationCandidate(pointId) {
 
 async function openStudyWikiCandidate(conceptId) {
   if (!conceptId) return;
-  var w = ((S.studyReport && S.studyReport.wiki_candidates) || []).find(function(x) { return x.concept_id === conceptId; });
+  var w = ((S.studyReport && S.studyReport.wiki_candidates) || []).find(function(x) { return x.entry_id === conceptId; });
   var detail = document.getElementById('wikiDetailModalContent');
   document.getElementById('wikiDetailModal').classList.remove('hidden');
   if (!w) {
@@ -3483,14 +3528,14 @@ async function openStudyWikiCandidate(conceptId) {
     : '<div style="font-size:12px;color:var(--text-3)">暂无合格知识点明细</div>';
 
   var compileBtn = resultId
-    ? '<button class="btn btn-primary btn-sm" onclick="compileWikiCandidate(\'' + esc(conceptId) + '\',\'' + esc(resultId) + '\')">编译（概念页）</button>'
+    ? '<button class="btn btn-primary btn-sm" onclick="compileWikiCandidate(\'' + esc(conceptId) + '\',\'' + esc(resultId) + '\')">编译（词条页）</button>'
     : '';
   var tip = !resultId
     ? '<div style="font-size:12px;color:var(--text-3);margin-top:8px">' + (w.recommendation === 'ready' ? '尚未找到待确认的 wiki_candidate 学习动作，无法直接编译。可先执行「学习扫描」。' : '尚未达到可编译门槛，仅供查看信号进展。') + '</div>'
     : '';
 
   detail.innerHTML = '\
-    <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">' + esc(w.concept_name || conceptId) + '</h2>\
+    <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">' + esc(w.entry_name || conceptId) + '</h2>\
     <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="badge ' + (w.recommendation==='ready'?'confident':'partial') + '">' + (w.recommendation==='ready' ? '可编译' : '数据不足') + '</span></span></div>\
     <div class="detail-row"><span class="dl">合格 KP</span><span class="dv">' + (ws.qualifying_kp_count||0) + ' 个</span></div>\
     <div class="detail-row"><span class="dl">平均置信</span><span class="dv">' + (ws.avg_confident_count ? ws.avg_confident_count.toFixed(1) : '-') + '</span></div>\
@@ -3733,11 +3778,11 @@ function selectActivationDomainRail(domainId) {
 
 // 领域下的激活链接 = 该领域概念挂载的 KP 对应的 activation_links（一对一）。
 async function fetchActivationLinksForDomain(domainId) {
-  var conceptsR = await api('GET', '/concepts?domain_id=' + encodeURIComponent(domainId));
-  var concepts = (conceptsR.ok && Array.isArray(conceptsR.data)) ? conceptsR.data : [];
-  if (!concepts.length) return [];
-  var detailResults = await Promise.all(concepts.map(function(c) {
-    return api('GET', '/concepts/' + encodeURIComponent(c.concept_id));
+  var conceptsR = await api('GET', '/entries?domain_id=' + encodeURIComponent(domainId));
+  var entries = (conceptsR.ok && Array.isArray(conceptsR.data)) ? conceptsR.data : [];
+  if (!entries.length) return [];
+  var detailResults = await Promise.all(entries.map(function(c) {
+    return api('GET', '/entries/' + encodeURIComponent(c.entry_id));
   }));
   var pointIds = [];
   var seen = {};
@@ -4078,7 +4123,7 @@ async function openWikiPageFromBadge(pageId) {
     renderWikiDomainRail();
     renderWikiDomainPane();
   }
-  openWikiConceptDetail(pageId);
+  openWikiEntryDetail(pageId);
 }
 
 async function loadWikiCatalog() {
@@ -4096,7 +4141,7 @@ async function loadWikiCatalog() {
       if (p.kind === 'candidate') {
         S.wikiCandidateList.push({
           resultId: p.result_id,
-          conceptId: p.concept_id,
+          conceptId: p.entry_id,
           conceptName: p.title,
           reason: p.description || '',
           qualifyingKpCount: null
@@ -4144,9 +4189,10 @@ function renderWikiDomainPane() {
     return;
   }
   var pages = d.pages || [];
-  var cardsHtml = pages.length
-    ? pages.map(renderWikiCatalogCardHtml).join('')
-    : '<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">该领域下还没有 Wiki</div>';
+  var cardsHtml = pages.map(renderWikiCatalogCardHtml).join('');
+  if (!cardsHtml) {
+    cardsHtml = '<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">该领域下还没有 Wiki</div>';
+  }
   pane.innerHTML = '\
     <div style="min-width:0">\
       <div style="font-size:16px;font-weight:700">' + esc(d.name) + '</div>\
@@ -4172,7 +4218,7 @@ function renderWikiCatalogCardHtml(p) {
   var badgeCls = 'status-' + status;
   var onclick = p.kind === 'candidate'
     ? 'openWikiCompileCandidate(\'' + esc(p.result_id) + '\')'
-    : 'openWikiConceptDetail(\'' + esc(p.page_id) + '\')';
+    : 'openWikiEntryDetail(\'' + esc(p.page_id) + '\')';
   return '<div class="domain-concept-card ' + cls + '" onclick="' + onclick + '">\
     <div class="dcc-top"><div class="dcc-name">' + esc(p.title || '(未命名)') + '</div><span class="dcc-status-badge ' + badgeCls + '">' + esc(label) + '</span></div>\
     <div class="dcc-desc">' + esc(p.description || '') + '</div>\
@@ -4202,14 +4248,15 @@ function closeWikiDetailModal() {
   S.wikiConceptId = null;
 }
 
-// 人工指定主题手动编译（docs/impl/v1/wiki.md 步骤 2 / 步骤 8）：
-// Wiki 抽屉入口提供两种模式——概念页（单概念一阶）与主题页（多已发布
-// 概念页二阶）。两者分别复用 Study 候选的 compile / topic/compile 链路，
-// 不是新管线；差别只在有没有 result_id / 是否写 manual_trigger。
-async function openManualWikiCompilePicker(mode) {
-  S.wikiManualMode = mode === 'topic' ? 'topic' : 'concept';
-  S.wikiManualPickerFilter = '';
-  S.wikiManualTopicSelected = S.wikiManualTopicSelected || {};
+// 人工手动指定主题（docs/design/wiki.md「主题：从真实使用中识别」一节 +
+// docs/impl/v1/wiki.md 步骤 8「人工手动指定主题」，2026-08-03 修订）：
+// 只有一个输入口径——给主题名称/范围描述（不选 concept），系统据此检索
+// qualifying KP、按概念归属分组；落在几个概念名下决定编译停在一阶还是
+// 走完二阶（docs/design/wiki.md:84），不是两条并行的生成逻辑。
+// 复用现有 POST /wiki/topics（已实现同样的检索+分组）；当结果只落在一个
+// 已发布概念上时，说明不需要主题页这一层，直接把候选建的壳页归档，改为
+// 打开那个概念页本身（见 submitWikiTopicResolve）。
+function openManualWikiCompilePicker() {
   var detail = document.getElementById('wikiDetailModalContent');
   document.getElementById('wikiDetailModal').classList.remove('hidden');
   S.wikiConceptId = null;
@@ -4223,194 +4270,81 @@ async function openManualWikiCompilePicker(mode) {
       <div class="modal-actions"><button class="btn btn-sm" onclick="closeWikiDetailModal()">关闭</button></div>';
     return;
   }
-  S.wikiManualPickerDomainId = S.wikiManualPickerDomainId || S.wikiDomainSelectedId || domains[0].domain_id;
-  var isTopic = S.wikiManualMode === 'topic';
-  if (!isTopic && !S.wikiManualPickerDomainId) {
-    S.wikiManualPickerDomainId = domains[0].domain_id;
-  }
   detail.innerHTML = '\
     <h2 style="font-size:16px;font-weight:700;margin-bottom:8px">生成 Wiki</h2>\
-    <div style="display:flex;gap:6px;margin-bottom:12px">\
-      <button class="btn btn-sm' + (!isTopic ? ' btn-primary' : '') + '" onclick="openManualWikiCompilePicker(\'concept\')">概念页</button>\
-      <button class="btn btn-sm' + (isTopic ? ' btn-primary' : '') + '" onclick="openManualWikiCompilePicker(\'topic\')">主题页（多概念）</button>\
-    </div>\
-    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">' +
-      (isTopic
-        ? '多选已发布的概念页作为成员，创建主题页壳后走二阶编译（默认需 3–8 个成员；连通性信号仅供参考）。'
-        : '选择一个概念作为主题，按现有一阶编译规则生成概念页（需至少 1 条合格 KP）。') + '\
-    </div>\
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">给出主题的名称/范围描述，系统据此检索知识点、按归属（概念或事实）分组：落在同一个词条下会直接产出这一个词条页（概念页或事实页）；落在多个词条下则各自先编出词条页，再看是否达标编出主题页（连通性/可靠度信号仅供参考，不作硬性门槛）。</div>\
     <div style="display:flex;flex-direction:column;gap:8px">\
-      <label style="font-size:12px;color:var(--text-3)">知识领域\
-        <select id="wikiManualPickerDomain" style="width:100%;margin-top:4px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-xs);font-size:13px;background:var(--bg);color:var(--text)" onchange="onWikiManualPickerDomainChange(this.value)">\
-          ' + (isTopic ? '<option value="">全部领域</option>' : '') + '\
+      <label style="font-size:12px;color:var(--text-3)">主题名称\
+        <input id="wikiManualTopicName" style="width:100%;box-sizing:border-box;margin-top:4px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-xs);font-size:13px;background:var(--bg);color:var(--text)" placeholder="例如：合同违约责任认定" />\
+      </label>\
+      <label style="font-size:12px;color:var(--text-3)">范围描述（可选）\
+        <textarea id="wikiManualTopicDescription" rows="3" style="width:100%;box-sizing:border-box;margin-top:4px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-xs);font-size:13px;background:var(--bg);color:var(--text);resize:vertical" placeholder="补充说明这个主题的范围，帮助检索更准确"></textarea>\
+      </label>\
+      <label style="font-size:12px;color:var(--text-3)">限定知识领域（可选）\
+        <select id="wikiManualPickerDomain" style="width:100%;margin-top:4px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-xs);font-size:13px;background:var(--bg);color:var(--text)">\
+          <option value="">全部领域</option>\
           ' + domains.map(function(d) {
-            var selected = isTopic
-              ? (S.wikiManualTopicDomainPinned && d.domain_id === S.wikiManualPickerDomainId)
-              : (d.domain_id === S.wikiManualPickerDomainId);
-            return '<option value="' + esc(d.domain_id) + '"' + (selected ? ' selected' : '') + '>' + esc(d.name) + '</option>';
+            return '<option value="' + esc(d.domain_id) + '">' + esc(d.name) + '</option>';
           }).join('') + '\
         </select>\
       </label>\
-      <label style="font-size:12px;color:var(--text-3)">搜索\
-        <input id="wikiManualPickerSearch" style="width:100%;box-sizing:border-box;margin-top:4px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-xs);font-size:13px;background:var(--bg);color:var(--text)" placeholder="' + (isTopic ? '搜索已发布概念页…' : '输入概念名称…') + '" oninput="filterWikiManualPickerConcepts(this.value)" />\
-      </label>\
     </div>\
-    <div id="wikiManualPickerList" style="margin-top:12px;max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-xs)">\
-      <div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">加载中...</div>\
-    </div>\
-    <div id="wikiManualPickerFooter" style="margin-top:10px"></div>\
+    <div style="margin-top:12px"><button class="btn btn-primary btn-sm" onclick="submitWikiTopicResolve()">检索并生成</button></div>\
+    <div id="wikiManualTopicCreateStatus" style="margin-top:8px;font-size:12px;color:var(--text-3)"></div>\
     <div class="modal-actions"><button class="btn btn-sm" onclick="closeWikiDetailModal()">关闭</button></div>';
-  if (isTopic) {
-    if (!S.wikiManualTopicDomainPinned) {
-      S.wikiManualPickerDomainId = '';
-      var sel = document.getElementById('wikiManualPickerDomain');
-      if (sel) sel.value = '';
-    }
-    renderWikiManualTopicPicker();
-  } else {
-    if (!S.wikiManualPickerDomainId) {
-      S.wikiManualPickerDomainId = S.wikiDomainSelectedId || domains[0].domain_id;
-      var selC = document.getElementById('wikiManualPickerDomain');
-      if (selC) selC.value = S.wikiManualPickerDomainId;
-    }
-    await loadWikiManualPickerConcepts();
-  }
 }
 
-async function onWikiManualPickerDomainChange(domainId) {
-  S.wikiManualPickerDomainId = domainId;
-  S.wikiManualPickerFilter = '';
-  if (S.wikiManualMode === 'topic') S.wikiManualTopicDomainPinned = !!domainId;
-  var search = document.getElementById('wikiManualPickerSearch');
-  if (search) search.value = '';
-  if (S.wikiManualMode === 'topic') renderWikiManualTopicPicker();
-  else await loadWikiManualPickerConcepts();
-}
-
-function filterWikiManualPickerConcepts(v) {
-  S.wikiManualPickerFilter = v || '';
-  if (S.wikiManualMode === 'topic') renderWikiManualTopicPicker();
-  else renderWikiManualPickerList();
-}
-
-async function loadWikiManualPickerConcepts() {
-  var list = document.getElementById('wikiManualPickerList');
-  if (!list) return;
-  list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">加载中...</div>';
-  var domainId = S.wikiManualPickerDomainId;
-  try {
-    var r = await api('GET', '/concepts?domain_id=' + encodeURIComponent(domainId));
-    if (S.wikiManualPickerDomainId !== domainId) return;
-    S.wikiManualPickerConcepts = (r.ok && Array.isArray(r.data)) ? r.data : [];
-  } catch (e) {
-    if (S.wikiManualPickerDomainId !== domainId) return;
-    S.wikiManualPickerConcepts = [];
-  }
-  renderWikiManualPickerList();
-}
-
-function renderWikiManualPickerList() {
-  var list = document.getElementById('wikiManualPickerList');
-  var footer = document.getElementById('wikiManualPickerFooter');
-  if (!list) return;
-  if (footer) footer.innerHTML = '';
-  var f = (S.wikiManualPickerFilter || '').trim().toLowerCase();
-  var items = (S.wikiManualPickerConcepts || []).filter(function(c) {
-    return !f || (c.name || '').toLowerCase().indexOf(f) !== -1 || (c.description || '').toLowerCase().indexOf(f) !== -1;
-  });
-  if (!items.length) {
-    list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">' +
-      ((S.wikiManualPickerConcepts || []).length ? '没有匹配的概念' : '该领域下还没有概念') + '</div>';
+async function submitWikiTopicResolve() {
+  var statusEl = document.getElementById('wikiManualTopicCreateStatus');
+  var nameEl = document.getElementById('wikiManualTopicName');
+  var descEl = document.getElementById('wikiManualTopicDescription');
+  var topicName = nameEl ? nameEl.value.trim() : '';
+  if (!topicName) {
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">请填写主题名称</span>';
     return;
   }
-  list.innerHTML = items.map(function(c) {
-    return '<div class="link-row" style="border:none;border-bottom:1px solid var(--border-lt);border-radius:0;cursor:pointer" onclick="openManualWikiCompile(\'' + esc(c.concept_id) + '\',\'' + esc(c.name) + '\')">\
-      <div class="lr-terms">' + esc(c.name || '(未命名)') + '</div>\
-      <div style="font-size:12px;color:var(--text-2);margin-top:2px">' + esc(c.description || '暂无描述') + '</div>\
-      <div class="lr-meta"><span>' + (c.kp_count || 0) + ' 个知识点</span></div>\
-    </div>';
-  }).join('');
-}
-
-function collectPublishedConceptPagesForPicker() {
-  var byId = {};
-  (S.wikiCatalog || []).forEach(function(d) {
-    (d.pages || []).forEach(function(p) {
-      if (p.kind === 'page' && p.page_type === 'concept' && p.status === 'published' && p.page_id) {
-        if (!byId[p.page_id]) {
-          byId[p.page_id] = {
-            page_id: p.page_id,
-            title: p.title || '(未命名)',
-            description: p.description || '',
-            domain_id: d.domain_id,
-            domain_name: d.name || ''
-          };
-        }
-      }
-    });
-  });
-  return Object.keys(byId).map(function(k) { return byId[k]; });
-}
-
-function renderWikiManualTopicPicker() {
-  var list = document.getElementById('wikiManualPickerList');
-  var footer = document.getElementById('wikiManualPickerFooter');
-  if (!list) return;
-  var f = (S.wikiManualPickerFilter || '').trim().toLowerCase();
-  var domainId = S.wikiManualPickerDomainId || '';
-  var items = collectPublishedConceptPagesForPicker().filter(function(p) {
-    if (domainId && p.domain_id !== domainId) return false;
-    return !f || (p.title || '').toLowerCase().indexOf(f) !== -1 || (p.description || '').toLowerCase().indexOf(f) !== -1;
-  });
-  if (!items.length) {
-    list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">没有可选的已发布概念页——请先编译并发布概念页</div>';
-  } else {
-    list.innerHTML = items.map(function(p) {
-      var checked = !!(S.wikiManualTopicSelected && S.wikiManualTopicSelected[p.page_id]);
-      return '<label class="link-row" style="border:none;border-bottom:1px solid var(--border-lt);border-radius:0;cursor:pointer;display:flex;gap:10px;align-items:flex-start">\
-        <input type="checkbox" style="margin-top:3px" ' + (checked ? 'checked' : '') + ' onchange="toggleWikiManualTopicMember(\'' + esc(p.page_id) + '\', this.checked)" />\
-        <div style="flex:1;min-width:0">\
-          <div class="lr-terms">' + esc(p.title) + '</div>\
-          <div style="font-size:12px;color:var(--text-2);margin-top:2px">' + esc(p.description || '暂无说明') + '</div>\
-          <div class="lr-meta"><span>' + esc(p.domain_name || '') + '</span></div>\
-        </div>\
-      </label>';
-    }).join('');
-  }
-  var selected = Object.keys(S.wikiManualTopicSelected || {}).filter(function(id) { return S.wikiManualTopicSelected[id]; });
-  if (footer) {
-    footer.innerHTML = '\
-      <div style="font-size:12px;color:var(--text-2);margin-bottom:8px">已选 <b>' + selected.length + '</b> 个（需 3–8 个）</div>\
-      <button class="btn btn-primary btn-sm" ' + (selected.length < 3 || selected.length > 8 ? 'disabled' : '') + ' onclick="submitManualTopicCreate()">创建主题页壳</button>\
-      <div id="wikiManualTopicCreateStatus" style="margin-top:8px;font-size:12px;color:var(--text-3)"></div>';
-  }
-}
-
-function toggleWikiManualTopicMember(pageId, checked) {
-  S.wikiManualTopicSelected = S.wikiManualTopicSelected || {};
-  if (checked) S.wikiManualTopicSelected[pageId] = true;
-  else delete S.wikiManualTopicSelected[pageId];
-  renderWikiManualTopicPicker();
-}
-
-async function submitManualTopicCreate() {
-  var statusEl = document.getElementById('wikiManualTopicCreateStatus');
-  var memberIds = Object.keys(S.wikiManualTopicSelected || {}).filter(function(id) { return S.wikiManualTopicSelected[id]; });
-  if (statusEl) statusEl.textContent = '创建中...';
+  if (statusEl) statusEl.textContent = '检索中...';
+  var domainSel = document.getElementById('wikiManualPickerDomain');
   try {
-    var r = await api('POST', '/wiki/topics', { member_page_ids: memberIds });
+    var r = await api('POST', '/wiki/topics', {
+      topic_name: topicName,
+      topic_description: descEl ? descEl.value.trim() : '',
+      domain_id: domainSel ? domainSel.value : ''
+    });
     if (!r.ok) {
-      if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">创建失败：' + esc(r.data && (r.data.message || r.data.error) ? (r.data.message || r.data.error) : JSON.stringify(r.data)) + '</span>';
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">检索失败：' + esc(r.data && (r.data.message || r.data.error) ? (r.data.message || r.data.error) : JSON.stringify(r.data)) + '</span>';
       return;
     }
-    S.wikiManualTopicSelected = {};
-    await loadWikiCatalog();
-    if (r.data && r.data.page_id) {
+    var d = r.data || {};
+    var memberIds = d.member_page_ids || [];
+    var pendingEntries = d.pending_concepts || [];
+    var uncoveredConcepts = d.uncovered_entries || [];
+    // docs/design/wiki.md:84——检索结果只落在一个概念下时，不需要主题页
+    // 这一层，直接把候选建的壳页归档，改为打开这个概念页本身。
+    var singleConcept = memberIds.length === 1 && !pendingEntries.length && !uncoveredConcepts.length;
+    if (singleConcept) {
+      if (statusEl) statusEl.textContent = '结果只落在一个词条下，直接打开该词条页...';
+      try { await api('POST', '/wiki/pages/' + d.page_id + '/archive'); } catch (e) { /* best-effort cleanup */ }
+      await loadWikiCatalog();
       closeWikiDetailModal();
-      openWikiConceptDetail(r.data.page_id);
+      openWikiEntryDetail(memberIds[0]);
+      return;
+    }
+    var readiness = d.readiness || {};
+    if (statusEl) {
+      statusEl.innerHTML = '\
+        <div style="color:var(--green)">已创建主题页壳「' + esc(d.title || '') + '」</div>\
+        <div style="margin-top:4px">已发布成员 ' + (readiness.member_count || 0) + ' 个 · related ' + (readiness.related_connection_count || 0) + ' 条 · contradicts ' + (readiness.contradicts_connection_count || 0) + ' 条 · 可靠度 ' + ((readiness.reliability_ratio || 0).toFixed ? readiness.reliability_ratio.toFixed(2) : readiness.reliability_ratio) + '（参考阈值 ' + readiness.reliability_min + '）</div>' +
+        (pendingEntries.length ? '<div style="margin-top:4px">待发布概念 ' + pendingEntries.length + ' 个（已推进候选，发布后自动补入）</div>' : '') +
+        (uncoveredConcepts.length ? '<div style="margin-top:4px">未覆盖概念 ' + uncoveredConcepts.length + ' 个</div>' : '');
+    }
+    await loadWikiCatalog();
+    if (d.page_id) {
+      closeWikiDetailModal();
+      openWikiEntryDetail(d.page_id);
     }
   } catch (e) {
-    if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">创建出错：' + esc(e.message) + '</span>';
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">检索出错：' + esc(e.message) + '</span>';
   }
 }
 
@@ -4422,7 +4356,7 @@ function openManualWikiCompile(conceptId, conceptName) {
     <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">' + esc(conceptName || conceptId) + '</h2>\
     <div style="font-size:12px;color:var(--text-3);margin-bottom:8px">人工手动触发（未经 Study 推荐）——分析后会展示"是否够格立传"的参考信号，仅供参考，不阻断生成。</div>\
     <div style="margin-top:8px;display:flex;gap:8px;align-items:center">\
-      <button class="btn btn-sm" onclick="openManualWikiCompilePicker(\'concept\')">← 重选主题</button>\
+      <button class="btn btn-sm" onclick="openManualWikiCompilePicker()">← 重选主题</button>\
       <button class="btn btn-primary btn-sm" onclick="analyzeWikiCandidate(\'' + esc(conceptId) + '\',\'\')">分析（生成结论）</button>\
     </div>\
     <div id="wikiAnalyzeResult" style="margin-top:10px"></div>\
@@ -4456,7 +4390,7 @@ async function analyzeWikiCandidate(conceptId, resultId) {
   var host = document.getElementById('wikiAnalyzeResult');
   host.innerHTML = '<div style="color:var(--text-3);font-size:12px">分析中...</div>';
   try {
-    var r = await api('POST', '/wiki/compile/analyze', { concept_id: conceptId, page_type: 'concept', result_id: resultId });
+    var r = await api('POST', '/wiki/compile/analyze', { entry_id: conceptId, result_id: resultId });
     if (!r.ok || !r.data) { host.innerHTML = '<div style="color:var(--red);font-size:12px">分析失败：' + esc(r.data && r.data.error ? r.data.error : JSON.stringify(r.data)) + '</div>'; return; }
     var o = r.data;
     var claims = o.claims || [];
@@ -4477,14 +4411,14 @@ async function compileWikiCandidate(conceptId, resultId) {
   statusEl.textContent = '编译中，可能需要一些时间...';
   var cached = (S.wikiAnalyzeCache && S.wikiAnalyzeCache[conceptId]) || {};
   try {
-    var r = await api('POST', '/wiki/compile', { concept_id: conceptId, page_type: 'concept', result_id: resultId, claims: cached.claims || [], tensions: cached.tensions || [] });
+    var r = await api('POST', '/wiki/compile', { entry_id: conceptId, result_id: resultId, claims: cached.claims || [], tensions: cached.tensions || [] });
     if (r.ok) {
       statusEl.innerHTML = '<span style="color:var(--green)">编译成功，已生成草稿</span>';
       pollWikiPendingCount();
       loadWikiCatalog();
       if (r.data && r.data.page_id) {
         closeWikiDetailModal();
-        openWikiConceptDetail(r.data.page_id);
+        openWikiEntryDetail(r.data.page_id);
       }
     } else {
       statusEl.innerHTML = '<span style="color:var(--red)">编译失败：' + esc(r.data && r.data.message ? r.data.message : JSON.stringify(r.data)) + '</span>';
@@ -4492,7 +4426,7 @@ async function compileWikiCandidate(conceptId, resultId) {
   } catch(e) { statusEl.innerHTML = '<span style="color:var(--red)">编译出错：' + esc(e.message) + '</span>'; }
 }
 
-async function openWikiConceptDetail(pageId) {
+async function openWikiEntryDetail(pageId) {
   S.wikiSelectedId = pageId;
   var detail = document.getElementById('wikiDetailModalContent');
   detail.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3)">加载中...</div>';
@@ -4500,7 +4434,7 @@ async function openWikiConceptDetail(pageId) {
   try {
     var r = await api('GET', '/wiki/pages/' + pageId);
     if (!r.ok || !r.data) { detail.innerHTML = '<div style="color:var(--red);padding:20px">加载失败</div>'; return; }
-    S.wikiConceptId = r.data.concept_id || null;
+    S.wikiConceptId = r.data.entry_id || null;
     renderWikiPageDetail(r.data);
   } catch(e) { detail.innerHTML = '<div style="color:var(--red);padding:20px">加载失败</div>'; }
 }
@@ -4687,7 +4621,7 @@ function renderWikiPageDetail(p) {
   detail.innerHTML = '\
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">\
       <h2 style="font-size:16px;font-weight:700">' + esc(p.title || '') + '</h2>\
-      <span class="badge">' + esc((p.page_type === 'topic' ? '主题页' : '概念页') + ' · ' + statusLabel) + '</span>\
+      <span class="badge">' + esc(wikiPageTypeLabel(p.page_type) + ' · ' + statusLabel) + '</span>\
     </div>\
     <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">' + actionsHtml + '\
       ' + (isTopicShell ? '' : '<button class="btn btn-sm" onclick="deriveWikiDraft(\'' + esc(p.page_id) + '\',\'' + esc(p.page_type) + '\',\'wikiDraftsPanel\')">派生草稿</button>') + '\
@@ -4703,8 +4637,18 @@ function renderWikiPageDetail(p) {
     loadWikiRelationsPanel(p.page_id, 'wikiRelationsPanel');
     loadWikiDraftsPanel(p.page_id, 'wikiDraftsPanel');
   }
-  if (p.concept_id) { loadConceptKPLinksSection(p.concept_id); }
-  else { document.getElementById('wikiConceptKPSection').innerHTML = '<div style="font-size:12px;color:var(--text-3)">该页面未关联概念' + (p.page_type === 'topic' ? '（主题页通过成员概念页关联）' : '') + '</div>'; }
+  if (p.entry_id) { loadConceptKPLinksSection(p.entry_id); }
+  else { document.getElementById('wikiConceptKPSection').innerHTML = '<div style="font-size:12px;color:var(--text-3)">该页面未关联概念' + (p.page_type === 'topic' ? '（主题页通过成员词条页关联）' : '') + '</div>'; }
+}
+
+// wikiPageTypeLabel: concept/fact 词条页与 topic 主题页共用同一批
+// 状态徽标、操作按钮渲染逻辑（renderWikiPageDetail 等），唯一的展示差异是
+// 这一处的中文名——概念页/事实页对应 docs/impl/v1/wiki.md「概念页 / 事实页」
+// 2026-08-03 扩展。
+function wikiPageTypeLabel(pageType) {
+  if (pageType === 'topic') return '主题页';
+  if (pageType === 'fact') return '事实页';
+  return '概念页';
 }
 
 async function analyzeTopicShell(pageId) {
@@ -4755,7 +4699,7 @@ async function loadConceptKPLinksSection(conceptId) {
   if (!host) return;
   host.innerHTML = '<div style="font-size:12px;color:var(--text-3)">加载中...</div>';
   try {
-    var cr = await api('GET', '/concepts/' + encodeURIComponent(conceptId));
+    var cr = await api('GET', '/entries/' + encodeURIComponent(conceptId));
     if (!cr.ok || !cr.data) { host.innerHTML = '<div style="font-size:12px;color:var(--red)">加载失败</div>'; return; }
     var points = cr.data.points || [];
     if (!points.length) { host.innerHTML = '<div style="font-size:12px;color:var(--text-3)">该概念暂无知识点</div>'; return; }
@@ -4830,9 +4774,21 @@ async function loadWikiDraftsPanel(pageId, hostId) {
     var r = await api('GET', '/wiki/drafts?page_id=' + pageId);
     var rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
     host.innerHTML = rows.length
-      ? rows.map(function(d) { return '<div class="timeline-event" style="cursor:pointer" onclick="openWikiDraftEditor(\'' + esc(d.draft_id) + '\')"><b>' + esc(d.title || '(未命名草稿)') + '</b> · ' + dateStr(d.updated_at || d.created_at) + '</div>'; }).join('')
+      ? rows.map(function(d) { return '<div class="timeline-event" style="display:flex;align-items:center;justify-content:space-between;gap:8px">\
+          <span style="cursor:pointer;flex:1;min-width:0" onclick="openWikiDraftEditor(\'' + esc(d.draft_id) + '\')"><b>' + esc(d.title || '(未命名草稿)') + '</b> · ' + dateStr(d.updated_at || d.created_at) + '</span>\
+          <button class="btn btn-sm" style="flex-shrink:0" onclick="deleteWikiDraft(\'' + esc(d.draft_id) + '\',\'' + esc(pageId) + '\',\'' + esc(hostId) + '\')">删除</button>\
+        </div>'; }).join('')
       : '<div style="font-size:12px;color:var(--text-3)">暂无草稿</div>';
   } catch(e) { host.innerHTML = '<div style="font-size:12px;color:var(--red)">加载失败</div>'; }
+}
+
+async function deleteWikiDraft(draftId, pageId, hostId) {
+  if (!confirm('确认删除该草稿？草稿删除后不可恢复。')) return;
+  try {
+    var r = await api('DELETE', '/wiki/drafts/' + draftId);
+    if (!r.ok) { alert('删除失败：' + (r.data && (r.data.message || r.data.error) ? (r.data.message || r.data.error) : JSON.stringify(r.data))); return; }
+    loadWikiDraftsPanel(pageId, hostId);
+  } catch(e) { alert('删除出错：' + e.message); }
 }
 
 async function deriveWikiDraft(pageId, pageType, hostId) {
@@ -4899,7 +4855,7 @@ async function viewWikiRevision(pageId, revId, hostId) {
 function refreshWikiPageEverywhere(pageId) {
   loadWikiCatalog();
   if (S.wikiSelectedId === pageId && !document.getElementById('wikiDetailModal').classList.contains('hidden')) {
-    openWikiConceptDetail(pageId);
+    openWikiEntryDetail(pageId);
   }
 }
 
@@ -5018,7 +4974,7 @@ function renderDomainRail() {
   list.innerHTML = items.map(function(d) {
     return '<div class="domain-rail-item' + (d.domain_id === S.domainRailSelectedId ? ' active' : '') + '" onclick="selectDomainRail(\'' + esc(d.domain_id) + '\')">\
       <span class="domain-rail-name">' + esc(d.name) + '</span>\
-      <span class="domain-rail-count">' + d.concept_count + '</span>\
+      <span class="domain-rail-count">' + d.entry_count + '</span>\
       ' + (d.pending_signal_count > 0 ? '<span class="domain-rail-signal" title="' + d.pending_signal_count + ' 条待确认信号">' + d.pending_signal_count + '</span>' : '') + '\
     </div>';
   }).join('');
@@ -5041,22 +4997,23 @@ async function renderDomainConceptPane() {
       <div style="min-width:0">\
         <div style="font-size:16px;font-weight:700">' + esc(d.name) + '</div>\
         <div style="font-size:12.5px;color:var(--text-2);margin-top:4px">' + esc(d.description || '暂无简介') + '</div>\
-        <div style="display:flex;gap:14px;margin-top:8px;font-size:12px;color:var(--text-3)">\
+        <div style="display:flex;gap:14px;margin-top:8px;font-size:12px;color:var(--text-3);flex-wrap:wrap">\
           <span>来源 <b style="color:var(--text)">' + d.source_count + '</b></span>\
-          <span>概念 <b style="color:var(--text)">' + d.concept_count + '</b></span>\
+          <span>概念 <b style="color:var(--text)">' + d.entry_count + '</b></span>\
           <span>知识点 <b style="color:var(--text)">' + d.kp_count + '</b></span>\
+          <span>未归于概念的知识点 <b style="color:var(--text)">' + (d.unassigned_kp_count || 0) + '</b></span>\
         </div>\
       </div>\
-      <button class="btn btn-sm" onclick="openManualConceptDraft(\'' + esc(domainId) + '\')">+ 新增概念</button>\
+      <button class="btn btn-sm" onclick="proposeEntriesFromOrphans(\'' + esc(domainId) + '\')">+ 新增词条</button>\
     </div>\
     <div class="domain-concept-grid" id="domainConceptGrid"><div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">加载中...</div></div>';
 
   var conceptsR, domainCandidatesR, pendingR;
   try {
     var results = await Promise.all([
-      api('GET', '/concepts?domain_id=' + encodeURIComponent(domainId)),
-      api('GET', '/concepts/candidates/by-domain?domain_id=' + encodeURIComponent(domainId)),
-      api('GET', '/concepts/candidates?status=pending_confirm')
+      api('GET', '/entries?domain_id=' + encodeURIComponent(domainId)),
+      api('GET', '/entries/candidates/by-domain?domain_id=' + encodeURIComponent(domainId)),
+      api('GET', '/entries/candidates?status=pending_confirm')
     ]);
     conceptsR = results[0]; domainCandidatesR = results[1]; pendingR = results[2];
   } catch (e) { conceptsR = domainCandidatesR = pendingR = { ok: false, data: [] }; }
@@ -5066,11 +5023,11 @@ async function renderDomainConceptPane() {
   var domainCandidates = (domainCandidatesR.ok && Array.isArray(domainCandidatesR.data)) ? domainCandidatesR.data : [];
   var allPending = (pendingR.ok && Array.isArray(pendingR.data)) ? pendingR.data : [];
   // 合并候选没有 domain_id（涉及两个已有概念，见后端注释），靠 merge_from
-  // 里是否包含本领域的 concept_id 来判断要不要在这个领域下露出徽标。
+  // 里是否包含本领域的 entry_id 来判断要不要在这个领域下露出徽标。
   var mergeCandidates = allPending.filter(function(c) { return c.kind === 'merge'; });
 
-  // S.conceptCandidates 是 confirmConceptCandidate/rejectConceptCandidate/
-  // selectConceptCandidate 等既有函数按 candidate_id 查找候选详情用的缓存，
+  // S.conceptCandidates 是 confirmEntryCandidate/rejectEntryCandidate/
+  // selectEntryCandidate 等既有函数按 candidate_id 查找候选详情用的缓存，
   // 这里把本领域会展示出来的所有候选（新增 + 合并）都放进去。
   var byId = {};
   domainCandidates.forEach(function(c) { byId[c.candidate_id] = c; });
@@ -5084,7 +5041,7 @@ async function renderDomainConceptPane() {
   var items = [];
   domainCandidates.filter(function(c) { return c.status === 'pending_confirm'; })
     .forEach(function(c) { items.push({ type: 'candidate', data: c }); });
-  S.domainConceptList.forEach(function(c) { items.push({ type: 'concept', data: c, merge: mergeCandidateFor(c.concept_id) }); });
+  S.domainConceptList.forEach(function(c) { items.push({ type: 'concept', data: c, merge: mergeCandidateFor(c.entry_id) }); });
   domainCandidates.filter(function(c) { return c.status === 'rejected'; })
     .forEach(function(c) { items.push({ type: 'candidate', data: c }); });
   domainCandidates.filter(function(c) { return c.status === 'expired'; })
@@ -5095,7 +5052,7 @@ async function renderDomainConceptPane() {
   var cardsHtml = items.length
     ? items.map(renderDomainGridCard).join('')
     : '<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">该领域下还没有概念</div>';
-  grid.innerHTML = cardsHtml + '<div class="domain-concept-new" onclick="openManualConceptDraft(\'' + esc(domainId) + '\')">+ 新增概念</div>';
+  grid.innerHTML = cardsHtml + '<div class="domain-concept-new" onclick="openManualConceptDraft(\'' + esc(domainId) + '\')">+ 新增词条</div>';
 }
 
 var CONCEPT_CANDIDATE_STATUS_LABELS = { pending_confirm: '待确认', rejected: '已驳回', expired: '已过期' };
@@ -5104,10 +5061,11 @@ function renderDomainGridCard(item) {
   if (item.type === 'concept') {
     var c = item.data;
     var mergeBadge = item.merge
-      ? '<span class="dcc-badge merge" onclick="event.stopPropagation();selectConceptCandidate(\'' + esc(item.merge.candidate_id) + '\')">合并候选</span>'
+      ? '<span class="dcc-badge merge" onclick="event.stopPropagation();selectEntryCandidate(\'' + esc(item.merge.candidate_id) + '\')">合并候选</span>'
       : '';
-    return '<div class="domain-concept-card confirmed" onclick="openConceptEditView(\'' + esc(c.concept_id) + '\')">\
-      <div class="dcc-top"><div class="dcc-name">' + esc(c.name) + '</div>' + mergeBadge + '</div>\
+    var kindBadge = c.kind === 'fact' ? '<span class="dcc-badge" style="background:var(--bg-alt);color:var(--text-3);border:1px solid var(--border)">事实</span>' : '';
+    return '<div class="domain-concept-card confirmed" onclick="openEntryEditView(\'' + esc(c.entry_id) + '\')">\
+      <div class="dcc-top"><div class="dcc-name">' + esc(c.name) + '</div>' + kindBadge + mergeBadge + '</div>\
       <div class="dcc-desc">' + esc(c.description || '') + '</div>\
       <div class="dcc-kp">' + c.kp_count + ' 个知识点</div>\
     </div>';
@@ -5116,8 +5074,10 @@ function renderDomainGridCard(item) {
   var statusLabel = CONCEPT_CANDIDATE_STATUS_LABELS[c.status] || c.status;
   var origin = conceptCandidateOrigin(c);
   var originLabel = origin === 'content_driven' ? '导入内容' : origin === 'manual' ? '人工新增' : origin === 'usage_driven' ? '查询信号' : '';
-  return '<div class="domain-concept-card candidate status-' + esc(c.status) + '" onclick="selectConceptCandidate(\'' + esc(c.candidate_id) + '\')">\
-    <div class="dcc-top"><div class="dcc-name">' + esc(c.suggested_name || '(未命名)') + '</div><span class="dcc-status-badge status-' + esc(c.status) + '">' + esc(statusLabel) + '</span></div>\
+  var candidateKindBadge = (c.kind === 'add' && c.entry_kind === 'fact')
+    ? '<span class="dcc-badge" style="background:var(--bg-alt);color:var(--text-3);border:1px solid var(--border)">事实</span>' : '';
+  return '<div class="domain-concept-card candidate status-' + esc(c.status) + '" onclick="selectEntryCandidate(\'' + esc(c.candidate_id) + '\')">\
+    <div class="dcc-top"><div class="dcc-name">' + esc(c.suggested_name || '(未命名)') + '</div>' + candidateKindBadge + '<span class="dcc-status-badge status-' + esc(c.status) + '">' + esc(statusLabel) + '</span></div>\
     <div class="dcc-desc">' + (originLabel ? esc(originLabel) + ' · ' : '') + (c.point_ids || []).length + ' 个关联知识点</div>\
     <div class="dcc-kp">最近信号 ' + dateStr(c.last_signal_at) + '</div>\
   </div>';
@@ -5144,10 +5104,32 @@ async function submitDomainCreateForm() {
   } catch (e) { alert('创建出错：' + e.message); }
 }
 
+// 「知识领域」页面的"+ 新增词条"：对该领域下所有未归于概念的知识点跑
+// 一次 LLM 聚类命名（POST /entries/domains/:id/propose-from-orphans，
+// docs/impl/v1/kpn.md 步骤 3 的按需触发版本），每一簇各自写入一条
+// pending_confirm 候选，仍需人工在候选列表里逐条确认/驳回——这里只负责
+// 触发聚类，不做任何自动确认。
+async function proposeEntriesFromOrphans(domainId) {
+  var btns = document.querySelectorAll('[onclick="proposeEntriesFromOrphans(\'' + domainId + '\')"]');
+  btns.forEach(function(b) { b.disabled = true; b.textContent = '聚类中...'; });
+  try {
+    var r = await api('POST', '/entries/domains/' + encodeURIComponent(domainId) + '/propose-from-orphans');
+    if (!r.ok) { alert('聚类失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data))); return; }
+    var touched = (r.data && r.data.proposals_touched) || 0;
+    alert(touched > 0 ? ('已生成 ' + touched + ' 个待确认概念候选') : '没有可聚类的未归类知识点');
+    pollConceptPendingCount();
+    loadDomainRail();
+  } catch (e) {
+    alert('聚类出错：' + e.message);
+  } finally {
+    btns.forEach(function(b) { b.disabled = false; b.textContent = '+ 新增词条'; });
+  }
+}
+
 // "新增"：只在前端开一个草稿表单，不调用后端、不落库——复用既有的候选
 // 确认对话框 UI（选领域/填名字/加 KP），但候选行本身要等草稿的"确认"或
 // "驳回"按钮点击后才真正创建，避免用户中途关闭也在概念网格里留下一条空
-// 记录。preferredDomainId 让「知识领域」页面里点某个领域的"+ 新增概念"
+// 记录。preferredDomainId 让「知识领域」页面里点某个领域的"+ 新增词条"
 // 时直接预选该领域，而不是总落回第一个领域。
 async function openManualConceptDraft(preferredDomainId) {
   var domains = await ensureDomainsLoaded();
@@ -5165,19 +5147,21 @@ async function openManualConceptDraft(preferredDomainId) {
   S.conceptFormShowAddPicker = false;
   S.conceptFormAvailablePoints = null;
 
-  var concepts = await loadConceptsForDomain(initialDomain);
-  if (!S.conceptDraftActive) return; // closed while domains/concepts were loading
-  renderConceptCandidateDetail(draft, domains, concepts, initialDomain, [], {});
+  var entries = await loadEntriesForDomain(initialDomain);
+  if (!S.conceptDraftActive) return; // closed while domains/entries were loading
+  renderEntryCandidateDetail(draft, domains, entries, initialDomain, [], {});
 }
 
 function readManualConceptDraftForm() {
   var domainSel = document.getElementById('conceptConfirmDomainSelect');
   var nameInput = document.getElementById('conceptConfirmConceptNewInput');
   var descInput = document.getElementById('conceptConfirmDescriptionInput');
+  var kindSel = document.getElementById('conceptConfirmKindSelect');
   return {
     domain_id: domainSel ? domainSel.value : '',
     suggested_name: nameInput ? nameInput.value.trim() : '',
     description: descInput ? descInput.value.trim() : '',
+    kind: kindSel ? kindSel.value : '',
     point_ids: (S.conceptFormPointIds || []).map(function(p) { return p.point_id; })
   };
 }
@@ -5185,9 +5169,9 @@ function readManualConceptDraftForm() {
 async function saveManualConceptDraft() {
   var body = readManualConceptDraftForm();
   try {
-    var r = await api('POST', '/concepts/candidates', body);
+    var r = await api('POST', '/entries/candidates', body);
     if (!r.ok) { alert('保存失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data))); return; }
-    closeConceptDetailModal();
+    closeEntryDetailModal();
     pollConceptPendingCount();
     loadDomainRail();
   } catch(e) { alert('保存出错：' + e.message); }
@@ -5196,11 +5180,11 @@ async function saveManualConceptDraft() {
 async function rejectManualConceptDraft() {
   var body = readManualConceptDraftForm();
   try {
-    var r = await api('POST', '/concepts/candidates', body);
+    var r = await api('POST', '/entries/candidates', body);
     if (!r.ok) { alert('保存失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data))); return; }
-    var r2 = await api('POST', '/concepts/candidates/' + r.data.candidate_id + '/reject');
+    var r2 = await api('POST', '/entries/candidates/' + r.data.candidate_id + '/reject');
     if (!r2.ok) { alert('驳回失败：' + (r2.data && r2.data.message ? r2.data.message : JSON.stringify(r2.data))); return; }
-    closeConceptDetailModal();
+    closeEntryDetailModal();
     pollConceptPendingCount();
     loadDomainRail();
   } catch(e) { alert('操作出错：' + e.message); }
@@ -5216,7 +5200,7 @@ function conceptCandidateOrigin(c) {
   return 'usage_driven';
 }
 
-async function selectConceptCandidate(candidateId) {
+async function selectEntryCandidate(candidateId) {
   S.conceptDraftActive = false;
   S.conceptDraftCandidate = null;
   S.conceptSelectedId = candidateId;
@@ -5226,7 +5210,7 @@ async function selectConceptCandidate(candidateId) {
   if (!c) { detail.innerHTML = '<div style="color:var(--red);padding:20px">未找到候选</div>'; return; }
 
   detail.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>';
-  var points = await loadConceptCandidatePoints(c.point_ids || []);
+  var points = await loadEntryCandidatePoints(c.point_ids || []);
   var conceptNames = c.kind === 'merge' ? await loadConceptNamesByIds(c.merge_from || []) : {};
   // A candidate may have been re-selected while these async loads were in
   // flight — bail if the user has since moved on.
@@ -5235,128 +5219,175 @@ async function selectConceptCandidate(candidateId) {
   if (c.status === 'pending_confirm' && c.kind === 'add') {
     var domains = await ensureDomainsLoaded();
     var initialDomain = c.domain_id || (domains[0] && domains[0].domain_id) || '';
-    var concepts = await loadConceptsForDomain(initialDomain);
+    var entries = await loadEntriesForDomain(initialDomain);
     if (S.conceptSelectedId !== candidateId) return;
     S.conceptFormSelectedDomain = initialDomain;
     S.conceptFormPointIds = points.slice();
     S.conceptFormShowAddPicker = false;
     S.conceptFormAvailablePoints = null;
-    renderConceptCandidateDetail(c, domains, concepts, initialDomain, points, conceptNames);
+    renderEntryCandidateDetail(c, domains, entries, initialDomain, points, conceptNames);
     return;
   }
-  renderConceptCandidateDetail(c, null, null, null, points, conceptNames);
+  renderEntryCandidateDetail(c, null, null, null, points, conceptNames);
 }
 
 // ═══════════════════════════════════════════════════════
 // 已确认概念详情/编辑：改名、改描述、增删关联知识点。这是对已有结构的
 // 直接编辑，不是概念演化候选，所以没有确认/驳回步骤——保存即生效。
 // ═══════════════════════════════════════════════════════
-async function openConceptEditView(conceptId) {
+async function openEntryEditView(conceptId) {
   var box = document.getElementById('conceptEditModalContent');
   document.getElementById('conceptEditModal').classList.remove('hidden');
   box.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>';
   S.conceptEditId = conceptId;
   S.conceptEditAvailablePoints = null;
   S.conceptEditShowAddPicker = false;
-  await reloadConceptEditView();
+  S.conceptEditDraft = null;
+  await reloadEntryEditView();
 }
-function closeConceptEditModal() {
+function closeEntryEditModal() {
   document.getElementById('conceptEditModal').classList.add('hidden');
   S.conceptEditId = null;
+  S.conceptEditDraft = null;
 }
 
-async function reloadConceptEditView() {
+function captureEntryEditDraft() {
+  var nameEl = document.getElementById('conceptEditName');
+  if (!nameEl) return;
+  var kindEl = document.getElementById('conceptEditKind');
+  var descEl = document.getElementById('conceptEditDesc');
+  S.conceptEditDraft = {
+    name: nameEl.value,
+    description: descEl ? descEl.value : '',
+    kind: kindEl ? kindEl.value : ''
+  };
+}
+
+async function reloadEntryEditView() {
   var conceptId = S.conceptEditId;
   if (!conceptId) return;
-  var r = await api('GET', '/concepts/' + encodeURIComponent(conceptId));
+  captureEntryEditDraft();
+  var r = await api('GET', '/entries/' + encodeURIComponent(conceptId));
   if (S.conceptEditId !== conceptId) return;
   var box = document.getElementById('conceptEditModalContent');
   if (!r.ok) { box.innerHTML = '<div style="color:var(--red);padding:20px">加载失败：' + esc(r.data && r.data.message ? r.data.message : '') + '</div>'; return; }
   S.conceptEditData = r.data;
-  renderConceptEditView();
+  renderEntryEditView();
 }
 
-function renderConceptEditView() {
+function renderEntryEditView() {
   var d = S.conceptEditData;
   var box = document.getElementById('conceptEditModalContent');
+  var draft = S.conceptEditDraft;
+  var nameVal = draft ? draft.name : (d.name || '');
+  var descVal = draft ? draft.description : (d.description || '');
+  var kindVal = draft ? draft.kind : d.kind;
   var pointsHtml = (d.points || []).length ? d.points.map(function(p) {
     return '<div style="padding:8px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;gap:8px">\
       <div style="flex:1;min-width:0">\
         <div style="font-size:12px;color:var(--text)">' + esc(p.content || '') + '</div>\
         <div style="font-size:11px;color:var(--text-3);margin-top:4px">来源文件：' + esc(p.source_title || '') + '</div>\
       </div>\
-      <button class="btn btn-sm" style="color:var(--red);flex-shrink:0" onclick="removeConceptEditPoint(\'' + esc(p.point_id) + '\')">移除</button>\
+      <button class="btn btn-sm" style="color:var(--red);flex-shrink:0" onclick="removeEntryEditPoint(\'' + esc(p.point_id) + '\')">移除</button>\
     </div>';
   }).join('') : '<div style="font-size:12px;color:var(--text-3);padding:8px 0">暂无数据</div>';
 
   var pickerHtml = '';
   if (S.conceptEditShowAddPicker) {
     var options = S.conceptEditAvailablePoints || [];
-    pickerHtml = '<div style="margin-top:8px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px;max-height:200px;overflow-y:auto">' +
-      (options.length ? options.map(function(p) {
-        return '<div style="padding:6px 0;border-bottom:1px solid var(--border-lt);display:flex;justify-content:space-between;align-items:flex-start;gap:8px">\
+    var linkedIds = {};
+    (d.points || []).forEach(function(p) { linkedIds[p.point_id] = true; });
+    var candidates = options.filter(function(p) { return !linkedIds[p.point_id]; });
+    pickerHtml = '<div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;gap:8px">\
+      <button class="btn btn-sm" onclick="toggleEntryEditAddPicker()">收起</button>\
+      <button class="btn btn-sm" onclick="addSelectedEntryEditPoints()">添加</button>\
+    </div>\
+    <div id="conceptEditAddPicker" style="margin-top:8px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px;max-height:200px;overflow-y:auto">' +
+      (candidates.length ? candidates.map(function(p) {
+        return '<label style="padding:6px 0;border-bottom:1px solid var(--border-lt);display:flex;align-items:flex-start;gap:8px;cursor:pointer">\
+          <input type="checkbox" value="' + esc(p.point_id) + '" style="margin-top:2px;flex-shrink:0">\
           <div style="flex:1;min-width:0;font-size:12px;color:var(--text)">' + esc(p.content || '') + '<div style="font-size:11px;color:var(--text-3);margin-top:2px">' + esc(p.source_title || '') + '</div></div>\
-          <button class="btn btn-sm" onclick="addConceptEditPoint(\'' + esc(p.point_id) + '\')">添加</button>\
-        </div>';
+        </label>';
       }).join('') : '<div style="font-size:12px;color:var(--text-3);padding:6px 0">该领域下暂无可添加的知识点（需未归类且状态为 current）</div>') +
       '</div>';
   }
 
   box.innerHTML = '\
-    <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">概念详情</h2>\
+    <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">词条详情</h2>\
     <div style="display:flex;flex-direction:column;gap:8px">\
-      <label style="font-size:12px;color:var(--text-3)">概念名称<input id="conceptEditName" value="' + esc(d.name) + '" style="' + CONCEPT_INPUT_STYLE + ';margin-top:4px" /></label>\
-      <label style="font-size:12px;color:var(--text-3)">描述<textarea id="conceptEditDesc" style="' + CONCEPT_INPUT_STYLE + ';margin-top:4px;min-height:64px;resize:vertical">' + esc(d.description || '') + '</textarea></label>\
+      <label style="font-size:12px;color:var(--text-3)">词条名称<input id="conceptEditName" value="' + esc(nameVal) + '" style="' + CONCEPT_INPUT_STYLE + ';margin-top:4px" /></label>\
+      <label style="font-size:12px;color:var(--text-3)">类型' + conceptKindSelectHtml('conceptEditKind', kindVal) + '</label>\
+      <label style="font-size:12px;color:var(--text-3)">描述<textarea id="conceptEditDesc" style="' + CONCEPT_INPUT_STYLE + ';margin-top:4px;min-height:64px;resize:vertical">' + esc(descVal) + '</textarea></label>\
     </div>\
     <h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">关联知识点（' + (d.points || []).length + ' 个）</h3>\
     ' + pointsHtml + '\
-    <div style="margin-top:8px"><button class="btn btn-sm" onclick="toggleConceptEditAddPicker()">' + (S.conceptEditShowAddPicker ? '收起' : '+ 添加知识点') + '</button></div>\
+    ' + (S.conceptEditShowAddPicker ? '' : '<div style="margin-top:8px"><button class="btn btn-sm" onclick="toggleEntryEditAddPicker()">+ 添加知识点</button></div>') + '\
     ' + pickerHtml + '\
     <div class="modal-actions">\
-      <button class="btn btn-primary btn-sm" onclick="saveConceptEdit()">保存</button>\
-      <button class="btn btn-sm" onclick="closeConceptEditModal()">取消</button>\
+      <button class="btn btn-primary btn-sm" onclick="saveEntryEdit()">保存</button>\
+      <button class="btn btn-sm" onclick="closeEntryEditModal()">取消</button>\
     </div>';
 }
 
-async function toggleConceptEditAddPicker() {
+async function toggleEntryEditAddPicker() {
+  captureEntryEditDraft();
   S.conceptEditShowAddPicker = !S.conceptEditShowAddPicker;
   if (S.conceptEditShowAddPicker && !S.conceptEditAvailablePoints) {
-    var r = await api('GET', '/concepts/points?domain_id=' + encodeURIComponent(S.conceptEditData.domain_id));
+    var r = await api('GET', '/entries/points?domain_id=' + encodeURIComponent(S.conceptEditData.domain_id));
     S.conceptEditAvailablePoints = (r.ok && Array.isArray(r.data)) ? r.data : [];
   }
-  renderConceptEditView();
+  renderEntryEditView();
 }
 
-async function addConceptEditPoint(pointId) {
+async function addEntryEditPoint(pointId) {
+  return addEntryEditPoints([pointId]);
+}
+
+async function addSelectedEntryEditPoints() {
+  var boxes = document.querySelectorAll('#conceptEditAddPicker input[type=checkbox]:checked');
+  var ids = Array.prototype.map.call(boxes, function(el) { return el.value; }).filter(Boolean);
+  if (!ids.length) { alert('请先勾选要添加的知识点'); return; }
+  return addEntryEditPoints(ids);
+}
+
+async function addEntryEditPoints(pointIds) {
   var conceptId = S.conceptEditId;
   try {
-    var r = await api('POST', '/concepts/' + encodeURIComponent(conceptId) + '/points', { point_ids: [pointId] });
+    var r = await api('POST', '/entries/' + encodeURIComponent(conceptId) + '/points', { point_ids: pointIds });
     if (!r.ok) { alert('添加失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data))); return; }
     S.conceptEditAvailablePoints = null;
-    await reloadConceptEditView();
+    await reloadEntryEditView();
+    if (S.conceptEditShowAddPicker) {
+      var pr = await api('GET', '/entries/points?domain_id=' + encodeURIComponent(S.conceptEditData.domain_id));
+      S.conceptEditAvailablePoints = (pr.ok && Array.isArray(pr.data)) ? pr.data : [];
+      renderEntryEditView();
+    }
     loadDomainRail();
   } catch(e) { alert('添加出错：' + e.message); }
 }
 
-async function removeConceptEditPoint(pointId) {
+async function removeEntryEditPoint(pointId) {
   if (!(await showConfirm('确认移除该知识点？注意：一个分段内的多个知识点共享同一个"是否归入此概念"的归属，移除会把该知识点所在的整个分段都移出这个概念，不只是这一条。'))) return;
   var conceptId = S.conceptEditId;
   try {
-    var r = await api('DELETE', '/concepts/' + encodeURIComponent(conceptId) + '/points/' + encodeURIComponent(pointId));
+    var r = await api('DELETE', '/entries/' + encodeURIComponent(conceptId) + '/points/' + encodeURIComponent(pointId));
     if (!r.ok) { alert('移除失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data))); return; }
-    await reloadConceptEditView();
+    await reloadEntryEditView();
     loadDomainRail();
   } catch(e) { alert('移除出错：' + e.message); }
 }
 
-async function saveConceptEdit() {
+async function saveEntryEdit() {
+  captureEntryEditDraft();
   var name = document.getElementById('conceptEditName').value.trim();
   var description = document.getElementById('conceptEditDesc').value.trim();
-  if (!name) { alert('请填写概念名称'); return; }
+  var kindSel = document.getElementById('conceptEditKind');
+  if (!name) { alert('请填写词条名称'); return; }
   try {
-    var r = await api('PATCH', '/concepts/' + encodeURIComponent(S.conceptEditId), { name: name, description: description });
+    var r = await api('PATCH', '/entries/' + encodeURIComponent(S.conceptEditId), { name: name, description: description, kind: kindSel ? kindSel.value : '' });
     if (!r.ok) { alert('保存失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data))); return; }
-    closeConceptEditModal();
+    S.conceptEditDraft = null;
+    closeEntryEditModal();
     loadDomainRail();
   } catch(e) { alert('保存出错：' + e.message); }
 }
@@ -5364,7 +5395,7 @@ async function saveConceptEdit() {
 // 关联 KP 不止要显示数量，还要显示内容和所属文件名——分别取自
 // GET /points/:id（content/source_id）和 GET /sources/:id（title），
 // 数量通常很小（几个到十几个），逐条请求足够，不新增批量端点。
-async function loadConceptCandidatePoints(pointIds) {
+async function loadEntryCandidatePoints(pointIds) {
   var results = await Promise.all(pointIds.map(async function(pid) {
     try {
       var r = await api('GET', '/points/' + encodeURIComponent(pid));
@@ -5391,12 +5422,12 @@ async function loadConceptCandidatePoints(pointIds) {
   });
 }
 
-// 合并候选的 merge_from 只有 concept_id，界面上要显示概念名而不是裸 id。
+// 合并候选的 merge_from 只有 entry_id，界面上要显示概念名而不是裸 id。
 async function loadConceptNamesByIds(conceptIds) {
   try {
-    var r = await api('GET', '/concepts');
+    var r = await api('GET', '/entries');
     var map = {};
-    (r.ok && Array.isArray(r.data) ? r.data : []).forEach(function(cc) { map[cc.concept_id] = cc.name; });
+    (r.ok && Array.isArray(r.data) ? r.data : []).forEach(function(cc) { map[cc.entry_id] = cc.name; });
     var names = {};
     conceptIds.forEach(function(cid) { names[cid] = map[cid] || cid; });
     return names;
@@ -5418,15 +5449,15 @@ async function ensureDomainsLoaded() {
   return S.allDomains || [];
 }
 
-async function loadConceptsForDomain(domainId) {
+async function loadEntriesForDomain(domainId) {
   if (!domainId) return [];
   try {
-    var r = await api('GET', '/concepts?domain_id=' + encodeURIComponent(domainId));
+    var r = await api('GET', '/entries?domain_id=' + encodeURIComponent(domainId));
     return (r.ok && Array.isArray(r.data)) ? r.data : [];
   } catch (e) { return []; }
 }
 
-function closeConceptDetailModal() {
+function closeEntryDetailModal() {
   document.getElementById('conceptDetailModal').classList.add('hidden');
   S.conceptDraftActive = false;
   S.conceptDraftCandidate = null;
@@ -5447,7 +5478,7 @@ var CONCEPT_EVIDENCE_LABELS = {
 // 其余状态/kind=merge 保持只读，直接展示传入的 points 快照。单独抽成函数是
 // 因为增删/切换添加面板只需要替换 #conceptFormPointsSection 这一小块 DOM，
 // 不能整卡重渲染——那样会打断用户正在概念名输入框里敲的字。
-function buildConceptPointsSectionHtml(c, points) {
+function buildEntryPointsSectionHtml(c, points) {
   var editable = (c.status === 'pending_confirm' || c.status === 'draft') && c.kind === 'add';
   var list = editable ? (S.conceptFormPointIds || []) : (points || []);
   var pointsHtml = list.length ? list.map(function(p) {
@@ -5461,16 +5492,17 @@ function buildConceptPointsSectionHtml(c, points) {
 
   var addHtml = '';
   if (editable) {
-    addHtml = S.conceptFormShowAddPicker ? renderConceptAddPointsPicker() :
-      '<div style="margin-top:8px"><button class="btn btn-sm" onclick="openConceptAddPointsPicker()">+ 添加知识点</button></div>';
+    addHtml = S.conceptFormShowAddPicker ? renderEntryAddPointsPicker() :
+      '<div style="margin-top:8px"><button class="btn btn-sm" onclick="openEntryAddPointsPicker()">+ 添加知识点</button></div>';
   }
 
   return '<h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">关联知识点（' + list.length + ' 个）</h3>' + pointsHtml + addHtml;
 }
 
-// 添加面板：列出所选领域下尚无 concept 的 KP（GET /concepts/points，与
+// 添加面板：列出所选领域下尚无 concept 的 KP（GET /entries/points，与
 // ConfirmAdd/ConfirmAssign 迁移查询同一条件），已加入工作副本的排除掉。
-function renderConceptAddPointsPicker() {
+// 交互对齐概念详情：多选框 + 右上角统一「添加」。
+function renderEntryAddPointsPicker() {
   var avail = S.conceptFormAvailablePoints;
   if (avail == null) {
     return '<div style="margin-top:8px;font-size:12px;color:var(--text-3)">加载中...</div>';
@@ -5479,25 +5511,28 @@ function renderConceptAddPointsPicker() {
   (S.conceptFormPointIds || []).forEach(function(p) { includedIds[p.point_id] = true; });
   var candidates = avail.filter(function(p) { return !includedIds[p.point_id]; });
   var listHtml = candidates.length ? candidates.map(function(p) {
-    return '<div style="padding:6px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;gap:8px">\
+    return '<label style="padding:6px 0;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:8px;cursor:pointer">\
+      <input type="checkbox" value="' + esc(p.point_id) + '" style="margin-top:2px;flex-shrink:0">\
       <div style="flex:1;min-width:0">\
         <div style="font-size:12px;color:var(--text)">' + esc(p.content || '') + '</div>\
         <div style="font-size:11px;color:var(--text-3);margin-top:2px">来源文件：' + esc(p.source_title || '') + '</div>\
       </div>\
-      <button class="btn btn-sm" style="flex-shrink:0" onclick="addConceptFormPoint(\'' + esc(p.point_id) + '\')">添加</button>\
-    </div>';
+    </label>';
   }).join('') : '<div style="font-size:12px;color:var(--text-3);padding:6px 0">该领域下没有其他待归类知识点</div>';
-  return '<div style="margin-top:8px;border:1px solid var(--border);border-radius:var(--radius-xs);padding:8px;max-height:220px;overflow-y:auto">\
-    <div style="font-size:11px;color:var(--text-3);margin-bottom:6px">该领域下尚无概念的知识点：</div>' + listHtml + '\
-    <div style="margin-top:6px"><a href="javascript:void(0)" onclick="closeConceptAddPointsPicker()" style="font-size:12px;color:var(--text-3);text-decoration:underline">收起</a></div>\
-  </div>';
+  return '<div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;gap:8px">\
+      <button class="btn btn-sm" onclick="closeEntryAddPointsPicker()">收起</button>\
+      <button class="btn btn-sm" onclick="addSelectedConceptFormPoints()">添加</button>\
+    </div>\
+    <div id="conceptFormAddPicker" style="margin-top:8px;border:1px solid var(--border);border-radius:var(--radius-xs);padding:8px;max-height:220px;overflow-y:auto">\
+      <div style="font-size:11px;color:var(--text-3);margin-bottom:6px">该领域下尚无概念的知识点：</div>' + listHtml + '\
+    </div>';
 }
 
 function refreshConceptFormPointsSection() {
   var el = document.getElementById('conceptFormPointsSection');
   var c = S.conceptDraftActive ? S.conceptDraftCandidate : S.conceptCandidates.find(function(x) { return x.candidate_id === S.conceptSelectedId; });
   if (!el || !c) return;
-  el.innerHTML = buildConceptPointsSectionHtml(c, null);
+  el.innerHTML = buildEntryPointsSectionHtml(c, null);
 }
 
 function removeConceptFormPoint(pointId) {
@@ -5506,31 +5541,48 @@ function removeConceptFormPoint(pointId) {
 }
 
 function addConceptFormPoint(pointId) {
-  var p = (S.conceptFormAvailablePoints || []).find(function(x) { return x.point_id === pointId; });
-  if (!p) return;
-  S.conceptFormPointIds = (S.conceptFormPointIds || []).concat([p]);
+  addConceptFormPoints([pointId]);
+}
+
+function addSelectedConceptFormPoints() {
+  var boxes = document.querySelectorAll('#conceptFormAddPicker input[type=checkbox]:checked');
+  var ids = Array.prototype.map.call(boxes, function(el) { return el.value; }).filter(Boolean);
+  if (!ids.length) { alert('请先勾选要添加的知识点'); return; }
+  addConceptFormPoints(ids);
+}
+
+function addConceptFormPoints(pointIds) {
+  var avail = S.conceptFormAvailablePoints || [];
+  var byId = {};
+  avail.forEach(function(p) { byId[p.point_id] = p; });
+  var toAdd = [];
+  pointIds.forEach(function(id) {
+    if (byId[id]) toAdd.push(byId[id]);
+  });
+  if (!toAdd.length) return;
+  S.conceptFormPointIds = (S.conceptFormPointIds || []).concat(toAdd);
   refreshConceptFormPointsSection();
 }
 
-async function openConceptAddPointsPicker() {
+async function openEntryAddPointsPicker() {
   S.conceptFormShowAddPicker = true;
   S.conceptFormAvailablePoints = null;
   refreshConceptFormPointsSection();
   var domainId = S.conceptFormSelectedDomain;
   if (!domainId) { S.conceptFormAvailablePoints = []; refreshConceptFormPointsSection(); return; }
   try {
-    var r = await api('GET', '/concepts/points?domain_id=' + encodeURIComponent(domainId));
+    var r = await api('GET', '/entries/points?domain_id=' + encodeURIComponent(domainId));
     S.conceptFormAvailablePoints = (r.ok && Array.isArray(r.data)) ? r.data : [];
   } catch (e) { S.conceptFormAvailablePoints = []; }
   refreshConceptFormPointsSection();
 }
 
-function closeConceptAddPointsPicker() {
+function closeEntryAddPointsPicker() {
   S.conceptFormShowAddPicker = false;
   refreshConceptFormPointsSection();
 }
 
-function renderConceptCandidateDetail(c, domains, concepts, selectedDomainId, points, conceptNames) {
+function renderEntryCandidateDetail(c, domains, entries, selectedDomainId, points, conceptNames) {
   points = points || [];
   conceptNames = conceptNames || {};
   var detail = document.getElementById('conceptDetailModalContent');
@@ -5559,7 +5611,7 @@ function renderConceptCandidateDetail(c, domains, concepts, selectedDomainId, po
   if (isDraft || c.status === 'pending_confirm') {
     if (c.kind === 'add') {
       domains = domains || [];
-      concepts = concepts || [];
+      entries = entries || [];
       var domainOptions = domains.map(function(d) {
         return '<option value="' + esc(d.domain_id) + '"' + (d.domain_id === selectedDomainId ? ' selected' : '') + '>' + esc(d.name) + '</option>';
       }).join('');
@@ -5567,18 +5619,19 @@ function renderConceptCandidateDetail(c, domains, concepts, selectedDomainId, po
       // and the select<->new-name-input swap below (docs: 概念名称控件与
       // 领域名称同为原生 select，样式和"点击展开"行为一致；选中
       // "+ 新建概念..." 时就地换成输入框，不额外加第二个常驻字段).
-      S.conceptFormConcepts = concepts;
+      S.conceptFormConcepts = entries;
       S.conceptFormSuggestedName = c.suggested_name || '';
 
       // 草稿（"新增"按钮打开的、还没有候选行的表单）没有"归入已有概念"
       // 入口——那是确认执行时才做的决策，草稿此刻只是在保存一条候选，
       // 所以概念名称永远是纯文本输入，不提供选已有概念的 select/切换。
-      var conceptFieldHtml = isDraft ? conceptSlotNewInputHtml([], c.suggested_name) : buildConceptSlotHtml(concepts, c.suggested_name);
+      var conceptFieldHtml = isDraft ? conceptSlotNewInputHtml([], c.suggested_name) : buildConceptSlotHtml(entries, c.suggested_name);
 
       formHtml = '\
         <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px">\
-          <label style="font-size:12px;color:var(--text-3)">领域名称<select id="conceptConfirmDomainSelect" style="width:100%;margin-top:4px" onchange="onConceptConfirmDomainChange()">' + domainOptions + '</select></label>\
-          <label style="font-size:12px;color:var(--text-3)">概念名称<span id="conceptConfirmConceptSlot" style="display:block;margin-top:4px">' + conceptFieldHtml + '</span></label>\
+          <label style="font-size:12px;color:var(--text-3)">领域名称<select id="conceptConfirmDomainSelect" style="width:100%;margin-top:4px" onchange="onEntryConfirmDomainChange()">' + domainOptions + '</select></label>\
+          <label style="font-size:12px;color:var(--text-3)">词条名称<span id="conceptConfirmConceptSlot" style="display:block;margin-top:4px">' + conceptFieldHtml + '</span></label>\
+          <label style="font-size:12px;color:var(--text-3)">类型（新建概念时生效，归入已有概念沿用其已有类型）' + conceptKindSelectHtml('conceptConfirmKindSelect', c.entry_kind) + '</label>\
           <label style="font-size:12px;color:var(--text-3)">概念描述<textarea id="conceptConfirmDescriptionInput" style="' + CONCEPT_INPUT_STYLE + ';margin-top:4px;min-height:64px;resize:vertical">' + esc(evidence.description || '') + '</textarea></label>\
         </div>';
 
@@ -5586,9 +5639,9 @@ function renderConceptCandidateDetail(c, domains, concepts, selectedDomainId, po
         footerButtons.push('<button class="btn btn-primary btn-sm" onclick="saveManualConceptDraft()">确认</button>');
         footerButtons.push('<button class="btn btn-sm" style="color:var(--red)" onclick="rejectManualConceptDraft()">驳回</button>');
       } else {
-        footerButtons.push('<button class="btn btn-primary btn-sm" onclick="confirmConceptCandidate(\'' + esc(c.candidate_id) + '\')">确认</button>');
-        footerButtons.push('<button class="btn btn-sm" style="color:var(--red)" onclick="rejectConceptCandidate(\'' + esc(c.candidate_id) + '\')">驳回</button>');
-        footerButtons.push('<button class="btn btn-sm" style="color:var(--red)" onclick="deleteConceptCandidate(\'' + esc(c.candidate_id) + '\')">删除</button>');
+        footerButtons.push('<button class="btn btn-primary btn-sm" onclick="confirmEntryCandidate(\'' + esc(c.candidate_id) + '\')">确认</button>');
+        footerButtons.push('<button class="btn btn-sm" style="color:var(--red)" onclick="rejectEntryCandidate(\'' + esc(c.candidate_id) + '\')">驳回</button>');
+        footerButtons.push('<button class="btn btn-sm" style="color:var(--red)" onclick="deleteEntryCandidate(\'' + esc(c.candidate_id) + '\')">删除</button>');
       }
     } else {
       var options = (c.merge_from||[]).map(function(cid) { return '<option value="' + esc(cid) + '">' + esc(conceptNames[cid] || cid) + '</option>'; }).join('');
@@ -5596,17 +5649,17 @@ function renderConceptCandidateDetail(c, domains, concepts, selectedDomainId, po
         <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px">\
           <label style="font-size:12px;color:var(--text-3)">并入目标概念<select id="conceptConfirmTarget" style="width:100%;margin-top:4px">' + options + '</select></label>\
         </div>';
-      footerButtons.push('<button class="btn btn-primary btn-sm" onclick="confirmConceptCandidate(\'' + esc(c.candidate_id) + '\')">确认合并</button>');
-      footerButtons.push('<button class="btn btn-sm" style="color:var(--red)" onclick="rejectConceptCandidate(\'' + esc(c.candidate_id) + '\')">驳回</button>');
-      footerButtons.push('<button class="btn btn-sm" style="color:var(--red)" onclick="deleteConceptCandidate(\'' + esc(c.candidate_id) + '\')">删除</button>');
+      footerButtons.push('<button class="btn btn-primary btn-sm" onclick="confirmEntryCandidate(\'' + esc(c.candidate_id) + '\')">确认合并</button>');
+      footerButtons.push('<button class="btn btn-sm" style="color:var(--red)" onclick="rejectEntryCandidate(\'' + esc(c.candidate_id) + '\')">驳回</button>');
+      footerButtons.push('<button class="btn btn-sm" style="color:var(--red)" onclick="deleteEntryCandidate(\'' + esc(c.candidate_id) + '\')">删除</button>');
     }
   } else if (c.status === 'rejected' || (c.status === 'applied' && c.restorable)) {
     // 已驳回：纯状态翻转，随时可恢复。已执行：仅"新建概念"的 add 候选可
     // 恢复（后端会撤销概念创建+知识点迁移），c.restorable 由后端算好，
-    // 前端不重复判断 kind/created_new_concept 这些细节。
-    footerButtons.push('<button class="btn btn-sm" onclick="restoreConceptCandidate(\'' + esc(c.candidate_id) + '\')">待确认</button>');
+    // 前端不重复判断 kind/created_new_entry 这些细节。
+    footerButtons.push('<button class="btn btn-sm" onclick="restoreEntryCandidate(\'' + esc(c.candidate_id) + '\')">待确认</button>');
   }
-  footerButtons.push('<button class="btn btn-sm" onclick="closeConceptDetailModal()">取消</button>');
+  footerButtons.push('<button class="btn btn-sm" onclick="closeEntryDetailModal()">取消</button>');
 
   var origin = conceptCandidateOrigin(c);
   var originLabels = { content_driven: '导入内容聚类（跨 Source KPN 匹配）', manual: '人工手动新增', usage_driven: '查询信号聚类（Study 概念缺口扫描）' };
@@ -5621,7 +5674,7 @@ function renderConceptCandidateDetail(c, domains, concepts, selectedDomainId, po
     <div class="detail-row"><span class="dl">支撑事件</span><span class="dv">' + (c.event_ids||[]).length + ' 条</span></div>\
     <h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">依据</h3>\
     ' + evidenceHtml + '\
-    <div id="conceptFormPointsSection">' + buildConceptPointsSectionHtml(c, points) + '</div>\
+    <div id="conceptFormPointsSection">' + buildEntryPointsSectionHtml(c, points) + '</div>\
     ' + formHtml + '\
     <div class="modal-actions" style="justify-content:flex-end">' + footerButtons.join('') + '</div>';
 }
@@ -5631,9 +5684,9 @@ function renderConceptCandidateDetail(c, domains, concepts, selectedDomainId, po
 // 破坏原生下拉的可点击展开行为，且列表里出现非概念的操作项本身也不合适）。
 // "新建"是 select 之外单独的入口，点击后整个槽位就地换成文本输入框，
 // 不额外常驻第二个字段。
-function conceptSlotSelectHtml(concepts, selectedConceptId) {
-  var options = concepts.map(function(cc) {
-    return '<option value="' + esc(cc.concept_id) + '"' + (cc.concept_id === selectedConceptId ? ' selected' : '') + '>' + esc(cc.name) + '</option>';
+function conceptSlotSelectHtml(entries, selectedConceptId) {
+  var options = entries.map(function(cc) {
+    return '<option value="' + esc(cc.entry_id) + '"' + (cc.entry_id === selectedConceptId ? ' selected' : '') + '>' + esc(cc.name) + '</option>';
   }).join('');
   var newLink = '<div style="margin-top:4px"><a href="javascript:void(0)" onclick="switchConceptSlotToNew()" style="font-size:12px;color:var(--text-3);text-decoration:underline">+ 新建概念...</a></div>';
   return '<select id="conceptConfirmConceptSelect" style="width:100%">' + options + '</select>' + newLink;
@@ -5645,18 +5698,29 @@ function conceptSlotSelectHtml(concepts, selectedConceptId) {
 // 浏览器默认样式。
 var CONCEPT_INPUT_STYLE = 'width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-xs);font-size:13px;background:var(--bg);outline:none;color:var(--text)';
 
-function conceptSlotNewInputHtml(concepts, nameValue) {
-  var backLink = concepts.length ? '<div style="margin-top:4px"><a href="javascript:void(0)" onclick="switchConceptSlotToSelect()" style="font-size:12px;color:var(--text-3);text-decoration:underline">从已有概念中选择</a></div>' : '';
-  return '<input id="conceptConfirmConceptNewInput" type="text" value="' + esc(nameValue||'') + '" placeholder="输入新概念名称" style="' + CONCEPT_INPUT_STYLE + '">' + backLink;
+// 概念/事实分类（docs/impl/v1/kpn.md 步骤 3「类型标注」）：讲底层理论/
+// 原理/规则的是概念，讲具体实现/技术/产品对象的是事实。空值按后端
+// ValidateEntryKind 的默认值处理为概念。
+function conceptKindSelectHtml(id, selectedKind) {
+  var isFact = selectedKind === 'fact';
+  return '<select id="' + id + '" style="width:100%;margin-top:4px">\
+    <option value="concept"' + (isFact ? '' : ' selected') + '>概念（理论 / 原理 / 规则）</option>\
+    <option value="fact"' + (isFact ? ' selected' : '') + '>事实（具体实现 / 技术 / 产品）</option>\
+  </select>';
+}
+
+function conceptSlotNewInputHtml(entries, nameValue) {
+  var backLink = entries.length ? '<div style="margin-top:4px"><a href="javascript:void(0)" onclick="switchConceptSlotToSelect()" style="font-size:12px;color:var(--text-3);text-decoration:underline">从已有概念中选择</a></div>' : '';
+  return '<input id="conceptConfirmConceptNewInput" type="text" value="' + esc(nameValue||'') + '" placeholder="输入新词条名称" style="' + CONCEPT_INPUT_STYLE + '">' + backLink;
 }
 
 // 建议名称若与该领域下某个已有概念同名，默认展示为已选中该概念的 select——
-// 这正是修正 unit_concept_match 漏判的典型场景；否则（含该领域尚无任何
+// 这正是修正 unit_entry_match 漏判的典型场景；否则（含该领域尚无任何
 // 概念的情况）直接展示为待编辑的新概念名输入框。
-function buildConceptSlotHtml(concepts, suggestedName) {
-  var matched = concepts.find(function(cc) { return cc.name === suggestedName; });
-  if (matched) return conceptSlotSelectHtml(concepts, matched.concept_id);
-  return conceptSlotNewInputHtml(concepts, suggestedName);
+function buildConceptSlotHtml(entries, suggestedName) {
+  var matched = entries.find(function(cc) { return cc.name === suggestedName; });
+  if (matched) return conceptSlotSelectHtml(entries, matched.entry_id);
+  return conceptSlotNewInputHtml(entries, suggestedName);
 }
 
 function switchConceptSlotToNew() {
@@ -5674,8 +5738,8 @@ function switchConceptSlotToSelect() {
 }
 
 // 切换领域后概念槽位必须刷新为该领域下的概念列表，否则会把上一个领域的
-// concept_id 提交给新领域（后端并不校验两者归属一致）。
-async function onConceptConfirmDomainChange() {
+// entry_id 提交给新领域（后端并不校验两者归属一致）。
+async function onEntryConfirmDomainChange() {
   var domainSel = document.getElementById('conceptConfirmDomainSelect');
   var slot = document.getElementById('conceptConfirmConceptSlot');
   if (!domainSel || !slot) return;
@@ -5692,13 +5756,13 @@ async function onConceptConfirmDomainChange() {
     refreshConceptFormPointsSection();
     return;
   }
-  var concepts = await loadConceptsForDomain(domainSel.value);
-  S.conceptFormConcepts = concepts;
-  slot.innerHTML = buildConceptSlotHtml(concepts, S.conceptFormSuggestedName);
+  var entries = await loadEntriesForDomain(domainSel.value);
+  S.conceptFormConcepts = entries;
+  slot.innerHTML = buildConceptSlotHtml(entries, S.conceptFormSuggestedName);
   refreshConceptFormPointsSection();
 }
 
-async function confirmConceptCandidate(candidateId) {
+async function confirmEntryCandidate(candidateId) {
   var c = S.conceptCandidates.find(function(x) { return x.candidate_id === candidateId; });
   if (!c) return;
   if (!(await showConfirm('确认执行该概念候选？这会立即改变概念结构（' + (c.kind === 'merge' ? '合并概念、迁移知识点、标记相关 Wiki 页面重编译' : '创建新概念并迁移知识点，或归入已选择的已有概念') + '）。'))) return;
@@ -5708,53 +5772,55 @@ async function confirmConceptCandidate(candidateId) {
     if (!pointIds.length) { alert('至少需要保留一个关联知识点'); return; }
     var conceptSelect = document.getElementById('conceptConfirmConceptSelect');
     if (conceptSelect) {
-      body.concept_id = conceptSelect.value;
+      body.entry_id = conceptSelect.value;
     } else {
       var domainSel = document.getElementById('conceptConfirmDomainSelect');
       var newInput = document.getElementById('conceptConfirmConceptNewInput');
       var descInput = document.getElementById('conceptConfirmDescriptionInput');
+      var kindSel = document.getElementById('conceptConfirmKindSelect');
       body.suggested_name = newInput ? newInput.value.trim() : '';
       body.domain_id = domainSel ? domainSel.value : '';
       body.description = descInput ? descInput.value.trim() : '';
+      body.kind = kindSel ? kindSel.value : '';
     }
     body.point_ids = pointIds;
   } else {
     body.target = document.getElementById('conceptConfirmTarget').value;
   }
   try {
-    var r = await api('POST', '/concepts/candidates/' + candidateId + '/confirm', body);
-    if (r.ok) { pollConceptPendingCount(); closeConceptDetailModal(); loadDomainRail(); }
+    var r = await api('POST', '/entries/candidates/' + candidateId + '/confirm', body);
+    if (r.ok) { pollConceptPendingCount(); closeEntryDetailModal(); loadDomainRail(); }
     else alert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
   } catch(e) { alert('操作出错：' + e.message); }
 }
 
-async function rejectConceptCandidate(candidateId) {
+async function rejectEntryCandidate(candidateId) {
   if (!(await showConfirm('确认驳回该概念候选？'))) return;
   try {
-    var r = await api('POST', '/concepts/candidates/' + candidateId + '/reject');
-    if (r.ok) { pollConceptPendingCount(); closeConceptDetailModal(); loadDomainRail(); }
+    var r = await api('POST', '/entries/candidates/' + candidateId + '/reject');
+    if (r.ok) { pollConceptPendingCount(); closeEntryDetailModal(); loadDomainRail(); }
     else alert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
   } catch(e) { alert('操作出错：' + e.message); }
 }
 
-async function deleteConceptCandidate(candidateId) {
+async function deleteEntryCandidate(candidateId) {
   if (!(await showConfirm('确认删除该候选？这会彻底删除记录，不会像驳回那样留在已驳回列表里，无法恢复。'))) return;
   try {
-    var r = await api('DELETE', '/concepts/candidates/' + candidateId);
-    if (r.ok) { pollConceptPendingCount(); closeConceptDetailModal(); loadDomainRail(); }
+    var r = await api('DELETE', '/entries/candidates/' + candidateId);
+    if (r.ok) { pollConceptPendingCount(); closeEntryDetailModal(); loadDomainRail(); }
     else alert('删除失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
   } catch(e) { alert('操作出错：' + e.message); }
 }
 
-async function restoreConceptCandidate(candidateId) {
+async function restoreEntryCandidate(candidateId) {
   var c = S.conceptCandidates.find(function(x) { return x.candidate_id === candidateId; });
   var msg = c && c.status === 'applied'
     ? '确认将该候选恢复到待确认？这会撤销已新建的概念，并把关联知识点迁回未归类状态。'
     : '确认将该候选恢复到待确认？';
   if (!(await showConfirm(msg))) return;
   try {
-    var r = await api('POST', '/concepts/candidates/' + candidateId + '/restore');
-    if (r.ok) { pollConceptPendingCount(); closeConceptDetailModal(); loadDomainRail(); }
+    var r = await api('POST', '/entries/candidates/' + candidateId + '/restore');
+    if (r.ok) { pollConceptPendingCount(); closeEntryDetailModal(); loadDomainRail(); }
     else alert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
   } catch(e) { alert('操作出错：' + e.message); }
 }
@@ -5762,7 +5828,7 @@ async function restoreConceptCandidate(candidateId) {
 // 待确认徽标：pending_confirm 的概念候选数量，与其他徽标共用 30 秒轮询周期。
 async function pollConceptPendingCount() {
   try {
-    var r = await api('GET', '/concepts/candidates?status=pending_confirm');
+    var r = await api('GET', '/entries/candidates?status=pending_confirm');
     var n = Array.isArray(r.data) ? r.data.length : 0;
     var badge = document.getElementById('conceptPendingBadge');
     if (badge) { badge.textContent = n; badge.classList.toggle('hidden', n === 0); }

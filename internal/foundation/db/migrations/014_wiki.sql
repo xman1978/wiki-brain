@@ -4,7 +4,7 @@ CREATE TABLE wiki_pages (
     page_id          TEXT PRIMARY KEY,
     page_type        TEXT NOT NULL,
     -- topic / concept（V1 两种；编译输入相同，区别在标题组织）
-    concept_id       TEXT REFERENCES concepts(concept_id),
+    entry_id       TEXT REFERENCES entries(entry_id),
     title            TEXT NOT NULL,
     content          TEXT NOT NULL,
     status           TEXT NOT NULL DEFAULT 'draft',
@@ -21,7 +21,7 @@ CREATE TABLE wiki_pages (
 );
 
 CREATE INDEX idx_wiki_status  ON wiki_pages(status);
-CREATE INDEX idx_wiki_concept ON wiki_pages(concept_id);
+CREATE INDEX idx_wiki_entry ON wiki_pages(entry_id);
 
 CREATE TABLE wiki_revisions (
     revision_id  TEXT PRIMARY KEY,

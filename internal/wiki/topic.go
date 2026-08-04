@@ -1,5 +1,8 @@
 // Topic-page candidate detection and second-tier compilation
-// (docs/impl/v1/wiki.md 步骤 8).
+// (docs/impl/v1/wiki.md 步骤 8; 2026-08-03 修订: quadruple clustering over
+// real questions replaces connected-component clustering over published
+// concept pages — see the doc's "主题：从真实使用中识别，而不是从已发布词条
+// 事后聚类").
 package wiki
 
 import (
@@ -10,271 +13,414 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/blevesearch/bleve/v2"
+	"github.com/blevesearch/bleve/v2/search/query"
 	"github.com/google/uuid"
 	"github.com/jxman78/wiki-brain/internal/activation"
 )
 
 var requiredTopicSections = []string{"## 主题概览", "## 主线结论", "## 子主题分工", "## 跨主题矛盾与待验证点", "## 依赖页面"}
 
-// TopicCandidate is one connected component that qualified for a topic-page
-// shell (docs/impl/v1/wiki.md 步骤 8 "候选产生").
+// TopicCandidate is one quadruple-cluster group that cleared 二阶编译准入
+// (docs/impl/v1/wiki.md 步骤 8, 2026-08-03 修订): a draft topic shell page
+// was created with contains rows for every already-published member.
 type TopicCandidate struct {
-	PageID           string   // the newly created draft shell page
-	MemberPageIDs    []string
-	RelatedCount     int
-	ContradictsCount int
-	Reason           string
+	PageID            string   // the newly created draft shell page
+	MemberPageIDs     []string // published members with a contains row
+	PendingEntries   []string // entry_id list that cleared 步骤3 ready but has no published page yet — "待发布成员", a wiki_candidate was written and will get a contains row once it publishes (步骤 7b)
+	UncoveredEntries []string // entry_id list that did NOT clear 步骤3 ready — 缺材料, no wiki_candidate written
+	RelatedCount      int
+	ContradictsCount  int
+	Reason            string
 }
 
-// OversizedCluster is a connected component that exceeded topic_member_max —
-// report-only, never auto-split (docs/impl/v1/wiki.md 步骤 8, study.md 步骤
-// 6 "报告提示项").
-type OversizedCluster struct {
-	MemberCount           int
-	RepresentativePageIDs []string
-	RelatedCount          int
-	ContradictsCount      int
+// TopicSignalUnderfilled is 步骤 8 第 4 步's "有需求、缺材料" outcome: a
+// quadruple cluster cleared the stable-cluster gate but the candidate-range
+// KP retrieval produced zero qualifying KP, so no shell page was created.
+// Report-only (study.md 步骤 6 "topic_signal_underfilled").
+type TopicSignalUnderfilled struct {
+	Subject               string
+	Intent                string
+	Audience              string
+	ConstraintText        string
+	DistinctQuestionCount int
+	DaysActive            int
 }
 
-// unionFind is a minimal disjoint-set used to build connected components
-// from related edges among published concept pages.
-type unionFind struct {
-	parent map[string]string
+// lifecyclePointsQuery mirrors retrieval.lifecycleCurrentQuery for the
+// points index (unexported there, so re-derived here rather than exported
+// cross-package just for this one call site).
+func lifecyclePointsQuery(text string) query.Query {
+	mq := bleve.NewMatchQuery(text)
+	lq := bleve.NewTermQuery("current")
+	lq.SetField("lifecycle")
+	return bleve.NewConjunctionQuery(mq, lq)
 }
 
-func newUnionFind(nodes []string) *unionFind {
-	u := &unionFind{parent: make(map[string]string, len(nodes))}
-	for _, n := range nodes {
-		u.parent[n] = n
+// DetectTopicCandidate implements docs/impl/v1/wiki.md 步骤 8 第 3-10 步 for
+// one already-qualified quadruple cluster (稳定簇判定, done by the caller —
+// Study — before calling in; see study/service.go's flagTopicPageCandidates).
+// queryText is the cluster's subject/intent/audience/constraint_text
+// concatenation; kpMin is study.wiki_kp_min, the "广度" leg of 步骤 3's
+// concept-level ready judgment, passed in rather than duplicated into
+// wiki.Config since Study owns that threshold.
+//
+// Returns (candidate, nil, nil) when a shell page was created;
+// (nil, underfilled, nil) when the candidate range had zero topic-scope
+// material KPs (步骤 4: lifecycle=current; verified not required);
+// (nil, nil, nil) when the cluster failed 二阶准入 (步骤 7:
+// insufficient related-connection dominance, insufficient reliability, or
+// fewer than 2 published members) — logged, not persisted as a report item,
+// since 步骤 7 doesn't name a learning_result object for the no-shell case
+// (a judgment call: the doc's "写入 learning_result.reason" reads most
+// naturally as documenting the *reason field of a result the caller may or
+// may not choose to keep* — but with no page_id yet minted there is nothing
+// canonical to hang a pending_confirm result on, so we surface it only via
+// structured logging here and let the caller decide whether to elevate it).
+func (s *Service) DetectTopicCandidate(subject, intent, audience, constraintText string, distinctQuestionCount, daysActive, kpMin int) (*TopicCandidate, *TopicSignalUnderfilled, error) {
+	queryText := strings.TrimSpace(subject + " " + intent + " " + audience + " " + constraintText)
+	// 步骤 3: candidate-range KP retrieval.
+	kpMax := s.cfg.TopicCandidateKPMax
+	if kpMax <= 0 {
+		kpMax = 50
 	}
-	return u
-}
-
-func (u *unionFind) find(x string) string {
-	if _, ok := u.parent[x]; !ok {
-		u.parent[x] = x
-		return x
+	req := bleve.NewSearchRequest(lifecyclePointsQuery(queryText))
+	req.Size = kpMax
+	req.Fields = []string{"point_id"}
+	var candidateIDs []string
+	if s.pointsIndex != nil {
+		res, err := s.pointsIndex.Search(req)
+		if err != nil {
+			return nil, nil, fmt.Errorf("wiki: topic candidate range search: %w", err)
+		}
+		for _, hit := range res.Hits {
+			if hit.Score < s.topicSearchMinScore {
+				continue
+			}
+			candidateIDs = append(candidateIDs, hit.ID)
+		}
 	}
-	for u.parent[x] != x {
-		u.parent[x] = u.parent[u.parent[x]]
-		x = u.parent[x]
+	if len(candidateIDs) > kpMax {
+		candidateIDs = candidateIDs[:kpMax]
 	}
-	return x
-}
 
-func (u *unionFind) union(a, b string) {
-	ra, rb := u.find(a), u.find(b)
-	if ra != rb {
-		u.parent[ra] = rb
-	}
-}
-
-// DetectTopicCandidates implements docs/impl/v1/wiki.md 步骤 8 "候选产生":
-// build the related-edge graph among published concept pages, take connected
-// components, and for every component satisfying the member-count range,
-// coherence (contradicts < related), and "enough uncontained members"
-// conditions, create a draft topic shell page + contains rows in one
-// transaction. Called by Study's periodic scan
-// (docs/impl/v1/study.md 步骤 6); Study writes the topic_page_candidate
-// learning_results using the returned TopicCandidate list, and the
-// oversized_topic_cluster report item using the returned OversizedCluster list.
-func (s *Service) DetectTopicCandidates() ([]TopicCandidate, []OversizedCluster, error) {
-	pages, err := s.store.ListPublishedConceptPagesWithPoints()
+	// 步骤 4: topic-scope material filter (lifecycle=current only;
+	// verified is NOT required — see QualifyingPointsByIDs).
+	qualifying, err := s.store.QualifyingPointsByIDs(candidateIDs)
 	if err != nil {
-		return nil, nil, fmt.Errorf("wiki: detect topic candidates: list pages: %w", err)
+		return nil, nil, fmt.Errorf("wiki: topic candidate qualifying filter: %w", err)
 	}
-	if len(pages) == 0 {
+	if len(qualifying) == 0 {
+		return nil, &TopicSignalUnderfilled{
+			Subject: subject, Intent: intent, Audience: audience, ConstraintText: constraintText,
+			DistinctQuestionCount: distinctQuestionCount, DaysActive: daysActive,
+		}, nil
+	}
+
+	// 步骤 5: group by entry_id.
+	byEntry := make(map[string][]string)
+	var conceptOrder []string
+	for _, q := range qualifying {
+		if _, ok := byEntry[q.EntryID]; !ok {
+			conceptOrder = append(conceptOrder, q.EntryID)
+		}
+		byEntry[q.EntryID] = append(byEntry[q.EntryID], q.PointID)
+	}
+	sort.Strings(conceptOrder)
+
+	// 步骤 6: per-concept resolution.
+	var publishedMembers []string
+	var pendingEntries []string
+	var uncoveredConcepts []string
+	for _, conceptID := range conceptOrder {
+		page, err := s.store.GetActivePageByEntryID(conceptID)
+		if err != nil {
+			slog.Warn("wiki: topic candidate concept page lookup failed", "entry_id", conceptID, "error", err)
+			uncoveredConcepts = append(uncoveredConcepts, conceptID)
+			continue
+		}
+		if page != nil && page.Status == StatusPublished {
+			publishedMembers = append(publishedMembers, page.PageID)
+			continue
+		}
+		ready, _, err := s.isEntryReady(conceptID, kpMin)
+		if err != nil {
+			slog.Warn("wiki: topic candidate concept readiness check failed", "entry_id", conceptID, "error", err)
+			uncoveredConcepts = append(uncoveredConcepts, conceptID)
+			continue
+		}
+		if !ready {
+			uncoveredConcepts = append(uncoveredConcepts, conceptID)
+			continue
+		}
+		if s.activationSvc == nil {
+			// Can't record the wiki_candidate — falls back to uncovered rather
+			// than silently claiming "pending" with nothing behind it.
+			uncoveredConcepts = append(uncoveredConcepts, conceptID)
+			continue
+		}
+		pending, err := s.store.HasPendingWikiCandidate(conceptID)
+		if err != nil {
+			slog.Warn("wiki: topic candidate check pending wiki_candidate failed", "entry_id", conceptID, "error", err)
+		}
+		if !pending {
+			lr := &activation.LearningResult{
+				Action:     activation.ActionWikiCandidate,
+				ObjectType: activation.ObjectTypeWikiPage,
+				ObjectID:   conceptID,
+				Reason:     "主题候选随批推进：该概念的 qualifying KP 满足概念级 ready 判定",
+				EventIDs:   marshalIDs(byEntry[conceptID]),
+				Status:     activation.ResultPendingConfirm,
+			}
+			if err := s.activationSvc.Store().InsertLearningResult(lr); err != nil {
+				slog.Warn("wiki: topic candidate insert member wiki_candidate failed", "entry_id", conceptID, "error", err)
+			}
+		}
+		// Not published yet — contains row deferred to 步骤 7b (recomputePageRelations)
+		// once this concept's own compile publishes it. "待发布成员": ready and
+		// (now or already) has a pending wiki_candidate, distinct from
+		// uncovered_entries (缺材料, not ready).
+		pendingEntries = append(pendingEntries, conceptID)
+	}
+
+	// 成员数 < 2 时无意义，直接跳过（步骤 7）。
+	if len(publishedMembers) < 2 {
+		slog.Info("wiki: topic candidate skipped, fewer than 2 published members",
+			"published_members", len(publishedMembers), "distinct_question_count", distinctQuestionCount, "days_active", daysActive)
+		return nil, nil, nil
+	}
+	sort.Strings(publishedMembers)
+
+	// 步骤 7: 二阶编译准入 — 关联 + 整体可靠度.
+	relatedCount, err := s.store.CountRelationEdgesWithin(publishedMembers, RelationRelated)
+	if err != nil {
+		return nil, nil, fmt.Errorf("wiki: topic candidate count related edges: %w", err)
+	}
+	contradictsCount, err := s.store.CountRelationEdgesWithin(publishedMembers, RelationContradicts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("wiki: topic candidate count contradicts edges: %w", err)
+	}
+	relatedOK := relatedCount >= 1 && relatedCount >= contradictsCount
+
+	reliabilityMin := s.cfg.TopicReliabilityMin
+	if reliabilityMin <= 0 {
+		reliabilityMin = 0.5
+	}
+	reliability, err := s.store.VerifiedFraction(candidateIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("wiki: topic candidate reliability: %w", err)
+	}
+	reliabilityOK := reliability >= reliabilityMin
+
+	if !relatedOK || !reliabilityOK {
+		reason := "关联不够"
+		if relatedOK {
+			reason = "整体可靠度不够"
+		}
+		slog.Info("wiki: topic candidate failed second-tier admission", "reason", reason,
+			"related", relatedCount, "contradicts", contradictsCount, "reliability", reliability, "reliability_min", reliabilityMin)
 		return nil, nil, nil
 	}
 
-	nodes := make([]string, 0, len(pages))
-	for _, p := range pages {
-		nodes = append(nodes, p.PageID)
-	}
-	uf := newUnionFind(nodes)
-
-	edges, err := s.store.ListRelatedEdges()
+	// 步骤 8: create draft shell + contains rows for published members.
+	cand, err := s.createTopicShell(publishedMembers, relatedCount, contradictsCount, "[]")
 	if err != nil {
-		return nil, nil, fmt.Errorf("wiki: detect topic candidates: list related edges: %w", err)
+		return nil, nil, fmt.Errorf("wiki: create topic shell failed: %w", err)
 	}
-	for _, e := range edges {
-		uf.union(e.FromPageID, e.ToPageID)
+	cand.PendingEntries = pendingEntries
+	cand.UncoveredEntries = uncoveredConcepts
+	cand.Reason = fmt.Sprintf("四元组聚类：不同问法 %d 个，活跃天数 %d 天；已发布成员 %d 个，related 边 %d 条，contradicts 边 %d 条，整体可靠度 %.2f；待发布成员 %d 个，未覆盖概念 %d 个",
+		distinctQuestionCount, daysActive, len(publishedMembers), relatedCount, contradictsCount, reliability, len(pendingEntries), len(uncoveredConcepts))
+	return cand, nil, nil
+}
+
+// isEntryReady applies docs/impl/v1/wiki.md 步骤 3's "概念级 ready 判定"
+// four gates (广度/连贯/稳定/内聚), reusing gatherAnalyzeInputs +
+// computeReadiness — the exact same material-gathering and stats Analyze
+// already computes for a human-triggered compile, so this isn't a second
+// implementation of the qualifying-KP/cohesion SQL. kpMin ("广度" leg) is a
+// parameter because it's study.wiki_kp_min, owned by Study's config.
+func (s *Service) isEntryReady(conceptID string, kpMin int) (bool, *Readiness, error) {
+	in, err := s.gatherAnalyzeInputs(conceptID)
+	if err != nil {
+		// No qualifying points (or lookup failure) — not ready, not an error
+		// the caller needs to abort over.
+		return false, nil, nil
 	}
-
-	components := make(map[string][]string)
-	for _, n := range nodes {
-		root := uf.find(n)
-		components[root] = append(components[root], n)
+	r := s.computeReadiness(in)
+	if kpMin <= 0 {
+		kpMin = 4
 	}
-
-	memberMin := s.cfg.TopicMemberMin
-	if memberMin <= 0 {
-		memberMin = 3
-	}
-	memberMax := s.cfg.TopicMemberMax
-	if memberMax <= 0 {
-		memberMax = 8
-	}
-
-	var candidates []TopicCandidate
-	var oversized []OversizedCluster
-
-	for _, members := range components {
-		sort.Strings(members)
-		if len(members) < memberMin {
-			continue
-		}
-
-		relatedCount, err := s.store.CountRelationEdgesWithin(members, RelationRelated)
-		if err != nil {
-			slog.Error("wiki: count related edges within component failed", "error", err)
-			continue
-		}
-		contradictsCount, err := s.store.CountRelationEdgesWithin(members, RelationContradicts)
-		if err != nil {
-			slog.Error("wiki: count contradicts edges within component failed", "error", err)
-			continue
-		}
-
-		if len(members) > memberMax {
-			repr := members
-			if len(repr) > 5 {
-				repr = repr[:5]
-			}
-			oversized = append(oversized, OversizedCluster{
-				MemberCount: len(members), RepresentativePageIDs: repr,
-				RelatedCount: relatedCount, ContradictsCount: contradictsCount,
-			})
-			continue
-		}
-
-		if contradictsCount >= relatedCount {
-			continue
-		}
-
-		uncontainedCount := 0
-		for _, m := range members {
-			topics, err := s.store.ContainingTopics(m)
-			if err != nil {
-				slog.Warn("wiki: check containing topics failed", "page_id", m, "error", err)
-				continue
-			}
-			if len(topics) == 0 {
-				uncontainedCount++
-			}
-		}
-		if uncontainedCount < memberMin {
-			continue
-		}
-
-		cand, err := s.createTopicShell(members, relatedCount, contradictsCount, "[]")
-		if err != nil {
-			slog.Error("wiki: create topic shell failed", "error", err)
-			continue
-		}
-		candidates = append(candidates, *cand)
-	}
-
-	return candidates, oversized, nil
+	breadthOK := r.QualifyingKPCount >= kpMin
+	relatedOK := r.RelatedConnectionCount >= 1 && r.ContradictsConnectionCount < r.RelatedConnectionCount
+	stableOK := r.DaysActive >= s.cfg.QualifyingMinDaysActive
+	cohesionOK := s.cfg.EntryCohesionMin <= 0 || r.Cohesion >= s.cfg.EntryCohesionMin
+	return breadthOK && relatedOK && stableOK && cohesionOK, r, nil
 }
 
 // TopicReadiness is the informational snapshot returned by CreateTopicManual
-// (docs/impl/v1/wiki.md 步骤 8 "人工指定成员手动创建主题页") — same role as
-// the concept-page Analyze readiness: Study's coherence signals are shown,
-// not used as a gate.
+// (docs/impl/v1/wiki.md 步骤 8 "人工手动指定主题") — Study's admission
+// signals are shown, not used as a gate for the manual-trigger path.
 type TopicReadiness struct {
-	MemberCount              int `json:"member_count"`
-	RelatedConnectionCount   int `json:"related_connection_count"`
-	ContradictsConnectionCount int `json:"contradicts_connection_count"`
-	MemberMin                int `json:"member_min"`
-	MemberMax                int `json:"member_max"`
+	MemberCount                int     `json:"member_count"`
+	RelatedConnectionCount     int     `json:"related_connection_count"`
+	ContradictsConnectionCount int     `json:"contradicts_connection_count"`
+	ReliabilityRatio           float64 `json:"reliability_ratio"`
+	ReliabilityMin             float64 `json:"reliability_min"`
 }
 
 // ErrInvalidTopicMembers is returned by CreateTopicManual when the caller
-// supplied an empty/out-of-range/non-published-concept member set. Handler
-// maps it to HTTP 400.
+// supplied an unusable topic_name/domain_id. Handler maps it to HTTP 400.
 type ErrInvalidTopicMembers struct {
 	Message string
 }
 
 func (e *ErrInvalidTopicMembers) Error() string { return e.Message }
 
-// CreateTopicManual implements docs/impl/v1/wiki.md 步骤 8
-// "人工指定成员手动创建主题页": build a draft topic shell + contains from an
-// explicit published-concept-page list, then the caller drives the same
-// topic/analyze → topic/compile path Study candidates use. Study's graph /
-// coherence / uncontained checks are informational only (returned in
-// readiness); the hard gates are member count ∈ [min,max] and every member
-// being a published concept page.
-func (s *Service) CreateTopicManual(memberPageIDs []string) (*TopicCandidate, *TopicReadiness, error) {
-	memberMin := s.cfg.TopicMemberMin
-	if memberMin <= 0 {
-		memberMin = 3
+// CreateTopicManual implements docs/impl/v1/wiki.md 步骤 8 "人工手动指定
+// 主题" (2026-08-03 修订): the human gives a topic *scope* (name +
+// description [+ domain]), not a member-page list — the same candidate-range
+// retrieval / qualifying filter / concept grouping as Study's automatic path
+// (步骤 8 第 3-6 步), just triggered manually and with admission (步骤 7)
+// shown rather than enforced. No topic_page_candidate learning_result is
+// written (no pending_confirm object to resolve — the shell itself can be
+// archived directly to reject it).
+func (s *Service) CreateTopicManual(topicName, topicDescription, domainID string) (*TopicCandidate, *TopicReadiness, error) {
+	if strings.TrimSpace(topicName) == "" {
+		return nil, nil, &ErrInvalidTopicMembers{Message: "wiki: topic_name is required"}
 	}
-	memberMax := s.cfg.TopicMemberMax
-	if memberMax <= 0 {
-		memberMax = 8
+	queryText := strings.TrimSpace(topicName + " " + topicDescription)
+
+	kpMax := s.cfg.TopicCandidateKPMax
+	if kpMax <= 0 {
+		kpMax = 50
+	}
+	req := bleve.NewSearchRequest(lifecyclePointsQuery(queryText))
+	req.Size = kpMax
+	req.Fields = []string{"point_id"}
+	var candidateIDs []string
+	if s.pointsIndex != nil {
+		res, err := s.pointsIndex.Search(req)
+		if err != nil {
+			return nil, nil, fmt.Errorf("wiki: manual topic candidate search: %w", err)
+		}
+		for _, hit := range res.Hits {
+			if hit.Score < s.topicSearchMinScore {
+				continue
+			}
+			if domainID != "" {
+				d, err := s.store.PointDomainID(hit.ID)
+				if err == nil && d != domainID {
+					continue
+				}
+			}
+			candidateIDs = append(candidateIDs, hit.ID)
+		}
+	}
+	if len(candidateIDs) > kpMax {
+		candidateIDs = candidateIDs[:kpMax]
 	}
 
-	seen := make(map[string]bool, len(memberPageIDs))
-	var unique []string
-	for _, id := range memberPageIDs {
-		if id == "" || seen[id] {
+	qualifying, err := s.store.QualifyingPointsByIDs(candidateIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("wiki: manual topic qualifying filter: %w", err)
+	}
+	if len(qualifying) == 0 {
+		return nil, nil, &ErrInvalidTopicMembers{Message: "wiki: no current knowledge points found for this topic scope"}
+	}
+
+	byEntry := make(map[string][]string)
+	var conceptOrder []string
+	for _, q := range qualifying {
+		if _, ok := byEntry[q.EntryID]; !ok {
+			conceptOrder = append(conceptOrder, q.EntryID)
+		}
+		byEntry[q.EntryID] = append(byEntry[q.EntryID], q.PointID)
+	}
+	sort.Strings(conceptOrder)
+
+	// wiki.Service has no visibility into study.wiki_kp_min (owned by
+	// Study's config); isEntryReady falls back to its own default (4) when
+	// passed 0, which is an acceptable approximation for this manual,
+	// informational-only path (readiness here never gates anything — see
+	// doc comment above).
+	const wikiKPMin = 0
+
+	var publishedMembers, pendingEntries, uncoveredConcepts []string
+	for _, conceptID := range conceptOrder {
+		page, err := s.store.GetActivePageByEntryID(conceptID)
+		if err != nil {
+			uncoveredConcepts = append(uncoveredConcepts, conceptID)
 			continue
 		}
-		seen[id] = true
-		unique = append(unique, id)
-	}
-	if len(unique) < memberMin || len(unique) > memberMax {
-		return nil, nil, &ErrInvalidTopicMembers{
-			Message: fmt.Sprintf("wiki: topic members must number between %d and %d (got %d)", memberMin, memberMax, len(unique)),
+		if page != nil && page.Status == StatusPublished {
+			publishedMembers = append(publishedMembers, page.PageID)
+			continue
 		}
-	}
-
-	for _, id := range unique {
-		p, err := s.store.GetPage(id)
-		if err != nil {
-			return nil, nil, fmt.Errorf("wiki: get member page %s: %w", id, err)
-		}
-		if p == nil {
-			return nil, nil, &ErrInvalidTopicMembers{Message: fmt.Sprintf("wiki: member page %s not found", id)}
-		}
-		if p.PageType != PageTypeConcept {
-			return nil, nil, &ErrInvalidTopicMembers{
-				Message: fmt.Sprintf("wiki: member page %s must be page_type=concept (got %s)", id, p.PageType),
+		ready, _, err := s.isEntryReady(conceptID, wikiKPMin)
+		if err == nil && ready && s.activationSvc != nil {
+			pending, perr := s.store.HasPendingWikiCandidate(conceptID)
+			if perr == nil && !pending {
+				lr := &activation.LearningResult{
+					Action:     activation.ActionWikiCandidate,
+					ObjectType: activation.ObjectTypeWikiPage,
+					ObjectID:   conceptID,
+					Reason:     "人工指定主题范围检索命中：该概念的 qualifying KP 满足概念级 ready 判定",
+					EventIDs:   marshalIDs(byEntry[conceptID]),
+					Status:     activation.ResultPendingConfirm,
+				}
+				if err := s.activationSvc.Store().InsertLearningResult(lr); err != nil {
+					slog.Warn("wiki: manual topic insert member wiki_candidate failed", "entry_id", conceptID, "error", err)
+				}
 			}
+			pendingEntries = append(pendingEntries, conceptID)
+			continue
 		}
-		if p.Status != StatusPublished {
-			return nil, nil, &ErrInvalidTopicMembers{
-				Message: fmt.Sprintf("wiki: member page %s must be status=published (got %s)", id, p.Status),
-			}
+		uncoveredConcepts = append(uncoveredConcepts, conceptID)
+	}
+	sort.Strings(publishedMembers)
+
+	relatedCount, err := s.store.CountRelationEdgesWithin(publishedMembers, RelationRelated)
+	if err != nil {
+		return nil, nil, fmt.Errorf("wiki: manual topic count related edges: %w", err)
+	}
+	contradictsCount, err := s.store.CountRelationEdgesWithin(publishedMembers, RelationContradicts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("wiki: manual topic count contradicts edges: %w", err)
+	}
+	reliability, err := s.store.VerifiedFraction(candidateIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("wiki: manual topic reliability: %w", err)
+	}
+	reliabilityMin := s.cfg.TopicReliabilityMin
+	if reliabilityMin <= 0 {
+		reliabilityMin = 0.5
+	}
+
+	readiness := &TopicReadiness{
+		MemberCount:                len(publishedMembers),
+		RelatedConnectionCount:     relatedCount,
+		ContradictsConnectionCount: contradictsCount,
+		ReliabilityRatio:           reliability,
+		ReliabilityMin:             reliabilityMin,
+	}
+
+	if len(publishedMembers) == 0 {
+		return nil, readiness, &ErrInvalidTopicMembers{
+			Message: "wiki: no published concept pages among this topic scope's qualifying entries yet",
 		}
 	}
 
-	relatedCount, err := s.store.CountRelationEdgesWithin(unique, RelationRelated)
-	if err != nil {
-		return nil, nil, fmt.Errorf("wiki: count related edges: %w", err)
-	}
-	contradictsCount, err := s.store.CountRelationEdgesWithin(unique, RelationContradicts)
-	if err != nil {
-		return nil, nil, fmt.Errorf("wiki: count contradicts edges: %w", err)
-	}
-
-	cand, err := s.createTopicShell(unique, relatedCount, contradictsCount, marshalIDs([]string{ManualTriggerSentinel}))
+	cand, err := s.createTopicShell(publishedMembers, relatedCount, contradictsCount, marshalIDs([]string{ManualTriggerSentinel}))
 	if err != nil {
 		return nil, nil, err
 	}
-	cand.Reason = fmt.Sprintf("人工指定 %d 个成员，related 边 %d 条，contradicts 边 %d 条",
-		len(unique), relatedCount, contradictsCount)
+	cand.PendingEntries = pendingEntries
+	cand.UncoveredEntries = uncoveredConcepts
+	cand.Reason = fmt.Sprintf("人工指定主题范围 %q，已发布成员 %d 个，related 边 %d 条，contradicts 边 %d 条，整体可靠度 %.2f；待发布成员 %d 个，未覆盖概念 %d 个",
+		topicName, len(publishedMembers), relatedCount, contradictsCount, reliability, len(pendingEntries), len(uncoveredConcepts))
 
-	readiness := &TopicReadiness{
-		MemberCount:                len(unique),
-		RelatedConnectionCount:     relatedCount,
-		ContradictsConnectionCount: contradictsCount,
-		MemberMin:                  memberMin,
-		MemberMax:                  memberMax,
-	}
-	slog.Info("wiki: created manual topic shell", "page_id", cand.PageID, "members", len(unique))
+	slog.Info("wiki: created manual topic shell", "page_id", cand.PageID, "members", len(publishedMembers))
 	return cand, readiness, nil
 }
 
@@ -311,10 +457,9 @@ func (s *Service) createTopicShell(memberPageIDs []string, relatedCount, contrad
 		}
 	}
 
-	reason := fmt.Sprintf("连通分量 %d 个成员，related 边 %d 条，contradicts 边 %d 条", len(memberPageIDs), relatedCount, contradictsCount)
 	return &TopicCandidate{
 		PageID: shell.PageID, MemberPageIDs: memberPageIDs,
-		RelatedCount: relatedCount, ContradictsCount: contradictsCount, Reason: reason,
+		RelatedCount: relatedCount, ContradictsCount: contradictsCount,
 	}, nil
 }
 

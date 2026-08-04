@@ -30,7 +30,7 @@ type ObservedConditionEnricher interface {
 }
 
 // conceptNullRatioMin is docs/impl/v1/concept-evolution.md's
-// study.concept_null_ratio_min — trace only reads this one threshold to
+// study.entry_null_ratio_min — trace only reads this one threshold to
 // classify activation_gap events, the rest of concept evolution's config
 // lives and is consumed in the study package.
 func NewService(store *Store, conceptNullRatioMin float64) *Service {
@@ -333,22 +333,22 @@ func (s *Service) generateActivationEvents(t *Trace, r *answer.AnswerResult, gra
 		if t.PathType == retrieval.PathTypeFull && t.RetrievalQuality == QualityConfident {
 			directPointIDs := nonNilStrings(t.DirectPointIDs)
 
-			nullRatio, err := s.store.ConceptNullRatio(directPointIDs)
+			nullRatio, err := s.store.EntryNullRatio(directPointIDs)
 			if err != nil {
 				slog.Error("trace: concept null ratio lookup failed", "trace_id", t.TraceID, "error", err)
 			}
 			gapLevel := "link_gap"
 			if nullRatio >= s.conceptNullRatioMin {
-				gapLevel = "concept_gap"
+				gapLevel = "entry_gap"
 			}
 
 			payload, _ := json.Marshal(map[string]interface{}{
 				"question_terms":     t.QuestionTerms,
 				"direct_point_ids":   directPointIDs,
 				"gap_level":          gapLevel,
-				"null_concept_ratio": nullRatio,
+				"null_entry_ratio": nullRatio,
 			})
-			slog.Debug("trace: generating activation_gap event", "trace_id", t.TraceID, "gap_level", gapLevel, "null_concept_ratio", nullRatio)
+			slog.Debug("trace: generating activation_gap event", "trace_id", t.TraceID, "gap_level", gapLevel, "null_entry_ratio", nullRatio)
 			if err := s.store.SaveLearningEvent(t.TraceID, "activation_gap", string(payload)); err != nil {
 				slog.Error("trace: save activation_gap event failed", "trace_id", t.TraceID, "error", err)
 			}

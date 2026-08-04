@@ -7,20 +7,22 @@ import (
 	"github.com/google/uuid"
 )
 
-// PagePoints is one published concept page's id and decoded source_point_ids
-// — the unit of comparison for page relation derivation (docs/impl/v1/wiki.md
-// 步骤 7).
+// PagePoints is one published 词条页 (concept or fact page)'s id and
+// decoded source_point_ids — the unit of comparison for page relation
+// derivation (docs/impl/v1/wiki.md 步骤 7).
 type PagePoints struct {
 	PageID   string
 	PointIDs []string
 }
 
-// ListPublishedConceptPagesWithPoints backs relation derivation: every
-// published concept page (topic pages are never a relation-derivation side —
-// their inter-page structure is contains, not related/contradicts).
-func (s *Store) ListPublishedConceptPagesWithPoints() ([]PagePoints, error) {
-	rows, err := s.db.Query(`SELECT page_id, source_point_ids FROM wiki_pages WHERE status = ? AND page_type = ?`,
-		StatusPublished, PageTypeConcept)
+// ListPublishedEntryPagesWithPoints backs relation derivation: every
+// published 词条页 — concept AND fact pages alike (topic pages are never a
+// relation-derivation side — their inter-page structure is contains, not
+// related/contradicts). Name kept for call-site stability; it no longer means
+// "concept-kind pages only".
+func (s *Store) ListPublishedEntryPagesWithPoints() ([]PagePoints, error) {
+	rows, err := s.db.Query(`SELECT page_id, source_point_ids FROM wiki_pages WHERE status = ? AND page_type != ?`,
+		StatusPublished, PageTypeTopic)
 	if err != nil {
 		return nil, fmt.Errorf("wiki store: list published concept pages with points: %w", err)
 	}

@@ -1,6 +1,7 @@
-package concept
+package entry
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -27,9 +28,9 @@ func TestScanAddClusters_AllThresholdsMet_CreatesCandidate(t *testing.T) {
 	seedKP(t, db, "p2", "u2", "s1")
 
 	pointIDs := []string{"p1", "p2"}
-	seedConceptGapEvent(t, db, newEventID(), "h1", pointIDs, "concept_gap")
-	seedConceptGapEvent(t, db, newEventID(), "h2", pointIDs, "concept_gap")
-	seedConceptGapEvent(t, db, newEventID(), "h3", pointIDs, "concept_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h1", pointIDs, "entry_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h2", pointIDs, "entry_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h3", pointIDs, "entry_gap")
 
 	summary := svc.Scan()
 	if summary.AddCreated != 1 {
@@ -67,8 +68,8 @@ func TestScanAddClusters_EventCountNotMet_NoCandidate(t *testing.T) {
 	seedKP(t, db, "p1", "u1", "s1")
 
 	pointIDs := []string{"p1"}
-	seedConceptGapEvent(t, db, newEventID(), "h1", pointIDs, "concept_gap")
-	seedConceptGapEvent(t, db, newEventID(), "h2", pointIDs, "concept_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h1", pointIDs, "entry_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h2", pointIDs, "entry_gap")
 	// only 2 events, AddEventMin=3
 
 	svc.Scan()
@@ -86,9 +87,9 @@ func TestScanAddClusters_DistinctCountNotMet_NoCandidate(t *testing.T) {
 
 	pointIDs := []string{"p1"}
 	// 3 events but all from the same question_hash -> distinct=1 < AddDistinctMin=2
-	seedConceptGapEvent(t, db, newEventID(), "h1", pointIDs, "concept_gap")
-	seedConceptGapEvent(t, db, newEventID(), "h1", pointIDs, "concept_gap")
-	seedConceptGapEvent(t, db, newEventID(), "h1", pointIDs, "concept_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h1", pointIDs, "entry_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h1", pointIDs, "entry_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h1", pointIDs, "entry_gap")
 
 	svc.Scan()
 	candidates, _ := store.ListCandidatesByKindStatus(KindAdd, StatusPendingConfirm)
@@ -107,9 +108,9 @@ func TestScanAddClusters_OverlapNotMet_EventsSplitAcrossClusters(t *testing.T) {
 
 	// Three events with pairwise-disjoint point sets: each starts its own
 	// cluster (Jaccard=0 < 0.5), so no cluster reaches AddEventMin=3.
-	seedConceptGapEvent(t, db, newEventID(), "h1", []string{"p1"}, "concept_gap")
-	seedConceptGapEvent(t, db, newEventID(), "h2", []string{"p2"}, "concept_gap")
-	seedConceptGapEvent(t, db, newEventID(), "h3", []string{"p3"}, "concept_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h1", []string{"p1"}, "entry_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h2", []string{"p2"}, "entry_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h3", []string{"p3"}, "entry_gap")
 
 	svc.Scan()
 	candidates, _ := store.ListCandidatesByKindStatus(KindAdd, StatusPendingConfirm)
@@ -125,9 +126,9 @@ func TestScanAddClusters_LinkGapEventsIgnored(t *testing.T) {
 	seedKP(t, db, "p1", "u1", "s1")
 
 	pointIDs := []string{"p1"}
-	seedConceptGapEvent(t, db, newEventID(), "h1", pointIDs, "link_gap")
-	seedConceptGapEvent(t, db, newEventID(), "h2", pointIDs, "link_gap")
-	seedConceptGapEvent(t, db, newEventID(), "h3", pointIDs, "link_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h1", pointIDs, "link_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h2", pointIDs, "link_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h3", pointIDs, "link_gap")
 
 	svc.Scan()
 	candidates, _ := store.ListCandidatesByKindStatus(KindAdd, StatusPendingConfirm)
@@ -145,9 +146,9 @@ func TestScanAddClusters_SecondCycleUpdatesExisting_NoDuplicateRow(t *testing.T)
 	seedKP(t, db, "p2", "u2", "s1")
 	pointIDs := []string{"p1", "p2"}
 
-	seedConceptGapEvent(t, db, newEventID(), "h1", pointIDs, "concept_gap")
-	seedConceptGapEvent(t, db, newEventID(), "h2", pointIDs, "concept_gap")
-	seedConceptGapEvent(t, db, newEventID(), "h3", pointIDs, "concept_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h1", pointIDs, "entry_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h2", pointIDs, "entry_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h3", pointIDs, "entry_gap")
 	summary1 := svc.Scan()
 	if summary1.AddCreated != 1 {
 		t.Fatalf("expected 1 candidate created in cycle 1, got %d", summary1.AddCreated)
@@ -157,8 +158,8 @@ func TestScanAddClusters_SecondCycleUpdatesExisting_NoDuplicateRow(t *testing.T)
 	beforeEventCount := len(candidateEventIDs(t, &before[0]))
 
 	// Cycle 2: two more overlapping events arrive.
-	seedConceptGapEvent(t, db, newEventID(), "h4", pointIDs, "concept_gap")
-	seedConceptGapEvent(t, db, newEventID(), "h5", pointIDs, "concept_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h4", pointIDs, "entry_gap")
+	seedEntryGapEvent(t, db, newEventID(), "h5", pointIDs, "entry_gap")
 	summary2 := svc.Scan()
 	if summary2.AddCreated != 0 {
 		t.Errorf("expected 0 new candidates in cycle 2, got %d", summary2.AddCreated)
@@ -182,8 +183,8 @@ func TestScanAddClusters_SecondCycleUpdatesExisting_NoDuplicateRow(t *testing.T)
 func seedMergeScenario(t *testing.T, db *sql.DB, conceptA, conceptB string, mergedInto sql.NullString) {
 	t.Helper()
 	seedSource(t, db, "s1", "d1")
-	seedConcept(t, db, conceptA, "d1", sql.NullString{})
-	seedConcept(t, db, conceptB, "d1", mergedInto)
+	seedEntry(t, db, conceptA, "d1", sql.NullString{})
+	seedEntry(t, db, conceptB, "d1", mergedInto)
 	seedKU(t, db, "u-a", "s1", "concept a topic", sql.NullString{String: conceptA, Valid: true})
 	seedKP(t, db, "pa1", "u-a", "s1")
 	seedKU(t, db, "u-b", "s1", "concept b topic", sql.NullString{String: conceptB, Valid: true})
@@ -209,7 +210,7 @@ func TestScanMergeCandidates_BothConditionsMet_CreatesCandidate(t *testing.T) {
 	}
 	mf := candidateMergeFrom(t, &candidates[0])
 	if len(mf) != 2 {
-		t.Fatalf("expected merge_from with 2 concepts, got %v", mf)
+		t.Fatalf("expected merge_from with 2 entries, got %v", mf)
 	}
 	ev := candidateEvidence(t, &candidates[0])
 	if int(ev["cooccur_count"].(float64)) != 3 {
@@ -243,7 +244,7 @@ func TestScanMergeCandidates_OverlapNotMet_NoCandidate(t *testing.T) {
 	svc, store, db := setupService(t)
 	seedMergeScenario(t, db, "cA", "cB", sql.NullString{})
 
-	// 3 traces co-occur both concepts (meets MergeCooccurMin=3), but each
+	// 3 traces co-occur both entries (meets MergeCooccurMin=3), but each
 	// concept also appears independently many more times, so the
 	// trace-occurrence overlap coefficient (cooccur / |A ∪ B|) stays low:
 	// cooccur=3, totalA=totalB=13, union=13+13-3=23, overlap=3/23≈0.13 < 0.5.
@@ -265,9 +266,9 @@ func TestScanMergeCandidates_OverlapNotMet_NoCandidate(t *testing.T) {
 func TestScanMergeCandidates_ExcludesMergedConcept(t *testing.T) {
 	svc, store, db := setupService(t)
 	seedSource(t, db, "s1", "d1")
-	seedConcept(t, db, "cTarget", "d1", sql.NullString{})
-	seedConcept(t, db, "cMerged", "d1", sql.NullString{String: "cTarget", Valid: true})
-	seedConcept(t, db, "cB", "d1", sql.NullString{})
+	seedEntry(t, db, "cTarget", "d1", sql.NullString{})
+	seedEntry(t, db, "cMerged", "d1", sql.NullString{String: "cTarget", Valid: true})
+	seedEntry(t, db, "cB", "d1", sql.NullString{})
 	seedKU(t, db, "u-m", "s1", "merged topic", sql.NullString{String: "cMerged", Valid: true})
 	seedKP(t, db, "pm1", "u-m", "s1")
 	seedKU(t, db, "u-b", "s1", "b topic", sql.NullString{String: "cB", Valid: true})
@@ -292,11 +293,11 @@ func TestScan_ExpiresIdlePendingCandidates(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", []string{"p1"}, []string{"evt-1"}, AddEvidence{EventCount: 5}, "seed")
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{EventCount: 5}, "seed")
 	if err != nil {
 		t.Fatalf("insert add candidate: %v", err)
 	}
-	if _, err := db.Exec(`UPDATE concept_candidates SET last_signal_at = datetime('now', '-100 days') WHERE candidate_id = ?`, candidateID); err != nil {
+	if _, err := db.Exec(`UPDATE entry_candidates SET last_signal_at = datetime('now', '-100 days') WHERE candidate_id = ?`, candidateID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -314,7 +315,7 @@ func TestScan_ExpiresIdlePendingCandidates(t *testing.T) {
 	}
 
 	var lrStatus string
-	err = db.QueryRow(`SELECT status FROM learning_results WHERE object_type = 'concept_candidate' AND object_id = ?`, candidateID).Scan(&lrStatus)
+	err = db.QueryRow(`SELECT status FROM learning_results WHERE object_type = 'entry_candidate' AND object_id = ?`, candidateID).Scan(&lrStatus)
 	if err != nil {
 		t.Fatalf("query learning_result: %v", err)
 	}
@@ -330,11 +331,11 @@ func TestConfirm_Add_CreatesConceptAndMigratesOnlyNullKUs(t *testing.T) {
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{}) // NULL concept -> should migrate
 	seedKP(t, db, "p1", "u1", "s1")
-	seedConcept(t, db, "cOther", "d1", sql.NullString{})
+	seedEntry(t, db, "cOther", "d1", sql.NullString{})
 	seedKU(t, db, "u2", "s1", "topic2", sql.NullString{String: "cOther", Valid: true}) // already anchored -> must not change
 	seedKP(t, db, "p2", "u2", "s1")
 
-	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "并发编程", []string{"p1", "p2"}, []string{"evt-1"}, AddEvidence{EventCount: 5}, "seed")
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "并发编程", EntryKindConcept, []string{"p1", "p2"}, []string{"evt-1"}, AddEvidence{EventCount: 5}, "seed")
 	if err != nil {
 		t.Fatalf("insert add candidate: %v", err)
 	}
@@ -343,29 +344,29 @@ func TestConfirm_Add_CreatesConceptAndMigratesOnlyNullKUs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	if result.ConceptID == "" {
-		t.Fatal("expected new concept_id")
+	if result.EntryID == "" {
+		t.Fatal("expected new entry_id")
 	}
 	if result.MigratedKUs != 1 {
 		t.Errorf("expected 1 migrated KU (only the NULL one), got %d", result.MigratedKUs)
 	}
 
 	var origin string
-	if err := db.QueryRow(`SELECT origin FROM concepts WHERE concept_id = ?`, result.ConceptID).Scan(&origin); err != nil {
+	if err := db.QueryRow(`SELECT origin FROM entries WHERE entry_id = ?`, result.EntryID).Scan(&origin); err != nil {
 		t.Fatal(err)
 	}
 	if origin != "evolved" {
 		t.Errorf("origin = %q, want evolved", origin)
 	}
 
-	var u1Concept, u2Concept sql.NullString
-	db.QueryRow(`SELECT concept_id FROM knowledge_units WHERE unit_id = 'u1'`).Scan(&u1Concept)
-	db.QueryRow(`SELECT concept_id FROM knowledge_units WHERE unit_id = 'u2'`).Scan(&u2Concept)
-	if !u1Concept.Valid || u1Concept.String != result.ConceptID {
-		t.Errorf("u1.concept_id = %+v, want %s", u1Concept, result.ConceptID)
+	var u1Entry, u2Entry sql.NullString
+	db.QueryRow(`SELECT entry_id FROM knowledge_units WHERE unit_id = 'u1'`).Scan(&u1Entry)
+	db.QueryRow(`SELECT entry_id FROM knowledge_units WHERE unit_id = 'u2'`).Scan(&u2Entry)
+	if !u1Entry.Valid || u1Entry.String != result.EntryID {
+		t.Errorf("u1.entry_id = %+v, want %s", u1Entry, result.EntryID)
 	}
-	if !u2Concept.Valid || u2Concept.String != "cOther" {
-		t.Errorf("u2.concept_id changed unexpectedly: %+v, want cOther", u2Concept)
+	if !u2Entry.Valid || u2Entry.String != "cOther" {
+		t.Errorf("u2.entry_id changed unexpectedly: %+v, want cOther", u2Entry)
 	}
 
 	c, _ := store.GetCandidate(candidateID)
@@ -373,7 +374,7 @@ func TestConfirm_Add_CreatesConceptAndMigratesOnlyNullKUs(t *testing.T) {
 		t.Errorf("candidate status = %q, want applied", c.Status)
 	}
 	var lrStatus, confirmedBy string
-	db.QueryRow(`SELECT status, confirmed_by FROM learning_results WHERE object_type = 'concept_candidate' AND object_id = ?`, candidateID).
+	db.QueryRow(`SELECT status, confirmed_by FROM learning_results WHERE object_type = 'entry_candidate' AND object_id = ?`, candidateID).
 		Scan(&lrStatus, &confirmedBy)
 	if lrStatus != "applied" || confirmedBy != "manual" {
 		t.Errorf("learning_result status/confirmed_by = %q/%q, want applied/manual", lrStatus, confirmedBy)
@@ -391,7 +392,7 @@ func TestConfirm_Add_NoDomain_RequiresOverride(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := store.InsertAddCandidate(sql.NullString{}, "topic", []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
+	candidateID, err := store.InsertAddCandidate(sql.NullString{}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +405,7 @@ func TestConfirm_Add_NoDomain_RequiresOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("confirm with override domain: %v", err)
 	}
-	if result.ConceptID == "" {
+	if result.EntryID == "" {
 		t.Error("expected concept created with overridden domain")
 	}
 }
@@ -429,22 +430,22 @@ func TestConfirm_Merge_MigratesAndFlagsWikiPages(t *testing.T) {
 		t.Errorf("expected 1 migrated KU (u-b), got %d", result.MigratedKUs)
 	}
 	if result.FlaggedPages != 2 {
-		t.Errorf("expected 2 flagged wiki pages (both concepts), got %d", result.FlaggedPages)
+		t.Errorf("expected 2 flagged wiki pages (both entries), got %d", result.FlaggedPages)
 	}
 
-	var uBConcept string
-	db.QueryRow(`SELECT concept_id FROM knowledge_units WHERE unit_id = 'u-b'`).Scan(&uBConcept)
-	if uBConcept != "cA" {
-		t.Errorf("u-b.concept_id = %q, want cA", uBConcept)
+	var uBEntry string
+	db.QueryRow(`SELECT entry_id FROM knowledge_units WHERE unit_id = 'u-b'`).Scan(&uBEntry)
+	if uBEntry != "cA" {
+		t.Errorf("u-b.entry_id = %q, want cA", uBEntry)
 	}
 
 	var mergedInto sql.NullString
-	db.QueryRow(`SELECT merged_into FROM concepts WHERE concept_id = 'cB'`).Scan(&mergedInto)
+	db.QueryRow(`SELECT merged_into FROM entries WHERE entry_id = 'cB'`).Scan(&mergedInto)
 	if !mergedInto.Valid || mergedInto.String != "cA" {
 		t.Errorf("cB.merged_into = %+v, want cA", mergedInto)
 	}
 
-	pageA, err := wikiSvc.GetActivePageByConceptID("cA")
+	pageA, err := wikiSvc.GetActivePageByEntryID("cA")
 	if err != nil || pageA == nil || pageA.Status != "needs_recompile" {
 		t.Errorf("page-a status not needs_recompile: %+v (err=%v)", pageA, err)
 	}
@@ -474,7 +475,7 @@ func TestCreateManualCandidate_BlankThenConfirmable(t *testing.T) {
 
 	// Blank args model the never-touched "新增" draft form — nothing to
 	// persist yet until the user actually fills something in.
-	candidateID, err := svc.CreateManualCandidate("", "", "", nil)
+	candidateID, err := svc.CreateManualCandidate("", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("create manual candidate: %v", err)
 	}
@@ -500,7 +501,7 @@ func TestCreateManualCandidate_BlankThenConfirmable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("confirm manual candidate: %v", err)
 	}
-	if result.ConceptID == "" || result.MigratedKUs != 1 {
+	if result.EntryID == "" || result.MigratedKUs != 1 {
 		t.Errorf("unexpected confirm result: %+v", result)
 	}
 }
@@ -513,7 +514,7 @@ func TestCreateManualCandidate_FilledFromDraft(t *testing.T) {
 
 	// The draft dialog's own "确认" (保存到待确认) sends whatever the user
 	// filled in — this is what CreateManualCandidate now actually receives.
-	candidateID, err := svc.CreateManualCandidate("d1", "并发编程", "", []string{"p1"})
+	candidateID, err := svc.CreateManualCandidate("d1", "并发编程", "", EntryKindConcept, []string{"p1"})
 	if err != nil {
 		t.Fatalf("create manual candidate: %v", err)
 	}
@@ -539,7 +540,7 @@ func TestProposeAddCandidate_FirstCall_CreatesContentDrivenCandidate(t *testing.
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "关注差旅费用报销标准", []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "关注差旅费用报销标准", EntryKindConcept, []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatalf("propose add candidate: %v", err)
 	}
@@ -563,7 +564,7 @@ func TestProposeAddCandidate_FirstCall_CreatesContentDrivenCandidate(t *testing.
 	}
 }
 
-func TestProposeAddCandidate_SecondCallSameDomain_MergesIntoExisting(t *testing.T) {
+func TestProposeAddCandidate_SecondCallSameDomainSameName_MergesIntoExisting(t *testing.T) {
 	svc, store, db := setupService(t)
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic1", sql.NullString{})
@@ -572,11 +573,11 @@ func TestProposeAddCandidate_SecondCallSameDomain_MergesIntoExisting(t *testing.
 	seedKU(t, db, "u2", "s2", "topic2", sql.NullString{})
 	seedKP(t, db, "p2", "u2", "s2")
 
-	id1, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc1", []string{"p1"}, "s1")
+	id1, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc1", EntryKindConcept, []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatalf("first propose: %v", err)
 	}
-	id2, err := svc.ProposeAddCandidate("d1", "住宿标准", "desc2", []string{"p2"}, "s2")
+	id2, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc2", EntryKindConcept, []string{"p2"}, "s2")
 	if err != nil {
 		t.Fatalf("second propose: %v", err)
 	}
@@ -602,6 +603,43 @@ func TestProposeAddCandidate_SecondCallSameDomain_MergesIntoExisting(t *testing.
 	}
 }
 
+// TestProposeAddCandidate_SecondCallSameDomainDifferentName_DoesNotMerge
+// guards against the bug where kpn_entry_propose.md's multi-cluster
+// output (docs/impl/v1/kpn.md 步骤 3) all collapsed into one candidate row
+// because the old merge key was domain-only: a single "+ 新增概念" click
+// that named several distinct clusters in the same domain must produce
+// several distinct pending_confirm candidates, not one candidate holding
+// every orphan KP under whichever name happened to be proposed first.
+func TestProposeAddCandidate_SecondCallSameDomainDifferentName_DoesNotMerge(t *testing.T) {
+	svc, store, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic1", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+	seedSource(t, db, "s2", "d1")
+	seedKU(t, db, "u2", "s2", "topic2", sql.NullString{})
+	seedKP(t, db, "p2", "u2", "s2")
+
+	id1, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc1", EntryKindConcept, []string{"p1"}, "s1")
+	if err != nil {
+		t.Fatalf("first propose: %v", err)
+	}
+	id2, err := svc.ProposeAddCandidate("d1", "住宿标准", "desc2", EntryKindConcept, []string{"p2"}, "s2")
+	if err != nil {
+		t.Fatalf("second propose: %v", err)
+	}
+	if id1 == id2 {
+		t.Fatalf("expected distinct candidates for distinct suggested_name in the same domain, got same id %s", id1)
+	}
+
+	rows, err := store.ListCandidatesByKindStatus(KindAdd, StatusPendingConfirm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 distinct pending add candidates, got %d", len(rows))
+	}
+}
+
 func TestProposeAddCandidate_DoesNotMergeIntoUsageDrivenCandidate(t *testing.T) {
 	svc, store, db := setupService(t)
 	seedSource(t, db, "s1", "d1")
@@ -609,11 +647,11 @@ func TestProposeAddCandidate_DoesNotMergeIntoUsageDrivenCandidate(t *testing.T) 
 	seedKP(t, db, "p1", "u1", "s1")
 
 	// A usage_driven candidate already pending in the same domain.
-	if _, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "既有候选", []string{"pX"}, []string{"evt-1"}, AddEvidence{EventCount: 5}, "seed"); err != nil {
+	if _, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "既有候选", EntryKindConcept, []string{"pX"}, []string{"evt-1"}, AddEvidence{EventCount: 5}, "seed"); err != nil {
 		t.Fatal(err)
 	}
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", EntryKindConcept, []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatalf("propose add candidate: %v", err)
 	}
@@ -634,8 +672,11 @@ func TestProposeAddCandidate_DoesNotMergeIntoUsageDrivenCandidate(t *testing.T) 
 // fakeKPNRematchNotifier stands in for internal/unit.Service in concept
 // package tests (docs/impl/v1/kpn.md 步骤 6).
 type fakeKPNRematchNotifier struct {
-	calls             []fakeRematchCall
-	returnRelationIDs []string
+	calls               []fakeRematchCall
+	returnRelationIDs   []string
+	orphanDomainIDs     []string
+	orphanReturnTouched int
+	orphanErr           error
 }
 
 type fakeRematchCall struct {
@@ -648,45 +689,75 @@ func (f *fakeKPNRematchNotifier) RematchPoints(conceptID string, pointIDs []stri
 	return f.returnRelationIDs
 }
 
+func (f *fakeKPNRematchNotifier) ProposeEntriesForDomainOrphans(ctx context.Context, domainID string) (int, error) {
+	f.orphanDomainIDs = append(f.orphanDomainIDs, domainID)
+	return f.orphanReturnTouched, f.orphanErr
+}
+
+func TestProposeEntriesFromDomainOrphans_DelegatesToNotifier(t *testing.T) {
+	svc, _, _ := setupService(t)
+	notifier := &fakeKPNRematchNotifier{orphanReturnTouched: 3}
+	svc.SetKPNRematchNotifier(notifier)
+
+	touched, err := svc.ProposeEntriesFromDomainOrphans(context.Background(), "d1")
+	if err != nil {
+		t.Fatalf("ProposeEntriesFromDomainOrphans: %v", err)
+	}
+	if touched != 3 {
+		t.Errorf("touched = %d, want 3", touched)
+	}
+	if len(notifier.orphanDomainIDs) != 1 || notifier.orphanDomainIDs[0] != "d1" {
+		t.Errorf("expected delegation with domain_id d1, got %v", notifier.orphanDomainIDs)
+	}
+}
+
+func TestProposeEntriesFromDomainOrphans_ErrorsWithoutNotifier(t *testing.T) {
+	svc, _, _ := setupService(t)
+
+	if _, err := svc.ProposeEntriesFromDomainOrphans(context.Background(), "d1"); err != ErrNoOrphanClusterer {
+		t.Errorf("expected ErrNoOrphanClusterer, got %v", err)
+	}
+}
+
 func TestConfirmAdd_Assign_MigratesToExistingConceptWithoutCreatingNew(t *testing.T) {
 	svc, store, db := setupService(t)
 	notifier := &fakeKPNRematchNotifier{}
 	svc.SetKPNRematchNotifier(notifier)
 
 	seedSource(t, db, "s1", "d1")
-	seedConcept(t, db, "cExisting", "d1", sql.NullString{})
+	seedEntry(t, db, "cExisting", "d1", sql.NullString{})
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", EntryKindConcept, []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var conceptCountBefore int
-	db.QueryRow(`SELECT COUNT(*) FROM concepts`).Scan(&conceptCountBefore)
+	db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&conceptCountBefore)
 
-	result, err := svc.Confirm(candidateID, &ConfirmAddRequest{ConceptID: "cExisting"}, nil)
+	result, err := svc.Confirm(candidateID, &ConfirmAddRequest{EntryID: "cExisting"}, nil)
 	if err != nil {
 		t.Fatalf("confirm assign: %v", err)
 	}
-	if result.ConceptID != "cExisting" {
-		t.Errorf("concept_id = %q, want cExisting", result.ConceptID)
+	if result.EntryID != "cExisting" {
+		t.Errorf("entry_id = %q, want cExisting", result.EntryID)
 	}
 	if result.MigratedKUs != 1 {
 		t.Errorf("migrated KUs = %d, want 1", result.MigratedKUs)
 	}
 
 	var conceptCountAfter int
-	db.QueryRow(`SELECT COUNT(*) FROM concepts`).Scan(&conceptCountAfter)
+	db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&conceptCountAfter)
 	if conceptCountAfter != conceptCountBefore {
 		t.Errorf("expected no new concept row, before=%d after=%d", conceptCountBefore, conceptCountAfter)
 	}
 
-	var u1Concept sql.NullString
-	db.QueryRow(`SELECT concept_id FROM knowledge_units WHERE unit_id = 'u1'`).Scan(&u1Concept)
-	if !u1Concept.Valid || u1Concept.String != "cExisting" {
-		t.Errorf("u1.concept_id = %+v, want cExisting", u1Concept)
+	var u1Entry sql.NullString
+	db.QueryRow(`SELECT entry_id FROM knowledge_units WHERE unit_id = 'u1'`).Scan(&u1Entry)
+	if !u1Entry.Valid || u1Entry.String != "cExisting" {
+		t.Errorf("u1.entry_id = %+v, want cExisting", u1Entry)
 	}
 
 	c, _ := store.GetCandidate(candidateID)
@@ -705,20 +776,20 @@ func TestConfirmAdd_Assign_MigratesToExistingConceptWithoutCreatingNew(t *testin
 func TestConfirmAdd_Assign_RejectsMergedAwayConcept(t *testing.T) {
 	svc, store, db := setupService(t)
 	seedSource(t, db, "s1", "d1")
-	seedConcept(t, db, "cTarget", "d1", sql.NullString{})
-	seedConcept(t, db, "cMergedAway", "d1", sql.NullString{String: "cTarget", Valid: true})
+	seedEntry(t, db, "cTarget", "d1", sql.NullString{})
+	seedEntry(t, db, "cMergedAway", "d1", sql.NullString{String: "cTarget", Valid: true})
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", []string{"p1"}, nil, ContentDrivenEvidence{Origin: "content_driven"}, "seed")
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, nil, ContentDrivenEvidence{Origin: "content_driven"}, "seed")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := svc.Confirm(candidateID, &ConfirmAddRequest{ConceptID: "cMergedAway"}, nil); err == nil {
+	if _, err := svc.Confirm(candidateID, &ConfirmAddRequest{EntryID: "cMergedAway"}, nil); err == nil {
 		t.Fatal("expected error assigning to a merged-away concept")
 	}
-	if _, err := svc.Confirm(candidateID, &ConfirmAddRequest{ConceptID: "does-not-exist"}, nil); err == nil {
+	if _, err := svc.Confirm(candidateID, &ConfirmAddRequest{EntryID: "does-not-exist"}, nil); err == nil {
 		t.Fatal("expected error assigning to a nonexistent concept")
 	}
 }
@@ -732,7 +803,7 @@ func TestConfirmAdd_New_NotifiesKPNRematch(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", EntryKindConcept, []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -742,8 +813,8 @@ func TestConfirmAdd_New_NotifiesKPNRematch(t *testing.T) {
 		t.Fatalf("confirm: %v", err)
 	}
 
-	if len(notifier.calls) != 1 || notifier.calls[0].conceptID != result.ConceptID {
-		t.Fatalf("expected 1 RematchPoints call for the new concept_id, got %+v", notifier.calls)
+	if len(notifier.calls) != 1 || notifier.calls[0].conceptID != result.EntryID {
+		t.Fatalf("expected 1 RematchPoints call for the new entry_id, got %+v", notifier.calls)
 	}
 }
 
@@ -753,7 +824,7 @@ func TestReject_MarksRejectedNoStructuralChange(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -768,9 +839,9 @@ func TestReject_MarksRejectedNoStructuralChange(t *testing.T) {
 	}
 
 	var conceptID sql.NullString
-	db.QueryRow(`SELECT concept_id FROM knowledge_units WHERE unit_id = 'u1'`).Scan(&conceptID)
+	db.QueryRow(`SELECT entry_id FROM knowledge_units WHERE unit_id = 'u1'`).Scan(&conceptID)
 	if conceptID.Valid {
-		t.Errorf("expected u1.concept_id to remain NULL after reject, got %+v", conceptID)
+		t.Errorf("expected u1.entry_id to remain NULL after reject, got %+v", conceptID)
 	}
 
 	if err := svc.Reject(candidateID); err == nil {
@@ -784,7 +855,7 @@ func TestDelete_RemovesPendingCandidateAndLearningResult(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -799,7 +870,7 @@ func TestDelete_RemovesPendingCandidateAndLearningResult(t *testing.T) {
 	}
 
 	var lrCount int
-	db.QueryRow(`SELECT COUNT(*) FROM learning_results WHERE object_type = 'concept_candidate' AND object_id = ?`, candidateID).Scan(&lrCount)
+	db.QueryRow(`SELECT COUNT(*) FROM learning_results WHERE object_type = 'entry_candidate' AND object_id = ?`, candidateID).Scan(&lrCount)
 	if lrCount != 0 {
 		t.Errorf("expected learning_result row gone, got %d", lrCount)
 	}
@@ -815,7 +886,7 @@ func TestDelete_RejectsNonPendingCandidate(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -834,7 +905,7 @@ func TestRestore_Rejected_ReturnsToPendingConfirm(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -852,7 +923,7 @@ func TestRestore_Rejected_ReturnsToPendingConfirm(t *testing.T) {
 	}
 
 	var lrStatus string
-	db.QueryRow(`SELECT status FROM learning_results WHERE object_type = 'concept_candidate' AND object_id = ?`, candidateID).Scan(&lrStatus)
+	db.QueryRow(`SELECT status FROM learning_results WHERE object_type = 'entry_candidate' AND object_id = ?`, candidateID).Scan(&lrStatus)
 	if lrStatus != "pending_confirm" {
 		t.Errorf("learning_result status = %q, want pending_confirm", lrStatus)
 	}
@@ -868,7 +939,7 @@ func TestRestore_AppliedNewConcept_DeletesConceptAndRevertsKUs(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", EntryKindConcept, []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -876,7 +947,7 @@ func TestRestore_AppliedNewConcept_DeletesConceptAndRevertsKUs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conceptID := result.ConceptID
+	conceptID := result.EntryID
 
 	if err := svc.Restore(candidateID); err != nil {
 		t.Fatalf("restore: %v", err)
@@ -886,24 +957,24 @@ func TestRestore_AppliedNewConcept_DeletesConceptAndRevertsKUs(t *testing.T) {
 	if c.Status != StatusPendingConfirm {
 		t.Errorf("status = %q, want pending_confirm", c.Status)
 	}
-	if c.ResolvedConceptID.Valid || c.CreatedNewConcept {
-		t.Errorf("expected resolved_concept_id cleared and created_new_concept=false, got %+v/%v", c.ResolvedConceptID, c.CreatedNewConcept)
+	if c.ResolvedEntryID.Valid || c.CreatedNewEntry {
+		t.Errorf("expected resolved_entry_id cleared and created_new_entry=false, got %+v/%v", c.ResolvedEntryID, c.CreatedNewEntry)
 	}
 
 	var conceptCount int
-	db.QueryRow(`SELECT COUNT(*) FROM concepts WHERE concept_id = ?`, conceptID).Scan(&conceptCount)
+	db.QueryRow(`SELECT COUNT(*) FROM entries WHERE entry_id = ?`, conceptID).Scan(&conceptCount)
 	if conceptCount != 0 {
 		t.Errorf("expected concept row deleted, still found %d", conceptCount)
 	}
 
-	var u1Concept sql.NullString
-	db.QueryRow(`SELECT concept_id FROM knowledge_units WHERE unit_id = 'u1'`).Scan(&u1Concept)
-	if u1Concept.Valid {
-		t.Errorf("expected u1.concept_id reverted to NULL, got %+v", u1Concept)
+	var u1Entry sql.NullString
+	db.QueryRow(`SELECT entry_id FROM knowledge_units WHERE unit_id = 'u1'`).Scan(&u1Entry)
+	if u1Entry.Valid {
+		t.Errorf("expected u1.entry_id reverted to NULL, got %+v", u1Entry)
 	}
 
 	var lrStatus string
-	db.QueryRow(`SELECT status FROM learning_results WHERE object_type = 'concept_candidate' AND object_id = ?`, candidateID).Scan(&lrStatus)
+	db.QueryRow(`SELECT status FROM learning_results WHERE object_type = 'entry_candidate' AND object_id = ?`, candidateID).Scan(&lrStatus)
 	if lrStatus != "pending_confirm" {
 		t.Errorf("learning_result status = %q, want pending_confirm", lrStatus)
 	}
@@ -934,7 +1005,7 @@ func TestRestore_AppliedNewConcept_DeletesOnlyThisConfirmsKPNRelations(t *testin
 		t.Fatal(err)
 	}
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", EntryKindConcept, []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -970,15 +1041,15 @@ func TestRestore_AppliedNewConcept_DeletesOnlyThisConfirmsKPNRelations(t *testin
 func TestRestore_AppliedAssignToExisting_NotRestorable(t *testing.T) {
 	svc, _, db := setupService(t)
 	seedSource(t, db, "s1", "d1")
-	seedConcept(t, db, "cExisting", "d1", sql.NullString{})
+	seedEntry(t, db, "cExisting", "d1", sql.NullString{})
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", EntryKindConcept, []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Confirm(candidateID, &ConfirmAddRequest{ConceptID: "cExisting"}, nil); err != nil {
+	if _, err := svc.Confirm(candidateID, &ConfirmAddRequest{EntryID: "cExisting"}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -995,7 +1066,7 @@ func TestRestore_AppliedNewConcept_RefusesWhenLaterConfirmAssignedMoreKUs(t *tes
 	seedKU(t, db, "u2", "s1", "topic2", sql.NullString{})
 	seedKP(t, db, "p2", "u2", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", EntryKindConcept, []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1004,11 +1075,11 @@ func TestRestore_AppliedNewConcept_RefusesWhenLaterConfirmAssignedMoreKUs(t *tes
 		t.Fatal(err)
 	}
 
-	otherCandidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "并发编程2", []string{"p2"}, nil, ContentDrivenEvidence{Origin: "content_driven"}, "seed")
+	otherCandidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "并发编程2", EntryKindConcept, []string{"p2"}, nil, ContentDrivenEvidence{Origin: "content_driven"}, "seed")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Confirm(otherCandidateID, &ConfirmAddRequest{ConceptID: result.ConceptID}, nil); err != nil {
+	if _, err := svc.Confirm(otherCandidateID, &ConfirmAddRequest{EntryID: result.EntryID}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1023,7 +1094,7 @@ func TestRestore_AppliedNewConcept_RefusesWhenActiveWikiPageExists(t *testing.T)
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", EntryKindConcept, []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1031,7 +1102,7 @@ func TestRestore_AppliedNewConcept_RefusesWhenActiveWikiPageExists(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	insertWikiPage(t, db, "page-1", result.ConceptID)
+	insertWikiPage(t, db, "page-1", result.EntryID)
 
 	if err := svc.Restore(candidateID); err == nil {
 		t.Error("expected error restoring while an active wiki page references the concept")

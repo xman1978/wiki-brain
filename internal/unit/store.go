@@ -24,7 +24,7 @@ type KnowledgeUnit struct {
 	UnitID             string
 	SourceID           string
 	OutlineID          sql.NullString
-	ConceptID          sql.NullString
+	EntryID          sql.NullString
 	Center             string
 	LineStart          int
 	LineEnd            int
@@ -159,9 +159,9 @@ func (s *Store) PublishGeneration(
 			Lifecycle:     LifecycleCurrent,
 		}
 		if _, err := tx.Exec(`INSERT INTO knowledge_units
-			(unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle)
+			(unit_id, source_id, outline_id, entry_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			unit.UnitID, unit.SourceID, unit.OutlineID, unit.ConceptID, unit.Center,
+			unit.UnitID, unit.SourceID, unit.OutlineID, unit.EntryID, unit.Center,
 			unit.LineStart, unit.LineEnd, unit.Status, unit.ErrorMsg, unit.PromptVersion, unit.Lifecycle); err != nil {
 			return nil, nil, nil, fmt.Errorf("unit store: publish generation: insert unit %s: %w", unit.UnitID, err)
 		}
@@ -283,9 +283,9 @@ func (s *Store) InsertStandaloneUnit(ku *KnowledgeUnit, points []KnowledgePoint,
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(`INSERT INTO knowledge_units
-		(unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle)
+		(unit_id, source_id, outline_id, entry_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ku.UnitID, ku.SourceID, ku.OutlineID, ku.ConceptID, ku.Center,
+		ku.UnitID, ku.SourceID, ku.OutlineID, ku.EntryID, ku.Center,
 		ku.LineStart, ku.LineEnd, ku.Status, ku.ErrorMsg, ku.PromptVersion, LifecycleCurrent); err != nil {
 		return fmt.Errorf("unit store: insert standalone unit: insert unit: %w", err)
 	}
@@ -314,7 +314,7 @@ func (s *Store) InsertStandaloneUnit(ku *KnowledgeUnit, points []KnowledgePoint,
 }
 
 func getCurrentUnitsBySourceIDTx(tx *sql.Tx, sourceID string) ([]KnowledgeUnit, error) {
-	rows, err := tx.Query(`SELECT unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
+	rows, err := tx.Query(`SELECT unit_id, source_id, outline_id, entry_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
 		FROM knowledge_units WHERE source_id = ? AND lifecycle = ? ORDER BY line_start ASC`, sourceID, LifecycleCurrent)
 	if err != nil {
 		return nil, fmt.Errorf("unit store: publish generation: read current units: %w", err)
@@ -328,7 +328,7 @@ func getUnitsByIDsTx(tx *sql.Tx, unitIDs []string) ([]KnowledgeUnit, error) {
 	for i, id := range unitIDs {
 		args[i] = id
 	}
-	rows, err := tx.Query(fmt.Sprintf(`SELECT unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
+	rows, err := tx.Query(fmt.Sprintf(`SELECT unit_id, source_id, outline_id, entry_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
 		FROM knowledge_units WHERE unit_id IN (%s) ORDER BY line_start ASC`, placeholders), args...)
 	if err != nil {
 		return nil, fmt.Errorf("unit store: publish generation: read superseded units: %w", err)
@@ -341,7 +341,7 @@ func scanKnowledgeUnitsForPublish(rows *sql.Rows) ([]KnowledgeUnit, error) {
 	var units []KnowledgeUnit
 	for rows.Next() {
 		var unit KnowledgeUnit
-		if err := rows.Scan(&unit.UnitID, &unit.SourceID, &unit.OutlineID, &unit.ConceptID, &unit.Center,
+		if err := rows.Scan(&unit.UnitID, &unit.SourceID, &unit.OutlineID, &unit.EntryID, &unit.Center,
 			&unit.LineStart, &unit.LineEnd, &unit.Status, &unit.ErrorMsg, &unit.PromptVersion,
 			&unit.Lifecycle, &unit.LifecycleChangedAt, &unit.CreatedAt, &unit.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("unit store: publish generation: scan unit: %w", err)
@@ -386,9 +386,9 @@ func (s *Store) InsertUnit(ku *KnowledgeUnit) error {
 	if ku.UnitID == "" {
 		ku.UnitID = uuid.New().String()
 	}
-	_, err := s.db.Exec(`INSERT INTO knowledge_units (unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version)
+	_, err := s.db.Exec(`INSERT INTO knowledge_units (unit_id, source_id, outline_id, entry_id, center, line_start, line_end, status, error_msg, prompt_version)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ku.UnitID, ku.SourceID, ku.OutlineID, ku.ConceptID, ku.Center,
+		ku.UnitID, ku.SourceID, ku.OutlineID, ku.EntryID, ku.Center,
 		ku.LineStart, ku.LineEnd, ku.Status, ku.ErrorMsg, ku.PromptVersion)
 	if err != nil {
 		return fmt.Errorf("unit store: insert unit: %w", err)
@@ -560,12 +560,12 @@ func (s *Store) MovePointToUnit(pointID, unitID string) error {
 	return nil
 }
 
-func (s *Store) UpdateUnitConceptID(unitID string, conceptID *string) error {
+func (s *Store) UpdateUnitEntryID(unitID string, conceptID *string) error {
 	var val sql.NullString
 	if conceptID != nil && *conceptID != "" {
 		val = sql.NullString{String: *conceptID, Valid: true}
 	}
-	_, err := s.db.Exec(`UPDATE knowledge_units SET concept_id = ?, updated_at = CURRENT_TIMESTAMP WHERE unit_id = ?`,
+	_, err := s.db.Exec(`UPDATE knowledge_units SET entry_id = ?, updated_at = CURRENT_TIMESTAMP WHERE unit_id = ?`,
 		val, unitID)
 	if err != nil {
 		return fmt.Errorf("unit store: update concept id: %w", err)
@@ -573,13 +573,13 @@ func (s *Store) UpdateUnitConceptID(unitID string, conceptID *string) error {
 	return nil
 }
 
-// ClearConceptIDBySourceID resets concept_id for all of a source's current
-// KUs — used before a domain-switch re-match (MatchConcepts) so a KU that no
+// ClearEntryIDBySourceID resets entry_id for all of a source's current
+// KUs — used before a domain-switch re-match (MatchEntries) so a KU that no
 // longer fits any concept in the new domain ends up unclassified instead of
-// silently keeping a concept_id that belongs to its old domain (matchConcepts
+// silently keeping a entry_id that belongs to its old domain (matchEntries
 // only ever writes a match it found; it never clears one that came up empty).
-func (s *Store) ClearConceptIDBySourceID(sourceID string) error {
-	_, err := s.db.Exec(`UPDATE knowledge_units SET concept_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE source_id = ? AND lifecycle = 'current'`, sourceID)
+func (s *Store) ClearEntryIDBySourceID(sourceID string) error {
+	_, err := s.db.Exec(`UPDATE knowledge_units SET entry_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE source_id = ? AND lifecycle = 'current'`, sourceID)
 	if err != nil {
 		return fmt.Errorf("unit store: clear concept id by source: %w", err)
 	}
@@ -587,7 +587,7 @@ func (s *Store) ClearConceptIDBySourceID(sourceID string) error {
 }
 
 func (s *Store) GetUnitsBySourceID(sourceID string) ([]KnowledgeUnit, error) {
-	rows, err := s.db.Query(`SELECT unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
+	rows, err := s.db.Query(`SELECT unit_id, source_id, outline_id, entry_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
 		FROM knowledge_units WHERE source_id = ? ORDER BY line_start ASC`, sourceID)
 	if err != nil {
 		return nil, fmt.Errorf("unit store: get units by source: %w", err)
@@ -597,7 +597,7 @@ func (s *Store) GetUnitsBySourceID(sourceID string) ([]KnowledgeUnit, error) {
 	var units []KnowledgeUnit
 	for rows.Next() {
 		var ku KnowledgeUnit
-		if err := rows.Scan(&ku.UnitID, &ku.SourceID, &ku.OutlineID, &ku.ConceptID, &ku.Center,
+		if err := rows.Scan(&ku.UnitID, &ku.SourceID, &ku.OutlineID, &ku.EntryID, &ku.Center,
 			&ku.LineStart, &ku.LineEnd, &ku.Status, &ku.ErrorMsg, &ku.PromptVersion,
 			&ku.Lifecycle, &ku.LifecycleChangedAt, &ku.CreatedAt, &ku.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("unit store: scan unit: %w", err)
@@ -614,7 +614,7 @@ func (s *Store) GetUnitsBySourceIDFiltered(sourceID, lifecycle string) ([]Knowle
 	if lifecycle == "" || lifecycle == "all" {
 		return s.GetUnitsBySourceID(sourceID)
 	}
-	rows, err := s.db.Query(`SELECT unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
+	rows, err := s.db.Query(`SELECT unit_id, source_id, outline_id, entry_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
 		FROM knowledge_units WHERE source_id = ? AND lifecycle = ? ORDER BY line_start ASC`, sourceID, lifecycle)
 	if err != nil {
 		return nil, fmt.Errorf("unit store: get units by source filtered: %w", err)
@@ -624,7 +624,7 @@ func (s *Store) GetUnitsBySourceIDFiltered(sourceID, lifecycle string) ([]Knowle
 	var units []KnowledgeUnit
 	for rows.Next() {
 		var ku KnowledgeUnit
-		if err := rows.Scan(&ku.UnitID, &ku.SourceID, &ku.OutlineID, &ku.ConceptID, &ku.Center,
+		if err := rows.Scan(&ku.UnitID, &ku.SourceID, &ku.OutlineID, &ku.EntryID, &ku.Center,
 			&ku.LineStart, &ku.LineEnd, &ku.Status, &ku.ErrorMsg, &ku.PromptVersion,
 			&ku.Lifecycle, &ku.LifecycleChangedAt, &ku.CreatedAt, &ku.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("unit store: scan unit: %w", err)
@@ -645,7 +645,7 @@ func (s *Store) GetUnitsByIDs(unitIDs []string) ([]KnowledgeUnit, error) {
 	for i, id := range unitIDs {
 		args[i] = id
 	}
-	rows, err := s.db.Query(fmt.Sprintf(`SELECT unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
+	rows, err := s.db.Query(fmt.Sprintf(`SELECT unit_id, source_id, outline_id, entry_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
 		FROM knowledge_units WHERE unit_id IN (%s)`, placeholders), args...)
 	if err != nil {
 		return nil, fmt.Errorf("unit store: get units by ids: %w", err)
@@ -655,7 +655,7 @@ func (s *Store) GetUnitsByIDs(unitIDs []string) ([]KnowledgeUnit, error) {
 	var units []KnowledgeUnit
 	for rows.Next() {
 		var ku KnowledgeUnit
-		if err := rows.Scan(&ku.UnitID, &ku.SourceID, &ku.OutlineID, &ku.ConceptID, &ku.Center,
+		if err := rows.Scan(&ku.UnitID, &ku.SourceID, &ku.OutlineID, &ku.EntryID, &ku.Center,
 			&ku.LineStart, &ku.LineEnd, &ku.Status, &ku.ErrorMsg, &ku.PromptVersion,
 			&ku.Lifecycle, &ku.LifecycleChangedAt, &ku.CreatedAt, &ku.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("unit store: scan unit: %w", err)
@@ -807,7 +807,7 @@ func (s *Store) GetPointsByUnitIDs(unitIDs []string) ([]KnowledgePoint, error) {
 }
 
 func (s *Store) GetCompletedUnitsBySourceID(sourceID string) ([]KnowledgeUnit, error) {
-	rows, err := s.db.Query(`SELECT unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
+	rows, err := s.db.Query(`SELECT unit_id, source_id, outline_id, entry_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
 		FROM knowledge_units WHERE source_id = ? AND status = 'completed' ORDER BY line_start ASC`, sourceID)
 	if err != nil {
 		return nil, fmt.Errorf("unit store: get completed units: %w", err)
@@ -817,7 +817,7 @@ func (s *Store) GetCompletedUnitsBySourceID(sourceID string) ([]KnowledgeUnit, e
 	var units []KnowledgeUnit
 	for rows.Next() {
 		var ku KnowledgeUnit
-		if err := rows.Scan(&ku.UnitID, &ku.SourceID, &ku.OutlineID, &ku.ConceptID, &ku.Center,
+		if err := rows.Scan(&ku.UnitID, &ku.SourceID, &ku.OutlineID, &ku.EntryID, &ku.Center,
 			&ku.LineStart, &ku.LineEnd, &ku.Status, &ku.ErrorMsg, &ku.PromptVersion,
 			&ku.Lifecycle, &ku.LifecycleChangedAt, &ku.CreatedAt, &ku.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("unit store: scan unit: %w", err)
@@ -829,9 +829,9 @@ func (s *Store) GetCompletedUnitsBySourceID(sourceID string) ([]KnowledgeUnit, e
 
 func (s *Store) GetUnitByID(unitID string) (*KnowledgeUnit, error) {
 	ku := &KnowledgeUnit{}
-	err := s.db.QueryRow(`SELECT unit_id, source_id, outline_id, concept_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
+	err := s.db.QueryRow(`SELECT unit_id, source_id, outline_id, entry_id, center, line_start, line_end, status, error_msg, prompt_version, lifecycle, lifecycle_changed_at, created_at, updated_at
 		FROM knowledge_units WHERE unit_id = ?`, unitID).Scan(
-		&ku.UnitID, &ku.SourceID, &ku.OutlineID, &ku.ConceptID, &ku.Center,
+		&ku.UnitID, &ku.SourceID, &ku.OutlineID, &ku.EntryID, &ku.Center,
 		&ku.LineStart, &ku.LineEnd, &ku.Status, &ku.ErrorMsg, &ku.PromptVersion,
 		&ku.Lifecycle, &ku.LifecycleChangedAt, &ku.CreatedAt, &ku.UpdatedAt)
 	if err != nil {
@@ -905,14 +905,14 @@ func (s *Store) GetPointsBySourceID(sourceID string) ([]KnowledgePoint, error) {
 	return points, rows.Err()
 }
 
-// GetCrossSourcePointsByConceptID returns lifecycle=current KPs (with a
+// GetCrossSourcePointsByEntryID returns lifecycle=current KPs (with a
 // current KU) sharing conceptID, excluding excludeSourceID — priority-1 "对端
 // KP 集合" (docs/impl/v1/kpn.md 步骤 2).
-func (s *Store) GetCrossSourcePointsByConceptID(conceptID, excludeSourceID string) ([]KnowledgePoint, error) {
+func (s *Store) GetCrossSourcePointsByEntryID(conceptID, excludeSourceID string) ([]KnowledgePoint, error) {
 	rows, err := s.db.Query(`SELECT kp.point_id, kp.unit_id, kp.source_id, kp.content, kp.point_type, kp.lifecycle, kp.lifecycle_changed_at, kp.created_at
 		FROM knowledge_points kp
 		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
-		WHERE ku.concept_id = ? AND kp.source_id != ? AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
+		WHERE ku.entry_id = ? AND kp.source_id != ? AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
 		ORDER BY kp.created_at ASC`, conceptID, excludeSourceID)
 	if err != nil {
 		return nil, fmt.Errorf("unit store: get cross source points by concept: %w", err)
@@ -923,7 +923,7 @@ func (s *Store) GetCrossSourcePointsByConceptID(conceptID, excludeSourceID strin
 
 // GetCrossSourcePointsByDomainID returns lifecycle=current KPs (with a
 // current KU) whose Source is under domainID, excluding excludeSourceID —
-// priority-2 fallback "对端 KP 集合" when the new KU has no concept_id
+// priority-2 fallback "对端 KP 集合" when the new KU has no entry_id
 // (docs/impl/v1/kpn.md 步骤 2).
 func (s *Store) GetCrossSourcePointsByDomainID(domainID, excludeSourceID string) ([]KnowledgePoint, error) {
 	rows, err := s.db.Query(`SELECT kp.point_id, kp.unit_id, kp.source_id, kp.content, kp.point_type, kp.lifecycle, kp.lifecycle_changed_at, kp.created_at
@@ -958,6 +958,63 @@ func (s *Store) GetPointsByIDs(pointIDs []string) ([]KnowledgePoint, error) {
 	}
 	defer rows.Close()
 	return scanKnowledgePoints(rows)
+}
+
+// GetOrphanPointsByDomain returns the domain's standing entry_id-empty KPs
+// (same eligibility as entry.Store.AvailablePoints: current lifecycle on
+// both KU and KP, non-shadow Source) for the on-demand "对未归类知识点聚类"
+// trigger — unlike GetPointsBySourceID this spans every Source in the
+// domain, not just one just-imported Source.
+func (s *Store) GetOrphanPointsByDomain(domainID string) ([]KnowledgePoint, error) {
+	rows, err := s.db.Query(`
+		SELECT kp.point_id, kp.unit_id, kp.source_id, kp.content, kp.point_type, kp.lifecycle, kp.lifecycle_changed_at, kp.created_at
+		FROM knowledge_points kp
+		INNER JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
+		INNER JOIN sources s ON s.source_id = kp.source_id
+		WHERE ku.entry_id IS NULL AND ku.lifecycle = 'current' AND kp.lifecycle = 'current'
+		  AND s.domain_id = ? AND s.shadow_of IS NULL
+		ORDER BY kp.created_at ASC`, domainID)
+	if err != nil {
+		return nil, fmt.Errorf("unit store: get orphan points by domain: %w", err)
+	}
+	defer rows.Close()
+	return scanKnowledgePoints(rows)
+}
+
+// GetUnitCentersByIDs returns unit_id -> center for the given units, used to
+// enrich the kpn_entry_propose.md prompt (point_id TAB unit_center TAB
+// content) when the caller doesn't already have a full KnowledgeUnit slice.
+func (s *Store) GetUnitCentersByIDs(unitIDs []string) (map[string]string, error) {
+	result := make(map[string]string, len(unitIDs))
+	if len(unitIDs) == 0 {
+		return result, nil
+	}
+	seen := make(map[string]bool, len(unitIDs))
+	unique := make([]string, 0, len(unitIDs))
+	for _, id := range unitIDs {
+		if !seen[id] {
+			seen[id] = true
+			unique = append(unique, id)
+		}
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(unique)), ",")
+	args := make([]any, len(unique))
+	for i, id := range unique {
+		args[i] = id
+	}
+	rows, err := s.db.Query(fmt.Sprintf(`SELECT unit_id, center FROM knowledge_units WHERE unit_id IN (%s)`, placeholders), args...)
+	if err != nil {
+		return nil, fmt.Errorf("unit store: get unit centers: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, center string
+		if err := rows.Scan(&id, &center); err != nil {
+			return nil, fmt.Errorf("unit store: scan unit center: %w", err)
+		}
+		result[id] = center
+	}
+	return result, rows.Err()
 }
 
 func scanKnowledgePoints(rows *sql.Rows) ([]KnowledgePoint, error) {
@@ -1034,39 +1091,54 @@ func (s *Store) GetRelationsByPointID(pointID, scope string) ([]KnowledgePointRe
 	return relations, rows.Err()
 }
 
-// GetConceptsByDomainID lists candidate concepts for unit_concept_match,
+// GetSourceTitleSummary returns sources.title and sources.summary for
+// unit_entry_match injection (distinguish source entities, especially facts).
+// Missing/empty summary returns "" — callers omit the摘要 field when empty.
+func (s *Store) GetSourceTitleSummary(sourceID string) (title, summary string, err error) {
+	var sum sql.NullString
+	err = s.db.QueryRow(`SELECT title, summary FROM sources WHERE source_id = ?`, sourceID).Scan(&title, &sum)
+	if err != nil {
+		return "", "", fmt.Errorf("unit store: get source title/summary: %w", err)
+	}
+	if sum.Valid {
+		summary = sum.String
+	}
+	return title, summary, nil
+}
+
+// GetEntriesByDomainID lists candidate entries for unit_entry_match,
 // excluding merged_into non-NULL rows — a merged concept is no longer a
 // valid match target (docs/impl/v1/concept-evolution.md 步骤 4).
-func (s *Store) GetConceptsByDomainID(domainID string) ([]Concept, error) {
+func (s *Store) GetEntriesByDomainID(domainID string) ([]Concept, error) {
 	var rows *sql.Rows
 	var err error
 	if domainID != "" {
-		rows, err = s.db.Query(`SELECT concept_id, domain_id, name, description FROM concepts WHERE domain_id = ? AND merged_into IS NULL ORDER BY name`, domainID)
+		rows, err = s.db.Query(`SELECT entry_id, domain_id, name, description FROM entries WHERE domain_id = ? AND merged_into IS NULL ORDER BY name`, domainID)
 	} else {
-		rows, err = s.db.Query(`SELECT concept_id, domain_id, name, description FROM concepts WHERE merged_into IS NULL ORDER BY name`)
+		rows, err = s.db.Query(`SELECT entry_id, domain_id, name, description FROM entries WHERE merged_into IS NULL ORDER BY name`)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("unit store: get concepts: %w", err)
+		return nil, fmt.Errorf("unit store: get entries: %w", err)
 	}
 	defer rows.Close()
 
-	var concepts []Concept
+	var entries []Concept
 	for rows.Next() {
 		var c Concept
 		var desc sql.NullString
-		if err := rows.Scan(&c.ConceptID, &c.DomainID, &c.Name, &desc); err != nil {
+		if err := rows.Scan(&c.EntryID, &c.DomainID, &c.Name, &desc); err != nil {
 			return nil, fmt.Errorf("unit store: scan concept: %w", err)
 		}
 		if desc.Valid {
 			c.Description = desc.String
 		}
-		concepts = append(concepts, c)
+		entries = append(entries, c)
 	}
-	return concepts, rows.Err()
+	return entries, rows.Err()
 }
 
 type Concept struct {
-	ConceptID   string
+	EntryID   string
 	DomainID    string
 	Name        string
 	Description string

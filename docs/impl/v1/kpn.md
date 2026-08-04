@@ -4,7 +4,7 @@
 
 MVP 的 KPN 关系只在单 Source 内生成。V1 在新 Source 完成 Unit 提取后，将其 KP 与既有其他 Source 的同类 KP 做批量匹配，建立跨 Source 关系（related / contradicts，与 MVP 内部关系类型一致，见 unit.md 设计决策），提升 KPN 扩展的跨文档覆盖。contradicts 只标记并进入学习报告，不做冲突消解（V3 能力）。
 
-跨 Source 匹配只在同 concept_id 的 KP 之间进行；concept_id 缺失的 KP 不回退到同 domain 全量候选（早期设计曾如此，验收测试发现该回退会在概念颗粒度覆盖不到的领域——尤其宽泛制度类文本——产出大量表面同域实则无关的 related 关系，人工合理率远低于要求）。这批 KP 直接转入**概念演化模块**（`docs/impl/v1/concept-evolution.md`，V1 实现顺序第 10 位，已先于 KPN 完整实现）已有的 `concept_candidates(kind=add)` 候选与确认机制，本轮暂不建立跨 Source 关系，待概念补齐后定向重新匹配。KPN 模块不新建任何独立表，只是 `concept_candidates` 的另一个候选生产者。
+跨 Source 匹配只在同 entry_id 的 KP 之间进行；entry_id 缺失的 KP 不回退到同 domain 全量候选（早期设计曾如此，验收测试发现该回退会在概念颗粒度覆盖不到的领域——尤其宽泛制度类文本——产出大量表面同域实则无关的 related 关系，人工合理率远低于要求）。这批 KP 直接转入**概念演化模块**（`docs/impl/v1/concept-evolution.md`，V1 实现顺序第 10 位，已先于 KPN 完整实现）已有的 `entry_candidates(kind=add)` 候选与确认机制，本轮暂不建立跨 Source 关系，待概念补齐后定向重新匹配。KPN 模块不新建任何独立表，只是 `entry_candidates` 的另一个候选生产者。
 
 ## 数据结构
 
@@ -19,15 +19,15 @@ CREATE UNIQUE INDEX idx_kp_relations_uniq
 -- 防重复写入；migration 前先清理存量重复行（保留 created_at 最早者）
 ```
 
-`concept_candidates`（`concepts`/`concept_candidates` 两表）沿用 `docs/impl/v1/concept-evolution.md` 的既有结构，本文档不新增字段，仅约定 `evidence` JSON 增加一个通用键：
+`entry_candidates`（`entries`/`entry_candidates` 两表）沿用 `docs/impl/v1/concept-evolution.md` 的既有结构，本文档不新增字段，仅约定 `evidence` JSON 增加一个通用键：
 
 ```text
 origin: "usage_driven"（概念演化模块自身基于 activation_gap 的候选，既有行为）
-      | "content_driven"（本文档：KPN 跨 Source 匹配时，对 concept_id 为空的
+      | "content_driven"（本文档：KPN 跨 Source 匹配时，对 entry_id 为空的
         KP 按 domain 聚类直接产生的候选，不依赖任何查询信号）
 ```
 
-两种来源共用同一张表、同一套 `GET/POST /concepts/candidates*` 确认流程，`origin` 只用于审计展示，不改变确认执行逻辑。
+两种来源共用同一张表、同一套 `GET/POST /entries/candidates*` 确认流程，`origin` 只用于审计展示，不改变确认执行逻辑。
 
 ## 实现步骤
 
@@ -49,16 +49,16 @@ Step 7    content_driven 概念候选生成（本文档步骤 3，调用概念�
 新 KP 集合：当前 source 下 status=completed 的 KU 的全部 KP
             （lifecycle=current）；
 
-对新 KP 按其所属 KU 的 concept_id 分流：
-  concept_id 非空 -> 参与本轮跨 Source 匹配（步骤 4~5），
-    对端 KP 集合 = 同 concept_id 且 lifecycle=current 且
+对新 KP 按其所属 KU 的 entry_id 分流：
+  entry_id 非空 -> 参与本轮跨 Source 匹配（步骤 4~5），
+    对端 KP 集合 = 同 entry_id 且 lifecycle=current 且
     source_id != 当前的 KP；
-  concept_id 为空 -> 不参与本轮匹配，转入步骤 3
+  entry_id 为空 -> 不参与本轮匹配，转入步骤 3
     （按 domain_id 聚类，交给概念演化模块生成/合并 content_driven 候选）；
   source 无 domain（domain_id 为空）-> 两条路径都不适用，
     跳过该组新 KP，记录 debug。
 
-规模控制（仅对 concept_id 非空的匹配批次生效）：
+规模控制（仅对 entry_id 非空的匹配批次生效）：
   对端集合按 concept 分组，每组与对应新 KP 组成一个匹配批次；
   单批（新 KP + 对端 KP）合计 ≤ 60 个，超出时对端按
   question_kp_cooccurrence.confident_count 降序截取（优先与被验证过
@@ -81,28 +81,67 @@ Step 7    content_driven 概念候选生成（本文档步骤 3，调用概念�
 ### 步骤 3：content_driven 概念候选
 
 ```text
-输入：本次导入中 concept_id 为空、且 source 有 domain_id 的 KU 集合
+输入：本次导入中 entry_id 为空、且 source 有 domain_id 的 KU 集合
       （步骤 2 分流出的部分）。
 
-按 domain_id 分组，每组一次轻量 LLM 调用（类似 unit_concept_match，
-但不是从既有概念列表选，而是对这组内容提出建议概念名与边界描述），
-再调用概念演化模块的候选写入接口：
+按 domain_id 分组，每组一次轻量 LLM 调用（类似 unit_entry_match，
+但不是从既有概念列表选，而是对这组内容做主题聚类，每簇提出建议
+概念名与边界描述——一组可以聚出 0～多簇，找不到明确主题的知识点
+不勉强入簇，留到下次一起判断），再对每一簇调用概念演化模块的候选
+写入接口：
 
-  同 domain 下已存在 status=pending_confirm 的 kind=add 候选
+**类型标注（kind：concept / fact，2026-08-04 新增；2026-08-03 修订：
+V1 正式实现「概念簇/事实簇」两种词条类型，不再是仅打标签的最小可行版本）**：
+每簇除 suggested_name/suggested_description/point_ids 外，还需产出
+kind 字段——concept（该簇讲的是底层理论、原理或规则，跨具体实现
+成立）/ fact（该簇讲的是某个具体的实现、技术或产品实例，是理论
+落地后的对象，如某个数据库产品、某个协议实现、某个具体系统）。
+判断依据统一：这条知识点的核心论断在描述什么——通用规律，还是
+可唯一指认的具体对象（详见 `docs/design/wiki.md`「概念与事实：
+一阶编译的两种词条类型」）。
+`entries` 表新增 `kind` 列（NOT NULL DEFAULT 'concept'，迁移时存量
+行统一置 concept，不做回填猜测）；候选表 `entry_candidates` 同步
+新增 kind 列，人工确认（新建）时随其他字段一起写入 entries——
+`entries` 表本身就是概念和事实两种词条的统一存储，`kind` 是唯一
+区分字段，不新建独立的 facts 表，domain 下概念与事实依旧平铺
+共享同一份命名空间与去重逻辑。
+
+kind 不再只是"打标签"：`docs/impl/v1/wiki.md` 的一阶编译（步骤 1-6）、
+两层架构扩展（步骤 7-9）对 concept/fact 两种 kind 的 entries 行
+一视同仁地跑同一条 analyze → 确认 → 生成 → 发布 → 重编译 → 关系派生
+→ 二阶接入链路，**唯一的分岔点**是 `wiki_pages.page_type` 由该
+concept 行的 `kind` 决定（kind=concept → page_type=concept，
+kind=fact → page_type=fact），以及编译 Prompt 依据 kind 调整
+措辞提示（概念页强调定义/边界/内部逻辑，事实页强调"这是什么/当前
+状态如何/关联对象"，见 wiki.md 步骤 3）。qualifying/ready 判定、
+citation 白名单、关系派生、主题页二阶接入等判据逻辑对两种 kind
+完全相同，不重复实现。别名/版本变体的事实专属治理（旧称降级为
+别名、内涵有别的版本各自建页不合并）落在本步骤的聚类判断与既有
+概念演化模块的确认流程中，不需要额外的事实专用治理表。
+
+  同 domain 且 suggested_name 相同，已存在 status=pending_confirm 的
+  kind=add 候选（origin=content_driven）
     -> 合并：point_ids 并入该候选，suggested_name 保留原值不因新
        一批内容漂移改名，evidence 追加本次涉及的 source_id，
        last_signal_at/updated_at 刷新（不重复建行，呼应
        concept-evolution.md 步骤 2"同簇已有 pending_confirm 候选
        更新，不重复建行"的既有原则，扩展到 content_driven 来源）；
   否则 -> 新建候选（kind=add, evidence.origin=content_driven）。
+  只按 domain 匹配会让同一次聚类里的多个不同主题簇（或不同批次里
+  恰好都落在同一 domain 的不同主题簇）错误合并成一条候选，因此
+  suggested_name 是合并键的一部分，不只是展示字段。
+
+命名粒度：Prompt 会把该 domain 下已有概念名称列表作为参照传给
+LLM，要求新建议的概念名跟已有概念的粒度看齐（名词性主题，不夹带
+"安装"“配置”“故障处理”这类操作/场景后缀），避免概念越建越碎。
 
 这批 KP 本轮不建立任何跨 Source 关系，记录 info 日志（跳过 KP 数、
 涉及候选数）；LLM 调用失败按既有失败隔离原则处理，记录 warn，
-不阻塞 Source 完成，这批 KP 保持未处理，下次该 domain 有新导入时
-会被重新尝试聚类。
+不阻塞 Source 完成，未被任何簇覆盖的 KP 保持未处理，下次该 domain
+有新导入时会被重新尝试聚类。
 ```
 
-**调用参数**：extraction 模型，temperature 0。Prompt 文件：`config/prompts/kpn_concept_propose.md`（结构类似 `unit_concept_match.md`，输出 `{"suggested_name","suggested_description"}`）。
+**调用参数**：extraction 模型，temperature 0。Prompt 文件：`config/prompts/kpn_entry_propose.md`（结构类似 `unit_entry_match.md`，输出 `{"clusters":[{"suggested_name","suggested_description","point_ids"}]}`）。
 
 **模块边界**：本步骤只负责聚类、命名和写入候选，不做任何概念确认或 KU 迁移——那部分完全复用概念演化模块既有的 `Service.Confirm`/`Reject`（`docs/impl/v1/concept-evolution.md` 步骤 3），KPN 模块不重复实现。
 
@@ -148,18 +187,18 @@ scope='cross'；
 
 ### 步骤 6：概念候选确认后的定向重新匹配
 
-概念演化模块的 `POST /concepts/candidates/:id/confirm` 对 `kind=add` 候选执行确认（新建概念，或归入已有概念——见下）后，其涉及的 point_id 对应 KU 已获得 `concept_id`。确认成功（事务提交）之后，同步追加一次**只针对这批 point_id** 的跨 Source 匹配：候选池此时直接走步骤 2 的"同 concept_id"路径查询对端（按 point_id 所属 source_id 分别排除自身），复用步骤 4~5 的匹配与写入逻辑，不再需要任何回退。这一步由概念演化模块通过一个通知接口回调 KPN 模块执行（避免概念演化模块反向依赖 KPN/Unit 包），失败记录 warn，不影响概念确认本身已提交的结果。
+概念演化模块的 `POST /entries/candidates/:id/confirm` 对 `kind=add` 候选执行确认（新建概念，或归入已有概念——见下）后，其涉及的 point_id 对应 KU 已获得 `entry_id`。确认成功（事务提交）之后，同步追加一次**只针对这批 point_id** 的跨 Source 匹配：候选池此时直接走步骤 2 的"同 entry_id"路径查询对端（按 point_id 所属 source_id 分别排除自身），复用步骤 4~5 的匹配与写入逻辑，不再需要任何回退。这一步由概念演化模块通过一个通知接口回调 KPN 模块执行（避免概念演化模块反向依赖 KPN/Unit 包），失败记录 warn，不影响概念确认本身已提交的结果。
 
-`POST /concepts/candidates/:id/confirm` 的 `kind=add` 确认支持两种执行方式，均触发上述定向重新匹配：
+`POST /entries/candidates/:id/confirm` 的 `kind=add` 确认支持两种执行方式，均触发上述定向重新匹配：
 
 ```text
 新建概念（既有行为）：body 可覆盖 suggested_name/domain_id，事务内
-  INSERT concepts(origin='evolved')，point_ids 对应 KU 迁移到新 concept_id；
+  INSERT entries(origin='evolved')，point_ids 对应 KU 迁移到新 entry_id；
 
-归入已有概念（本文档新增）：body 改传 concept_id，事务内跳过创建
-  概念，直接把 point_ids 对应 KU 的 concept_id 迁移为该已有值——用于
-  修正 unit_concept_match 漏判导致的误判空概念场景，避免概念表因
-  content_driven 候选而不必要地膨胀；concept_id 必须存在且未被合并
+归入已有概念（本文档新增）：body 改传 entry_id，事务内跳过创建
+  概念，直接把 point_ids 对应 KU 的 entry_id 迁移为该已有值——用于
+  修正 unit_entry_match 漏判导致的误判空概念场景，避免概念表因
+  content_driven 候选而不必要地膨胀；entry_id 必须存在且未被合并
   （merged_into IS NULL），否则拒绝执行。
 ```
 
@@ -180,7 +219,7 @@ WHERE relation_type='contradicts' AND scope='cross'
 ORDER BY created_at DESC LIMIT 20
 ```
 
-仅展示提示，无任何自动动作。`docs/impl/v1/concept-evolution.md` 步骤 5 的报告 `concept_candidates` 节自然覆盖 content_driven 候选（evidence.origin 区分展示），不需要额外的报告字段。
+仅展示提示，无任何自动动作。`docs/impl/v1/concept-evolution.md` 步骤 5 的报告 `entry_candidates` 节自然覆盖 content_driven 候选（evidence.origin 区分展示），不需要额外的报告字段。
 
 检索侧无需改动：MVP 的 KPN 扩展（retrieval 步骤 8）按 point_id 查 `knowledge_point_relations`，跨 Source 关系自然参与扩展；lifecycle 过滤已由 retrieval.md（V1）步骤 5 覆盖。cross 关系与 intra 关系类型一致（related / contradicts，均 bidirectional），扩展规则沿用 MVP：related 走 GetKPNNeighbors 补充 supporting，contradicts 走 GetKPNConflicts 单独写入 EvidenceSet.conflicts。
 
@@ -193,15 +232,15 @@ GET /points/:id/relations（既有）
 
 POST /sources/:id/kpn-cross
   手动补触发指定 source 的跨 Source 匹配；用于对存量 Source 回填
-  跨源关系。仅处理 concept_id 非空的 KP（步骤 2、4~5、7）；concept_id
+  跨源关系。仅处理 entry_id 非空的 KP（步骤 2、4~5、7）；entry_id
   为空的 KP 按步骤 3 逻辑生成/合并 content_driven 概念候选。
   响应：{ source_id, batches: N, relations_created: M,
-  concept_candidates_touched: P }
+  entry_candidates_touched: P }
 
-GET/POST /concepts/candidates*（既有，概念演化模块）
-  不新增路由；POST .../confirm 的 body 新增 concept_id 字段（步骤 6
+GET/POST /entries/candidates*（既有，概念演化模块）
+  不新增路由；POST .../confirm 的 body 新增 entry_id 字段（步骤 6
   "归入已有概念"路径），与既有 suggested_name/domain_id/target 字段
-  互斥使用（kind=add 时：传 concept_id 走归入已有分支，否则走新建
+  互斥使用（kind=add 时：传 entry_id 走归入已有分支，否则走新建
   分支）。
 ```
 
@@ -210,15 +249,15 @@ GET/POST /concepts/candidates*（既有，概念演化模块）
 ## 依赖
 
 ```text
-基础设施：SQLite（LLM client；无新增 migration，复用 concept_candidates）
+基础设施：SQLite（LLM client；无新增 migration，复用 entry_candidates）
 Unit：    unit_extract 任务链追加 Step 6~7；复用 KPN 写入与校验代码
 概念演化：content_driven 候选写入、确认（新建/归入已有）与定向重新匹配的
           回调通知，均通过概念演化模块既有/新增的接口对接，KPN 模块不
-          直接操作 concept_candidates 表
+          直接操作 entry_candidates 表
 Lifecycle：候选配对过滤 lifecycle=current
 Trace：   question_kp_cooccurrence 用于对端截取排序（只读）
 Study：   报告新增 cross_source_conflicts 节（只读查询）；
-          concept_candidates 节自然覆盖 content_driven 候选
+          entry_candidates 节自然覆盖 content_driven 候选
 ```
 
 ## 完成标准
@@ -228,11 +267,11 @@ Study：   报告新增 cross_source_conflicts 节（只读查询）；
 关系写入 scope=cross，from 恒为新 KP，type 限 2 种枚举（related / contradicts）；
 重复触发（POST /sources/:id/kpn-cross）不产生重复关系，但不保证结果集合
   与前次一致（步骤 8 已注明：受 LLM 判断调用采样波动影响，非严格幂等）；
-对端候选严格按 concept_id 精确匹配，不回退同 domain 全量候选；
-concept_id 为空的 KP 转入 concept_candidates(kind=add, evidence.origin=
+对端候选严格按 entry_id 精确匹配，不回退同 domain 全量候选；
+entry_id 为空的 KP 转入 entry_candidates(kind=add, evidence.origin=
   content_driven)，不建立任何跨 Source 关系；
 同 domain 内容语义相近的多次导入合并进同一 pending_confirm 候选，不重复建行；
-confirm（新建或归入已有）后受影响 KU 的 concept_id 正确更新，且触发定向
+confirm（新建或归入已有）后受影响 KU 的 entry_id 正确更新，且触发定向
   重新匹配、产出与直接同 concept 匹配等价的关系；
 reject 后对应 point_id 保持无跨 Source 关系，不再被重复聚类；
 contradicts 关系出现在下一期学习报告的 cross_source_conflicts 节；

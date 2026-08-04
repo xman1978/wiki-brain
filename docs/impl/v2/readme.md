@@ -16,7 +16,7 @@ v1 的使用记录、ActivationLink、Wiki、KP、证据
 
 **V2 交付的是编译基础设施、材料 Schema 和种子材料，不是成品材料库。** 视角、槽位角色等使用侧字段在 V2 只能来自人工声明和编译时推断，是低置信起点；它们的成熟依赖 V3 上线后的使用信号回流（谁被采用、谁被纠正、反复是否有效）。这符合"认知结构来自使用"的设计原则（`precompile.md`）——声明和推断只是给使用验证提供起点。
 
-设计依据：`design.md`（知识表达的分层）、`wiki-compilation.md`（页面与 Claim 同源、认知包）、`precompile.md`（ActivationLink 认知入口规则）、`knowledge-processing-pattern.md`、`reasoning-pattern.md`。
+设计依据：`design.md`（知识表达的分层）、`wiki.md`（页面与 Claim 同源、认知包）、`precompile.md`（ActivationLink 认知入口规则）、`knowledge-processing-pattern.md`、`reasoning-pattern.md`。
 
 ---
 
@@ -37,7 +37,7 @@ v1 的使用记录、ActivationLink、Wiki、KP、证据
 
 ### 1. Claim 层（Wiki 编译双产物）
 
-依据 `wiki-compilation.md`「编译产物：页面与 Claim 同源」。
+依据 `wiki.md`「编译产物：页面与 Claim 同源」。
 
 ```text
 编译输出扩展：在页面 Markdown 之外产出 claims 数组，每条包含
@@ -51,7 +51,7 @@ v1 的使用记录、ActivationLink、Wiki、KP、证据
 两层适配：概念页（一阶）的 Claim 依据 point_ids；主题页（二阶）的 Claim
   依据同样是 point_ids（不指向下层 Claim），并额外记录来源成员页面，
   与 V1「主题页引用白名单 = 成员页面并集」同源，避免出现依赖 Claim 的
-  Claim 这种二级间接（见 docs/design/wiki-compilation.md
+  Claim 这种二级间接（见 docs/design/wiki.md
   「证据回链必须穿透两层」）。
 ```
 
@@ -96,7 +96,7 @@ perspectives 表：视角定义（名称、描述、来源：preset / 人工）�
 
 ### 5. 认知材料访问契约（认知包 + 动态解析）
 
-依据 `wiki-compilation.md`「认知包」。V3 消费材料的唯一入口是一份两部分的访问契约：
+依据 `wiki.md`「认知包」。V3 消费材料的唯一入口是一份两部分的访问契约：
 
 ```text
 静态组装（认知包）：按主题 / 概念 / 视角装配 Wiki 页面、Claim 集合、

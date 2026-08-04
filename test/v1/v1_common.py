@@ -357,9 +357,15 @@ def db_kp_relations(conn, scope=None, relation_type=None):
     return [dict(r) for r in rows]
 
 
-def db_concept_name(conn, concept_id):
-    row = conn.execute("SELECT name FROM concepts WHERE concept_id = ?", (concept_id,)).fetchone()
+def db_entry_name(conn, entry_id):
+    row = conn.execute("SELECT name FROM entries WHERE entry_id = ?", (entry_id,)).fetchone()
     return row["name"] if row else None
+
+
+def db_entry_kind(conn, entry_id):
+    """entries.kind: concept | fact (docs/impl/v1/kpn.md 类型标注)."""
+    row = conn.execute("SELECT kind FROM entries WHERE entry_id = ?", (entry_id,)).fetchone()
+    return row["kind"] if row else None
 
 
 def db_wiki_pages(conn, status=None):

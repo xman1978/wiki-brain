@@ -1,4 +1,4 @@
-package concept
+package entry
 
 import (
 	"database/sql"
@@ -22,10 +22,10 @@ func seedDomain(t *testing.T, db *sql.DB, domainID string) {
 	}
 }
 
-func seedConcept(t *testing.T, db *sql.DB, conceptID, domainID string, mergedInto sql.NullString) {
+func seedEntry(t *testing.T, db *sql.DB, conceptID, domainID string, mergedInto sql.NullString) {
 	t.Helper()
 	seedDomain(t, db, domainID)
-	if _, err := db.Exec(`INSERT INTO concepts (concept_id, domain_id, name, merged_into) VALUES (?, ?, ?, ?)`,
+	if _, err := db.Exec(`INSERT INTO entries (entry_id, domain_id, name, merged_into) VALUES (?, ?, ?, ?)`,
 		conceptID, domainID, conceptID, mergedInto); err != nil {
 		t.Fatalf("seed concept: %v", err)
 	}
@@ -42,7 +42,7 @@ func seedSource(t *testing.T, db *sql.DB, sourceID, domainID string) {
 
 func seedKU(t *testing.T, db *sql.DB, unitID, sourceID, center string, conceptID sql.NullString) {
 	t.Helper()
-	if _, err := db.Exec(`INSERT INTO knowledge_units (unit_id, source_id, concept_id, center, line_start, line_end, status, prompt_version)
+	if _, err := db.Exec(`INSERT INTO knowledge_units (unit_id, source_id, entry_id, center, line_start, line_end, status, prompt_version)
 		VALUES (?, ?, ?, ?, 1, 10, 'completed', 'v1')`, unitID, sourceID, conceptID, center); err != nil {
 		t.Fatalf("seed KU: %v", err)
 	}
@@ -86,9 +86,9 @@ func seedTrace(t *testing.T, db *sql.DB, traceID, questionHash string, pointIDs 
 	}
 }
 
-// seedConceptGapEvent inserts an activation_gap learning_event classified as
+// seedEntryGapEvent inserts an activation_gap learning_event classified as
 // gapLevel, backing trace created fresh (question_hash = questionHash).
-func seedConceptGapEvent(t *testing.T, db *sql.DB, eventID, questionHash string, pointIDs []string, gapLevel string) string {
+func seedEntryGapEvent(t *testing.T, db *sql.DB, eventID, questionHash string, pointIDs []string, gapLevel string) string {
 	t.Helper()
 	traceID := "t-" + eventID
 	seedTrace(t, db, traceID, questionHash, pointIDs, 0)
@@ -97,7 +97,7 @@ func seedConceptGapEvent(t *testing.T, db *sql.DB, eventID, questionHash string,
 		"question_terms":     "q terms",
 		"direct_point_ids":   pointIDs,
 		"gap_level":          gapLevel,
-		"null_concept_ratio": 1.0,
+		"null_entry_ratio": 1.0,
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -180,7 +180,7 @@ func setupServiceWithWiki(t *testing.T) (*Service, *Store, *sql.DB, *wiki.Servic
 
 	wikiStore := wiki.NewStore(db)
 	fake := llm.NewFakeClient()
-	wikiSvc := wiki.NewService(wikiStore, fake, idxMgr.Wiki, config.WikiConfig{CompileMaxChars: 12000, RecompileNewKPMin: 2})
+	wikiSvc := wiki.NewService(wikiStore, fake, idxMgr.Wiki, idxMgr.Points, config.WikiConfig{CompileMaxChars: 12000, RecompileNewKPMin: 2}, 0)
 
 	svc := NewService(store, testConfig(), wikiSvc)
 	return svc, store, db, wikiSvc
@@ -192,7 +192,7 @@ func insertWikiPage(t *testing.T, db *sql.DB, pageID, conceptID string) {
 	err := wikiStore.InsertPage(&wiki.Page{
 		PageID:        pageID,
 		PageType:      wiki.PageTypeConcept,
-		ConceptID:     sql.NullString{String: conceptID, Valid: true},
+		EntryID:     sql.NullString{String: conceptID, Valid: true},
 		Title:         "test page " + pageID,
 		Content:       "## 稳定结论\ntest\n",
 		Status:        wiki.StatusDraft,

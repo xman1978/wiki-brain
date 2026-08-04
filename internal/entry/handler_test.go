@@ -1,4 +1,4 @@
-package concept
+package entry
 
 import (
 	"bytes"
@@ -20,11 +20,11 @@ func TestHandler_ListCandidates(t *testing.T) {
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
-	if _, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", []string{"p1"}, []string{"evt-1"}, AddEvidence{EventCount: 5}, "seed"); err != nil {
+	if _, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{EventCount: 5}, "seed"); err != nil {
 		t.Fatal(err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/concepts/candidates?status=pending_confirm", nil)
+	req := httptest.NewRequest(http.MethodGet, "/entries/candidates?status=pending_confirm", nil)
 	rec := httptest.NewRecorder()
 	h.list(rec, req)
 
@@ -48,13 +48,13 @@ func TestHandler_Confirm_Add(t *testing.T) {
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
-	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	body, _ := json.Marshal(confirmRequestBody{SuggestedName: "并发编程"})
-	req := httptest.NewRequest(http.MethodPost, "/concepts/candidates/"+candidateID+"/confirm", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/entries/candidates/"+candidateID+"/confirm", bytes.NewReader(body))
 	req.SetPathValue("id", candidateID)
 	rec := httptest.NewRecorder()
 	h.confirm(rec, req)
@@ -66,14 +66,14 @@ func TestHandler_Confirm_Add(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.ConceptID == "" || resp.MigratedKUs != 1 {
+	if resp.EntryID == "" || resp.MigratedKUs != 1 {
 		t.Errorf("unexpected confirm response: %+v", resp)
 	}
 }
 
 func TestHandler_Confirm_InvalidCandidate_BadRequest(t *testing.T) {
 	h, _, _ := setupHandler(t)
-	req := httptest.NewRequest(http.MethodPost, "/concepts/candidates/missing/confirm", nil)
+	req := httptest.NewRequest(http.MethodPost, "/entries/candidates/missing/confirm", nil)
 	req.SetPathValue("id", "missing")
 	rec := httptest.NewRecorder()
 	h.confirm(rec, req)
@@ -86,26 +86,26 @@ func TestHandler_Confirm_InvalidCandidate_BadRequest(t *testing.T) {
 func TestHandler_ListConcepts_FiltersByDomainAndExcludesMerged(t *testing.T) {
 	h, _, db := setupHandler(t)
 	seedDomain(t, db, "d2")
-	seedConcept(t, db, "c1", "d1", sql.NullString{})
-	seedConcept(t, db, "c2", "d2", sql.NullString{})
-	seedConcept(t, db, "c3-merged", "d1", sql.NullString{String: "c1", Valid: true})
+	seedEntry(t, db, "c1", "d1", sql.NullString{})
+	seedEntry(t, db, "c2", "d2", sql.NullString{})
+	seedEntry(t, db, "c3-merged", "d1", sql.NullString{String: "c1", Valid: true})
 
-	req := httptest.NewRequest(http.MethodGet, "/concepts?domain_id=d1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/entries?domain_id=d1", nil)
 	rec := httptest.NewRecorder()
-	h.listConcepts(rec, req)
+	h.listEntries(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	var items []struct {
-		ConceptID string `json:"concept_id"`
+		EntryID string `json:"entry_id"`
 		Name      string `json:"name"`
 		DomainID  string `json:"domain_id"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 || items[0].ConceptID != "c1" {
+	if len(items) != 1 || items[0].EntryID != "c1" {
 		t.Fatalf("expected only c1 (d1, unmerged), got %+v", items)
 	}
 }
@@ -115,12 +115,12 @@ func TestHandler_Reject(t *testing.T) {
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
-	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/concepts/candidates/"+candidateID+"/reject", nil)
+	req := httptest.NewRequest(http.MethodPost, "/entries/candidates/"+candidateID+"/reject", nil)
 	req.SetPathValue("id", candidateID)
 	rec := httptest.NewRecorder()
 	h.reject(rec, req)
@@ -138,12 +138,12 @@ func TestHandler_Reject(t *testing.T) {
 func TestHandler_ListByDomain(t *testing.T) {
 	h, store, db := setupHandler(t)
 	seedDomain(t, db, "d1")
-	pending, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "pending", nil, nil, AddEvidence{}, "seed")
+	pending, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "pending", EntryKindConcept, nil, nil, AddEvidence{}, "seed")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/concepts/candidates/by-domain?domain_id=d1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/entries/candidates/by-domain?domain_id=d1", nil)
 	rec := httptest.NewRecorder()
 	h.listByDomain(rec, req)
 
@@ -161,7 +161,7 @@ func TestHandler_ListByDomain(t *testing.T) {
 
 func TestHandler_ListByDomain_RequiresDomainID(t *testing.T) {
 	h, _, _ := setupHandler(t)
-	req := httptest.NewRequest(http.MethodGet, "/concepts/candidates/by-domain", nil)
+	req := httptest.NewRequest(http.MethodGet, "/entries/candidates/by-domain", nil)
 	rec := httptest.NewRecorder()
 	h.listByDomain(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -169,17 +169,17 @@ func TestHandler_ListByDomain_RequiresDomainID(t *testing.T) {
 	}
 }
 
-func TestHandler_ConceptDetailAndEdit(t *testing.T) {
+func TestHandler_EntryDetailAndEdit(t *testing.T) {
 	h, _, db := setupHandler(t)
-	seedConcept(t, db, "c1", "d1", sql.NullString{})
+	seedEntry(t, db, "c1", "d1", sql.NullString{})
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{String: "c1", Valid: true})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	req := httptest.NewRequest(http.MethodGet, "/concepts/c1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/entries/c1", nil)
 	req.SetPathValue("id", "c1")
 	rec := httptest.NewRecorder()
-	h.getConceptDetail(rec, req)
+	h.getEntryDetail(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -192,38 +192,38 @@ func TestHandler_ConceptDetailAndEdit(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(map[string]string{"name": "新名称", "description": "新描述"})
-	req2 := httptest.NewRequest(http.MethodPatch, "/concepts/c1", bytes.NewReader(body))
+	req2 := httptest.NewRequest(http.MethodPatch, "/entries/c1", bytes.NewReader(body))
 	req2.SetPathValue("id", "c1")
 	rec2 := httptest.NewRecorder()
-	h.updateConcept(rec2, req2)
+	h.updateEntry(rec2, req2)
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("update status = %d, body = %s", rec2.Code, rec2.Body.String())
 	}
 }
 
-func TestHandler_ConceptDetail_NotFound(t *testing.T) {
+func TestHandler_EntryDetail_NotFound(t *testing.T) {
 	h, _, _ := setupHandler(t)
-	req := httptest.NewRequest(http.MethodGet, "/concepts/missing", nil)
+	req := httptest.NewRequest(http.MethodGet, "/entries/missing", nil)
 	req.SetPathValue("id", "missing")
 	rec := httptest.NewRecorder()
-	h.getConceptDetail(rec, req)
+	h.getEntryDetail(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
 	}
 }
 
-func TestHandler_AddAndRemoveConceptPoints(t *testing.T) {
+func TestHandler_AddAndRemoveEntryPoints(t *testing.T) {
 	h, _, db := setupHandler(t)
-	seedConcept(t, db, "c1", "d1", sql.NullString{})
+	seedEntry(t, db, "c1", "d1", sql.NullString{})
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
 	body, _ := json.Marshal(map[string][]string{"point_ids": {"p1"}})
-	req := httptest.NewRequest(http.MethodPost, "/concepts/c1/points", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/entries/c1/points", bytes.NewReader(body))
 	req.SetPathValue("id", "c1")
 	rec := httptest.NewRecorder()
-	h.addConceptPoints(rec, req)
+	h.addEntryPoints(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("add status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -235,11 +235,11 @@ func TestHandler_AddAndRemoveConceptPoints(t *testing.T) {
 		t.Fatalf("migrated = %d, want 1", addResp["migrated"])
 	}
 
-	req2 := httptest.NewRequest(http.MethodDelete, "/concepts/c1/points/p1", nil)
+	req2 := httptest.NewRequest(http.MethodDelete, "/entries/c1/points/p1", nil)
 	req2.SetPathValue("id", "c1")
 	req2.SetPathValue("point_id", "p1")
 	rec2 := httptest.NewRecorder()
-	h.removeConceptPoint(rec2, req2)
+	h.removeEntryPoint(rec2, req2)
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("remove status = %d, body = %s", rec2.Code, rec2.Body.String())
 	}

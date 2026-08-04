@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS knowledge_units (
     unit_id        TEXT PRIMARY KEY,
     source_id      TEXT NOT NULL REFERENCES sources(source_id),
     outline_id     TEXT REFERENCES source_outlines(outline_id),
-    concept_id     TEXT REFERENCES concepts(concept_id),
+    entry_id     TEXT REFERENCES entries(entry_id),
     center         TEXT NOT NULL,
     line_start     INTEGER NOT NULL,
     line_end       INTEGER NOT NULL,

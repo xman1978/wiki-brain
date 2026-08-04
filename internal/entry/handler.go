@@ -1,4 +1,4 @@
-package concept
+package entry
 
 import (
 	"encoding/json"
@@ -18,23 +18,24 @@ func NewHandler(svc *Service) *Handler {
 // RegisterRoutes implements docs/impl/v1/concept-evolution.md 步骤 3: list,
 // confirm, reject. There is no auto mode — confirm is always a human action.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /concepts/candidates", h.list)
-	mux.HandleFunc("GET /concepts/candidates/by-domain", h.listByDomain)
-	mux.HandleFunc("POST /concepts/candidates", h.createManual)
-	mux.HandleFunc("POST /concepts/candidates/{id}/confirm", h.confirm)
-	mux.HandleFunc("POST /concepts/candidates/{id}/reject", h.reject)
-	mux.HandleFunc("POST /concepts/candidates/{id}/restore", h.restore)
-	mux.HandleFunc("DELETE /concepts/candidates/{id}", h.delete)
-	mux.HandleFunc("GET /concepts", h.listConcepts)
-	mux.HandleFunc("GET /concepts/points", h.availablePoints)
-	mux.HandleFunc("GET /concepts/{id}", h.getConceptDetail)
-	mux.HandleFunc("PATCH /concepts/{id}", h.updateConcept)
-	mux.HandleFunc("POST /concepts/{id}/points", h.addConceptPoints)
-	mux.HandleFunc("DELETE /concepts/{id}/points/{point_id}", h.removeConceptPoint)
+	mux.HandleFunc("GET /entries/candidates", h.list)
+	mux.HandleFunc("GET /entries/candidates/by-domain", h.listByDomain)
+	mux.HandleFunc("POST /entries/candidates", h.createManual)
+	mux.HandleFunc("POST /entries/domains/{id}/propose-from-orphans", h.proposeFromOrphans)
+	mux.HandleFunc("POST /entries/candidates/{id}/confirm", h.confirm)
+	mux.HandleFunc("POST /entries/candidates/{id}/reject", h.reject)
+	mux.HandleFunc("POST /entries/candidates/{id}/restore", h.restore)
+	mux.HandleFunc("DELETE /entries/candidates/{id}", h.delete)
+	mux.HandleFunc("GET /entries", h.listEntries)
+	mux.HandleFunc("GET /entries/points", h.availablePoints)
+	mux.HandleFunc("GET /entries/{id}", h.getEntryDetail)
+	mux.HandleFunc("PATCH /entries/{id}", h.updateEntry)
+	mux.HandleFunc("POST /entries/{id}/points", h.addEntryPoints)
+	mux.HandleFunc("DELETE /entries/{id}/points/{point_id}", h.removeEntryPoint)
 }
 
-// availablePoints is GET /concepts/points?domain_id=: populates the concept
-// candidate confirm dialog's "add KP" picker with concept_id-NULL KPs in the
+// availablePoints is GET /entries/points?domain_id=: populates the concept
+// candidate confirm dialog's "add KP" picker with entry_id-NULL KPs in the
 // given domain — the same eligibility precondition ConfirmAdd/ConfirmAssign's
 // migration query enforces.
 func (h *Handler) availablePoints(w http.ResponseWriter, r *http.Request) {
@@ -70,6 +71,7 @@ func (h *Handler) createManual(w http.ResponseWriter, r *http.Request) {
 		DomainID      string   `json:"domain_id"`
 		SuggestedName string   `json:"suggested_name"`
 		Description   string   `json:"description"`
+		Kind          string   `json:"kind"`
 		PointIDs      []string `json:"point_ids"`
 	}
 	if r.ContentLength != 0 {
@@ -78,7 +80,7 @@ func (h *Handler) createManual(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	candidateID, err := h.svc.CreateManualCandidate(body.DomainID, body.SuggestedName, body.Description, body.PointIDs)
+	candidateID, err := h.svc.CreateManualCandidate(body.DomainID, body.SuggestedName, body.Description, body.Kind, body.PointIDs)
 	if err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -86,26 +88,45 @@ func (h *Handler) createManual(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, map[string]string{"candidate_id": candidateID})
 }
 
-// listConcepts implements GET /concepts?domain_id=: populates the concept
+// proposeFromOrphans is the 知识领域页面"+ 新增概念"按钮's endpoint: clusters
+// and names domainID's standing entry_id-empty KPs and writes each
+// cluster as a pending_confirm add candidate (docs/impl/v1/kpn.md 步骤 3
+// on-demand variant) — replaces what used to be a manual-only draft form.
+func (h *Handler) proposeFromOrphans(w http.ResponseWriter, r *http.Request) {
+	domainID := r.PathValue("id")
+	if domainID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "domain id is required")
+		return
+	}
+	touched, err := h.svc.ProposeEntriesFromDomainOrphans(r.Context(), domainID)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	foundation.WriteJSON(w, http.StatusOK, map[string]int{"proposals_touched": touched})
+}
+
+// listEntries implements GET /entries?domain_id=: populates the concept
 // candidate confirm UI's "select an existing concept" picker
 // (docs/impl/v1/kpn.md 步骤 6). Not used by any matching/confirm logic.
-func (h *Handler) listConcepts(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) listEntries(w http.ResponseWriter, r *http.Request) {
 	domainID := r.URL.Query().Get("domain_id")
-	concepts, err := h.svc.ListActiveConcepts(domainID)
+	entries, err := h.svc.ListActiveEntries(domainID)
 	if err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	type item struct {
-		ConceptID   string `json:"concept_id"`
+		EntryID   string `json:"entry_id"`
 		Name        string `json:"name"`
 		DomainID    string `json:"domain_id"`
 		Description string `json:"description,omitempty"`
+		Kind        string `json:"kind"`
 		KPCount     int    `json:"kp_count"`
 	}
-	items := make([]item, len(concepts))
-	for i, c := range concepts {
-		items[i] = item{ConceptID: c.ConceptID, Name: c.Name, DomainID: c.DomainID, Description: c.Description, KPCount: c.KPCount}
+	items := make([]item, len(entries))
+	for i, c := range entries {
+		items[i] = item{EntryID: c.EntryID, Name: c.Name, DomainID: c.DomainID, Description: c.Description, Kind: c.Kind, KPCount: c.KPCount}
 	}
 	foundation.WriteJSON(w, http.StatusOK, items)
 }
@@ -123,10 +144,10 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, views)
 }
 
-// listByDomain is GET /concepts/candidates/by-domain?domain_id=: the 知识领域
+// listByDomain is GET /entries/candidates/by-domain?domain_id=: the 知识领域
 // 页面 merged concept grid's data source for pending/rejected/expired kind=add
 // candidates targeting one domain — the grid shows these as cards alongside
-// real concepts instead of a separate status-tabbed list.
+// real entries instead of a separate status-tabbed list.
 func (h *Handler) listByDomain(w http.ResponseWriter, r *http.Request) {
 	domainID := r.URL.Query().Get("domain_id")
 	if domainID == "" {
@@ -145,10 +166,11 @@ func (h *Handler) listByDomain(w http.ResponseWriter, r *http.Request) {
 }
 
 type conceptDetailResp struct {
-	ConceptID   string                   `json:"concept_id"`
+	EntryID   string                   `json:"entry_id"`
 	DomainID    string                   `json:"domain_id"`
 	Name        string                   `json:"name"`
 	Description string                   `json:"description"`
+	Kind        string                   `json:"kind"`
 	Points      []conceptDetailPointResp `json:"points"`
 }
 
@@ -159,9 +181,9 @@ type conceptDetailPointResp struct {
 	SourceTitle string `json:"source_title"`
 }
 
-func (h *Handler) getConceptDetail(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) getEntryDetail(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	d, err := h.svc.GetConceptDetail(id)
+	d, err := h.svc.GetEntryDetail(id)
 	if err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -170,7 +192,7 @@ func (h *Handler) getConceptDetail(w http.ResponseWriter, r *http.Request) {
 		foundation.WriteError(w, http.StatusNotFound, "concept not found")
 		return
 	}
-	resp := conceptDetailResp{ConceptID: d.ConceptID, DomainID: d.DomainID, Name: d.Name, Description: d.Description}
+	resp := conceptDetailResp{EntryID: d.EntryID, DomainID: d.DomainID, Name: d.Name, Description: d.Description, Kind: d.Kind}
 	for _, p := range d.Points {
 		resp.Points = append(resp.Points, conceptDetailPointResp{PointID: p.PointID, Content: p.Content, SourceID: p.SourceID, SourceTitle: p.SourceTitle})
 	}
@@ -180,24 +202,25 @@ func (h *Handler) getConceptDetail(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) updateConcept(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) updateEntry(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
+		Kind        string `json:"kind"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		foundation.WriteError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if err := h.svc.UpdateConceptMeta(id, body.Name, body.Description); err != nil {
+	if err := h.svc.UpdateEntryMeta(id, body.Name, body.Description, body.Kind); err != nil {
 		foundation.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	foundation.WriteJSON(w, http.StatusOK, map[string]string{"concept_id": id})
+	foundation.WriteJSON(w, http.StatusOK, map[string]string{"entry_id": id})
 }
 
-func (h *Handler) addConceptPoints(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) addEntryPoints(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
 		PointIDs []string `json:"point_ids"`
@@ -206,7 +229,7 @@ func (h *Handler) addConceptPoints(w http.ResponseWriter, r *http.Request) {
 		foundation.WriteError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	migrated, err := h.svc.AddConceptPoints(id, body.PointIDs)
+	migrated, err := h.svc.AddEntryPoints(id, body.PointIDs)
 	if err != nil {
 		foundation.WriteError(w, http.StatusBadRequest, err.Error())
 		return
@@ -214,10 +237,10 @@ func (h *Handler) addConceptPoints(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, map[string]int{"migrated": migrated})
 }
 
-func (h *Handler) removeConceptPoint(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) removeEntryPoint(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	pointID := r.PathValue("point_id")
-	unitPointCount, err := h.svc.RemoveConceptPoint(id, pointID)
+	unitPointCount, err := h.svc.RemoveEntryPoint(id, pointID)
 	if err != nil {
 		foundation.WriteError(w, http.StatusBadRequest, err.Error())
 		return
@@ -232,15 +255,16 @@ type confirmRequestBody struct {
 	SuggestedName string   `json:"suggested_name"`
 	DomainID      string   `json:"domain_id"`
 	Description   string   `json:"description"`
+	Kind          string   `json:"kind"`
 	Target        string   `json:"target"`
-	ConceptID     string   `json:"concept_id"`
+	EntryID     string   `json:"entry_id"`
 	PointIDs      []string `json:"point_ids"`
 }
 
 type confirmResp struct {
 	CandidateID  string `json:"candidate_id"`
 	Status       string `json:"status"`
-	ConceptID    string `json:"concept_id,omitempty"`
+	EntryID    string `json:"entry_id,omitempty"`
 	MigratedKUs  int    `json:"migrated_kus"`
 	FlaggedPages int    `json:"flagged_pages,omitempty"`
 }
@@ -257,7 +281,7 @@ func (h *Handler) confirm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.svc.Confirm(id,
-		&ConfirmAddRequest{SuggestedName: body.SuggestedName, DomainID: body.DomainID, Description: body.Description, ConceptID: body.ConceptID, PointIDs: body.PointIDs},
+		&ConfirmAddRequest{SuggestedName: body.SuggestedName, DomainID: body.DomainID, Description: body.Description, EntryKind: body.Kind, EntryID: body.EntryID, PointIDs: body.PointIDs},
 		&ConfirmMergeRequest{Target: body.Target})
 	if err != nil {
 		foundation.WriteError(w, http.StatusBadRequest, err.Error())
@@ -267,7 +291,7 @@ func (h *Handler) confirm(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, confirmResp{
 		CandidateID:  result.Candidate.CandidateID,
 		Status:       StatusApplied,
-		ConceptID:    result.ConceptID,
+		EntryID:    result.EntryID,
 		MigratedKUs:  result.MigratedKUs,
 		FlaggedPages: result.FlaggedPages,
 	})

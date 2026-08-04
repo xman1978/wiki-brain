@@ -8,8 +8,15 @@ import (
 
 // applyPlatformThinking merges platform-specific thinking fields into reqBody.
 // reqBody is the base chat request map (model, messages, temperature, max_tokens, …).
+//
+// DeepSeek / Doubao default thinking on; enable_think=false must send
+// thinking.type=disabled rather than omitting the field.
 func applyPlatformThinking(platform Platform, enableThink bool, reqBody map[string]any) {
 	if !enableThink {
+		switch platform {
+		case PlatformDoubao, PlatformDeepSeek:
+			reqBody["thinking"] = map[string]any{"type": "disabled"}
+		}
 		return
 	}
 	switch platform {

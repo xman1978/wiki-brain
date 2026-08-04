@@ -160,7 +160,7 @@ func (s *Service) FixCoverageGap(ctx context.Context, sourceID string, lineStart
 	// from the store, so the newly inserted unit is picked up automatically
 	// without any special-casing here.
 	s.generateKPN(ctx, sourceID)
-	s.matchConcepts(ctx, sourceID, src.DomainID)
+	s.matchEntries(ctx, sourceID, src.DomainID)
 	if _, err := s.CrossSourceKPN(ctx, sourceID); err != nil {
 		slog.Warn("unit: fix coverage gap: cross source kpn failed", "source_id", sourceID, "error", err)
 	}

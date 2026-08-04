@@ -70,8 +70,8 @@ queue:
 
 # FileView 服务（格式转换）
 fileview:
-  base_url:          "http://127.0.0.1:8000"
-#  base_url:          "http://192.168.0.169:9000"
+#  base_url:          "http://127.0.0.1:8000"
+  base_url:          "http://192.168.0.169:9000"
   poll_interval_ms:  1500
   max_poll_seconds:  600
 
@@ -127,9 +127,17 @@ wiki:
   # 两层架构（步骤 7-9）
   relation_kpn_min:             1    # 派生 related 所需的 KPN related 关系对数
   relation_shared_point_min:    2    # 派生 related 的另一条件：共享 KP 数
-  topic_member_min:             3    # 主题页候选的连通分量最小成员数，也是重编译后剩余成员数的下限
-  topic_member_max:             8    # 连通分量成员数上限，超限不产候选、只写 oversized_topic_cluster 报告项
+  topic_member_min:             3    # 重编译后主题页剩余成员数的下限（2026-08-03 起不再兼作候选创建
+                                     # 时的成员数门槛——新机制的候选范围来自四元组聚类，不设创建时的
+                                     # 成员数上限）
   topic_compile_max_chars:      24000 # 二阶编译输入上限（成员页面正文合计）
+
+  # 主题候选识别（步骤 8，2026-08-03 新增，四元组聚类替代连通分量）
+  topic_cluster_min_questions:  3    # 稳定簇判定：分组内不同问法数下限
+  topic_cluster_min_days_active: 7   # 稳定簇判定：分组激活时间跨度下限（与 qualifying_min_days_active
+                                     # 相同的 DaysActive 计算口径）
+  topic_candidate_kp_max:       50   # 候选范围语义检索的知识点数上限
+  topic_reliability_min:        0.5  # 二阶准入「整体可靠度」：候选范围全部知识点中 verified 覆盖占比下限
 
   # 生成质量（docs/impl/v1/wiki-generation.md 阶段 E/G）
   claim_verify_enabled:          true
@@ -140,7 +148,7 @@ wiki:
   selfcheck_max_uncited_rate:    0.3
 
   # 概念内聚度（docs/impl/v1/wiki-generation.md 2.2/2.4，Louvain 社区检测）
-  concept_cohesion_min:          0.5
+  entry_cohesion_min:          0.5
   aspect_w_rel:                  1.0
   aspect_w_cooc:                 1.5
   aspect_cooc_sat:               3
@@ -181,14 +189,14 @@ study:
   synonym_gap_distinct_min: 2     # 且来自 ≥ N 个不同 question_hash
   synonym_auto_promote:     false # true 时候选直接 active，不经人工确认
   # —— 概念演化（V1 新增）——
-  concept_null_ratio_min:      0.7   # concept_gap 判定：无概念归属 KP 占比下限
-  concept_add_event_min:       5     # 新增候选：簇内 concept_gap 事件数下限
-  concept_add_distinct_min:    3     # 且来自 ≥ N 个不同 question_hash
-  concept_add_overlap_min:     0.5   # 簇内事件 KP 集合两两 Jaccard 重叠下限
-  concept_merge_cooccur_min:   5     # 合并候选：概念对共同采用次数下限
-  concept_merge_overlap_min:   0.6   # 且共同采用中 KP 重叠比例下限
-  concept_candidate_idle_days: 60    # 候选无新信号自动过期
-  concept_event_window_days:   90    # 聚合统计的时间窗口（长于链接窗口）
+  entry_null_ratio_min:      0.7   # entry_gap 判定：无概念归属 KP 占比下限
+  entry_add_event_min:       5     # 新增候选：簇内 entry_gap 事件数下限
+  entry_add_distinct_min:    3     # 且来自 ≥ N 个不同 question_hash
+  entry_add_overlap_min:     0.5   # 簇内事件 KP 集合两两 Jaccard 重叠下限
+  entry_merge_cooccur_min:   5     # 合并候选：概念对共同采用次数下限
+  entry_merge_overlap_min:   0.6   # 且共同采用中 KP 重叠比例下限
+  entry_candidate_idle_days: 60    # 候选无新信号自动过期
+  entry_event_window_days:   90    # 聚合统计的时间窗口（长于链接窗口）
 
   # 问题复杂度观测量（两层架构扩展，只观测不驱动）
   complexity_min_questions:    3     # 条件组内问答数下限，低于此不出报告项

@@ -1,6 +1,6 @@
 // Package domain provides minimal CRUD over the domains table for the 知识领域
 // page: domains themselves are flat structural metadata (not concept-evolution
-// content), so unlike concept_candidates there is no candidate/confirm gate —
+// content), so unlike entry_candidates there is no candidate/confirm gate —
 // creating one just inserts a row.
 package domain
 
@@ -12,9 +12,10 @@ type Domain struct {
 	DomainID           string    `json:"domain_id"`
 	Name               string    `json:"name"`
 	Description        string    `json:"description"`
-	ConceptCount       int       `json:"concept_count"`
+	ConceptCount       int       `json:"entry_count"`
 	SourceCount        int       `json:"source_count"`
 	KPCount            int       `json:"kp_count"`
+	UnassignedKPCount  int       `json:"unassigned_kp_count"`
 	PendingSignalCount int       `json:"pending_signal_count"`
 	CreatedAt          time.Time `json:"created_at"`
 }

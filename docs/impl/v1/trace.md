@@ -102,7 +102,7 @@ EvidenceItem 新增（证据挖掘产出，见 evidence.md）：
   "observed_subject": "...", "question_terms": "..." }
 ```
 
-概念演化模块（顺序 10）启用后，`activation_gap` payload 增加 `gap_level` / `null_concept_ratio` 两个字段；判定规则与存量事件兼容策略见 `concept-evolution.md`「activation_gap payload 扩展」。本模块实现时无需预留。
+概念演化模块（顺序 10）启用后，`activation_gap` payload 增加 `gap_level` / `null_entry_ratio` 两个字段；判定规则与存量事件兼容策略见 `concept-evolution.md`「activation_gap payload 扩展」。本模块实现时无需预留。
 
 ## 实现步骤
 

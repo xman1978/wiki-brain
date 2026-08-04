@@ -3,7 +3,7 @@
 仅清理 P8（Wiki 初版闭环）测试留下的状态，不清库、不删 P0–P7 的 traces / 共现 / 链接。
 
 清理范围：
-  1. 归档 P8 两域相关 concept 下的 Wiki 概念页（draft/published/needs_recompile）；
+  1. 归档 P8 两域相关 entry 下的 Wiki 概念/事实页（draft/published/needs_recompile）；
   2. 删除 wiki_candidate / recompile_flag 类 learning_results（待确认项）；
   3. 打印仍存在的影子 Source（P8 reupload 未完成时），不自动删库。
 
@@ -29,40 +29,48 @@ TECH_TOPIC = {
 P8_ACTIONS = ("wiki_candidate", "recompile_flag")
 
 
-def concept_ids_from_latest_jsonl():
+def entry_ids_from_latest_jsonl():
     files = sorted(glob.glob(str(c.RESULTS_DIR / "v1_p8_wiki_*.jsonl")))
     if not files:
         return set(), []
     data = json.loads(Path(files[-1]).read_text(encoding="utf-8").strip().splitlines()[-1])
-    cids = set(data.get("policy_concepts") or []) | set(data.get("tech_concepts") or [])
+    # 新字段 policy_entries/tech_entries；兼容旧落盘 policy_concepts/tech_concepts
+    eids = (
+        set(data.get("policy_entries") or data.get("policy_concepts") or [])
+        | set(data.get("tech_entries") or data.get("tech_concepts") or [])
+    )
     page_ids = []
     for info in (data.get("domain_pages") or {}).values():
         if info.get("page_id"):
             page_ids.append(info["page_id"])
-    return cids, page_ids
+        # 兼容旧落盘里的 concept_id
+        for key in ("entry_id", "concept_id"):
+            if info.get(key):
+                eids.add(info[key])
+    return eids, page_ids
 
 
-def resolve_p8_concepts(conn):
-    """从最近一次 P8 落盘 + 题库 ID 命中的 KP 推导 concept_id。"""
+def resolve_p8_entries(conn):
+    """从最近一次 P8 落盘 + 题库 ID 命中的 KP 推导 entry_id。"""
     from v1_p8_wiki_test import POLICY_TOPIC as PT, TECH_TOPIC as TT, build_bank, load_extra_phrasings
 
     extra = load_extra_phrasings(None)
     full_text = c.load_plan_text()
-    concepts = set()
+    entries = set()
     for topic in (PT, TT):
         bank = build_bank(topic, full_text, extra)
         for item in bank.values():
             for pid in item.get("point_ids") or []:
                 row = conn.execute(
-                    "SELECT ku.concept_id FROM knowledge_points kp "
+                    "SELECT ku.entry_id FROM knowledge_points kp "
                     "JOIN knowledge_units ku ON kp.unit_id = ku.unit_id WHERE kp.point_id = ?",
                     (pid,),
                 ).fetchone()
-                if row and row["concept_id"]:
-                    concepts.add(row["concept_id"])
-    from_jsonl, _ = concept_ids_from_latest_jsonl()
-    concepts |= from_jsonl
-    return concepts
+                if row and row["entry_id"]:
+                    entries.add(row["entry_id"])
+    from_jsonl, _ = entry_ids_from_latest_jsonl()
+    entries |= from_jsonl
+    return entries
 
 
 def main():
@@ -81,40 +89,40 @@ def main():
     if n_sources == 0:
         print("! 当前库内没有已导入的 Source（sources=0）。P8 依赖 P0–P7 验收数据，请先恢复备份或跑 P0，再执行 P8。")
 
-    concept_ids = resolve_p8_concepts(conn)
-    _, page_ids_jsonl = concept_ids_from_latest_jsonl()
-    print(f"P8 相关 concept_id 数: {len(concept_ids)}")
-    if concept_ids:
-        print("  ", ", ".join(sorted(concept_ids)[:12]) + ("..." if len(concept_ids) > 12 else ""))
+    entry_ids = resolve_p8_entries(conn)
+    _, page_ids_jsonl = entry_ids_from_latest_jsonl()
+    print(f"P8 相关 entry_id 数: {len(entry_ids)}")
+    if entry_ids:
+        print("  ", ", ".join(sorted(entry_ids)[:12]) + ("..." if len(entry_ids) > 12 else ""))
 
     pages = []
-    if concept_ids:
-        placeholders = ",".join("?" * len(concept_ids))
+    if entry_ids:
+        placeholders = ",".join("?" * len(entry_ids))
         pages = conn.execute(
-            f"SELECT page_id, concept_id, status, title FROM wiki_pages "
-            f"WHERE concept_id IN ({placeholders}) AND status != 'archived'",
-            list(concept_ids),
+            f"SELECT page_id, entry_id, page_type, status, title FROM wiki_pages "
+            f"WHERE entry_id IN ({placeholders}) AND status != 'archived'",
+            list(entry_ids),
         ).fetchall()
     for pid in page_ids_jsonl:
         if not any(p["page_id"] == pid for p in pages):
             row = conn.execute(
-                "SELECT page_id, concept_id, status, title FROM wiki_pages WHERE page_id = ? AND status != 'archived'",
+                "SELECT page_id, entry_id, page_type, status, title FROM wiki_pages WHERE page_id = ? AND status != 'archived'",
                 (pid,),
             ).fetchone()
             if row:
                 pages.append(row)
 
-    print(f"待归档 Wiki 概念页: {len(pages)}")
+    print(f"待归档 Wiki 概念/事实页: {len(pages)}")
     for p in pages:
-        print(f"  - {p['page_id'][:8]}… {p['status']} {p['title'][:40]}")
+        print(f"  - {p['page_id'][:8]}… {p['page_type']} {p['status']} {p['title'][:40]}")
 
     lr_rows = []
-    if concept_ids:
-        placeholders = ",".join("?" * len(concept_ids))
+    if entry_ids:
+        placeholders = ",".join("?" * len(entry_ids))
         lr_rows = conn.execute(
             f"SELECT result_id, action, object_id, status FROM learning_results "
             f"WHERE action IN ('wiki_candidate', 'recompile_flag') AND object_id IN ({placeholders})",
-            list(concept_ids),
+            list(entry_ids),
         ).fetchall()
     page_ids = [p["page_id"] for p in pages]
     if page_ids:

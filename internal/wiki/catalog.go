@@ -34,14 +34,14 @@ type CatalogDomain struct {
 // pending Study wiki_candidate. Topic pages may appear under every member
 // concept's domain (same page_id, multiple domain buckets).
 type CatalogCard struct {
-	Kind        string `json:"kind"`                   // page | candidate
-	PageID      string `json:"page_id,omitempty"`      // kind=page
-	PageType    string `json:"page_type,omitempty"`    // concept | topic
-	ConceptID   string `json:"concept_id,omitempty"`   // concept pages / candidates
-	ResultID    string `json:"result_id,omitempty"`    // kind=candidate
-	Title       string `json:"title"`                  // 主题
-	Description string `json:"description"`            // 说明
-	Status      string `json:"status"`                 // pending_compile|draft|needs_recompile|published|archived
+	Kind        string `json:"kind"`                 // page | candidate
+	PageID      string `json:"page_id,omitempty"`    // kind=page
+	PageType    string `json:"page_type,omitempty"`  // concept | fact | topic
+	EntryID   string `json:"entry_id,omitempty"` // concept pages / candidates
+	ResultID    string `json:"result_id,omitempty"`  // kind=candidate
+	Title       string `json:"title"`                // 主题
+	Description string `json:"description"`          // 说明
+	Status      string `json:"status"`               // pending_compile|draft|needs_recompile|published|archived
 	UpdatedAt   string `json:"updated_at,omitempty"`
 }
 
@@ -63,7 +63,7 @@ func (s *Store) ListCatalog() ([]CatalogDomain, error) {
 	}
 	byDomain := make(map[string][]catalogRow, len(domains))
 
-	conceptRows, err := s.listCatalogConceptPages()
+	conceptRows, err := s.listCatalogEntryPages()
 	if err != nil {
 		return nil, err
 	}
@@ -124,16 +124,19 @@ func (s *Store) listCatalogDomains() ([]CatalogDomain, error) {
 	return domains, rows.Err()
 }
 
-func (s *Store) listCatalogConceptPages() ([]catalogRow, error) {
+// listCatalogEntryPages lists every published-or-not 词条页 (concept AND
+// fact pages, not just kind=concept — topic pages are excluded and listed
+// separately by listCatalogTopicPages) for the catalog's per-domain buckets.
+func (s *Store) listCatalogEntryPages() ([]catalogRow, error) {
 	rows, err := s.db.Query(`
-		SELECT p.page_id, p.page_type, p.concept_id, p.title, p.status, p.summary,
+		SELECT p.page_id, p.page_type, p.entry_id, p.title, p.status, p.summary,
 			p.updated_at, c.domain_id, COALESCE(c.description, '')
 		FROM wiki_pages p
-		JOIN concepts c ON c.concept_id = p.concept_id
-		WHERE p.page_type = ?
-		ORDER BY p.updated_at DESC`, PageTypeConcept)
+		JOIN entries c ON c.entry_id = p.entry_id
+		WHERE p.page_type != ?
+		ORDER BY p.updated_at DESC`, PageTypeTopic)
 	if err != nil {
-		return nil, fmt.Errorf("wiki store: catalog concept pages: %w", err)
+		return nil, fmt.Errorf("wiki store: catalog entry pages: %w", err)
 	}
 	defer rows.Close()
 
@@ -162,7 +165,7 @@ func (s *Store) listCatalogConceptPages() ([]catalogRow, error) {
 			UpdatedAt:   updatedAt.Format(time.RFC3339),
 		}
 		if conceptID.Valid {
-			card.ConceptID = conceptID.String
+			card.EntryID = conceptID.String
 		}
 		out = append(out, catalogRow{card: card, domainID: domainID, updatedAt: updatedAt})
 	}
@@ -180,7 +183,7 @@ func (s *Store) listCatalogTopicPages() ([]catalogRow, error) {
 		JOIN wiki_page_relations r
 			ON r.from_page_id = p.page_id AND r.relation_type = ?
 		JOIN wiki_pages mp ON mp.page_id = r.to_page_id
-		JOIN concepts c ON c.concept_id = mp.concept_id
+		JOIN entries c ON c.entry_id = mp.entry_id
 		WHERE p.page_type = ?
 		GROUP BY p.page_id, p.page_type, p.title, p.status, p.summary, p.updated_at, c.domain_id
 		ORDER BY p.updated_at DESC`, RelationContains, PageTypeTopic)
@@ -226,11 +229,11 @@ func (s *Store) listCatalogCandidates() ([]catalogRow, error) {
 		SELECT lr.result_id, lr.object_id, lr.reason, lr.updated_at,
 			c.domain_id, c.name, COALESCE(c.description, '')
 		FROM learning_results lr
-		JOIN concepts c ON c.concept_id = lr.object_id
+		JOIN entries c ON c.entry_id = lr.object_id
 		WHERE lr.action = ? AND lr.object_type = ? AND lr.status = ?
 		  AND NOT EXISTS (
 			SELECT 1 FROM wiki_pages p
-			WHERE p.concept_id = lr.object_id AND p.status != ?
+			WHERE p.entry_id = lr.object_id AND p.status != ?
 		  )
 		ORDER BY lr.updated_at DESC`,
 		activation.ActionWikiCandidate, activation.ObjectTypeWikiPage,
@@ -259,7 +262,7 @@ func (s *Store) listCatalogCandidates() ([]catalogRow, error) {
 			updatedAt: updatedAt,
 			card: CatalogCard{
 				Kind:        CatalogKindCandidate,
-				ConceptID:   conceptID,
+				EntryID:   conceptID,
 				ResultID:    resultID,
 				Title:       name,
 				Description: desc,

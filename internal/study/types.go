@@ -3,7 +3,7 @@ package study
 import (
 	"time"
 
-	"github.com/jxman78/wiki-brain/internal/concept"
+	"github.com/jxman78/wiki-brain/internal/entry"
 )
 
 type GapEvent struct {
@@ -22,7 +22,7 @@ type LinkCandidateRow struct {
 	HitCount       int
 	PointSummary   string
 	UnitTopic      string
-	ConceptID      string
+	EntryID      string
 	ConceptName    string
 }
 
@@ -69,15 +69,15 @@ type Report struct {
 	KnowledgeGaps            []KnowledgeGapEntry       `json:"knowledge_gaps"`
 	LearningActions          LearningActionsSummary    `json:"learning_actions"`
 	CrossSourceConflicts     []CrossSourceConflict     `json:"cross_source_conflicts"`
-	ConceptCandidates        ConceptCandidatesSection  `json:"concept_candidates"`
+	EntryCandidates        EntryCandidatesSection  `json:"entry_candidates"`
 
 	// 两层架构扩展（docs/impl/v1/study.md 步骤 6「报告提示项」+ 步骤 7）
-	OversizedTopicClusters []OversizedTopicClusterEntry `json:"oversized_topic_clusters,omitempty"`
+	TopicSignalUnderfilled []TopicSignalUnderfilledEntry `json:"topic_signal_underfilled,omitempty"`
 	WikiDraftReflow        []WikiDraftReflowEntry       `json:"wiki_draft_reflow,omitempty"`
 	TopicDecompose         []TopicDecomposeEntry        `json:"topic_decompose,omitempty"`
 	QuestionComplexity     QuestionComplexitySection    `json:"question_complexity"`
 
-	// ConceptSplitSignals is report-only, same tier as
+	// EntrySplitSignals is report-only, same tier as
 	// OversizedTopicClusters (docs/impl/v1/wiki-generation.md 2.4, 附
 	// docs/design/wiki-compilation.md "连贯性判断还需要第三层"): a concept
 	// whose qualifying KPs otherwise clear the broad/related-connection
@@ -89,37 +89,42 @@ type Report struct {
 	// periodic gate computation with no per-question trace behind it, and
 	// learning_events.trace_id is NOT NULL — so it follows the same
 	// report-only precedent as oversized_topic_cluster instead. Only
-	// accumulates; does not create a concept_candidates(kind=split) row —
+	// accumulates; does not create a entry_candidates(kind=split) row —
 	// split candidates remain deferred to V3 (docs/impl/v1/
 	// concept-evolution.md).
-	ConceptSplitSignals []ConceptSplitSignalEntry `json:"concept_split_signals,omitempty"`
+	EntrySplitSignals []EntrySplitSignalEntry `json:"entry_split_signals,omitempty"`
 }
 
-// ConceptSplitSignalEntry is one concept whose qualifying KPs failed the
+// EntrySplitSignalEntry is one concept whose qualifying KPs failed the
 // cohesion gate (docs/impl/v1/wiki-generation.md 2.4).
-type ConceptSplitSignalEntry struct {
-	ConceptID    string                    `json:"concept_id"`
-	ConceptName  string                    `json:"concept_name"`
+type EntrySplitSignalEntry struct {
+	EntryID    string                    `json:"entry_id"`
+	ConceptName  string                    `json:"entry_name"`
 	Cohesion     float64                   `json:"cohesion"`
 	AspectCount  int                       `json:"aspect_count"`
-	Communities  []ConceptSplitCommunity   `json:"communities"`
+	Communities  []EntrySplitCommunity   `json:"communities"`
 }
 
-// ConceptSplitCommunity is one Louvain community found within a concept's
+// EntrySplitCommunity is one Louvain community found within a concept's
 // qualifying KPs (docs/impl/v1/wiki-generation.md 2.3 "切面命名").
-type ConceptSplitCommunity struct {
+type EntrySplitCommunity struct {
 	PointIDs      []string `json:"point_ids"`
 	SuggestedName string   `json:"suggested_name"`
 }
 
-// OversizedTopicClusterEntry is one connected component that exceeded
-// wiki.topic_member_max — report-only, never auto-split
-// (docs/impl/v1/wiki.md 步骤 8「候选产生」).
-type OversizedTopicClusterEntry struct {
-	MemberCount           int      `json:"member_count"`
-	RepresentativePageIDs []string `json:"representative_page_ids"`
-	RelatedCount          int      `json:"related_count"`
-	ContradictsCount      int      `json:"contradicts_count"`
+// TopicSignalUnderfilledEntry is one quadruple cluster that cleared the
+// stable-cluster gate (distinct_question_count/days_active) but whose
+// candidate-range KP retrieval produced zero qualifying KP — "有需求、缺
+// 材料" (docs/impl/v1/wiki.md 步骤 8 第 4 步, 2026-08-03 修订; replaces the
+// old oversized_topic_cluster report item now that candidate detection is no
+// longer connected-component clustering).
+type TopicSignalUnderfilledEntry struct {
+	Subject               string `json:"subject"`
+	Intent                string `json:"intent"`
+	Audience              string `json:"audience"`
+	ConstraintText        string `json:"constraint_text"`
+	DistinctQuestionCount int    `json:"distinct_question_count"`
+	DaysActive            int    `json:"days_active"`
 }
 
 // WikiDraftReflowEntry is one origin=wiki_draft source's reflow footprint
@@ -166,19 +171,19 @@ type QuestionComplexityGroup struct {
 	ComplexityHint *string `json:"complexity_hint"`
 }
 
-// ConceptCandidatesSection is the study report's concept evolution section
+// EntryCandidatesSection is the study report's concept evolution section
 // (docs/impl/v1/concept-evolution.md 步骤 5): this cycle's scan counts plus
 // the currently pending candidates, audited alongside the window's
-// concept_gap signal volume.
-type ConceptCandidatesSection struct {
+// entry_gap signal volume.
+type EntryCandidatesSection struct {
 	AddCreated           int                     `json:"add_created"`
 	AddUpdated           int                     `json:"add_updated"`
 	MergeCreated         int                     `json:"merge_created"`
 	MergeUpdated         int                     `json:"merge_updated"`
 	Expired              int                     `json:"expired"`
-	ConceptGapEventCount int                     `json:"concept_gap_event_count"`
-	PendingAdd           []concept.CandidateView `json:"pending_add"`
-	PendingMerge         []concept.CandidateView `json:"pending_merge"`
+	EntryGapEventCount int                     `json:"entry_gap_event_count"`
+	PendingAdd           []entry.CandidateView `json:"pending_add"`
+	PendingMerge         []entry.CandidateView `json:"pending_merge"`
 }
 
 // CrossSourceConflict is a read-only, display-only entry (docs/impl/v1/kpn.md
@@ -218,8 +223,8 @@ type ActivationLinkCandidate struct {
 	PointID        string              `json:"point_id"`
 	PointSummary   string              `json:"point_summary"`
 	UnitTopic      string              `json:"unit_topic"`
-	ConceptID      string              `json:"concept_id"`
-	ConceptName    string              `json:"concept_name"`
+	EntryID      string              `json:"entry_id"`
+	ConceptName    string              `json:"entry_name"`
 	Stats          ActivationLinkStats `json:"stats"`
 	Recommendation string              `json:"recommendation"`
 	Reason         string              `json:"reason"`
@@ -236,8 +241,8 @@ type ActivationLinkStats struct {
 }
 
 type WikiCandidate struct {
-	ConceptID          string                `json:"concept_id"`
-	ConceptName        string                `json:"concept_name"`
+	EntryID          string                `json:"entry_id"`
+	ConceptName        string                `json:"entry_name"`
 	DomainID           string                `json:"domain_id"`
 	QualifyingPointIDs []string              `json:"qualifying_point_ids"`
 	QualifyingPoints   []WikiQualifyingPoint `json:"qualifying_points"`
@@ -268,8 +273,8 @@ type WikiCandidateStats struct {
 	// community's share of qualifying KPs, via graph.LargestShare. A low
 	// value means this concept's qualifying material splits into several
 	// unrelated clusters rather than holding together as one topic — see
-	// ConceptSplitSignalEntry, written instead of (not in addition to) a
-	// "ready" recommendation when this falls below wiki.concept_cohesion_min.
+	// EntrySplitSignalEntry, written instead of (not in addition to) a
+	// "ready" recommendation when this falls below wiki.entry_cohesion_min.
 	Cohesion float64 `json:"cohesion"`
 }
 

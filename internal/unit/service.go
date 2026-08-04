@@ -33,7 +33,7 @@ type Service struct {
 	broadcaster        *progress.Broadcaster
 	wikiNotifier       WikiNotifier
 	activationNotifier ActivationNotifier
-	conceptNotifier    ConceptNotifier
+	conceptNotifier    EntryNotifier
 
 	// extracting guards against two Extract runs on the same source at once
 	// (double-triggered queue tasks, a retry racing the original) — the second
@@ -62,23 +62,31 @@ type ActivationNotifier interface {
 	InvalidateCache() error
 }
 
-// ConceptNotifier lets cross-Source KPN matching (kpn_cross.go,
-// docs/impl/v1/kpn.md 步骤 3) hand concept_id-empty KP clusters to the
+// EntryNotifier lets cross-Source KPN matching (kpn_cross.go,
+// docs/impl/v1/kpn.md 步骤 3) hand entry_id-empty KP clusters to the
 // concept evolution module instead of falling back to a same-domain
-// candidate pool — satisfied by *concept.Service without a direct import
+// candidate pool — satisfied by *entry.Service without a direct import
 // (concept already depends on wiki; keeping unit -> concept one-directional
 // via this interface, like WikiNotifier/ActivationNotifier above, avoids
 // unit's public surface hard-requiring the concept package in tests).
-// SetConceptNotifier no-ops when unset.
-type ConceptNotifier interface {
-	ProposeAddCandidate(domainID, suggestedName, suggestedDescription string, pointIDs []string, sourceID string) (candidateID string, err error)
+// SetEntryNotifier no-ops when unset.
+type EntryNotifier interface {
+	// kind is the concept/fact classification (docs/impl/v1/kpn.md 步骤 3
+	// "类型标注") the kpn_entry_propose.md cluster carries — "concept" or
+	// "fact", validated by the concept module.
+	ProposeAddCandidate(domainID, suggestedName, suggestedDescription, kind string, pointIDs []string, sourceID string) (candidateID string, err error)
+	// ListActiveEntryNames returns the domain's existing concept names, used
+	// as a granularity reference (docs/impl/v1/kpn.md 步骤 3) so the LLM names
+	// new content_driven entries at the same level instead of drifting to
+	// overly specific, scenario-bound names.
+	ListActiveEntryNames(domainID string) ([]string, error)
 }
 
 func (s *Service) SetWikiNotifier(n WikiNotifier) {
 	s.wikiNotifier = n
 }
 
-func (s *Service) SetConceptNotifier(n ConceptNotifier) {
+func (s *Service) SetEntryNotifier(n EntryNotifier) {
 	s.conceptNotifier = n
 }
 
@@ -234,9 +242,9 @@ func (s *Service) Extract(ctx context.Context, sourceID string) error {
 	s.emit(sourceID, progress.Event{Step: progress.StepKPNGenerate, Status: progress.StatusCompleted, ElapsedMs: time.Since(stepStart).Milliseconds()})
 
 	stepStart = time.Now()
-	s.emit(sourceID, progress.Event{Step: progress.StepConceptMatch, Status: progress.StatusStarted, Message: "概念匹配"})
-	s.matchConcepts(ctx, sourceID, src.DomainID)
-	s.emit(sourceID, progress.Event{Step: progress.StepConceptMatch, Status: progress.StatusCompleted, ElapsedMs: time.Since(stepStart).Milliseconds()})
+	s.emit(sourceID, progress.Event{Step: progress.StepEntryMatch, Status: progress.StatusStarted, Message: "概念匹配"})
+	s.matchEntries(ctx, sourceID, src.DomainID)
+	s.emit(sourceID, progress.Event{Step: progress.StepEntryMatch, Status: progress.StatusCompleted, ElapsedMs: time.Since(stepStart).Milliseconds()})
 
 	// Step 6 (docs/impl/v1/kpn.md): cross-Source KPN matching. Failure is
 	// isolated — it must never fail the Source's own completion status.
@@ -604,33 +612,33 @@ func containsPointID(points []KnowledgePoint, pointID string) bool {
 
 type conceptMatch struct {
 	UnitID    string `json:"unit_id"`
-	ConceptID string `json:"concept_id"`
+	EntryID string `json:"entry_id"`
 }
 
 type conceptMatchOutput struct {
 	Matches []conceptMatch `json:"matches"`
 }
 
-// MatchConcepts implements source.ConceptMatcher: re-runs concept matching
+// MatchEntries implements source.EntryMatcher: re-runs concept matching
 // for sourceID's current KUs against domainID's concept list. Exported so
 // source.Service.SetDomain can re-trigger it after a manual domain
-// reassignment — matchConcepts itself otherwise only runs once, inline,
-// during unit_extract. Concept ids are cleared first: matchConcepts only ever
+// reassignment — matchEntries itself otherwise only runs once, inline,
+// during unit_extract. Concept ids are cleared first: matchEntries only ever
 // writes a match it found and never clears one that came up empty, so without
 // this a KU that doesn't fit any concept in the new domain would keep
 // pointing at a concept from its old one.
-func (s *Service) MatchConcepts(ctx context.Context, sourceID, domainID string) {
-	if err := s.store.ClearConceptIDBySourceID(sourceID); err != nil {
+func (s *Service) MatchEntries(ctx context.Context, sourceID, domainID string) {
+	if err := s.store.ClearEntryIDBySourceID(sourceID); err != nil {
 		slog.Warn("unit: clear concept id before rematch failed", "source_id", sourceID, "error", err)
 	}
 	var did sql.NullString
 	if domainID != "" {
 		did = sql.NullString{String: domainID, Valid: true}
 	}
-	s.matchConcepts(ctx, sourceID, did)
+	s.matchEntries(ctx, sourceID, did)
 }
 
-func (s *Service) matchConcepts(ctx context.Context, sourceID string, domainID sql.NullString) {
+func (s *Service) matchEntries(ctx context.Context, sourceID string, domainID sql.NullString) {
 	allUnits, err := s.store.GetCompletedUnitsBySourceID(sourceID)
 	if err != nil {
 		return
@@ -651,19 +659,24 @@ func (s *Service) matchConcepts(ctx context.Context, sourceID string, domainID s
 	if domainID.Valid {
 		did = domainID.String
 	}
-	concepts, err := s.store.GetConceptsByDomainID(did)
+	entries, err := s.store.GetEntriesByDomainID(did)
 	if err != nil {
-		slog.Warn("unit: get concepts failed", "error", err)
+		slog.Warn("unit: get entries failed", "error", err)
 		return
 	}
-	if len(concepts) == 0 {
+	if len(entries) == 0 {
 		return
 	}
-	slog.Info("unit: matching concepts", "source_id", sourceID, "domain_id", did, "units", len(units), "concepts", len(concepts))
+	sourceTitle, sourceSummary, err := s.store.GetSourceTitleSummary(sourceID)
+	if err != nil {
+		slog.Warn("unit: get source title/summary for entry match failed", "source_id", sourceID, "error", err)
+		// Still match with empty source context rather than skipping the batch.
+	}
+	slog.Info("unit: matching entries", "source_id", sourceID, "domain_id", did, "units", len(units), "entries", len(entries))
 
 	var conceptList strings.Builder
-	for _, c := range concepts {
-		conceptList.WriteString(fmt.Sprintf("[%s] %s：%s\n", c.ConceptID, c.Name, c.Description))
+	for _, c := range entries {
+		conceptList.WriteString(fmt.Sprintf("[%s] %s：%s\n", c.EntryID, c.Name, c.Description))
 	}
 
 	for i := 0; i < len(units); i += 50 {
@@ -671,24 +684,31 @@ func (s *Service) matchConcepts(ctx context.Context, sourceID string, domainID s
 		if end > len(units) {
 			end = len(units)
 		}
-		s.matchConceptBatch(ctx, units[i:end], conceptList.String())
+		s.matchConceptBatch(ctx, units[i:end], conceptList.String(), sourceTitle, sourceSummary)
 	}
 }
 
-func (s *Service) matchConceptBatch(ctx context.Context, units []KnowledgeUnit, conceptList string) {
+func (s *Service) matchConceptBatch(ctx context.Context, units []KnowledgeUnit, conceptList, sourceTitle, sourceSummary string) {
 	var unitsList strings.Builder
 	unitIDSet := make(map[string]bool)
 	for _, u := range units {
-		unitsList.WriteString(fmt.Sprintf("[%s] %s\n", u.UnitID, u.Center))
+		// Inject source title/summary alongside center so the model can
+		// separate product/document entities (esp. fact entries) without a
+		// prompt rewrite — format only; unit_entry_match.md text unchanged.
+		line := fmt.Sprintf("[%s] %s | 来源标题：%s", u.UnitID, u.Center, sourceTitle)
+		if sourceSummary != "" {
+			line += fmt.Sprintf(" | 来源摘要：%s", sourceSummary)
+		}
+		unitsList.WriteString(line + "\n")
 		unitIDSet[u.UnitID] = true
 	}
 
 	vars := map[string]string{
-		"units_list":   unitsList.String(),
-		"concept_list": conceptList,
+		"units_list": unitsList.String(),
+		"entry_list": conceptList,
 	}
 
-	data, err := s.llmClient.CompleteJSON(ctx, "unit_concept_match.md", vars, "extraction")
+	data, err := s.llmClient.CompleteJSON(ctx, "unit_entry_match.md", vars, "extraction")
 	if err != nil {
 		slog.Warn("unit: concept match LLM failed", "error", err)
 		return
@@ -704,11 +724,11 @@ func (s *Service) matchConceptBatch(ctx context.Context, units []KnowledgeUnit, 
 		if !unitIDSet[m.UnitID] {
 			continue
 		}
-		if m.ConceptID == "" {
+		if m.EntryID == "" {
 			continue
 		}
-		if err := s.store.UpdateUnitConceptID(m.UnitID, &m.ConceptID); err != nil {
-			slog.Warn("unit: update concept_id failed", "unit_id", m.UnitID, "error", err)
+		if err := s.store.UpdateUnitEntryID(m.UnitID, &m.EntryID); err != nil {
+			slog.Warn("unit: update entry_id failed", "unit_id", m.UnitID, "error", err)
 		}
 	}
 }

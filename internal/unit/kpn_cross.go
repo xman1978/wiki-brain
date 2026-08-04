@@ -21,18 +21,18 @@ type CrossKPNResult struct {
 	SourceID                 string `json:"source_id"`
 	Batches                  int    `json:"batches"`
 	RelationsCreated         int    `json:"relations_created"`
-	ConceptCandidatesTouched int    `json:"concept_candidates_touched"`
+	EntryCandidatesTouched int    `json:"entry_candidates_touched"`
 }
 
 // CrossSourceKPN implements docs/impl/v1/kpn.md: matches sourceID's KPs
-// against same-concept_id KPs from other Sources, creating scope=cross
+// against same-entry_id KPs from other Sources, creating scope=cross
 // related/contradicts relations via the same InsertRelation path the
 // intra-Source pass uses (so duplicates are naturally idempotent). KPs
-// whose KU has no concept_id do not fall back to a same-domain candidate
+// whose KU has no entry_id do not fall back to a same-domain candidate
 // pool (docs/impl/v1/kpn.md 职责 — that produced low-precision relations in
 // concept-sparse domains); instead they're handed to the concept evolution
-// module (步骤 3) as content_driven concept_candidates, and rejoin cross
-// matching once a concept_id is confirmed (步骤 6, RematchPoints). Runs both
+// module (步骤 3) as content_driven entry_candidates, and rejoin cross
+// matching once a entry_id is confirmed (步骤 6, RematchPoints). Runs both
 // automatically at the end of unit_extract (docs/impl/v1/kpn.md 步骤 1) and
 // on-demand via POST /sources/:id/kpn-cross. Failures degrade to partial
 // results rather than propagating — the caller (Extract) must not fail the
@@ -52,16 +52,16 @@ func (s *Service) CrossSourceKPN(ctx context.Context, sourceID string) (*CrossKP
 	if err != nil {
 		return nil, fmt.Errorf("unit: cross kpn: get units: %w", err)
 	}
-	unitConceptMap := make(map[string]string, len(units))
+	unitEntryMap := make(map[string]string, len(units))
 	unitCenterMap := make(map[string]string, len(units))
 	for _, u := range units {
-		if u.ConceptID.Valid {
-			unitConceptMap[u.UnitID] = u.ConceptID.String
+		if u.EntryID.Valid {
+			unitEntryMap[u.UnitID] = u.EntryID.String
 		}
 		unitCenterMap[u.UnitID] = u.Center
 	}
 
-	groups, orphans := groupPointsForCrossMatch(newPoints, unitConceptMap)
+	groups, orphans := groupPointsForCrossMatch(newPoints, unitEntryMap)
 
 	maxBatches := s.cfg.KPN.CrossMaxBatches
 	if maxBatches <= 0 {
@@ -93,9 +93,9 @@ func (s *Service) CrossSourceKPN(ctx context.Context, sourceID string) (*CrossKP
 	batchesRun := 0
 groupLoop:
 	for _, g := range groups {
-		opposite, err := s.store.GetCrossSourcePointsByConceptID(g.id, sourceID)
+		opposite, err := s.store.GetCrossSourcePointsByEntryID(g.id, sourceID)
 		if err != nil {
-			slog.Warn("unit: cross kpn get opposite points failed", "concept_id", g.id, "error", err)
+			slog.Warn("unit: cross kpn get opposite points failed", "entry_id", g.id, "error", err)
 			continue
 		}
 		if len(opposite) == 0 {
@@ -146,11 +146,11 @@ groupLoop:
 		if srcErr != nil {
 			slog.Warn("unit: cross kpn get source for orphan proposal failed", "source_id", sourceID, "error", srcErr)
 		} else if src.DomainID.Valid && src.DomainID.String != "" {
-			touched, err := s.proposeConceptsForOrphans(ctx, sourceID, src.DomainID.String, orphans, unitCenterMap)
+			touched, err := s.proposeEntriesForOrphans(ctx, sourceID, src.DomainID.String, orphans, unitCenterMap)
 			if err != nil {
 				slog.Warn("unit: cross kpn orphan concept proposal failed", "source_id", sourceID, "error", err)
 			}
-			result.ConceptCandidatesTouched = touched
+			result.EntryCandidatesTouched = touched
 		} else {
 			slog.Debug("unit: cross kpn skip orphan points, source has no domain", "source_id", sourceID, "count", len(orphans))
 		}
@@ -158,25 +158,25 @@ groupLoop:
 
 	slog.Info("unit: cross source kpn done",
 		"source_id", sourceID, "batches", result.Batches, "relations_created", result.RelationsCreated,
-		"orphan_points", len(orphans), "concept_candidates_touched", result.ConceptCandidatesTouched)
+		"orphan_points", len(orphans), "entry_candidates_touched", result.EntryCandidatesTouched)
 	return result, nil
 }
 
 type crossGroup struct {
-	id     string // concept_id
+	id     string // entry_id
 	points []KnowledgePoint
 }
 
 // groupPointsForCrossMatch implements docs/impl/v1/kpn.md 步骤 2: points
-// whose KU has a concept_id are grouped by it for cross-Source matching;
-// points with no concept_id are returned separately as orphans rather than
+// whose KU has a entry_id are grouped by it for cross-Source matching;
+// points with no entry_id are returned separately as orphans rather than
 // falling back to a same-domain pool (see CrossSourceKPN's doc comment).
 // Order is preserved for deterministic batching.
-func groupPointsForCrossMatch(points []KnowledgePoint, unitConceptMap map[string]string) (groups []*crossGroup, orphans []KnowledgePoint) {
+func groupPointsForCrossMatch(points []KnowledgePoint, unitEntryMap map[string]string) (groups []*crossGroup, orphans []KnowledgePoint) {
 	index := make(map[string]*crossGroup)
 	var order []string
 	for _, p := range points {
-		conceptID := unitConceptMap[p.UnitID]
+		conceptID := unitEntryMap[p.UnitID]
 		if conceptID == "" {
 			orphans = append(orphans, p)
 			continue
@@ -366,10 +366,10 @@ func (s *Service) crossKPNBatch(ctx context.Context, sourceID string, newPoints,
 }
 
 // RematchPoints implements concept.KPNRematchNotifier (docs/impl/v1/kpn.md
-// 步骤 6): after a kind=add concept_candidates confirm — new concept or
-// "归入已有概念" — gives pointIDs a concept_id, re-run cross-Source matching
+// 步骤 6): after a kind=add entry_candidates confirm — new concept or
+// "归入已有概念" — gives pointIDs a entry_id, re-run cross-Source matching
 // for exactly this batch. These points may have sat with zero cross-Source
-// relations the whole time their concept_id was empty (routed to the
+// relations the whole time their entry_id was empty (routed to the
 // concept evolution module instead of a same-domain fallback). Grouped by
 // each point's own source_id so matching never pairs points from the same
 // Source against each other. Best-effort: failures are logged, not
@@ -378,7 +378,7 @@ func (s *Service) crossKPNBatch(ctx context.Context, sourceID string, newPoints,
 // relations this confirm produced (needed to clean them up precisely if the
 // candidate is later restored to pending_confirm — restoring must not touch
 // relations some unrelated later Source import happened to create once
-// these points had a concept_id).
+// these points had a entry_id).
 func (s *Service) RematchPoints(conceptID string, pointIDs []string) []string {
 	if len(pointIDs) == 0 {
 		return nil
@@ -387,7 +387,7 @@ func (s *Service) RematchPoints(conceptID string, pointIDs []string) []string {
 
 	points, err := s.store.GetPointsByIDs(pointIDs)
 	if err != nil {
-		slog.Warn("unit: kpn rematch get points failed", "concept_id", conceptID, "error", err)
+		slog.Warn("unit: kpn rematch get points failed", "entry_id", conceptID, "error", err)
 		return nil
 	}
 	if len(points) == 0 {
@@ -406,7 +406,7 @@ func (s *Service) RematchPoints(conceptID string, pointIDs []string) []string {
 	}
 	units, err := s.store.GetUnitsByIDs(unitIDs)
 	if err != nil {
-		slog.Warn("unit: kpn rematch get units failed", "concept_id", conceptID, "error", err)
+		slog.Warn("unit: kpn rematch get units failed", "entry_id", conceptID, "error", err)
 		return nil
 	}
 	unitCenterMap := make(map[string]string, len(units))
@@ -417,9 +417,9 @@ func (s *Service) RematchPoints(conceptID string, pointIDs []string) []string {
 	totalCreated, totalBatches := 0, 0
 	var allRelationIDs []string
 	for sourceID, srcPoints := range bySource {
-		opposite, err := s.store.GetCrossSourcePointsByConceptID(conceptID, sourceID)
+		opposite, err := s.store.GetCrossSourcePointsByEntryID(conceptID, sourceID)
 		if err != nil {
-			slog.Warn("unit: kpn rematch get opposite points failed", "concept_id", conceptID, "source_id", sourceID, "error", err)
+			slog.Warn("unit: kpn rematch get opposite points failed", "entry_id", conceptID, "source_id", sourceID, "error", err)
 			continue
 		}
 		if len(opposite) == 0 {
@@ -429,7 +429,7 @@ func (s *Service) RematchPoints(conceptID string, pointIDs []string) []string {
 		for _, chunk := range splitCrossBatch(srcPoints, opposite, crossBatchMaxSize) {
 			created, relationIDs, err := s.crossKPNBatch(ctx, sourceID, chunk.newPoints, chunk.oppositePoints, unitCenterMap)
 			if err != nil {
-				slog.Warn("unit: kpn rematch batch failed", "concept_id", conceptID, "source_id", sourceID, "error", err)
+				slog.Warn("unit: kpn rematch batch failed", "entry_id", conceptID, "source_id", sourceID, "error", err)
 				continue
 			}
 			totalCreated += created
@@ -439,6 +439,6 @@ func (s *Service) RematchPoints(conceptID string, pointIDs []string) []string {
 	}
 
 	slog.Info("unit: kpn rematch after concept confirm done",
-		"concept_id", conceptID, "point_count", len(points), "batches", totalBatches, "relations_created", totalCreated)
+		"entry_id", conceptID, "point_count", len(points), "batches", totalBatches, "relations_created", totalCreated)
 	return allRelationIDs
 }

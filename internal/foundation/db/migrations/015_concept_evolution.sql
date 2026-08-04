@@ -1,11 +1,11 @@
 -- Migration 015: Concept evolution (docs/impl/v1/concept-evolution.md)
 
-ALTER TABLE concepts ADD COLUMN merged_into TEXT REFERENCES concepts(concept_id);
+ALTER TABLE entries ADD COLUMN merged_into TEXT REFERENCES entries(entry_id);
 -- 非空 = 已被合并，不再是当前认知入口；保留行用于追溯
-ALTER TABLE concepts ADD COLUMN origin TEXT NOT NULL DEFAULT 'preset';
+ALTER TABLE entries ADD COLUMN origin TEXT NOT NULL DEFAULT 'preset';
 -- preset / evolved（人工确认新增的概念）
 
-CREATE TABLE concept_candidates (
+CREATE TABLE entry_candidates (
     candidate_id   TEXT PRIMARY KEY,
     kind           TEXT NOT NULL,
     -- add / merge（split 预留枚举值，V2 启用）
@@ -14,7 +14,7 @@ CREATE TABLE concept_candidates (
     suggested_name TEXT,
     -- kind=add：程序从簇内 KU center 高频词提取的建议名，确认时可改
     merge_from     TEXT NOT NULL DEFAULT '[]',
-    -- kind=merge：JSON 数组，涉及的两个 concept_id
+    -- kind=merge：JSON 数组，涉及的两个 entry_id
     point_ids      TEXT NOT NULL DEFAULT '[]',
     -- 关联 KnowledgePoint 集合（JSON 数组）
     evidence       TEXT NOT NULL DEFAULT '{}',
@@ -28,5 +28,5 @@ CREATE TABLE concept_candidates (
     updated_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_cc_status ON concept_candidates(status);
-CREATE INDEX idx_cc_kind ON concept_candidates(kind);
+CREATE INDEX idx_cc_status ON entry_candidates(status);
+CREATE INDEX idx_cc_kind ON entry_candidates(kind);

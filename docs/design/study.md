@@ -133,7 +133,7 @@ Study 主要做：
 根据 repeated_failure 标记路径风险；
 根据 knowledge_conflict 标记知识冲突；
 根据 user_correction 触发知识重新验证；
-根据 concept_gap 聚类与 concept_boundary_signal 累积形成概念演化候选
+根据 entry_gap 聚类与 entry_boundary_signal 累积形成概念演化候选
   （新增 / 合并 / 拆分，见 concept-evolution.md）；
 根据 wiki_update_candidate 触发 Wiki 重编译候选；
 根据 knowledge_gap 标记知识缺口；

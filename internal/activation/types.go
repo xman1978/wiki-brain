@@ -39,10 +39,10 @@ const (
 	ActionRecompileFlag   = "recompile_flag"
 	// Concept evolution actions (docs/impl/v1/concept-evolution.md 步骤 2/3),
 	// written through this package's Store since it owns learning_results.
-	ActionConceptAddCandidate   = "concept_add_candidate"
-	ActionConceptMergeCandidate = "concept_merge_candidate"
-	ActionConceptAdd            = "concept_add"
-	ActionConceptMerge          = "concept_merge"
+	ActionEntryAddCandidate   = "entry_add_candidate"
+	ActionEntryMergeCandidate = "entry_merge_candidate"
+	ActionEntryAdd            = "entry_add"
+	ActionEntryMerge          = "entry_merge"
 	// ActionTopicPageCandidate is the two-tier architecture's topic-page
 	// candidate audit action (docs/impl/v1/wiki.md 步骤 8, docs/impl/v1/study.md
 	// 步骤 6) — object_id is the shell page's page_id (identity is inherently
@@ -54,13 +54,13 @@ const (
 // learning_results.object_type — activation_link is written by this module;
 // knowledge_gap / wiki_page are Study's own audit objects (docs/impl/v1/study.md
 // 步骤 6), written through this package's Store.InsertLearningResult since it
-// owns the shared learning_results table. concept_candidate is concept
+// owns the shared learning_results table. entry_candidate is concept
 // evolution's own audit object (docs/impl/v1/concept-evolution.md).
 const (
 	ObjectTypeActivationLink   = "activation_link"
 	ObjectTypeKnowledgeGap     = "knowledge_gap"
 	ObjectTypeWikiPage         = "wiki_page"
-	ObjectTypeConceptCandidate = "concept_candidate"
+	ObjectTypeEntryCandidate = "entry_candidate"
 )
 
 // legalTransitions is the only source of truth for which status moves are

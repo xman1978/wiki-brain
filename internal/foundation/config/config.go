@@ -30,11 +30,11 @@ type Config struct {
 
 // BootstrapLLM is the legacy config.yml llm block used only for first-start import.
 type BootstrapLLM struct {
-	BaseURL        string                       `yaml:"base_url"`
-	APIKey         string                       `yaml:"api_key"`
-	TimeoutSeconds int                          `yaml:"timeout_seconds"`
-	MaxRetries     int                          `yaml:"max_retries"`
-	Models         map[string]BootstrapModel    `yaml:"models"`
+	BaseURL        string                    `yaml:"base_url"`
+	APIKey         string                    `yaml:"api_key"`
+	TimeoutSeconds int                       `yaml:"timeout_seconds"`
+	MaxRetries     int                       `yaml:"max_retries"`
+	Models         map[string]BootstrapModel `yaml:"models"`
 }
 
 type BootstrapModel struct {
@@ -195,9 +195,28 @@ type WikiConfig struct {
 	// —— 两层架构（docs/impl/v1/wiki.md 步骤 7-9）——
 	RelationKPNMin         int `yaml:"relation_kpn_min"`
 	RelationSharedPointMin int `yaml:"relation_shared_point_min"`
-	TopicMemberMin         int `yaml:"topic_member_min"`
-	TopicMemberMax         int `yaml:"topic_member_max"`
-	TopicCompileMaxChars   int `yaml:"topic_compile_max_chars"`
+	// TopicMemberMin is, since the 2026-08-03 revision, ONLY the
+	// recompile-time minimum remaining member gate (RecompileTopic) — it no
+	// longer doubles as a candidate-creation threshold, because candidate
+	// range is now determined by quadruple clustering over real questions,
+	// not by connected-component size (docs/impl/v1/wiki.md 步骤 8).
+	TopicMemberMin       int `yaml:"topic_member_min"`
+	TopicCompileMaxChars int `yaml:"topic_compile_max_chars"`
+
+	// —— 主题候选识别（docs/impl/v1/wiki.md 步骤 8，2026-08-03 修订：四元组
+	// 聚类替代连通分量）——
+	// TopicClusterMinQuestions/TopicClusterMinDaysActive gate "稳定簇判定":
+	// a normalized (subject,intent,audience,constraint_text) trace group must
+	// clear both before it's even considered a topic candidate.
+	TopicClusterMinQuestions  int `yaml:"topic_cluster_min_questions"`
+	TopicClusterMinDaysActive int `yaml:"topic_cluster_min_days_active"`
+	// TopicCandidateKPMax caps the candidate-range semantic KP retrieval
+	// (步骤 8 第 3 步), score-descending.
+	TopicCandidateKPMax int `yaml:"topic_candidate_kp_max"`
+	// TopicReliabilityMin gates 二阶准入的"整体可靠度": the fraction of the
+	// full candidate-range KP set (not just the qualifying subset) that has
+	// a verified ActivationLink.
+	TopicReliabilityMin float64 `yaml:"topic_reliability_min"`
 
 	// —— 生成质量（docs/impl/v1/wiki-generation.md 阶段 E/G，P0）——
 	// ClaimVerifyEnabled toggles the post-compile support check (阶段 E):
@@ -225,20 +244,20 @@ type WikiConfig struct {
 
 	// —— 概念内聚度（docs/impl/v1/wiki-generation.md 2.2/2.4，P0/P1 共用的
 	// Louvain 社区检测基础设施；概念级 ready 判定第五项） ——
-	// ConceptCohesionMin gates the Study wiki-candidate "ready" recommendation
+	// EntryCohesionMin gates the Study wiki-candidate "ready" recommendation
 	// on the largest Louvain community's share of qualifying KPs — a low
 	// share means the concept's qualifying material splits into several
 	// unrelated clusters rather than one coherent topic
 	// (docs/design/wiki-compilation.md "连贯性判断还需要第三层").
-	ConceptCohesionMin float64 `yaml:"concept_cohesion_min"`
+	EntryCohesionMin float64 `yaml:"entry_cohesion_min"`
 	// AspectWRel/AspectWCooc are edge weights feeding the concept-cohesion
 	// graph: KPN related/contradicts relations (both count positive — see
 	// docs/impl/v1/wiki-generation.md 2.1 "contradicts 计正权") and shared
 	// confident-question co-occurrence, saturating at AspectCoocSat.
-	AspectWRel     float64 `yaml:"aspect_w_rel"`
-	AspectWCooc    float64 `yaml:"aspect_w_cooc"`
-	AspectCoocSat  int     `yaml:"aspect_cooc_sat"`
-	AspectGamma    float64 `yaml:"aspect_gamma"`
+	AspectWRel    float64 `yaml:"aspect_w_rel"`
+	AspectWCooc   float64 `yaml:"aspect_w_cooc"`
+	AspectCoocSat int     `yaml:"aspect_cooc_sat"`
+	AspectGamma   float64 `yaml:"aspect_gamma"`
 
 	// —— 阶段 B 完整切面聚类（P1，docs/impl/v1/wiki-generation.md 2.1/2.2）——
 	// AspectWIntent/AspectWUnit are the two edge signals P0's cohesion-only
@@ -289,14 +308,14 @@ type StudyConfig struct {
 	SynonymGapDistinctMin int  `yaml:"synonym_gap_distinct_min"`
 	SynonymAutoPromote    bool `yaml:"synonym_auto_promote"`
 	// —— 概念演化（V1 新增，docs/impl/v1/concept-evolution.md 配置项）——
-	ConceptNullRatioMin      float64 `yaml:"concept_null_ratio_min"`
-	ConceptAddEventMin       int     `yaml:"concept_add_event_min"`
-	ConceptAddDistinctMin    int     `yaml:"concept_add_distinct_min"`
-	ConceptAddOverlapMin     float64 `yaml:"concept_add_overlap_min"`
-	ConceptMergeCooccurMin   int     `yaml:"concept_merge_cooccur_min"`
-	ConceptMergeOverlapMin   float64 `yaml:"concept_merge_overlap_min"`
-	ConceptCandidateIdleDays int     `yaml:"concept_candidate_idle_days"`
-	ConceptEventWindowDays   int     `yaml:"concept_event_window_days"`
+	EntryNullRatioMin      float64 `yaml:"entry_null_ratio_min"`
+	EntryAddEventMin       int     `yaml:"entry_add_event_min"`
+	EntryAddDistinctMin    int     `yaml:"entry_add_distinct_min"`
+	EntryAddOverlapMin     float64 `yaml:"entry_add_overlap_min"`
+	EntryMergeCooccurMin   int     `yaml:"entry_merge_cooccur_min"`
+	EntryMergeOverlapMin   float64 `yaml:"entry_merge_overlap_min"`
+	EntryCandidateIdleDays int     `yaml:"entry_candidate_idle_days"`
+	EntryEventWindowDays   int     `yaml:"entry_event_window_days"`
 	// —— 问题复杂度观测量（两层架构扩展，docs/impl/v1/study.md 步骤 7）——
 	ComplexityMinQuestions int `yaml:"complexity_min_questions"`
 }

@@ -32,7 +32,7 @@
 
 ### 产生点 1：Concept 匹配阶段（在线）
 
-问题理解时，Concept 匹配器本来就要为每个候选概念计算匹配分。当前两名概念的分数差小于阈值时，匹配器顺手记录一条 `concept_boundary_signal`（子类型 `ambiguous_match`），携带：
+问题理解时，Concept 匹配器本来就要为每个候选概念计算匹配分。当前两名概念的分数差小于阈值时，匹配器顺手记录一条 `entry_boundary_signal`（子类型 `ambiguous_match`），携带：
 
 ```text
 两个概念的 ID 与各自匹配分；
@@ -51,7 +51,7 @@
 概念匹配成功，但 KP 靠补充查找进入
     → activation_gap，gap_level = link_gap（缺链接，走候选 ActivationLink）；
 概念匹配整体失败，KP 全靠目录 / FTS 兜底
-    → activation_gap，gap_level = concept_gap（缺概念，本文档的原料）。
+    → activation_gap，gap_level = entry_gap（缺概念，本文档的原料）。
 ```
 
 `gap_level` 的定义见 `trace.md` 第 3 节。区分两级缺口是关键：缺链接说明入口存在、路径未建；缺概念说明入口本身不存在。
@@ -73,7 +73,7 @@ Study 在周期任务中消费上述信号，形成候选。所有阈值可配�
 
 ### 新增候选
 
-对窗口内 `gap_level = concept_gap` 的事件，按"同一 Domain + 采用 KP 集合重叠 + scene / goal 相似"聚类。某个簇满足全部条件时形成新增候选：
+对窗口内 `gap_level = entry_gap` 的事件，按"同一 Domain + 采用 KP 集合重叠 + scene / goal 相似"聚类。某个簇满足全部条件时形成新增候选：
 
 ```text
 簇内事件数 ≥ N；

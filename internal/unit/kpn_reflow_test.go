@@ -43,23 +43,23 @@ func TestCrossSourceKPN_SkipsSelfAncestorEdges(t *testing.T) {
 	store := NewStore(db)
 
 	seedDomain(t, db, "d1", "D")
-	seedConcept(t, db, "c1", "d1", "C")
+	seedEntry(t, db, "c1", "d1", "C")
 	seedSourceWithDomain(t, db, "reflow-src", "d1")
 	seedSourceWithDomain(t, db, "ancestor-src", "d1")
 	seedSourceWithDomain(t, db, "other-src", "d1")
 
 	// reflow-src's new KP.
-	seedKUWithConcept(t, store, "ku-reflow", "reflow-src", "c1", "reflow topic")
+	seedKUWithEntry(t, store, "ku-reflow", "reflow-src", "c1", "reflow topic")
 	seedKP(t, store, "kp-reflow", "ku-reflow", "reflow-src", "reflow content")
 
 	// ancestor-src's KP is what the origin page already cited — must be
 	// excluded from cross matching for this reflow source.
-	seedKUWithConcept(t, store, "ku-ancestor", "ancestor-src", "c1", "ancestor topic")
+	seedKUWithEntry(t, store, "ku-ancestor", "ancestor-src", "c1", "ancestor topic")
 	seedKP(t, store, "kp-ancestor", "ku-ancestor", "ancestor-src", "ancestor content")
 
 	// other-src's KP is unrelated knowledge — matching against it must
 	// proceed normally (the exclusion only targets the self-ancestor edge).
-	seedKUWithConcept(t, store, "ku-other", "other-src", "c1", "other topic")
+	seedKUWithEntry(t, store, "ku-other", "other-src", "c1", "other topic")
 	seedKP(t, store, "kp-other", "ku-other", "other-src", "other content")
 
 	seedWikiPage(t, db, "page-ancestor", []string{"kp-ancestor"})
