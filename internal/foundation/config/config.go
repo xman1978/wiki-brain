@@ -139,6 +139,12 @@ type RetrievalConfig struct {
 	// —— V1 新增（docs/impl/v1/retrieval.md 配置项）——
 	FastPath         bool    `yaml:"fast_path"`
 	FastPathVerify   bool    `yaml:"fast_path_verify"`
+	// SlowPathVerify gates a sufficiency check on PathType=full evidence
+	// before Answer generates (docs/impl/v1/retrieval.md 步骤 2b). When
+	// sufficient=false the answer layer refuses with the no-evidence
+	// fallback instead of letting near-miss evidence (wrong system /
+	// wrong intent) be rewritten into a confident answer.
+	SlowPathVerify   bool    `yaml:"slow_path_verify"`
 	FastPathFallback bool    `yaml:"fast_path_fallback"`
 	WikiMinScore     float64 `yaml:"wiki_min_score"`
 	// WikiMaxCandidates caps how many wiki-index/concept-matched candidate

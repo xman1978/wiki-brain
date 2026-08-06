@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +15,15 @@ import (
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 	"github.com/jxman78/wiki-brain/internal/foundation/textmatch"
 )
+
+// configAssignmentLine matches bare KEY=value / KEY = value parameter lines
+// (dm.ini / spfile-style), used to recognize unsplittable config blocks.
+var configAssignmentLine = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*\s*=\s*\S`)
+
+// markdownHeadingLine matches ATX headings (# … ######); a fragment that is
+// only headings is dropped (docs/impl/v1/evidence.md 步骤 3.1.0) — never
+// widened into a whole section.
+var markdownHeadingLine = regexp.MustCompile(`^#{1,6}\s+\S`)
 
 type Service struct {
 	llmClient llm.LLMClient
@@ -221,10 +231,11 @@ type fragmentSpan struct {
 
 // mineCandidate implements docs/impl/v1/evidence.md 步骤 3: validate each
 // fragment against c.Content (exact then whitespace-fuzzy match), drop
-// fragments that don't survive, resolve line numbers, widen any fragment
-// that lands inside a markdown table to the table's full contiguous range
-// (see expandToTableBlock), sort by original appearance order, dedupe
-// exact-overlapping ranges, and cap at max_fragments_per_ku.
+// fragments that don't survive (including heading-only fragments), resolve
+// line numbers, widen any fragment that lands inside an unsplittable block
+// (fenced code / markdown table / command-config run — see expandToAtomicBlock),
+// sort by original appearance order, dedupe exact-overlapping ranges, and
+// cap at max_fragments_per_ku.
 func (s *Service) mineCandidate(c EvidenceItem, fragments []string) (items []EvidenceItem, dropped int) {
 	minChars := s.cfg.MinFragmentChars
 	contentLines := strings.Split(c.Content, "\n")
@@ -248,12 +259,20 @@ func (s *Service) mineCandidate(c EvidenceItem, fragments []string) (items []Evi
 		}
 		relStart, relEnd := textmatch.ByteRangeToLines(c.Content, startByte, endByte)
 
+		if isHeadingOnlyFragment(contentLines, relStart, relEnd) {
+			dropped++
+			slog.Debug("evidence: heading-only fragment dropped",
+				"unit_id", c.UnitID, "lines", []int{relStart, relEnd})
+			continue
+		}
+
 		content := matched
-		widenedStart, widenedEnd := expandToTableBlock(contentLines, relStart, relEnd)
+		widenedStart, widenedEnd, kind := expandToAtomicBlock(contentLines, relStart, relEnd)
 		if widenedStart != relStart || widenedEnd != relEnd {
 			content = strings.Join(contentLines[widenedStart-1:widenedEnd], "\n")
-			slog.Debug("evidence: fragment widened to cover its whole markdown table",
-				"unit_id", c.UnitID, "original_lines", []int{relStart, relEnd}, "widened_lines", []int{widenedStart, widenedEnd})
+			slog.Debug("evidence: fragment widened to cover unsplittable block",
+				"unit_id", c.UnitID, "kind", kind,
+				"original_lines", []int{relStart, relEnd}, "widened_lines", []int{widenedStart, widenedEnd})
 		}
 
 		spans = append(spans, fragmentSpan{
@@ -295,6 +314,24 @@ func (s *Service) mineCandidate(c EvidenceItem, fragments []string) (items []Evi
 	return items, dropped
 }
 
+// isHeadingOnlyFragment reports whether every non-empty line in [relStart,relEnd]
+// is a markdown heading. Such fragments are dropped — never expanded into a
+// whole section (docs/impl/v1/evidence.md 步骤 3.1.0).
+func isHeadingOnlyFragment(contentLines []string, relStart, relEnd int) bool {
+	saw := false
+	for i := relStart; i <= relEnd && i >= 1 && i <= len(contentLines); i++ {
+		line := strings.TrimSpace(contentLines[i-1])
+		if line == "" {
+			continue
+		}
+		if !markdownHeadingLine.MatchString(line) {
+			return false
+		}
+		saw = true
+	}
+	return saw
+}
+
 // isMarkdownTableRow matches a GFM table row (header, separator, or data
 // row alike — they're syntactically identical: a line bounded by "|" on
 // both ends). Distinguishing header/separator/data isn't needed here; only
@@ -302,6 +339,90 @@ func (s *Service) mineCandidate(c EvidenceItem, fragments []string) (items []Evi
 func isMarkdownTableRow(line string) bool {
 	t := strings.TrimSpace(line)
 	return len(t) > 1 && strings.HasPrefix(t, "|") && strings.HasSuffix(t, "|")
+}
+
+// isFencedCodeFence reports a markdown fenced-code delimiter line.
+func isFencedCodeFence(line string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), "```")
+}
+
+// isCommandOrConfigLine recognizes bare (unfenced) SQL / Shell / parameter
+// lines that form an unsplittable command-config block. Headings and table
+// rows are excluded so those paths stay with their own expanders.
+func isCommandOrConfigLine(line string) bool {
+	t := strings.TrimSpace(line)
+	if t == "" || markdownHeadingLine.MatchString(t) || isMarkdownTableRow(t) || isFencedCodeFence(t) {
+		return false
+	}
+	lower := strings.ToLower(t)
+
+	switch {
+	case strings.HasPrefix(lower, "sql>"),
+		strings.HasPrefix(lower, "rman>"),
+		strings.HasPrefix(t, "$ "):
+		return true
+	case strings.Contains(lower, "alter system "),
+		strings.Contains(lower, "alter database "),
+		strings.HasPrefix(lower, "chmod "),
+		strings.HasPrefix(lower, "chown "),
+		strings.HasPrefix(lower, "export "),
+		strings.Contains(lower, "scope=spfile"):
+		return true
+	case configAssignmentLine.MatchString(t):
+		return true
+	}
+
+	// "$ su - oracle" style without trailing args already covered by "$ ".
+	// Also accept lines that are clearly shell invocations starting with a
+	// known binary (no path) when the rest looks like argv.
+	if fields := strings.Fields(t); len(fields) >= 1 {
+		cmd := strings.ToLower(fields[0])
+		switch cmd {
+		case "chmod", "chown", "export", "sqlplus", "asmcmd", "srvctl", "docker", "kubectl", "kubeadm":
+			return true
+		}
+	}
+	return false
+}
+
+// expandToAtomicBlock widens [relStart,relEnd] to the unsplittable block it
+// touches, if any (docs/impl/v1/evidence.md 步骤 3.1). Priority: fenced code
+// → markdown table → bare command/config run. kind is for debug logs.
+func expandToAtomicBlock(contentLines []string, relStart, relEnd int) (int, int, string) {
+	if start, end, ok := expandToFencedCodeBlock(contentLines, relStart, relEnd); ok {
+		return start, end, "fenced_code"
+	}
+	if start, end := expandToTableBlock(contentLines, relStart, relEnd); start != relStart || end != relEnd {
+		return start, end, "table"
+	}
+	if start, end, ok := expandToCommandConfigBlock(contentLines, relStart, relEnd); ok {
+		return start, end, "command_config"
+	}
+	return relStart, relEnd, ""
+}
+
+// expandToFencedCodeBlock widens to the enclosing ``` … ``` block when the
+// fragment overlaps any line of that fence (including delimiter lines).
+func expandToFencedCodeBlock(contentLines []string, relStart, relEnd int) (int, int, bool) {
+	inFence := false
+	openLine := 0
+	for idx, line := range contentLines {
+		lineNo := idx + 1
+		if !isFencedCodeFence(line) {
+			continue
+		}
+		if !inFence {
+			openLine = lineNo
+			inFence = true
+			continue
+		}
+		closeLine := lineNo
+		if relEnd >= openLine && relStart <= closeLine {
+			return openLine, closeLine, true
+		}
+		inFence = false
+	}
+	return relStart, relEnd, false
 }
 
 // expandToTableBlock widens [relStart, relEnd] (1-based line numbers within
@@ -336,6 +457,33 @@ func expandToTableBlock(contentLines []string, relStart, relEnd int) (int, int) 
 		end++
 	}
 	return start, end
+}
+
+// expandToCommandConfigBlock widens to a contiguous run of bare SQL / Shell /
+// parameter lines when the fragment intersects at least one such line.
+// Blank lines and non-command prose terminate the run (same spirit as table
+// contiguity — don't swallow neighboring narrative).
+func expandToCommandConfigBlock(contentLines []string, relStart, relEnd int) (int, int, bool) {
+	touches := false
+	for i := relStart; i <= relEnd && i >= 1 && i <= len(contentLines); i++ {
+		if isCommandOrConfigLine(contentLines[i-1]) {
+			touches = true
+			break
+		}
+	}
+	if !touches {
+		return relStart, relEnd, false
+	}
+
+	start := relStart
+	for start > 1 && isCommandOrConfigLine(contentLines[start-2]) {
+		start--
+	}
+	end := relEnd
+	for end < len(contentLines) && isCommandOrConfigLine(contentLines[end]) {
+		end++
+	}
+	return start, end, true
 }
 
 func wholeSegmentFallback(batch []EvidenceItem) []EvidenceItem {

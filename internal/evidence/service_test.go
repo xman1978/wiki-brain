@@ -2,6 +2,7 @@ package evidence
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
@@ -370,6 +371,146 @@ func TestExpandToTableBlock(t *testing.T) {
 			t.Errorf("got %d-%d, want unchanged 2-5", start, end)
 		}
 	})
+}
+
+// TestMine_PartialSQL_WidensToCommandBlock: mining returned only the alter
+// system line; program must fold the contiguous shell/SQL run so LMS* and
+// the preceding sqlplus login stay in the fragment (T10-class failure).
+func TestMine_PartialSQL_WidensToCommandBlock(t *testing.T) {
+	fake := llm.NewFakeClient()
+	svc := NewService(fake, testConfig())
+
+	content := "虚拟化环境下 VKTM 占用过高。\n" +
+		"$ su - oracle\n" +
+		"$ sqlplus / as sysdba\n" +
+		"SQL> alter system set \"_high_priority_processes\"='LMS*' scope=spfile;\n" +
+		"不建议用于生产环境。"
+	fake.SetResponse("evidence_mine.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "fragments": ["SQL> alter system set \"_high_priority_processes\"='LMS*' scope=spfile;"]}]}`,
+	})
+
+	in := []EvidenceItem{
+		{UnitID: "u1", PointID: "p1", SourceID: "s1", LineStart: 10, LineEnd: 14, Content: content, Role: RoleDirect},
+	}
+	out := svc.Mine(context.Background(), "VKTM CPU 高怎么处理？", "Oracle RAC", "排查", in, false)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 widened fragment, got %d: %+v", len(out), out)
+	}
+	want := "$ su - oracle\n" +
+		"$ sqlplus / as sysdba\n" +
+		"SQL> alter system set \"_high_priority_processes\"='LMS*' scope=spfile;"
+	if out[0].Content != want {
+		t.Errorf("content = %q\nwant %q", out[0].Content, want)
+	}
+	if !strings.Contains(out[0].Content, "LMS*") {
+		t.Errorf("widened fragment must keep LMS* assignment")
+	}
+}
+
+// TestMine_PartialChmod_WidensToCommandBlock covers T11-class: a lone chmod
+// line in a short command run stays complete (assignment + path).
+func TestMine_PartialChmod_WidensToCommandBlock(t *testing.T) {
+	fake := llm.NewFakeClient()
+	svc := NewService(fake, testConfig())
+
+	content := "原因是 oracle 可执行文件缺少粘连位。\n" +
+		"chmod u+s /u01/app/oracle/product/11.2.0/db/bin/oracle\n" +
+		"处理后重新连接验证。"
+	fake.SetResponse("evidence_mine.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "fragments": ["chmod u+s /u01/app/oracle/product/11.2.0/db/bin/oracle"]}]}`,
+	})
+	in := []EvidenceItem{
+		{UnitID: "u1", LineStart: 1, LineEnd: 3, Content: content, Role: RoleDirect},
+	}
+	out := svc.Mine(context.Background(), "TNS-12518 原因？", "Oracle", "排查", in, false)
+	if len(out) != 1 {
+		t.Fatalf("got %d items: %+v", len(out), out)
+	}
+	if out[0].Content != "chmod u+s /u01/app/oracle/product/11.2.0/db/bin/oracle" {
+		t.Errorf("single command line should stay as-is, got %q", out[0].Content)
+	}
+}
+
+// TestMine_PartialFencedCode_WidensToWholeFence covers ``` blocks.
+func TestMine_PartialFencedCode_WidensToWholeFence(t *testing.T) {
+	fake := llm.NewFakeClient()
+	svc := NewService(fake, testConfig())
+
+	content := "示例配置：\n" +
+		"```\n" +
+		"BUFFER=10000\n" +
+		"MAX_BUFFER=10000\n" +
+		"```\n" +
+		"说明文字。"
+	fake.SetResponse("evidence_mine.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "fragments": ["BUFFER=10000"]}]}`,
+	})
+	in := []EvidenceItem{
+		{UnitID: "u1", LineStart: 1, LineEnd: 6, Content: content, Role: RoleDirect},
+	}
+	out := svc.Mine(context.Background(), "BUFFER 怎么配？", "达梦", "查询", in, false)
+	if len(out) != 1 {
+		t.Fatalf("got %d: %+v", len(out), out)
+	}
+	want := "```\nBUFFER=10000\nMAX_BUFFER=10000\n```"
+	if out[0].Content != want {
+		t.Errorf("got %q want %q", out[0].Content, want)
+	}
+}
+
+// TestMine_HeadingOnlyFragment_Dropped: a bare markdown heading is not
+// evidence (T18-class UDEV title stub). Direct candidate then whole-segments.
+func TestMine_HeadingOnlyFragment_Dropped(t *testing.T) {
+	fake := llm.NewFakeClient()
+	svc := NewService(fake, testConfig())
+
+	content := "磁盘绑定有两种方式。\n" +
+		"# 二、UDEV 磁盘映射\n" +
+		"通过 udev rules 绑定 SCSI 序列号。\n" +
+		"也可使用 AFD。"
+	fake.SetResponse("evidence_mine.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "fragments": ["# 二、UDEV 磁盘映射"]}]}`,
+	})
+	in := []EvidenceItem{
+		{UnitID: "u1", LineStart: 1, LineEnd: 4, Content: content, Role: RoleDirect},
+	}
+	out := svc.Mine(context.Background(), "有哪些磁盘绑定方式？", "Oracle", "列举", in, false)
+	if len(out) != 1 {
+		t.Fatalf("expected whole-segment fallback after heading drop, got %d: %+v", len(out), out)
+	}
+	if out[0].Mined {
+		t.Errorf("expected mined=false whole-segment fallback, got mined=true content=%q", out[0].Content)
+	}
+	if out[0].Content != content {
+		t.Errorf("fallback should keep full KU, got %q", out[0].Content)
+	}
+}
+
+func TestExpandToCommandConfigBlock(t *testing.T) {
+	lines := []string{
+		"说明",                                            // 1
+		"$ su - oracle",                                // 2
+		"SQL> alter system set \"_high_priority_processes\"='LMS*' scope=spfile;", // 3
+		"注意：不建议生产",                                   // 4
+	}
+	start, end, ok := expandToCommandConfigBlock(lines, 3, 3)
+	if !ok || start != 2 || end != 3 {
+		t.Errorf("got ok=%v %d-%d, want 2-3", ok, start, end)
+	}
+	start, end, ok = expandToCommandConfigBlock(lines, 1, 1)
+	if ok {
+		t.Errorf("prose should not expand, got %d-%d", start, end)
+	}
+}
+
+func TestIsHeadingOnlyFragment(t *testing.T) {
+	lines := []string{"# 二、UDEV 磁盘映射", "正文"}
+	if !isHeadingOnlyFragment(lines, 1, 1) {
+		t.Error("single heading should be heading-only")
+	}
+	if isHeadingOnlyFragment(lines, 1, 2) {
+		t.Error("heading+body is not heading-only")
+	}
 }
 
 func TestBatchCandidates_SplitsBySize(t *testing.T) {

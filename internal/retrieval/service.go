@@ -411,7 +411,7 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 	}
 
 	if s.cfg.Retrieval.FastPathVerify {
-		sufficient, err := s.verifyFastPathEvidence(ctx, qc.Question, es)
+		sufficient, err := s.VerifyEvidenceSufficient(ctx, qc.Question, es)
 		if err != nil {
 			slog.Warn("retrieval: fast path verify failed, falling back to slow path", "error", err)
 			return nil, activationHits, false
@@ -429,17 +429,21 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 	return es, activationHits, true
 }
 
-// verifyFastPathEvidence implements docs/impl/v1/retrieval.md 步骤 2a: a
-// single LLM call judging whether the fast path's evidence (built from an
-// exact quadruple match, without Rerank) still independently and completely
-// answers the question. A match on the activation condition doesn't
-// guarantee the KP's content is still adequate — it may have been updated,
-// or the question may carry detail the quadruple didn't capture — so this
-// is the only check standing between an exact-match hit and answering the
-// user directly. Any ambiguity (LLM error, unparseable response,
-// sufficient=false) is treated as failure; the caller falls back to the
-// slow path.
-func (s *Service) verifyFastPathEvidence(ctx context.Context, question string, es *EvidenceSet) (bool, error) {
+// SlowPathVerifyEnabled reports whether Answer should run the slow-path
+// sufficiency gate (docs/impl/v1/retrieval.md 步骤 2b) before generating.
+func (s *Service) SlowPathVerifyEnabled() bool {
+	return s.cfg != nil && s.cfg.Retrieval.SlowPathVerify
+}
+
+// VerifyEvidenceSufficient implements docs/impl/v1/retrieval.md 步骤 2a/2b:
+// a single LLM call judging whether the assembled evidence independently
+// and completely answers the question. Used by the fast path (before
+// committing PathType=fast) and by Answer on PathType=full (before
+// generation). Any ambiguity (LLM error, unparseable response,
+// sufficient=false) is reported to the caller — fast path treats that as
+// failure and falls back; slow path refuses on sufficient=false and
+// proceeds on call/parse errors.
+func (s *Service) VerifyEvidenceSufficient(ctx context.Context, question string, es *EvidenceSet) (bool, error) {
 	var evidenceText strings.Builder
 	for i, ev := range es.DirectEvidence {
 		fmt.Fprintf(&evidenceText, "[direct-%d] %s\n", i+1, ev.Content)
@@ -453,7 +457,7 @@ func (s *Service) verifyFastPathEvidence(ctx context.Context, question string, e
 		"evidence": evidenceText.String(),
 	}, "classification")
 	if err != nil {
-		return false, fmt.Errorf("retrieval: fast path verify call: %w", err)
+		return false, fmt.Errorf("retrieval: evidence verify call: %w", err)
 	}
 
 	var result struct {
@@ -461,10 +465,10 @@ func (s *Service) verifyFastPathEvidence(ctx context.Context, question string, e
 		Reason     string `json:"reason"`
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
-		return false, fmt.Errorf("retrieval: parse fast path verify response: %w", err)
+		return false, fmt.Errorf("retrieval: parse evidence verify response: %w", err)
 	}
 	if !result.Sufficient {
-		slog.Info("retrieval: fast path verify judged insufficient", "reason", result.Reason)
+		slog.Info("retrieval: evidence verify judged insufficient", "reason", result.Reason)
 	}
 	return result.Sufficient, nil
 }

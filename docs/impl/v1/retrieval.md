@@ -71,6 +71,7 @@ retrieval:
   activation_match_top:   5      # 激活层最多采用的链接数
   fast_path_verify:       true   # 快路径证据充分性校验开关（false 时跳过校验，
                                   # 仅灰度/评估用，生产不建议关闭）
+  slow_path_verify:       true   # 慢路径答题前充分性校验（步骤 2b）；false 时跳过
   fast_path_fallback:     true   # 快路径回答失败时自动回落慢路径
   wiki_min_score:         2.0    # Wiki 直答的 Bleve 最低分（BM25，需评估集校准）
   wiki_max_candidates:    3      # 直答候选序列长度上限（依次尝试，
@@ -154,6 +155,26 @@ Prompt：config/prompts/fast_verify.md，输出 JSON
 校验失败照常保留 activation_hits 进入慢路径 EvidenceSet，Trace 据此产生 activation_failure（机制同步骤 7），校验结果反馈进学习回路。
 
 fast_path_verify=false 时跳过本步骤，直接进入充分性判断（行为与旧版一致，仅供灰度/评估对照，生产环境不建议关闭）。
+
+### 步骤 2b：慢路径校验（slow_path_verify）
+
+慢路径（`path_type=full`）在 Answer 生成之前做与步骤 2a **同构**的充分性校验（复用 `config/prompts/fast_verify.md`、classification 模型）：
+
+```text
+调用点：Answer.generate / AnswerStream，在已有 direct/supporting 证据、
+      即将调用 answer_short/answer_deep 之前（Wiki/快路径不经过本步骤——
+      各自已有 sufficient 闸门）。
+输入：question + 全部证据（direct + supporting，挖掘后的片段或整段回退）
+判定：sufficient=false → 拒答，返回与无证据兜底相同的固定话术
+      （HasAnswer=false、citations 空、Path=none），EvidenceSet 原样保留
+      供 Trace/审计观察「召回了什么但判定不够答」；
+      调用失败/解析失败 → 放行继续生成（慢路径已无下一层可回落，
+      与快路径「校验异常即回落」不对称，避免校验抖动导致大面积拒答）。
+```
+
+动机：慢路径 Rerank 常把「近邻相关」材料标成 direct（问 OA 填单召回易快报流程、问升级召回部署步骤）。答题模型在小参数下容易把近邻概念改写成所问概念的操作答案；充分性闸门输出的是结构化 `sufficient` 布尔，比依赖答题 Prompt 自守门更稳。
+
+`slow_path_verify=false` 时跳过，行为与改前一致（灰度/对照用）。
 
 ### 步骤 3：证据挖掘接入
 
@@ -277,6 +298,9 @@ force_full=true 强制慢路径生效；
 fast_path_verify=true 时校验不通过自动回落慢路径且只回落一次，
   trace 记录 path_type=full、activation_hits 保留（产生 activation_failure）；
 fast_path_verify=false 时跳过校验，行为同旧版快路径；
+slow_path_verify=true 时 Answer 在生成前校验不通过则拒答（Path=none、
+  HasAnswer=false），EvidenceSet 保留供审计；校验调用失败则放行生成；
+slow_path_verify=false 时跳过，慢路径行为与改前一致；
 快路径回答失败自动回落慢路径且只回落一次，trace 记录 path_type=full；
 superseded/deprecated 的 KU/KP 不出现在任何路径的候选与证据中；
 EvidenceSet 的 path_type / activation_hits / mined 正确传递至

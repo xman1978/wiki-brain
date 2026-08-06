@@ -73,6 +73,10 @@ func (s *Service) generate(ctx context.Context, es *retrieval.EvidenceSet) *gene
 		return s.handleNone(ctx, es)
 	}
 
+	if refused := s.refuseIfSlowPathInsufficient(ctx, es); refused != nil {
+		return refused
+	}
+
 	path := es.Path
 	if path == "short" && needsReasoning(es.Question) {
 		path = "deep"
@@ -87,6 +91,36 @@ func (s *Service) generate(ctx context.Context, es *retrieval.EvidenceSet) *gene
 	default:
 		return s.handleGenerate(ctx, es, path, "answer_deep.md", "reasoning")
 	}
+}
+
+// refuseIfSlowPathInsufficient runs docs/impl/v1/retrieval.md 步骤 2b on
+// PathType=full (and legacy empty PathType) evidence sets. Wiki/fast paths
+// already have their own sufficient gates. When the verifier says the
+// evidence does not answer the question (near-miss object/intent), return
+// the same none fallback as a true empty set — HasAnswer=false, no
+// citations — instead of letting the answer model rewrite adjacent
+// material into a confident how-to. Call/parse errors proceed with
+// generation (slow path has nowhere to fall back; unlike fast path).
+func (s *Service) refuseIfSlowPathInsufficient(ctx context.Context, es *retrieval.EvidenceSet) *generated {
+	if es.PathType == retrieval.PathTypeWiki || es.PathType == retrieval.PathTypeFast {
+		return nil
+	}
+	if s.retSvc == nil || !s.retSvc.SlowPathVerifyEnabled() {
+		return nil
+	}
+	ok, err := s.retSvc.VerifyEvidenceSufficient(ctx, es.Question, es)
+	if err != nil {
+		slog.Warn("answer: slow path verify error, proceeding with generation", "error", err)
+		return nil
+	}
+	if ok {
+		return nil
+	}
+	slog.Info("answer: slow path verify judged evidence insufficient, refusing",
+		"question", es.Question,
+		"direct", len(es.DirectEvidence),
+		"supporting", len(es.Supporting))
+	return s.handleNone(ctx, es)
 }
 
 func (s *Service) generateWithDeep(ctx context.Context, es *retrieval.EvidenceSet, forceDeep bool) *generated {
@@ -251,6 +285,18 @@ func (s *Service) AnswerStream(ctx context.Context, question string, forceDeep b
 			g := s.handleNone(ctx, es)
 			s.saveAndEnqueue(g.result, g.promptVersion, g.modelName)
 			finalResult = g.result
+			outCh <- llm.StreamChunk{Type: llm.ChunkContent, Content: finalResult.Content}
+			outCh <- llm.StreamChunk{Type: llm.ChunkDone}
+			return
+		}
+
+		if refused := s.refuseIfSlowPathInsufficient(ctx, es); refused != nil {
+			totalMs := time.Since(totalStart).Milliseconds()
+			slog.Debug("answer: stream slow path verify refused", "total_ms", totalMs)
+			outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
+				`{"phase":"answer","status":"insufficient","total_ms":%d}`, totalMs)}
+			s.saveAndEnqueue(refused.result, refused.promptVersion, refused.modelName)
+			finalResult = refused.result
 			outCh <- llm.StreamChunk{Type: llm.ChunkContent, Content: finalResult.Content}
 			outCh <- llm.StreamChunk{Type: llm.ChunkDone}
 			return

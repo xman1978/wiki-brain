@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
+	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 	"github.com/jxman78/wiki-brain/internal/foundation/queue"
 	"github.com/jxman78/wiki-brain/internal/retrieval"
@@ -358,3 +359,128 @@ func TestAnswer_ForceDeepNoEvidence(t *testing.T) {
 		t.Errorf("forceDeep with no evidence should still be none, got %s", result.Path)
 	}
 }
+
+func setupAnswerWithSlowPathVerify(t *testing.T, enabled bool) (*Service, *llm.FakeClient) {
+	t.Helper()
+	db := foundation.NewTestDB(t)
+	store := NewStore(db)
+	fake := llm.NewFakeClient()
+	q := queue.New(10)
+	q.RegisterHandler(queue.TaskTypeTrace, func(payload interface{}) {})
+	q.Start()
+	t.Cleanup(q.Shutdown)
+
+	cfg := &config.Config{}
+	cfg.Retrieval.SlowPathVerify = enabled
+	retStore := retrieval.NewStore(db)
+	retSvc := retrieval.NewService(retStore, fake, nil, nil, nil, cfg, nil, nil, nil)
+	svc := NewService(store, fake, q, retSvc)
+	return svc, fake
+}
+
+func TestAnswer_SlowPathVerify_Insufficient_Refuses(t *testing.T) {
+	svc, fake := setupAnswerWithSlowPathVerify(t, true)
+	fake.SetResponse("fast_verify.md", llm.FakeResponse{
+		Output: `{"sufficient": false, "reason": "证据讲部署而非升级"}`,
+	})
+	// If verify incorrectly lets through, generation would produce this — must not appear.
+	fake.SetResponse("answer_short.md", llm.FakeResponse{
+		Output: `{"content":"应按以下步骤升级集群","citations":["f1"]}`,
+	})
+
+	es := makeEvidenceSet("short",
+		[]retrieval.Evidence{
+			{FactID: "f1", Content: "Ubuntu 20.04 部署 K8S 1.27 步骤", UnitID: "u1", PointID: "p1",
+				SourceRef: json.RawMessage(`{"source_id":"s1","line_start":1,"line_end":5}`)},
+		},
+		nil,
+	)
+	es.Question = "K8S 集群怎么升级版本？"
+	es.PathType = retrieval.PathTypeFull
+
+	result := svc.Answer(context.Background(), es)
+
+	if result.Path != "none" {
+		t.Fatalf("expected path=none after insufficient verify, got %s content=%q", result.Path, result.Content)
+	}
+	if result.HasAnswer {
+		t.Error("expected has_answer=false")
+	}
+	if len(result.Citations) != 0 {
+		t.Errorf("expected empty citations, got %v", result.Citations)
+	}
+	if !strings.Contains(result.Content, "暂无相关材料") {
+		t.Errorf("expected refusal content, got %q", result.Content)
+	}
+	if result.PathType != retrieval.PathTypeFull {
+		t.Errorf("PathType should stay full for audit, got %s", result.PathType)
+	}
+}
+
+func TestAnswer_SlowPathVerify_Sufficient_Generates(t *testing.T) {
+	svc, fake := setupAnswerWithSlowPathVerify(t, true)
+	fake.SetResponse("fast_verify.md", llm.FakeResponse{
+		Output: `{"sufficient": true, "reason": "证据直接给出定义"}`,
+	})
+	fake.SetResponse("answer_short.md", llm.FakeResponse{
+		Output: `{"content":"线性方程是ax+b=0。","citations":["f1"]}`,
+	})
+
+	es := makeEvidenceSet("short",
+		[]retrieval.Evidence{
+			{FactID: "f1", Content: "线性方程定义 ax+b=0", UnitID: "u1", PointID: "p1",
+				SourceRef: json.RawMessage(`{"source_id":"s1","line_start":1,"line_end":5}`)},
+		},
+		nil,
+	)
+	es.PathType = retrieval.PathTypeFull
+
+	result := svc.Answer(context.Background(), es)
+	if result.Path != "short" || !result.HasAnswer {
+		t.Fatalf("expected short answer, got path=%s has_answer=%v content=%q", result.Path, result.HasAnswer, result.Content)
+	}
+}
+
+func TestAnswer_SlowPathVerify_Disabled_Skips(t *testing.T) {
+	svc, fake := setupAnswerWithSlowPathVerify(t, false)
+	fake.SetResponse("answer_short.md", llm.FakeResponse{
+		Output: `{"content":"近邻材料改写的答案","citations":["f1"]}`,
+	})
+
+	es := makeEvidenceSet("short",
+		[]retrieval.Evidence{
+			{FactID: "f1", Content: "易快报报销流程", UnitID: "u1", PointID: "p1",
+				SourceRef: json.RawMessage(`{"source_id":"s1","line_start":1,"line_end":5}`)},
+		},
+		nil,
+	)
+	es.Question = "报销单在 OA 里怎么填？"
+	es.PathType = retrieval.PathTypeFull
+
+	result := svc.Answer(context.Background(), es)
+	if result.Path != "short" {
+		t.Fatalf("disabled verify should generate normally, got path=%s", result.Path)
+	}
+}
+
+func TestAnswer_SlowPathVerify_SkipsFastPath(t *testing.T) {
+	svc, fake := setupAnswerWithSlowPathVerify(t, true)
+	fake.SetResponse("answer_short.md", llm.FakeResponse{
+		Output: `{"content":"快路径答案","citations":["f1"]}`,
+	})
+
+	es := makeEvidenceSet("short",
+		[]retrieval.Evidence{
+			{FactID: "f1", Content: "证据", UnitID: "u1", PointID: "p1",
+				SourceRef: json.RawMessage(`{"source_id":"s1","line_start":1,"line_end":5}`)},
+		},
+		nil,
+	)
+	es.PathType = retrieval.PathTypeFast
+
+	result := svc.Answer(context.Background(), es)
+	if result.Path != "short" {
+		t.Fatalf("fast path must not run slow verify refuse, got path=%s", result.Path)
+	}
+}
+
