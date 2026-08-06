@@ -72,10 +72,14 @@ func (s *Service) SetKPNRematchNotifier(n KPNRematchNotifier) {
 // new one. Unlike scanAddClusters this has no event/question/overlap
 // threshold — KPN calls it once per cluster per import and it always fires,
 // so a document's orphan KPs never sit unprocessed indefinitely.
-func (s *Service) ProposeAddCandidate(domainID, suggestedName, suggestedDescription, conceptKind string, pointIDs []string, sourceID string) (candidateID string, err error) {
+func (s *Service) ProposeAddCandidate(domainID, suggestedName, suggestedDescription, suggestedBoundary, conceptKind, entity string, pointIDs []string, sourceID string) (candidateID string, err error) {
 	if domainID == "" || len(pointIDs) == 0 {
 		return "", fmt.Errorf("concept: propose add candidate requires domain_id and point_ids")
 	}
+	suggestedName = strings.TrimSpace(suggestedName)
+	suggestedDescription = strings.TrimSpace(suggestedDescription)
+	suggestedBoundary = strings.TrimSpace(suggestedBoundary)
+	entity = strings.TrimSpace(entity)
 	conceptKind, err = ValidateEntryKind(conceptKind)
 	if err != nil {
 		return "", err
@@ -97,9 +101,33 @@ func (s *Service) ProposeAddCandidate(domainID, suggestedName, suggestedDescript
 			Origin:      "content_driven",
 			SourceIDs:   dedupStrings(append(existing.SourceIDs, sourceID)),
 			Description: existing.Description, // keep original, don't drift on each new batch
+			Boundary:    existing.Boundary,     // same — don't drift on each new batch
+			Entity:      existing.Entity,       // first-seen wins, tracked for alias detection below
+			Aliases:     existing.Aliases,
 		}
 		if evidence.Description == "" {
 			evidence.Description = suggestedDescription
+		}
+		if evidence.Boundary == "" {
+			evidence.Boundary = suggestedBoundary
+		}
+		if evidence.Entity == "" {
+			evidence.Entity = entity
+		} else if entity != "" && !strings.EqualFold(entity, evidence.Entity) {
+			// This batch names the same real-world thing under a different
+			// string than the entity already recorded on this pending
+			// candidate — record it as an alias instead of dropping it
+			// (docs/impl/v1/kpn.md 步骤 3, 2026-08-05).
+			alreadyKnown := false
+			for _, a := range evidence.Aliases {
+				if strings.EqualFold(a, entity) {
+					alreadyKnown = true
+					break
+				}
+			}
+			if !alreadyKnown {
+				evidence.Aliases = append(evidence.Aliases, entity)
+			}
 		}
 		if err := s.store.MergeAddCandidatePoints(p.CandidateID, pointIDs, evidence); err != nil {
 			return "", err
@@ -107,7 +135,7 @@ func (s *Service) ProposeAddCandidate(domainID, suggestedName, suggestedDescript
 		return p.CandidateID, nil
 	}
 
-	evidence := ContentDrivenEvidence{Origin: "content_driven", SourceIDs: []string{sourceID}, Description: suggestedDescription}
+	evidence := ContentDrivenEvidence{Origin: "content_driven", SourceIDs: []string{sourceID}, Description: suggestedDescription, Boundary: suggestedBoundary, Entity: entity}
 	reason := fmt.Sprintf("跨 Source KPN 匹配发现无概念归属的 KP 聚类：建议概念「%s」", suggestedName)
 	candidateID, err = s.store.InsertAddCandidate(sql.NullString{String: domainID, Valid: true}, suggestedName, conceptKind, pointIDs, nil, evidence, reason)
 	if err != nil {
@@ -659,6 +687,7 @@ func (s *Service) confirmAdd(c *CandidateRow, req *ConfirmAddRequest) (*ConfirmR
 			conceptKind = req.EntryKind
 		}
 	}
+	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fmt.Errorf("concept: confirm add requires a suggested_name")
 	}
@@ -670,9 +699,20 @@ func (s *Service) confirmAdd(c *CandidateRow, req *ConfirmAddRequest) (*ConfirmR
 		return nil, err
 	}
 
+	// boundary/aliases come from the candidate's own evidence (kpn_entry_
+	// propose.md's suggested_boundary, and entity aliases accumulated across
+	// merges in ProposeAddCandidate, 2026-08-05) — unlike name/description,
+	// there's no confirm-dialog override for these yet, so they're always
+	// whatever the LLM/merge pipeline produced.
+	var evidence ContentDrivenEvidence
+	_ = json.Unmarshal([]byte(c.Evidence), &evidence)
+	if req != nil && req.Boundary != "" {
+		evidence.Boundary = req.Boundary
+	}
+
 	conceptID := uuid.New().String()
 	reason := fmt.Sprintf("人工确认新增概念：%s（领域 %s）", name, domainID)
-	migrated, err := s.store.ConfirmAdd(c.CandidateID, conceptID, domainID, name, description, conceptKind, pointIDs, reason)
+	migrated, err := s.store.ConfirmAdd(c.CandidateID, conceptID, domainID, name, description, evidence.Boundary, conceptKind, evidence.Aliases, pointIDs, reason)
 	if err != nil {
 		return nil, err
 	}
@@ -916,19 +956,120 @@ func (s *Service) ListActiveEntries(domainID string) ([]EntryInfo, error) {
 	return s.store.ListActiveEntries(domainID)
 }
 
-// ListActiveEntryNames satisfies unit.EntryNotifier — gives
+// ListActiveEntryReferences satisfies unit.EntryNotifier — gives
 // kpn_entry_propose.md (docs/impl/v1/kpn.md 步骤 3) the domain's existing
-// concept names as a granularity reference.
-func (s *Service) ListActiveEntryNames(domainID string) ([]string, error) {
+// concepts as a granularity/abstraction-level reference. Previously this
+// only handed over bare names; description and boundary are exactly the
+// curation signal preset entries were authored with to pin down abstraction
+// level and scope, so they're formatted in too — one line per entry, kept
+// as plain strings (not a shared struct) so entry keeps not importing unit
+// and vice versa (see unit.EntryNotifier's doc comment on the intentional
+// one-directional wiring).
+func (s *Service) ListActiveEntryReferences(domainID string) ([]string, error) {
 	infos, err := s.store.ListActiveEntries(domainID)
 	if err != nil {
 		return nil, err
 	}
-	names := make([]string, len(infos))
-	for i, c := range infos {
-		names[i] = c.Name
+	lines := make([]string, 0, len(infos))
+	for _, c := range infos {
+		line := c.Name
+		if c.Description != "" {
+			line += "：" + c.Description
+		}
+		if c.Boundary != "" {
+			line += "｜边界：" + c.Boundary
+		}
+		lines = append(lines, line)
 	}
-	return names, nil
+
+	// The per-Source KPN pass calls kpn_entry_propose.md once per Source, so
+	// without this a second Source whose orphans belong to the same
+	// not-yet-confirmed concept has no way to know a first Source already
+	// proposed it — it invents its own name, and ProposeAddCandidate's
+	// exact-suggested_name merge (service.go 上方) then never fires, splitting
+	// one real concept into many pending_confirm candidates (observed after
+	// the 2026-08-05 wipe/rematch: ~20 "Oracle RAC*" candidates that should
+	// have been a handful). Surfacing pending content_driven add candidates
+	// here too, so the prompt can tell the model to reuse the exact name.
+	pending, err := s.store.ListCandidatesByKindStatus(KindAdd, StatusPendingConfirm)
+	if err != nil {
+		slog.Warn("concept: list active entry references: list pending add candidates failed", "domain_id", domainID, "error", err)
+		return lines, nil
+	}
+	for _, p := range pending {
+		if !p.DomainID.Valid || p.DomainID.String != domainID || !p.SuggestedName.Valid || p.SuggestedName.String == "" {
+			continue
+		}
+		var ev ContentDrivenEvidence
+		if err := json.Unmarshal([]byte(p.Evidence), &ev); err != nil || ev.Origin != "content_driven" {
+			continue
+		}
+		line := p.SuggestedName.String + "（待确认，同名请直接复用，不要改名）"
+		if ev.Description != "" {
+			line += "：" + ev.Description
+		}
+		if ev.Boundary != "" {
+			line += "｜边界：" + ev.Boundary
+		}
+		lines = append(lines, line)
+	}
+	return lines, nil
+}
+
+// ListActiveConceptEntryReferences satisfies unit.EntryNotifier — gives
+// kpn_fact_concept_match.md (docs/impl/v1/kpn.md 步骤 3 二阶段：fact 簇与
+// domain 已有 concept 词条组合命名, 2026-08-05) the domain's existing
+// kind=concept entries as a match candidate list — kind=fact entries are
+// excluded, a fact cluster combines with a concept, never with another
+// fact. One line per entry: "entry_id\tname\tdescription\tboundary",
+// tab-separated so the unit package can read entry_id back out without a
+// shared struct type, keeping this wiring one-directional like
+// ListActiveEntryReferences above.
+func (s *Service) ListActiveConceptEntryReferences(domainID string) ([]string, error) {
+	infos, err := s.store.ListActiveEntries(domainID)
+	if err != nil {
+		return nil, err
+	}
+	lines := make([]string, 0, len(infos))
+	for _, c := range infos {
+		if c.Kind != EntryKindConcept {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s\t%s\t%s\t%s", c.EntryID, c.Name, c.Description, c.Boundary))
+	}
+	return lines, nil
+}
+
+// ListPendingAddPointIDs satisfies unit.EntryNotifier — returns point_ids
+// already sitting on pending_confirm kind=add candidates in domainID so
+// orphan proposal can skip them (docs/impl/v1/kpn.md 步骤 3).
+func (s *Service) ListPendingAddPointIDs(domainID string) ([]string, error) {
+	if domainID == "" {
+		return nil, nil
+	}
+	pending, err := s.store.ListCandidatesByKindStatus(KindAdd, StatusPendingConfirm)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for _, p := range pending {
+		if !p.DomainID.Valid || p.DomainID.String != domainID {
+			continue
+		}
+		var pointIDs []string
+		if err := json.Unmarshal([]byte(p.PointIDs), &pointIDs); err != nil {
+			continue
+		}
+		for _, id := range pointIDs {
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 // ErrNoOrphanClusterer is returned by ProposeEntriesFromDomainOrphans when

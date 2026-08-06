@@ -114,28 +114,49 @@ func TestCrossSourceKPN_MatchByConcept(t *testing.T) {
 // (docs/impl/v1/kpn.md 步骤 3: orphan KPs are handed to the concept
 // evolution module instead of falling back to a same-domain candidate pool).
 type fakeEntryNotifier struct {
-	calls []fakeEntryProposeCall
-	err   error
+	calls           []fakeEntryProposeCall
+	err             error
+	conceptRefs     []string
+	pendingPointIDs []string
 }
 
 type fakeEntryProposeCall struct {
-	domainID, suggestedName, suggestedDescription, kind, sourceID string
-	pointIDs                                                      []string
+	domainID, suggestedName, suggestedDescription, suggestedBoundary, kind, entity, sourceID string
+	pointIDs                                                                                 []string
 }
 
-func (f *fakeEntryNotifier) ProposeAddCandidate(domainID, suggestedName, suggestedDescription, kind string, pointIDs []string, sourceID string) (string, error) {
+func (f *fakeEntryNotifier) ProposeAddCandidate(domainID, suggestedName, suggestedDescription, suggestedBoundary, kind, entity string, pointIDs []string, sourceID string) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}
-	f.calls = append(f.calls, fakeEntryProposeCall{domainID, suggestedName, suggestedDescription, kind, sourceID, pointIDs})
+	f.calls = append(f.calls, fakeEntryProposeCall{domainID, suggestedName, suggestedDescription, suggestedBoundary, kind, entity, sourceID, pointIDs})
 	return "candidate-1", nil
 }
 
-func (f *fakeEntryNotifier) ListActiveEntryNames(domainID string) ([]string, error) {
+func (f *fakeEntryNotifier) ListActiveEntryReferences(domainID string) ([]string, error) {
 	return nil, nil
 }
 
-func TestCrossSourceKPN_OrphanPointsRouteToEntryCandidate_WhenNoConcept(t *testing.T) {
+func (f *fakeEntryNotifier) ListActiveConceptEntryReferences(domainID string) ([]string, error) {
+	return f.conceptRefs, nil
+}
+
+func (f *fakeEntryNotifier) ListPendingAddPointIDs(domainID string) ([]string, error) {
+	return f.pendingPointIDs, nil
+}
+
+func seedEntryWithKind(t *testing.T, db *sql.DB, entryID, domainID, name, kind string) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO entries (entry_id, domain_id, name, kind) VALUES (?, ?, ?, ?)`, entryID, domainID, name, kind); err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+}
+
+// TestCrossSourceKPN_UnmatchedFactCluster_DoesNotAutoCreateCandidate covers
+// the classify-then-branch orphan flow: a KU classified as fact that cannot
+// match any existing fact entry AND cannot attach to any domain concept
+// dimension must not auto-create a candidate (left orphan for a human).
+func TestCrossSourceKPN_UnmatchedFactCluster_DoesNotAutoCreateCandidate(t *testing.T) {
 	svc, fake, db := setupTestService(t)
 	store := NewStore(db)
 	notifier := &fakeEntryNotifier{}
@@ -152,8 +173,13 @@ func TestCrossSourceKPN_OrphanPointsRouteToEntryCandidate_WhenNoConcept(t *testi
 	seedKUWithEntry(t, store, "ku-existing", "existing-src", "", "existing topic")
 	seedKP(t, store, "kp-existing", "ku-existing", "existing-src", "existing content")
 
+	fake.SetResponse("unit_kind_classify.md", llm.FakeResponse{
+		Output: `{"classifications": [{"unit_id": "ku-new", "kind": "fact"}]}`,
+	})
+	// Freeform must not run for fact leftovers — if it does, this would create
+	// a candidate and fail the assertion below.
 	fake.SetResponse("kpn_entry_propose.md", llm.FakeResponse{
-		Output: `{"clusters": [{"suggested_name": "新主题", "suggested_description": "描述", "kind": "fact", "point_ids": ["kp-new"]}]}`,
+		Output: `{"clusters": [{"suggested_name": "新主题", "suggested_description": "描述", "suggested_boundary": "边界", "point_ids": ["kp-new"]}]}`,
 	})
 
 	result, err := svc.CrossSourceKPN(context.Background(), "new-src")
@@ -163,24 +189,134 @@ func TestCrossSourceKPN_OrphanPointsRouteToEntryCandidate_WhenNoConcept(t *testi
 	if result.RelationsCreated != 0 || result.Batches != 0 {
 		t.Fatalf("expected no cross-Source relations without entry_id, got %+v", result)
 	}
-	if result.EntryCandidatesTouched != 1 {
-		t.Fatalf("expected 1 concept candidate touched, got %d", result.EntryCandidatesTouched)
+	if result.EntryCandidatesTouched != 0 {
+		t.Fatalf("expected 0 concept candidates touched (unmatched fact must not auto-create), got %d", result.EntryCandidatesTouched)
+	}
+	if len(notifier.calls) != 0 {
+		t.Fatalf("expected no ProposeAddCandidate call, got %d: %+v", len(notifier.calls), notifier.calls)
+	}
+}
+
+func TestProposeEntriesForOrphans_ExcludesPendingCandidatePoints(t *testing.T) {
+	svc, fake, db := setupTestService(t)
+	store := NewStore(db)
+	notifier := &fakeEntryNotifier{pendingPointIDs: []string{"kp-pending"}}
+	svc.SetEntryNotifier(notifier)
+
+	seedDomain(t, db, "d1", "D")
+	seedSourceWithDomain(t, db, "src-a", "d1")
+	seedKUWithEntry(t, store, "ku-pending", "src-a", "", "pending topic")
+	seedKP(t, store, "kp-pending", "ku-pending", "src-a", "already on a pending candidate")
+	seedKUWithEntry(t, store, "ku-free", "src-a", "", "free topic")
+	seedKP(t, store, "kp-free", "ku-free", "src-a", "still orphan")
+
+	fake.SetResponse("unit_kind_classify.md", llm.FakeResponse{
+		Output: `{"classifications": [{"unit_id": "ku-free", "kind": "concept"}]}`,
+	})
+	fake.SetResponse("kpn_entry_propose.md", llm.FakeResponse{
+		Output: `{"clusters": [{"suggested_name": "自由主题", "suggested_description": "desc", "suggested_boundary": "边界", "point_ids": ["kp-free"]}]}`,
+	})
+
+	touched, err := svc.ProposeEntriesForDomainOrphans(context.Background(), "d1")
+	if err != nil {
+		t.Fatalf("ProposeEntriesForDomainOrphans: %v", err)
+	}
+	if touched != 1 {
+		t.Fatalf("expected 1 proposal, got %d", touched)
 	}
 	if len(notifier.calls) != 1 {
-		t.Fatalf("expected 1 ProposeAddCandidate call, got %d", len(notifier.calls))
+		t.Fatalf("expected 1 ProposeAddCandidate call, got %d: %+v", len(notifier.calls), notifier.calls)
 	}
-	call := notifier.calls[0]
-	if call.domainID != "d1" {
-		t.Errorf("domain_id = %q, want d1", call.domainID)
+	if got := notifier.calls[0].pointIDs; len(got) != 1 || got[0] != "kp-free" {
+		t.Errorf("point_ids = %v, want [kp-free] (pending point excluded)", got)
 	}
-	if call.sourceID != "new-src" {
-		t.Errorf("source_id = %q, want new-src", call.sourceID)
+}
+
+func TestProposeEntriesForOrphans_SameKindMatchWritesEntryID(t *testing.T) {
+	svc, fake, db := setupTestService(t)
+	store := NewStore(db)
+	notifier := &fakeEntryNotifier{}
+	svc.SetEntryNotifier(notifier)
+
+	seedDomain(t, db, "d1", "D")
+	seedEntryWithKind(t, db, "fact-1", "d1", "Oracle RAC", "fact")
+	seedSourceWithDomain(t, db, "src-a", "d1")
+	seedKUWithEntry(t, store, "ku-a", "src-a", "", "Oracle RAC 安装")
+	seedKP(t, store, "kp-a", "ku-a", "src-a", "RAC 安装步骤")
+
+	fake.SetResponse("unit_kind_classify.md", llm.FakeResponse{
+		Output: `{"classifications": [{"unit_id": "ku-a", "kind": "fact"}]}`,
+	})
+	fake.SetResponse("unit_entry_match.md", llm.FakeResponse{
+		Output: `{"matches": [{"unit_id": "ku-a", "entry_id": "fact-1"}]}`,
+	})
+
+	touched, err := svc.ProposeEntriesForDomainOrphans(context.Background(), "d1")
+	if err != nil {
+		t.Fatalf("ProposeEntriesForDomainOrphans: %v", err)
 	}
-	if len(call.pointIDs) != 1 || call.pointIDs[0] != "kp-new" {
-		t.Errorf("expected only new-src's own orphan point (kp-new), got %v", call.pointIDs)
+	if touched != 0 {
+		t.Fatalf("expected 0 new candidates when matching existing entry, got %d", touched)
 	}
-	if call.kind != "fact" {
-		t.Errorf("kind = %q, want the cluster's own kind=fact threaded through", call.kind)
+	if len(notifier.calls) != 0 {
+		t.Fatalf("expected no ProposeAddCandidate, got %+v", notifier.calls)
+	}
+	units, err := store.GetUnitsByIDs([]string{"ku-a"})
+	if err != nil || len(units) != 1 {
+		t.Fatalf("GetUnitsByIDs: %v %+v", err, units)
+	}
+	if !units[0].EntryID.Valid || units[0].EntryID.String != "fact-1" {
+		t.Errorf("entry_id = %+v, want fact-1", units[0].EntryID)
+	}
+}
+
+func TestProposeEntriesForOrphans_FactPathCreatesEntityConceptCandidate(t *testing.T) {
+	svc, fake, db := setupTestService(t)
+	store := NewStore(db)
+	notifier := &fakeEntryNotifier{
+		conceptRefs: []string{"c-backup\t备份\t备份相关\t关注备份操作"},
+	}
+	svc.SetEntryNotifier(notifier)
+
+	seedDomain(t, db, "d1", "D")
+	seedEntryWithKind(t, db, "c-backup", "d1", "备份", "concept")
+	seedSourceWithDomain(t, db, "src-a", "d1")
+	seedKUWithEntry(t, store, "ku-a", "src-a", "", "MySQL 备份策略")
+	seedKP(t, store, "kp-a", "ku-a", "src-a", "全量备份每周一次")
+
+	fake.SetResponse("unit_kind_classify.md", llm.FakeResponse{
+		Output: `{"classifications": [{"unit_id": "ku-a", "kind": "fact"}]}`,
+	})
+	// No existing fact entry match — falls through to concept-dimension path.
+	fake.SetResponse("unit_entry_match.md", llm.FakeResponse{
+		Output: `{"matches": []}`,
+	})
+	fake.SetResponse("kpn_orphan_fact_match.md", llm.FakeResponse{
+		Output: `{"matches": [{"point_index": 0, "matched_concept_id": "c-backup"}]}`,
+	})
+	fake.SetResponse("kpn_fact_group_entity.md", llm.FakeResponse{
+		Output: `{"entity": "MySQL", "entity_type": "数据库", "description": "MySQL 备份", "boundary": "仅 MySQL"}`,
+	})
+
+	touched, err := svc.ProposeEntriesForDomainOrphans(context.Background(), "d1")
+	if err != nil {
+		t.Fatalf("ProposeEntriesForDomainOrphans: %v", err)
+	}
+	if touched != 1 {
+		t.Fatalf("expected 1 fact candidate, got %d", touched)
+	}
+	if len(notifier.calls) != 1 {
+		t.Fatalf("expected 1 ProposeAddCandidate, got %+v", notifier.calls)
+	}
+	c := notifier.calls[0]
+	if c.kind != "fact" {
+		t.Errorf("kind = %q, want fact", c.kind)
+	}
+	if c.suggestedName != "MySQL备份" && c.suggestedName != "MySQL 备份" {
+		t.Errorf("suggested_name = %q, want entity+concept join", c.suggestedName)
+	}
+	if c.entity != "MySQL" {
+		t.Errorf("entity = %q, want MySQL", c.entity)
 	}
 }
 
@@ -201,8 +337,14 @@ func TestProposeEntriesForDomainOrphans_MultiSourceClusterSplitsBySource(t *test
 	seedKUWithEntry(t, store, "ku-b", "src-b", "", "topic b")
 	seedKP(t, store, "kp-b", "ku-b", "src-b", "content b")
 
+	fake.SetResponse("unit_kind_classify.md", llm.FakeResponse{
+		Output: `{"classifications": [
+			{"unit_id": "ku-a", "kind": "concept"},
+			{"unit_id": "ku-b", "kind": "concept"}
+		]}`,
+	})
 	fake.SetResponse("kpn_entry_propose.md", llm.FakeResponse{
-		Output: `{"clusters": [{"suggested_name": "共同主题", "suggested_description": "desc", "point_ids": ["kp-a", "kp-b"]}]}`,
+		Output: `{"clusters": [{"suggested_name": "共同主题", "suggested_description": "desc", "suggested_boundary": "边界", "point_ids": ["kp-a", "kp-b"]}]}`,
 	})
 
 	touched, err := svc.ProposeEntriesForDomainOrphans(context.Background(), "d1")

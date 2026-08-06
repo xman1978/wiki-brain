@@ -145,6 +145,41 @@ func (s *Store) GetByID(sourceID string) (*Source, error) {
 	return src, nil
 }
 
+// GetSourcesByIDs fetches multiple sources by id, used by cross-Source KPN
+// matching to build a source_id -> Title map (docs/impl/v1/kpn.md 步骤 3-4).
+func (s *Store) GetSourcesByIDs(sourceIDs []string) ([]Source, error) {
+	if len(sourceIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(sourceIDs)), ",")
+	args := make([]any, len(sourceIDs))
+	for i, id := range sourceIDs {
+		args[i] = id
+	}
+	rows, err := s.db.Query(fmt.Sprintf(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at, units_built_at, origin, origin_page_id, reflow_skipped_edges
+		FROM sources WHERE source_id IN (%s)`, placeholders), args...)
+	if err != nil {
+		return nil, fmt.Errorf("source store: get sources by ids: %w", err)
+	}
+	defer rows.Close()
+
+	var srcs []Source
+	for rows.Next() {
+		var src Source
+		if err := rows.Scan(
+			&src.SourceID, &src.Title, &src.Format, &src.FileName,
+			&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status, &src.UnitsStatus, &src.UnitsStage,
+			&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
+			&src.WordCount, &src.ShadowOf, &src.Version, &src.CreatedAt, &src.UpdatedAt,
+			&src.ProcessingStartedAt, &src.CompletedAt, &src.UnitsCompletedAt, &src.UnitsBuiltAt,
+			&src.Origin, &src.OriginPageID, &src.ReflowSkippedEdges); err != nil {
+			return nil, fmt.Errorf("source store: scan source: %w", err)
+		}
+		srcs = append(srcs, src)
+	}
+	return srcs, rows.Err()
+}
+
 // List returns sources visible to the outside world — shadow rows created for
 // POST /sources/:id/reupload are always excluded (docs/impl/v1/lifecycle.md 步骤 2).
 func (s *Store) List(status, domainID string, limit, offset int) ([]Source, error) {

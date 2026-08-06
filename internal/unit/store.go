@@ -2,6 +2,7 @@ package unit
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -1112,10 +1113,11 @@ func (s *Store) GetSourceTitleSummary(sourceID string) (title, summary string, e
 func (s *Store) GetEntriesByDomainID(domainID string) ([]Concept, error) {
 	var rows *sql.Rows
 	var err error
+	const cols = `entry_id, domain_id, name, description, boundary, aliases, kind`
 	if domainID != "" {
-		rows, err = s.db.Query(`SELECT entry_id, domain_id, name, description FROM entries WHERE domain_id = ? AND merged_into IS NULL ORDER BY name`, domainID)
+		rows, err = s.db.Query(`SELECT `+cols+` FROM entries WHERE domain_id = ? AND merged_into IS NULL ORDER BY name`, domainID)
 	} else {
-		rows, err = s.db.Query(`SELECT entry_id, domain_id, name, description FROM entries WHERE merged_into IS NULL ORDER BY name`)
+		rows, err = s.db.Query(`SELECT ` + cols + ` FROM entries WHERE merged_into IS NULL ORDER BY name`)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("unit store: get entries: %w", err)
@@ -1125,12 +1127,22 @@ func (s *Store) GetEntriesByDomainID(domainID string) ([]Concept, error) {
 	var entries []Concept
 	for rows.Next() {
 		var c Concept
-		var desc sql.NullString
-		if err := rows.Scan(&c.EntryID, &c.DomainID, &c.Name, &desc); err != nil {
+		var desc, boundary sql.NullString
+		var aliasesJSON string
+		if err := rows.Scan(&c.EntryID, &c.DomainID, &c.Name, &desc, &boundary, &aliasesJSON, &c.Kind); err != nil {
 			return nil, fmt.Errorf("unit store: scan concept: %w", err)
 		}
 		if desc.Valid {
 			c.Description = desc.String
+		}
+		if boundary.Valid {
+			c.Boundary = boundary.String
+		}
+		if aliasesJSON != "" {
+			// Malformed JSON (should not happen — preset.go always marshals a
+			// valid array) degrades to no aliases rather than failing the
+			// whole batch.
+			_ = json.Unmarshal([]byte(aliasesJSON), &c.Aliases)
 		}
 		entries = append(entries, c)
 	}
@@ -1138,10 +1150,20 @@ func (s *Store) GetEntriesByDomainID(domainID string) ([]Concept, error) {
 }
 
 type Concept struct {
-	EntryID   string
+	EntryID     string
 	DomainID    string
 	Name        string
 	Description string
+	// Boundary and Aliases surface preset/evolved curation data
+	// (migration 044) into unit_entry_match's entry_list so the matcher can
+	// use exactly the disambiguation signal these fields were authored for,
+	// instead of only name+description.
+	Boundary string
+	Aliases  []string
+	// Kind is the concept/fact classification (entries.kind) — lets callers
+	// split the candidate list by kind before matching (docs/impl/v1/kpn.md
+	// 步骤 3, 直接匹配链路 kind-aware 改造 2026-08-05).
+	Kind string
 }
 
 // RerankSemanticsRow is one unit_rerank_semantics row as stored, including

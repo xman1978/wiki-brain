@@ -125,7 +125,12 @@ groupLoop:
 					"source_id", sourceID, "max_batches", maxBatches)
 				break groupLoop
 			}
-			created, _, err := s.crossKPNBatch(ctx, sourceID, chunk.newPoints, chunk.oppositePoints, unitCenterMap)
+			sourceTitleMap, err := s.sourceTitleMapForPoints(chunk.newPoints, chunk.oppositePoints)
+			if err != nil {
+				slog.Warn("unit: cross kpn get source titles failed", "source_id", sourceID, "error", err)
+				sourceTitleMap = map[string]string{}
+			}
+			created, _, err := s.crossKPNBatch(ctx, sourceID, chunk.newPoints, chunk.oppositePoints, unitCenterMap, sourceTitleMap)
 			if err != nil {
 				slog.Warn("unit: cross kpn batch failed", "source_id", sourceID, "error", err)
 			}
@@ -265,6 +270,35 @@ func splitCrossBatch(newPoints, opposite []KnowledgePoint, maxSize int) []crossB
 	return chunks
 }
 
+// sourceTitleMapForPoints collects the distinct source_ids referenced by
+// both sides of a cross-Source batch (docs/impl/v1/kpn.md 步骤 3-4, "跨
+// Source 判 contradicts 前需先确认同一主体/范围") and resolves them to
+// Source.Title for injection into the kpn_cross_match prompt.
+func (s *Service) sourceTitleMapForPoints(sides ...[]KnowledgePoint) (map[string]string, error) {
+	seen := make(map[string]bool)
+	var sourceIDs []string
+	for _, points := range sides {
+		for _, p := range points {
+			if !seen[p.SourceID] {
+				seen[p.SourceID] = true
+				sourceIDs = append(sourceIDs, p.SourceID)
+			}
+		}
+	}
+	if len(sourceIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	srcs, err := s.sourceStore.GetSourcesByIDs(sourceIDs)
+	if err != nil {
+		return nil, fmt.Errorf("unit: cross kpn: get source titles: %w", err)
+	}
+	titleMap := make(map[string]string, len(srcs))
+	for _, src := range srcs {
+		titleMap[src.SourceID] = src.Title
+	}
+	return titleMap, nil
+}
+
 // crossKPNBatch runs one LLM call for a (new, opposite) pairing and writes
 // the resulting relations (docs/impl/v1/kpn.md 步骤 3-4). Returns the number
 // of relations actually inserted (excludes duplicates INSERT OR IGNORE skipped).
@@ -272,7 +306,7 @@ func splitCrossBatch(newPoints, opposite []KnowledgePoint, maxSize int) []crossB
 // were actually inserted (not the IDs of pairs that were no-ops against
 // idx_kp_relations_uniq) — RematchPoints needs the latter to let a concept
 // candidate restore clean up exactly the relations its own confirm created.
-func (s *Service) crossKPNBatch(ctx context.Context, sourceID string, newPoints, opposite []KnowledgePoint, unitCenterMap map[string]string) (int, []string, error) {
+func (s *Service) crossKPNBatch(ctx context.Context, sourceID string, newPoints, opposite []KnowledgePoint, unitCenterMap map[string]string, sourceTitleMap map[string]string) (int, []string, error) {
 	if len(newPoints) == 0 || len(opposite) == 0 {
 		return 0, nil, nil
 	}
@@ -298,14 +332,14 @@ func (s *Service) crossKPNBatch(ctx context.Context, sourceID string, newPoints,
 	var newText strings.Builder
 	for _, p := range newPoints {
 		newPointIDs[p.PointID] = true
-		fmt.Fprintf(&newText, "%s\t%s\t%s\n", p.PointID, unitCenterMap[p.UnitID], p.Content)
+		fmt.Fprintf(&newText, "%s\t%s\t%s\t%s\n", p.PointID, sourceTitleMap[p.SourceID], unitCenterMap[p.UnitID], p.Content)
 	}
 
 	oppositePointIDs := make(map[string]bool, len(opposite))
 	var oppositeText strings.Builder
 	for _, p := range opposite {
 		oppositePointIDs[p.PointID] = true
-		fmt.Fprintf(&oppositeText, "%s\t%s\t%s\n", p.PointID, oppositeCenterMap[p.UnitID], p.Content)
+		fmt.Fprintf(&oppositeText, "%s\t%s\t%s\t%s\n", p.PointID, sourceTitleMap[p.SourceID], oppositeCenterMap[p.UnitID], p.Content)
 	}
 
 	vars := map[string]string{
@@ -427,7 +461,12 @@ func (s *Service) RematchPoints(conceptID string, pointIDs []string) []string {
 		}
 		opposite = s.trimOppositeByConfidence(opposite, len(srcPoints))
 		for _, chunk := range splitCrossBatch(srcPoints, opposite, crossBatchMaxSize) {
-			created, relationIDs, err := s.crossKPNBatch(ctx, sourceID, chunk.newPoints, chunk.oppositePoints, unitCenterMap)
+			sourceTitleMap, err := s.sourceTitleMapForPoints(chunk.newPoints, chunk.oppositePoints)
+			if err != nil {
+				slog.Warn("unit: kpn rematch get source titles failed", "entry_id", conceptID, "source_id", sourceID, "error", err)
+				sourceTitleMap = map[string]string{}
+			}
+			created, relationIDs, err := s.crossKPNBatch(ctx, sourceID, chunk.newPoints, chunk.oppositePoints, unitCenterMap, sourceTitleMap)
 			if err != nil {
 				slog.Warn("unit: kpn rematch batch failed", "entry_id", conceptID, "source_id", sourceID, "error", err)
 				continue

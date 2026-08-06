@@ -166,12 +166,13 @@ func (h *Handler) listByDomain(w http.ResponseWriter, r *http.Request) {
 }
 
 type conceptDetailResp struct {
-	EntryID   string                   `json:"entry_id"`
-	DomainID    string                   `json:"domain_id"`
-	Name        string                   `json:"name"`
-	Description string                   `json:"description"`
-	Kind        string                   `json:"kind"`
-	Points      []conceptDetailPointResp `json:"points"`
+	EntryID               string                   `json:"entry_id"`
+	DomainID              string                   `json:"domain_id"`
+	Name                  string                   `json:"name"`
+	Description           string                   `json:"description"`
+	Kind                  string                   `json:"kind"`
+	Points                []conceptDetailPointResp `json:"points"`
+	RestorableCandidateID string                   `json:"restorable_candidate_id,omitempty"`
 }
 
 type conceptDetailPointResp struct {
@@ -192,7 +193,7 @@ func (h *Handler) getEntryDetail(w http.ResponseWriter, r *http.Request) {
 		foundation.WriteError(w, http.StatusNotFound, "concept not found")
 		return
 	}
-	resp := conceptDetailResp{EntryID: d.EntryID, DomainID: d.DomainID, Name: d.Name, Description: d.Description, Kind: d.Kind}
+	resp := conceptDetailResp{EntryID: d.EntryID, DomainID: d.DomainID, Name: d.Name, Description: d.Description, Kind: d.Kind, RestorableCandidateID: d.RestorableCandidateID}
 	for _, p := range d.Points {
 		resp.Points = append(resp.Points, conceptDetailPointResp{PointID: p.PointID, Content: p.Content, SourceID: p.SourceID, SourceTitle: p.SourceTitle})
 	}

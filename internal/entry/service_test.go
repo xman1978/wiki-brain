@@ -3,6 +3,7 @@ package entry
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -540,7 +541,7 @@ func TestProposeAddCandidate_FirstCall_CreatesContentDrivenCandidate(t *testing.
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "关注差旅费用报销标准", EntryKindConcept, []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "关注差旅费用报销标准", "", EntryKindConcept, "", []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatalf("propose add candidate: %v", err)
 	}
@@ -564,6 +565,37 @@ func TestProposeAddCandidate_FirstCall_CreatesContentDrivenCandidate(t *testing.
 	}
 }
 
+func TestListPendingAddPointIDs_ReturnsDomainPendingPoints(t *testing.T) {
+	svc, _, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+	seedKP(t, db, "p2", "u1", "s1")
+
+	if _, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", "", EntryKindConcept, "", []string{"p1", "p2"}, "s1"); err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+
+	ids, err := svc.ListPendingAddPointIDs("d1")
+	if err != nil {
+		t.Fatalf("ListPendingAddPointIDs: %v", err)
+	}
+	got := map[string]bool{}
+	for _, id := range ids {
+		got[id] = true
+	}
+	if !got["p1"] || !got["p2"] {
+		t.Errorf("ids = %v, want p1 and p2", ids)
+	}
+	other, err := svc.ListPendingAddPointIDs("d-other")
+	if err != nil {
+		t.Fatalf("ListPendingAddPointIDs other: %v", err)
+	}
+	if len(other) != 0 {
+		t.Errorf("other domain ids = %v, want empty", other)
+	}
+}
+
 func TestProposeAddCandidate_SecondCallSameDomainSameName_MergesIntoExisting(t *testing.T) {
 	svc, store, db := setupService(t)
 	seedSource(t, db, "s1", "d1")
@@ -573,11 +605,11 @@ func TestProposeAddCandidate_SecondCallSameDomainSameName_MergesIntoExisting(t *
 	seedKU(t, db, "u2", "s2", "topic2", sql.NullString{})
 	seedKP(t, db, "p2", "u2", "s2")
 
-	id1, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc1", EntryKindConcept, []string{"p1"}, "s1")
+	id1, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc1", "", EntryKindConcept, "", []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatalf("first propose: %v", err)
 	}
-	id2, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc2", EntryKindConcept, []string{"p2"}, "s2")
+	id2, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc2", "", EntryKindConcept, "", []string{"p2"}, "s2")
 	if err != nil {
 		t.Fatalf("second propose: %v", err)
 	}
@@ -603,6 +635,88 @@ func TestProposeAddCandidate_SecondCallSameDomainSameName_MergesIntoExisting(t *
 	}
 }
 
+// TestProposeAddCandidate_MergeWithDifferentEntity_RecordsAlias covers the
+// 2026-08-05 alias-accumulation addition: a second batch merging into the
+// same pending fact candidate under a different entity string (e.g. a typo
+// variant, or a different name for the same real-world product) should be
+// recorded as an alias rather than silently dropped, while the
+// first-seen entity stays the canonical one.
+func TestProposeAddCandidate_MergeWithDifferentEntity_RecordsAlias(t *testing.T) {
+	svc, store, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic1", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+	seedSource(t, db, "s2", "d1")
+	seedKU(t, db, "u2", "s2", "topic2", sql.NullString{})
+	seedKP(t, db, "p2", "u2", "s2")
+
+	id1, err := svc.ProposeAddCandidate("d1", "MySQL备份", "desc1", "", EntryKindFact, "MySQL", []string{"p1"}, "s1")
+	if err != nil {
+		t.Fatalf("first propose: %v", err)
+	}
+	id2, err := svc.ProposeAddCandidate("d1", "MySQL备份", "desc2", "", EntryKindFact, "mysql数据库", []string{"p2"}, "s2")
+	if err != nil {
+		t.Fatalf("second propose: %v", err)
+	}
+	if id1 != id2 {
+		t.Fatalf("expected merge into the same candidate, got distinct ids %s / %s", id1, id2)
+	}
+
+	c, _ := store.GetCandidate(id1)
+	var ev ContentDrivenEvidence
+	if err := json.Unmarshal([]byte(c.Evidence), &ev); err != nil {
+		t.Fatalf("unmarshal evidence: %v", err)
+	}
+	if ev.Entity != "MySQL" {
+		t.Errorf("entity = %q, want first-seen entity MySQL to stay canonical", ev.Entity)
+	}
+	if len(ev.Aliases) != 1 || ev.Aliases[0] != "mysql数据库" {
+		t.Errorf("aliases = %v, want [mysql数据库]", ev.Aliases)
+	}
+}
+
+// TestConfirmAdd_WritesBoundaryAndAliases covers the 2026-08-05 additions:
+// confirming a kind=add candidate must carry its evidence.boundary and
+// evidence.aliases through to the new entries row, not just name/
+// description/kind.
+func TestConfirmAdd_WritesBoundaryAndAliases(t *testing.T) {
+	svc, _, db := setupService(t)
+	seedSource(t, db, "s1", "d1")
+	seedKU(t, db, "u1", "s1", "topic1", sql.NullString{})
+	seedKP(t, db, "p1", "u1", "s1")
+	seedSource(t, db, "s2", "d1")
+	seedKU(t, db, "u2", "s2", "topic2", sql.NullString{})
+	seedKP(t, db, "p2", "u2", "s2")
+
+	candidateID, err := svc.ProposeAddCandidate("d1", "达梦数据库备份", "desc", "关注达梦数据库的备份操作", EntryKindFact, "达梦数据库", []string{"p1"}, "s1")
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	if _, err := svc.ProposeAddCandidate("d1", "达梦数据库备份", "desc", "关注达梦数据库的备份操作", EntryKindFact, "DM数据库", []string{"p2"}, "s2"); err != nil {
+		t.Fatalf("second propose: %v", err)
+	}
+
+	result, err := svc.Confirm(candidateID, &ConfirmAddRequest{Description: "desc"}, nil)
+	if err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+
+	var boundary, aliasesJSON string
+	if err := db.QueryRow(`SELECT boundary, aliases FROM entries WHERE entry_id = ?`, result.EntryID).Scan(&boundary, &aliasesJSON); err != nil {
+		t.Fatal(err)
+	}
+	if boundary != "关注达梦数据库的备份操作" {
+		t.Errorf("boundary = %q, want it carried from evidence.boundary", boundary)
+	}
+	var aliases []string
+	if err := json.Unmarshal([]byte(aliasesJSON), &aliases); err != nil {
+		t.Fatalf("unmarshal aliases: %v", err)
+	}
+	if len(aliases) != 1 || aliases[0] != "DM数据库" {
+		t.Errorf("aliases = %v, want [DM数据库]", aliases)
+	}
+}
+
 // TestProposeAddCandidate_SecondCallSameDomainDifferentName_DoesNotMerge
 // guards against the bug where kpn_entry_propose.md's multi-cluster
 // output (docs/impl/v1/kpn.md 步骤 3) all collapsed into one candidate row
@@ -619,11 +733,11 @@ func TestProposeAddCandidate_SecondCallSameDomainDifferentName_DoesNotMerge(t *t
 	seedKU(t, db, "u2", "s2", "topic2", sql.NullString{})
 	seedKP(t, db, "p2", "u2", "s2")
 
-	id1, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc1", EntryKindConcept, []string{"p1"}, "s1")
+	id1, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc1", "", EntryKindConcept, "", []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatalf("first propose: %v", err)
 	}
-	id2, err := svc.ProposeAddCandidate("d1", "住宿标准", "desc2", EntryKindConcept, []string{"p2"}, "s2")
+	id2, err := svc.ProposeAddCandidate("d1", "住宿标准", "desc2", "", EntryKindConcept, "", []string{"p2"}, "s2")
 	if err != nil {
 		t.Fatalf("second propose: %v", err)
 	}
@@ -651,7 +765,7 @@ func TestProposeAddCandidate_DoesNotMergeIntoUsageDrivenCandidate(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", EntryKindConcept, []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", "", EntryKindConcept, "", []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatalf("propose add candidate: %v", err)
 	}
@@ -729,7 +843,7 @@ func TestConfirmAdd_Assign_MigratesToExistingConceptWithoutCreatingNew(t *testin
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", EntryKindConcept, []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", "", EntryKindConcept, "", []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -803,7 +917,7 @@ func TestConfirmAdd_New_NotifiesKPNRematch(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", EntryKindConcept, []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", "", EntryKindConcept, "", []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -939,7 +1053,7 @@ func TestRestore_AppliedNewConcept_DeletesConceptAndRevertsKUs(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", EntryKindConcept, []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", "", EntryKindConcept, "", []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1005,7 +1119,7 @@ func TestRestore_AppliedNewConcept_DeletesOnlyThisConfirmsKPNRelations(t *testin
 		t.Fatal(err)
 	}
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", EntryKindConcept, []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", "", EntryKindConcept, "", []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1045,7 +1159,7 @@ func TestRestore_AppliedAssignToExisting_NotRestorable(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", EntryKindConcept, []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "差旅报销", "desc", "", EntryKindConcept, "", []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1066,7 +1180,7 @@ func TestRestore_AppliedNewConcept_RefusesWhenLaterConfirmAssignedMoreKUs(t *tes
 	seedKU(t, db, "u2", "s1", "topic2", sql.NullString{})
 	seedKP(t, db, "p2", "u2", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", EntryKindConcept, []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", "", EntryKindConcept, "", []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1094,7 +1208,7 @@ func TestRestore_AppliedNewConcept_RefusesWhenActiveWikiPageExists(t *testing.T)
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", EntryKindConcept, []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "desc", "", EntryKindConcept, "", []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}

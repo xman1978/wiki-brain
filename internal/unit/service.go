@@ -71,15 +71,36 @@ type ActivationNotifier interface {
 // unit's public surface hard-requiring the concept package in tests).
 // SetEntryNotifier no-ops when unset.
 type EntryNotifier interface {
-	// kind is the concept/fact classification (docs/impl/v1/kpn.md 步骤 3
-	// "类型标注") the kpn_entry_propose.md cluster carries — "concept" or
-	// "fact", validated by the concept module.
-	ProposeAddCandidate(domainID, suggestedName, suggestedDescription, kind string, pointIDs []string, sourceID string) (candidateID string, err error)
-	// ListActiveEntryNames returns the domain's existing concept names, used
-	// as a granularity reference (docs/impl/v1/kpn.md 步骤 3) so the LLM names
-	// new content_driven entries at the same level instead of drifting to
-	// overly specific, scenario-bound names.
-	ListActiveEntryNames(domainID string) ([]string, error)
+	// kind is the concept/fact classification (docs/impl/v1/kpn.md 步骤 3,
+	// from unit_kind_classify on the direct-match path, or forced
+	// "concept"/"fact" on the orphan leftover paths) — validated by the
+	// concept module. suggestedBoundary is kpn_entry_propose.md's
+	// suggested_boundary (2026-08-05). entity is only meaningful when
+	// kind=="fact" (empty for concept clusters) — lets the concept module
+	// track/accumulate alias names across merges (docs/impl/v1/kpn.md 步骤
+	// 3, 2026-08-05).
+	ProposeAddCandidate(domainID, suggestedName, suggestedDescription, suggestedBoundary, kind, entity string, pointIDs []string, sourceID string) (candidateID string, err error)
+	// ListActiveEntryReferences returns one formatted "name：description｜
+	// 边界：boundary" line per existing entry in the domain, used as a
+	// granularity/abstraction-level reference (docs/impl/v1/kpn.md 步骤 3) so
+	// the LLM names new content_driven entries at the same level instead of
+	// drifting to overly specific, scenario-bound names — description and
+	// boundary give it concrete examples of "what abstraction level looks
+	// like here", not just a bare name to pattern-match against.
+	ListActiveEntryReferences(domainID string) ([]string, error)
+	// ListActiveConceptEntryReferences returns one "entry_id\tname\t
+	// description\tboundary" line per existing kind=concept entry in the
+	// domain — kpn_fact_concept_match.md's (docs/impl/v1/kpn.md 步骤 3
+	// 二阶段, 2026-08-05) match candidate list for combining a kind=fact
+	// cluster's entity with an existing concept into an "entity+concept"
+	// name. An empty result (no concepts yet in this domain) skips stage 2
+	// entirely — cost control, not an error.
+	ListActiveConceptEntryReferences(domainID string) ([]string, error)
+	// ListPendingAddPointIDs returns point_ids already attached to
+	// pending_confirm kind=add candidates in domainID — orphan proposal
+	// skips these so a 知识领域 "+ 新增词条" re-run does not re-cluster
+	// material that is already waiting for human confirm.
+	ListPendingAddPointIDs(domainID string) ([]string, error)
 }
 
 func (s *Service) SetWikiNotifier(n WikiNotifier) {
@@ -271,7 +292,7 @@ const (
 	promptVersionExtractRetry = "v7" // unit_extract_retry.md
 	promptVersionGapExtract   = "v1" // unit_gap_extract.md
 	promptVersionKPNExtract   = "v2" // kpn_extract.md
-	promptVersionKPNCross     = "v1" // kpn_cross_match.md
+	promptVersionKPNCross     = "v2" // kpn_cross_match.md
 )
 
 type llmUnit struct {
@@ -611,12 +632,27 @@ func containsPointID(points []KnowledgePoint, pointID string) bool {
 }
 
 type conceptMatch struct {
-	UnitID    string `json:"unit_id"`
+	UnitID  string `json:"unit_id"`
 	EntryID string `json:"entry_id"`
 }
 
 type conceptMatchOutput struct {
 	Matches []conceptMatch `json:"matches"`
+}
+
+// unitKindClassification/unitKindClassifyOutput are unit_kind_classify.md's
+// output shape (docs/impl/v1/kpn.md 步骤 3, 直接匹配链路 kind-aware 改造
+// 2026-08-05): classify-then-branch, reusing the same concept/fact standard
+// kpn_entry_propose.md already applies to orphan clustering, so a KU is
+// judged the same way regardless of which path (direct match vs orphan)
+// it goes through.
+type unitKindClassification struct {
+	UnitID string `json:"unit_id"`
+	Kind   string `json:"kind"`
+}
+
+type unitKindClassifyOutput struct {
+	Classifications []unitKindClassification `json:"classifications"`
 }
 
 // MatchEntries implements source.EntryMatcher: re-runs concept matching
@@ -674,23 +710,66 @@ func (s *Service) matchEntries(ctx context.Context, sourceID string, domainID sq
 	}
 	slog.Info("unit: matching entries", "source_id", sourceID, "domain_id", did, "units", len(units), "entries", len(entries))
 
-	var conceptList strings.Builder
+	var conceptEntries, factEntries []Concept
 	for _, c := range entries {
-		conceptList.WriteString(fmt.Sprintf("[%s] %s：%s\n", c.EntryID, c.Name, c.Description))
+		if c.Kind == "fact" {
+			factEntries = append(factEntries, c)
+		} else {
+			conceptEntries = append(conceptEntries, c)
+		}
+	}
+	conceptList := renderEntryList(conceptEntries)
+	factList := renderEntryList(factEntries)
+
+	// Classify-then-branch (docs/impl/v1/kpn.md 步骤 3, 2026-08-05): decide
+	// each unit's concept/fact kind first, then only let it match against
+	// same-kind entries — otherwise a fact-shaped unit (a specific
+	// product/system) keeps getting absorbed into a nearby broad concept
+	// entry just because concept entries dominate the domain's preset, and
+	// never gets a chance to match/create a fact entry.
+	kindByUnit := s.classifyUnitKinds(ctx, units, sourceTitle, sourceSummary)
+
+	var conceptUnits, factUnits []KnowledgeUnit
+	for _, u := range units {
+		if kindByUnit[u.UnitID] == "fact" {
+			factUnits = append(factUnits, u)
+		} else {
+			// Missing/failed classification defaults to concept, matching
+			// entries.kind's column default and ValidateEntryKind's "" case.
+			conceptUnits = append(conceptUnits, u)
+		}
 	}
 
-	for i := 0; i < len(units); i += 50 {
-		end := i + 50
-		if end > len(units) {
-			end = len(units)
-		}
-		s.matchConceptBatch(ctx, units[i:end], conceptList.String(), sourceTitle, sourceSummary)
-	}
+	s.matchConceptBatches(ctx, conceptUnits, conceptList, sourceTitle, sourceSummary)
+	s.matchConceptBatches(ctx, factUnits, factList, sourceTitle, sourceSummary)
 }
 
-func (s *Service) matchConceptBatch(ctx context.Context, units []KnowledgeUnit, conceptList, sourceTitle, sourceSummary string) {
+// renderEntryList formats entries (already filtered to one kind) into
+// unit_entry_match.md's entry_list text.
+func renderEntryList(entries []Concept) string {
+	var list strings.Builder
+	for _, c := range entries {
+		line := fmt.Sprintf("[%s] %s：%s", c.EntryID, c.Name, c.Description)
+		// Surface preset/evolved aliases and boundary (migration 044) — this
+		// is exactly the disambiguation signal those fields were authored
+		// for, previously dropped before it ever reached the matching
+		// prompt (unit_entry_match.md text unchanged, only entry_list's
+		// rendering gains these two segments).
+		if len(c.Aliases) > 0 {
+			line += fmt.Sprintf("（别名：%s）", strings.Join(c.Aliases, "、"))
+		}
+		if c.Boundary != "" {
+			line += fmt.Sprintf("｜边界：%s", c.Boundary)
+		}
+		list.WriteString(line + "\n")
+	}
+	return list.String()
+}
+
+// buildUnitsListText renders units into unit_entry_match.md /
+// unit_kind_classify.md's shared units_list format.
+func buildUnitsListText(units []KnowledgeUnit, sourceTitle, sourceSummary string) string {
 	var unitsList strings.Builder
-	unitIDSet := make(map[string]bool)
 	for _, u := range units {
 		// Inject source title/summary alongside center so the model can
 		// separate product/document entities (esp. fact entries) without a
@@ -700,11 +779,78 @@ func (s *Service) matchConceptBatch(ctx context.Context, units []KnowledgeUnit, 
 			line += fmt.Sprintf(" | 来源摘要：%s", sourceSummary)
 		}
 		unitsList.WriteString(line + "\n")
+	}
+	return unitsList.String()
+}
+
+// classifyUnitKinds batches units through unit_kind_classify.md and returns
+// each matched unit_id's kind ("concept"/"fact"). Units missing from the
+// result (LLM failure, hallucinated id) are simply absent from the map —
+// callers default those to concept.
+func (s *Service) classifyUnitKinds(ctx context.Context, units []KnowledgeUnit, sourceTitle, sourceSummary string) map[string]string {
+	result := make(map[string]string, len(units))
+	for i := 0; i < len(units); i += 50 {
+		end := i + 50
+		if end > len(units) {
+			end = len(units)
+		}
+		batch := units[i:end]
+		unitIDSet := make(map[string]bool, len(batch))
+		for _, u := range batch {
+			unitIDSet[u.UnitID] = true
+		}
+
+		vars := map[string]string{"units_list": buildUnitsListText(batch, sourceTitle, sourceSummary)}
+		data, err := s.llmClient.CompleteJSON(ctx, "unit_kind_classify.md", vars, "extraction")
+		if err != nil {
+			slog.Warn("unit: kind classify LLM failed", "error", err)
+			continue
+		}
+		var output unitKindClassifyOutput
+		if err := json.Unmarshal(data, &output); err != nil {
+			slog.Warn("unit: kind classify JSON parse failed", "error", err)
+			continue
+		}
+		for _, c := range output.Classifications {
+			if !unitIDSet[c.UnitID] {
+				continue
+			}
+			if c.Kind != "concept" && c.Kind != "fact" {
+				continue
+			}
+			result[c.UnitID] = c.Kind
+		}
+	}
+	return result
+}
+
+// matchConceptBatches chunks units into unit_entry_match.md-sized batches
+// and matches them against entryList. No-ops when either side is empty —
+// an empty entryList (e.g. the domain has no fact entries yet) leaves every
+// unit's entry_id NULL so it falls through to the orphan candidate path
+// instead of wasting an LLM call on a list with nothing to match.
+func (s *Service) matchConceptBatches(ctx context.Context, units []KnowledgeUnit, entryList, sourceTitle, sourceSummary string) {
+	if len(units) == 0 || entryList == "" {
+		return
+	}
+	for i := 0; i < len(units); i += 50 {
+		end := i + 50
+		if end > len(units) {
+			end = len(units)
+		}
+		s.matchConceptBatch(ctx, units[i:end], entryList, sourceTitle, sourceSummary)
+	}
+}
+
+func (s *Service) matchConceptBatch(ctx context.Context, units []KnowledgeUnit, conceptList, sourceTitle, sourceSummary string) {
+	unitsList := buildUnitsListText(units, sourceTitle, sourceSummary)
+	unitIDSet := make(map[string]bool, len(units))
+	for _, u := range units {
 		unitIDSet[u.UnitID] = true
 	}
 
 	vars := map[string]string{
-		"units_list": unitsList.String(),
+		"units_list": unitsList,
 		"entry_list": conceptList,
 	}
 

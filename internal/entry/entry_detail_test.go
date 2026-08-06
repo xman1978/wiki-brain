@@ -229,7 +229,7 @@ func TestStore_ListDomainAddCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ConfirmAdd(appliedID, "concept-x", "d1", "applied one", "", EntryKindConcept, nil, "seed"); err != nil {
+	if _, err := store.ConfirmAdd(appliedID, "concept-x", "d1", "applied one", "", "", EntryKindConcept, nil, nil, "seed"); err != nil {
 		t.Fatal(err)
 	}
 

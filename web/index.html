@@ -1088,6 +1088,11 @@ const S = {
   // this draft those meta fields snap back to the last saved server values,
   // so "edit title+desc and add/remove KP then 保存" cannot persist together.
   conceptEditDraft:    null,
+  // 知识领域页面「事实/概念」页签——domainConceptItems 是切换页签时复用的
+  // 未过滤原始列表（渲染网格前按 domainConceptItemKind 过滤），避免每次
+  // 切页签都重新拉一遍接口。
+  domainConceptTab:    'concept',
+  domainConceptItems:  [],
 };
 
 // ═══════════════════════════════════════════════════════
@@ -5006,6 +5011,7 @@ async function renderDomainConceptPane() {
       </div>\
       <button class="btn btn-sm" onclick="proposeEntriesFromOrphans(\'' + esc(domainId) + '\')">+ 新增词条</button>\
     </div>\
+    <div id="domainConceptTabs" style="margin-top:12px"></div>\
     <div class="domain-concept-grid" id="domainConceptGrid"><div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">加载中...</div></div>';
 
   var conceptsR, domainCandidatesR, pendingR;
@@ -5047,11 +5053,47 @@ async function renderDomainConceptPane() {
   domainCandidates.filter(function(c) { return c.status === 'expired'; })
     .forEach(function(c) { items.push({ type: 'candidate', data: c }); });
 
+  S.domainConceptItems = items;
+  renderDomainConceptTabsAndGrid(domainId);
+}
+
+// itemKind 统一取 concept/candidate 两种卡片各自存 kind 的字段名——candidate
+// 只有 kind=add 才会出现在这个网格里（ListDomainAddCandidates 已经把 merge
+// 候选排除在外，只作为 concept 卡片上的徽标附着），所以 entry_kind 总是有
+// 值；没有值（极旧数据）按 concept 兜底，不让卡片消失在两个页签之间。
+function domainConceptItemKind(item) {
+  var k = item.type === 'concept' ? item.data.kind : item.data.entry_kind;
+  return k === 'fact' ? 'fact' : 'concept';
+}
+
+function switchDomainConceptTab(tab) {
+  S.domainConceptTab = tab;
+  var d = S.domainRailList.find(function(x) { return x.domain_id === S.domainRailSelectedId; });
+  if (d) renderDomainConceptTabsAndGrid(d.domain_id);
+}
+
+function renderDomainConceptTabsAndGrid(domainId) {
+  var items = S.domainConceptItems || [];
+  var factCount = items.filter(function(i) { return domainConceptItemKind(i) === 'fact'; }).length;
+  var conceptCount = items.length - factCount;
+  var tab = S.domainConceptTab === 'fact' ? 'fact' : 'concept';
+
+  var tabsEl = document.getElementById('domainConceptTabs');
+  if (tabsEl) {
+    tabsEl.innerHTML = '<div style="display:flex;gap:6px;border-bottom:1px solid var(--border)">' +
+      ['concept', 'fact'].map(function(t) {
+        var label = (t === 'fact' ? '事实' : '概念') + ' (' + (t === 'fact' ? factCount : conceptCount) + ')';
+        var active = t === tab;
+        return '<button class="btn btn-sm" style="border:none;border-radius:0;border-bottom:2px solid ' + (active ? 'var(--text)' : 'transparent') + ';color:' + (active ? 'var(--text)' : 'var(--text-3)') + ';font-weight:' + (active ? '600' : '400') + '" onclick="switchDomainConceptTab(\'' + t + '\')">' + label + '</button>';
+      }).join('') + '</div>';
+  }
+
+  var filtered = items.filter(function(i) { return domainConceptItemKind(i) === tab; });
   var grid = document.getElementById('domainConceptGrid');
   if (!grid) return;
-  var cardsHtml = items.length
-    ? items.map(renderDomainGridCard).join('')
-    : '<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">该领域下还没有概念</div>';
+  var cardsHtml = filtered.length
+    ? filtered.map(renderDomainGridCard).join('')
+    : '<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">该页签下还没有词条</div>';
   grid.innerHTML = cardsHtml + '<div class="domain-concept-new" onclick="openManualConceptDraft(\'' + esc(domainId) + '\')">+ 新增词条</div>';
 }
 
@@ -5104,11 +5146,12 @@ async function submitDomainCreateForm() {
   } catch (e) { alert('创建出错：' + e.message); }
 }
 
-// 「知识领域」页面的"+ 新增词条"：对该领域下所有未归于概念的知识点跑
-// 一次 LLM 聚类命名（POST /entries/domains/:id/propose-from-orphans，
-// docs/impl/v1/kpn.md 步骤 3 的按需触发版本），每一簇各自写入一条
-// pending_confirm 候选，仍需人工在候选列表里逐条确认/驳回——这里只负责
-// 触发聚类，不做任何自动确认。
+// 「知识领域」页面的"+ 新增词条"：对该领域下未归于已确认词条、也未挂在
+// 待确认候选上的知识点，跑与文件导入一致的 classify-then-branch 流水线
+// （POST /entries/domains/:id/propose-from-orphans，docs/impl/v1/kpn.md
+// 步骤 3）：先判 concept/fact → 同 kind 挂靠已有词条 → 剩余 fact 按
+// concept 维度建 entity+concept 候选、剩余 concept 自由命名。这里只触发
+// 流水线，新建候选仍需人工确认/驳回。
 async function proposeEntriesFromOrphans(domainId) {
   var btns = document.querySelectorAll('[onclick="proposeEntriesFromOrphans(\'' + domainId + '\')"]');
   btns.forEach(function(b) { b.disabled = true; b.textContent = '聚类中...'; });
@@ -5323,10 +5366,28 @@ function renderEntryEditView() {
     ' + pointsHtml + '\
     ' + (S.conceptEditShowAddPicker ? '' : '<div style="margin-top:8px"><button class="btn btn-sm" onclick="toggleEntryEditAddPicker()">+ 添加知识点</button></div>') + '\
     ' + pickerHtml + '\
-    <div class="modal-actions">\
-      <button class="btn btn-primary btn-sm" onclick="saveEntryEdit()">保存</button>\
-      <button class="btn btn-sm" onclick="closeEntryEditModal()">取消</button>\
+    <div class="modal-actions" style="justify-content:space-between">\
+      <div>' + (d.restorable_candidate_id ? '<button class="btn btn-sm" style="color:var(--red)" onclick="revokeEntryConfirm(\'' + esc(d.restorable_candidate_id) + '\')">撤销</button>' : '') + '</div>\
+      <div style="display:flex;gap:8px">\
+        <button class="btn btn-primary btn-sm" onclick="saveEntryEdit()">保存</button>\
+        <button class="btn btn-sm" onclick="closeEntryEditModal()">取消</button>\
+      </div>\
     </div>';
+}
+
+// 撤销已确认词条：复用既有的 POST /entries/candidates/:id/restore（原本
+// 服务候选列表里"已执行"候选的撤销），只是这里的入口挪到了词条详情弹窗
+// 本身——该词条是不是能撤销（entries.RestorableCandidateID 是否非空）由
+// 后端 GetEntryDetail 判断并决定按钮是否渲染，前端不重复这层判断。
+async function revokeEntryConfirm(candidateId) {
+  if (!(await showConfirm('确认撤销该已确认词条？这会删除该词条，并把关联知识点迁回未归类状态，同时清理由它触发的跨 Source 关系。'))) return;
+  try {
+    var r = await api('POST', '/entries/candidates/' + candidateId + '/restore');
+    if (!r.ok) { alert('撤销失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data))); return; }
+    closeEntryEditModal();
+    loadDomainRail();
+    if (typeof renderDomainConceptPane === 'function') renderDomainConceptPane();
+  } catch(e) { alert('撤销出错：' + e.message); }
 }
 
 async function toggleEntryEditAddPicker() {

@@ -81,73 +81,98 @@ Step 7    content_driven 概念候选生成（本文档步骤 3，调用概念�
 ### 步骤 3：content_driven 概念候选
 
 ```text
-输入：本次导入中 entry_id 为空、且 source 有 domain_id 的 KU 集合
-      （步骤 2 分流出的部分）。
+输入：本次导入（或知识领域页「+ 新增词条」按领域重跑）中
+      entry_id 为空、且 source 有 domain_id 的 KP 集合
+      （步骤 2 分流出的部分；重跑时另排除已挂在
+      pending_confirm kind=add 候选上的 point_ids）。
 
-按 domain_id 分组，每组一次轻量 LLM 调用（类似 unit_entry_match，
-但不是从既有概念列表选，而是对这组内容做主题聚类，每簇提出建议
-概念名与边界描述——一组可以聚出 0～多簇，找不到明确主题的知识点
-不勉强入簇，留到下次一起判断），再对每一簇调用概念演化模块的候选
-写入接口：
+流水线与 unit_extract 的直接匹配路径对齐（classify-then-branch）：
 
-**类型标注（kind：concept / fact，2026-08-04 新增；2026-08-03 修订：
-V1 正式实现「概念簇/事实簇」两种词条类型，不再是仅打标签的最小可行版本）**：
-每簇除 suggested_name/suggested_description/point_ids 外，还需产出
-kind 字段——concept（该簇讲的是底层理论、原理或规则，跨具体实现
-成立）/ fact（该簇讲的是某个具体的实现、技术或产品实例，是理论
-落地后的对象，如某个数据库产品、某个协议实现、某个具体系统）。
-判断依据统一：这条知识点的核心论断在描述什么——通用规律，还是
-可唯一指认的具体对象（详见 `docs/design/wiki.md`「概念与事实：
-一阶编译的两种词条类型」）。
-`entries` 表新增 `kind` 列（NOT NULL DEFAULT 'concept'，迁移时存量
-行统一置 concept，不做回填猜测）；候选表 `entry_candidates` 同步
-新增 kind 列，人工确认（新建）时随其他字段一起写入 entries——
-`entries` 表本身就是概念和事实两种词条的统一存储，`kind` 是唯一
-区分字段，不新建独立的 facts 表，domain 下概念与事实依旧平铺
-共享同一份命名空间与去重逻辑。
+1. unit_kind_classify.md：对每个 orphan KU 判 concept / fact
+2. 同 kind 优先挂靠已有词条（unit_entry_match.md → 直接写 entry_id，
+   不建候选；concept KU 只对 concept 词条，fact KU 只对 fact 词条）
+3. 仍剩余的 fact KP：按本领域已有 concept 维度分组 → 整组反推
+   entity → 写 fact 候选，名=entity+conceptName（见下方）
+4. 仍剩余的 concept KP：kpn_entry_propose.md 自由聚类命名 → 写
+   concept 候选
+5. 挂不上任何 concept 维度的 fact KP 保持 orphan，不自动建裸 entity
+   候选（留给人工，或等 domain 新增 concept 后下次重跑）
 
-kind 不再只是"打标签"：`docs/impl/v1/wiki.md` 的一阶编译（步骤 1-6）、
-两层架构扩展（步骤 7-9）对 concept/fact 两种 kind 的 entries 行
-一视同仁地跑同一条 analyze → 确认 → 生成 → 发布 → 重编译 → 关系派生
-→ 二阶接入链路，**唯一的分岔点**是 `wiki_pages.page_type` 由该
-concept 行的 `kind` 决定（kind=concept → page_type=concept，
-kind=fact → page_type=fact），以及编译 Prompt 依据 kind 调整
-措辞提示（概念页强调定义/边界/内部逻辑，事实页强调"这是什么/当前
-状态如何/关联对象"，见 wiki.md 步骤 3）。qualifying/ready 判定、
-citation 白名单、关系派生、主题页二阶接入等判据逻辑对两种 kind
-完全相同，不重复实现。别名/版本变体的事实专属治理（旧称降级为
-别名、内涵有别的版本各自建页不合并）落在本步骤的聚类判断与既有
-概念演化模块的确认流程中，不需要额外的事实专用治理表。
+**类型标注（kind：concept / fact）**：
+判断标准与 unit_kind_classify.md / docs/design/wiki.md「概念与事实」
+一致。适用主体/组织范围限定是 fact 的强信号。`entries.kind` /
+`entry_candidates.entry_kind` 区分两种词条；Wiki 一阶编译对两种
+kind 共用同一条链路，仅 page_type 与 Prompt 措辞分岔。
 
   同 domain 且 suggested_name 相同，已存在 status=pending_confirm 的
   kind=add 候选（origin=content_driven）
     -> 合并：point_ids 并入该候选，suggested_name 保留原值不因新
        一批内容漂移改名，evidence 追加本次涉及的 source_id，
-       last_signal_at/updated_at 刷新（不重复建行，呼应
-       concept-evolution.md 步骤 2"同簇已有 pending_confirm 候选
-       更新，不重复建行"的既有原则，扩展到 content_driven 来源）；
+       last_signal_at/updated_at 刷新；
   否则 -> 新建候选（kind=add, evidence.origin=content_driven）。
-  只按 domain 匹配会让同一次聚类里的多个不同主题簇（或不同批次里
-  恰好都落在同一 domain 的不同主题簇）错误合并成一条候选，因此
   suggested_name 是合并键的一部分，不只是展示字段。
 
-命名粒度：Prompt 会把该 domain 下已有概念名称列表作为参照传给
-LLM，要求新建议的概念名跟已有概念的粒度看齐（名词性主题，不夹带
-"安装"“配置”“故障处理”这类操作/场景后缀），避免概念越建越碎。
+命名粒度：concept 自由聚类时 Prompt 把该 domain 已有词条名列表作
+参照，要求新概念名跟已有粒度看齐。
 
-这批 KP 本轮不建立任何跨 Source 关系，记录 info 日志（跳过 KP 数、
-涉及候选数）；LLM 调用失败按既有失败隔离原则处理，记录 warn，
-不阻塞 Source 完成，未被任何簇覆盖的 KP 保持未处理，下次该 domain
-有新导入时会被重新尝试聚类。
+这批 KP 本轮不建立任何跨 Source 关系；LLM 失败按既有失败隔离；
+未被覆盖的 KP 保持未处理，下次导入或「+ 新增词条」重跑再试。
 ```
 
-**调用参数**：extraction 模型，temperature 0。Prompt 文件：`config/prompts/kpn_entry_propose.md`（结构类似 `unit_entry_match.md`，输出 `{"clusters":[{"suggested_name","suggested_description","point_ids"}]}`）。
+**Fact 新建：先按 concept 定维度，再从整组反推 entity
+（2026-08-05；2026-08-06 纳入 classify-then-branch 主序）**：
+仅处理步骤 3 第 2 步同 kind 匹配后仍剩余、且已判为 fact 的 KP——
+不再对全部 orphan 先做 concept 维度匹配。
 
-**模块边界**：本步骤只负责聚类、命名和写入候选，不做任何概念确认或 KU 迁移——那部分完全复用概念演化模块既有的 `Service.Confirm`/`Reject`（`docs/impl/v1/concept-evolution.md` 步骤 3），KPN 模块不重复实现。
+1. **`config/prompts/kpn_orphan_fact_match.md`**：对每条 fact leftover KP
+   直接匹配该 domain 已有 concept 词条列表，只判断"属于哪个 concept
+   维度，或都不属于"。匹配上的按 `(source_id, matched_concept_id)` 分组。
+2. **`config/prompts/kpn_fact_group_entity.md`**：对每个分组把组内全部
+   KP（含来源标题/摘要）一起交给 LLM，反推共同 entity；反推不出则
+   丢弃分组。`suggested_name` = `entity + concept名`（`joinEntityConcept`
+   机械拼接），同时产出该组合自己的 description/boundary。
+3. **没匹配上任何 concept 的 fact KP** 保持 orphan，**不**进入 concept
+   自由聚类、**不**自动建裸 entity 候选。concept leftover 才走
+   `kpn_entry_propose.md` 发现新概念。
 
+**未匹配的 fact 不再自动建候选**：与上条一致——无论同 kind 匹配失败，
+还是 concept 维度匹配失败，都不退回裸 entity 命名。
+
+**命名必须确定性拼接，不经 LLM 二次改写（2026-08-05 二次修订）**：
+`joinEntityConcept`（Go 函数，非 Prompt）把 entity 和匹配到的 concept 名
+拼成最终 `suggested_name`——如果 concept 名已经完整包含在 entity 里就用
+entity 本身；否则去掉两者衔接处的重叠字（重叠 ≥2 个字符才算，避免"...
+系统内核参数"与"数据库配置"因为都含单字"数"而误裁剪）；是否加空格只看
+拼接处两侧各一个字符（entity 的最后一个字、concept 去重叠后的第一个
+字）——两侧都是汉字才不加空格，否则加（2026-08-05 三次修订，取代"看
+entity/concept 整串是否纯中文"的判断：像"Oracle RAC 数据库"这种整串混
+了英文但拼接处落在"库"字上的 entity，旧判断会因为字符串里出现过
+"Oracle"/"RAC" 而误加空格，拼出"Oracle RAC 数据库 部署"这种断词错误的
+结果，应为"Oracle RAC 数据库部署"）。同一个 entity+concept 组合，无论
+出现在哪一批、哪一次调用里，必须拼出完全相同的字符串——这样
+`ProposeAddCandidate` 按 `suggested_name` 精确匹配合并候选才会生效；
+早期让 LLM 自己组合措辞（`combined_name` 字段）会导致同一个真实概念在
+不同批次里被拼出不同的字符串，无法合并，已废弃该字段。
+
+**调用参数**：extraction 模型，temperature 0。Prompt 文件：
+`config/prompts/unit_kind_classify.md`（KU 级 concept/fact）、
+`config/prompts/unit_entry_match.md`（同 kind 挂靠已有词条）、
+`config/prompts/kpn_orphan_fact_match.md`（fact leftover → concept 维度）、
+`config/prompts/kpn_fact_group_entity.md`（整组反推 entity）、
+`config/prompts/kpn_entry_propose.md`（concept leftover 自由聚类命名）。
+
+**模块边界**：同 kind 匹配命中时直接写 `ku.entry_id`（与 unit_extract
+直接匹配一致）；新建路径只写 pending_confirm 候选，不做确认——确认
+复用概念演化模块 `Service.Confirm`/`Reject`。
+
+**知识领域页「+ 新增词条」**：`POST /entries/domains/:id/propose-from-orphans`
+对本领域全部 standing orphan 跑同一套流水线（跨 Source），不是只扫
+最近一次导入。
 ### 步骤 4：跨 Source 匹配 Prompt
 
 Prompt 文件：`config/prompts/kpn_cross_match.md`
+
+归属判断（步骤 3）已经把不同主体/组织范围的同名内容拆到不同 entry_id、天然隔离，是范围隔离的第一道防线；本步骤的来源上下文是第二道兜底——归属判断仍可能出错（比如两家公司的规定被误判进同一个 concept entry），届时同 entry_id 下的 KP 会一起进入本批匹配，需要 LLM 在判 contradicts 前有能力识别"两者其实不是同一范围的约束"。为此每条知识点格式追加来源标题（`sources.title`，既有字段，不新增列）：
 
 ```
 以下是两组知识点。A 组来自新导入的材料，B 组来自知识库中已有的其他材料。
@@ -160,9 +185,13 @@ Prompt 文件：`config/prompts/kpn_cross_match.md`
 原则：
 - 只建立有明确依据的关系，不推测；
 - 语义等价（同一知识的不同表述）用 related，不合并知识点；
+- 判 contradicts 前先确认两条知识点约束的是同一主体/范围：如果
+  两者分别限定于不同公司、组织或对象（例如各自是不同公司内部的
+  规定），即使表面数值或规则不同，也不构成真实冲突，应判 related
+  （同话题、不同范围）或不建立关系，不判 contradicts；
 - 关系总数不超过 A 组知识点数的 2 倍。
 
-A 组（格式：point_id TAB unit_center TAB content）：
+A 组（格式：point_id TAB source_title TAB unit_center TAB content）：
 {{new_points}}
 
 B 组（同格式）：
@@ -172,7 +201,7 @@ B 组（同格式）：
 {{json_schema}}
 ```
 
-示例 JSON 与校验规则同 MVP `kpn_extract.md`：`{"relations": [{"from","to","type"}]}`；程序校验 from ∈ A 组、to ∈ B 组（方向约束：跨 Source 关系统一以新 KP 为 from）、from != to、type ∈ 2 种枚举（related / contradicts）。
+示例 JSON 与校验规则同 MVP `kpn_extract.md`：`{"relations": [{"from","to","type"}]}`；程序校验 from ∈ A 组、to ∈ B 组（方向约束：跨 Source 关系统一以新 KP 为 from）、from != to、type ∈ 2 种枚举（related / contradicts）。`source_title` 只读传入，不参与去重键、不落表，仅供 LLM 判断范围是否一致。
 
 **调用参数**：extraction 模型，temperature 0。
 

@@ -1,52 +1,204 @@
 {
   "perspective_id": "default",
-  "version": "1.0.0",
+  "version": "1.6.0",
   "domains": [
     {
       "id": "finance_stocks",
       "name": "金融股票",
-      "description": "用于理解金融市场、股票投资、公司基本面、交易规则和风险控制。",
+      "description": "用于理解股票市场、金融市场、宏观经济、行业与公司分析、交易策略和风险管理。",
       "status": "active",
       "entries": [
         {
-          "id": "stock_market",
+          "id": "fin_stock_market",
           "name": "股票市场",
-          "aliases": ["证券市场", "二级市场"],
-          "description": "关注股票发行、交易、市场参与者和市场运行机制。",
-          "boundary": "关注股票市场整体机制，不直接等同于单只股票分析。",
-          "status": "active"
+          "aliases": [
+            "证券市场",
+            "二级市场"
+          ],
+          "description": "关注金融股票领域中「股票市场」相关的方法、流程与实践。",
+          "boundary": "关注「股票市场」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "fundamental_analysis",
+          "id": "fin_financial_market",
+          "name": "金融市场",
+          "aliases": [
+            "资本市场",
+            "金融体系"
+          ],
+          "description": "关注金融股票领域中「金融市场」相关的方法、流程与实践。",
+          "boundary": "关注「金融市场」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "fin_macro_economy",
+          "name": "宏观经济",
+          "aliases": [
+            "宏观经济形势",
+            "经济周期"
+          ],
+          "description": "关注金融股票领域中「宏观经济」相关的方法、流程与实践。",
+          "boundary": "关注「宏观经济」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "fin_industry_analysis",
+          "name": "行业分析",
+          "aliases": [
+            "产业分析",
+            "行业研究"
+          ],
+          "description": "关注金融股票领域中「行业分析」相关的方法、流程与实践。",
+          "boundary": "关注「行业分析」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "fin_fundamental_analysis",
           "name": "基本面分析",
-          "aliases": ["公司基本面", "财务分析"],
-          "description": "关注公司经营、财务、行业地位和长期价值判断。",
-          "boundary": "关注企业内在价值，不直接处理短线价格形态。",
-          "status": "active"
+          "aliases": [
+            "公司基本面",
+            "基本面研究"
+          ],
+          "description": "关注金融股票领域中「基本面分析」相关的方法、流程与实践。",
+          "boundary": "关注「基本面分析」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "technical_analysis",
+          "id": "fin_technical_analysis",
           "name": "技术分析",
-          "aliases": ["K线分析", "走势分析"],
-          "description": "关注价格、成交量、趋势、形态和技术指标。",
-          "boundary": "关注市场交易行为，不直接判断企业内在价值。",
-          "status": "active"
+          "aliases": [
+            "K线分析",
+            "走势分析"
+          ],
+          "description": "关注金融股票领域中「技术分析」相关的方法、流程与实践。",
+          "boundary": "关注「技术分析」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "valuation",
-          "name": "估值",
-          "aliases": ["股票估值", "价值评估"],
-          "description": "关注市盈率、市净率、现金流折现和相对估值等方法。",
-          "boundary": "关注价格与价值关系，不直接等同于买卖建议。",
-          "status": "active"
+          "id": "fin_valuation_analysis",
+          "name": "估值分析",
+          "aliases": [
+            "股票估值",
+            "价值评估"
+          ],
+          "description": "关注金融股票领域中「估值分析」相关的方法、流程与实践。",
+          "boundary": "关注「估值分析」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "portfolio_risk",
-          "name": "组合风险",
-          "aliases": ["投资组合风险", "风险控制"],
-          "description": "关注仓位、分散、回撤、波动和风险暴露。",
-          "boundary": "关注组合层面的风险管理，不直接判断单个交易信号。",
-          "status": "active"
+          "id": "fin_financial_analysis",
+          "name": "财务分析",
+          "aliases": [
+            "财报分析",
+            "财务指标分析"
+          ],
+          "description": "关注金融股票领域中「财务分析」相关的方法、流程与实践。",
+          "boundary": "关注「财务分析」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "fin_capital_flow_analysis",
+          "name": "资金分析",
+          "aliases": [
+            "资金流向",
+            "资金面分析"
+          ],
+          "description": "关注金融股票领域中「资金分析」相关的方法、流程与实践。",
+          "boundary": "关注「资金分析」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "fin_market_sentiment",
+          "name": "市场情绪",
+          "aliases": [
+            "投资者情绪",
+            "市场氛围"
+          ],
+          "description": "关注金融股票领域中「市场情绪」相关的方法、流程与实践。",
+          "boundary": "关注「市场情绪」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "fin_trading_strategy",
+          "name": "交易策略",
+          "aliases": [
+            "投资策略",
+            "操作策略"
+          ],
+          "description": "关注金融股票领域中「交易策略」相关的方法、流程与实践。",
+          "boundary": "关注「交易策略」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "fin_risk_management",
+          "name": "风险管理",
+          "aliases": [
+            "风控",
+            "风险控制"
+          ],
+          "description": "关注金融股票领域中「风险管理」相关的方法、流程与实践。",
+          "boundary": "关注「风险管理」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "fin_asset_allocation",
+          "name": "资产配置",
+          "aliases": [
+            "投资配置",
+            "大类资产配置"
+          ],
+          "description": "关注金融股票领域中「资产配置」相关的方法、流程与实践。",
+          "boundary": "关注「资产配置」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "fin_portfolio_management",
+          "name": "组合管理",
+          "aliases": [
+            "投资组合管理",
+            "持仓管理"
+          ],
+          "description": "关注金融股票领域中「组合管理」相关的方法、流程与实践。",
+          "boundary": "关注「组合管理」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "fin_index_investing",
+          "name": "指数投资",
+          "aliases": [
+            "被动投资",
+            "指数基金投资"
+          ],
+          "description": "关注金融股票领域中「指数投资」相关的方法、流程与实践。",
+          "boundary": "关注「指数投资」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "fin_quantitative_investing",
+          "name": "量化投资",
+          "aliases": [
+            "量化交易",
+            "程序化交易"
+          ],
+          "description": "关注金融股票领域中「量化投资」相关的方法、流程与实践。",
+          "boundary": "关注「量化投资」本身，不直接覆盖金融股票下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         }
       ]
     },
@@ -57,508 +209,2284 @@
       "status": "active",
       "entries": [
         {
-          "id": "policy_scope",
+          "id": "pol_policy_design",
+          "name": "制度设计",
+          "aliases": [
+            "制度构建",
+            "制度框架设计"
+          ],
+          "description": "关注制度规范领域中「制度设计」相关的方法、流程与实践。",
+          "boundary": "关注「制度设计」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "pol_policy_purpose",
+          "name": "制度目的",
+          "aliases": [
+            "制定目的",
+            "制度背景"
+          ],
+          "description": "关注制度规范领域中「制度目的」相关的方法、流程与实践。",
+          "boundary": "关注「制度目的」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "pol_scope_of_application",
           "name": "适用范围",
-          "aliases": ["适用对象", "适用边界"],
-          "description": "关注制度适用于哪些组织、人员、场景和事项。",
-          "boundary": "关注制度覆盖边界，不直接描述具体执行步骤。",
-          "status": "active"
+          "aliases": [
+            "适用对象",
+            "适用边界"
+          ],
+          "description": "关注制度规范领域中「适用范围」相关的方法、流程与实践。",
+          "boundary": "关注「适用范围」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "responsibility",
-          "name": "职责分工",
-          "aliases": ["责任主体", "职责边界"],
-          "description": "关注不同角色、部门或岗位承担的责任。",
-          "boundary": "关注谁负责什么，不直接判断执行结果。",
-          "status": "active"
+          "id": "pol_term_definition",
+          "name": "术语定义",
+          "aliases": [
+            "名词解释",
+            "定义说明"
+          ],
+          "description": "关注制度规范领域中「术语定义」相关的方法、流程与实践。",
+          "boundary": "关注「术语定义」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "approval_process",
+          "id": "pol_role_responsibility",
+          "name": "角色职责",
+          "aliases": [
+            "职责分工",
+            "责任主体"
+          ],
+          "description": "关注制度规范领域中「角色职责」相关的方法、流程与实践。",
+          "boundary": "关注「角色职责」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "pol_management_process",
+          "name": "管理流程",
+          "aliases": [
+            "管理办法流程",
+            "工作流程"
+          ],
+          "description": "关注制度规范领域中「管理流程」相关的方法、流程与实践。",
+          "boundary": "关注「管理流程」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "pol_approval_process",
           "name": "审批流程",
-          "aliases": ["流程审批", "审核流程"],
-          "description": "关注事项从发起、审核、批准到归档的流程。",
-          "boundary": "关注审批链路，不直接覆盖制度目的或处罚规则。",
-          "status": "active"
+          "aliases": [
+            "流程审批",
+            "审核流程"
+          ],
+          "description": "关注制度规范领域中「审批流程」相关的方法、流程与实践。",
+          "boundary": "关注「审批流程」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "compliance_requirement",
-          "name": "合规要求",
-          "aliases": ["合规规范", "监管要求"],
-          "description": "关注必须遵守的规则、限制、证明和检查要求。",
-          "boundary": "关注规范性要求，不直接等同于业务最佳实践。",
-          "status": "active"
+          "id": "pol_execution_process",
+          "name": "执行流程",
+          "aliases": [
+            "实施流程",
+            "操作流程"
+          ],
+          "description": "关注制度规范领域中「执行流程」相关的方法、流程与实践。",
+          "boundary": "关注「执行流程」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "assessment_penalty",
-          "name": "考核处罚",
-          "aliases": ["考核办法", "违规处理"],
-          "description": "关注考核指标、评分规则、奖惩和违规后果。",
-          "boundary": "关注结果评价和后果，不直接描述日常流程。",
-          "status": "active"
+          "id": "pol_exception_management",
+          "name": "例外管理",
+          "aliases": [
+            "特殊情况处理",
+            "例外情形"
+          ],
+          "description": "关注制度规范领域中「例外管理」相关的方法、流程与实践。",
+          "boundary": "关注「例外管理」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "pol_risk_control",
+          "name": "风险控制",
+          "aliases": [
+            "风控措施",
+            "风险防范"
+          ],
+          "description": "关注制度规范领域中「风险控制」相关的方法、流程与实践。",
+          "boundary": "关注「风险控制」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "pol_supervision_inspection",
+          "name": "监督检查",
+          "aliases": [
+            "监督管理",
+            "检查机制"
+          ],
+          "description": "关注制度规范领域中「监督检查」相关的方法、流程与实践。",
+          "boundary": "关注「监督检查」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "pol_audit_management",
+          "name": "审计管理",
+          "aliases": [
+            "内部审计",
+            "审计流程"
+          ],
+          "description": "关注制度规范领域中「审计管理」相关的方法、流程与实践。",
+          "boundary": "关注「审计管理」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "pol_document_management",
+          "name": "文档管理",
+          "aliases": [
+            "资料管理",
+            "档案管理"
+          ],
+          "description": "关注制度规范领域中「文档管理」相关的方法、流程与实践。",
+          "boundary": "关注「文档管理」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "pol_record_management",
+          "name": "记录管理",
+          "aliases": [
+            "台账管理",
+            "记录留存"
+          ],
+          "description": "关注制度规范领域中「记录管理」相关的方法、流程与实践。",
+          "boundary": "关注「记录管理」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "pol_change_management",
+          "name": "变更管理",
+          "aliases": [
+            "变更流程",
+            "变更控制"
+          ],
+          "description": "关注制度规范领域中「变更管理」相关的方法、流程与实践。",
+          "boundary": "关注「变更管理」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "pol_continuous_improvement",
+          "name": "持续改进",
+          "aliases": [
+            "持续优化",
+            "改进机制"
+          ],
+          "description": "关注制度规范领域中「持续改进」相关的方法、流程与实践。",
+          "boundary": "关注「持续改进」本身，不直接覆盖制度规范下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         }
       ]
     },
     {
       "id": "database_operations",
       "name": "数据库运维",
-      "description": "用于理解数据库部署、备份恢复、性能优化、高可用、归档日志管理和故障处理。",
+      "description": "用于理解数据库部署、配置、升级、迁移、备份恢复、高可用、监控、性能优化、安全和故障诊断。",
       "status": "active",
       "entries": [
         {
-          "id": "backup_restore",
-          "name": "备份恢复",
-          "aliases": ["数据备份", "数据恢复"],
-          "description": "关注数据库备份策略、恢复流程和恢复目标。",
-          "boundary": "关注数据保护和恢复，不直接处理查询性能优化。",
-          "status": "active"
+          "id": "db_database_deployment",
+          "name": "数据库部署",
+          "aliases": [
+            "数据库上线",
+            "数据库搭建"
+          ],
+          "description": "关注数据库运维领域中「数据库部署」相关的方法、流程与实践。",
+          "boundary": "关注「数据库部署」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "performance_tuning",
-          "name": "性能优化",
-          "aliases": ["SQL优化", "数据库调优"],
-          "description": "关注 SQL、索引、执行计划、连接和资源使用优化。",
-          "boundary": "关注性能问题，不直接覆盖备份和权限管理。",
-          "status": "active"
+          "id": "db_database_installation",
+          "name": "数据库安装",
+          "aliases": [
+            "安装部署",
+            "数据库初始化安装"
+          ],
+          "description": "关注数据库运维领域中「数据库安装」相关的方法、流程与实践。",
+          "boundary": "关注「数据库安装」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "high_availability",
-          "name": "高可用",
-          "aliases": ["主从复制", "集群高可用"],
-          "description": "关注数据库复制、故障切换、集群和可用性设计。",
-          "boundary": "关注服务连续性，不直接等同于数据备份。",
-          "status": "active"
+          "id": "db_database_configuration",
+          "name": "数据库配置",
+          "aliases": [
+            "参数配置",
+            "数据库参数设置"
+          ],
+          "description": "关注数据库运维领域中「数据库配置」相关的方法、流程与实践。",
+          "boundary": "关注「数据库配置」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "database_security",
+          "id": "db_database_upgrade",
+          "name": "数据库升级",
+          "aliases": [
+            "版本升级",
+            "数据库版本迁移升级"
+          ],
+          "description": "关注数据库运维领域中「数据库升级」相关的方法、流程与实践。",
+          "boundary": "关注「数据库升级」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "db_database_migration",
+          "name": "数据库迁移",
+          "aliases": [
+            "数据迁移",
+            "跨库迁移"
+          ],
+          "description": "关注数据库运维领域中「数据库迁移」相关的方法、流程与实践。",
+          "boundary": "关注「数据库迁移」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "db_database_backup_restore",
+          "name": "数据库备份恢复",
+          "aliases": [
+            "数据备份",
+            "数据恢复"
+          ],
+          "description": "关注数据库运维领域中「数据库备份恢复」相关的方法、流程与实践。",
+          "boundary": "关注「数据库备份恢复」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "db_database_replication",
+          "name": "数据库复制",
+          "aliases": [
+            "主从复制",
+            "数据同步"
+          ],
+          "description": "关注数据库运维领域中「数据库复制」相关的方法、流程与实践。",
+          "boundary": "关注「数据库复制」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "db_database_high_availability",
+          "name": "数据库高可用",
+          "aliases": [
+            "数据库HA",
+            "高可用架构"
+          ],
+          "description": "关注数据库运维领域中「数据库高可用」相关的方法、流程与实践。",
+          "boundary": "关注「数据库高可用」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "db_database_disaster_recovery",
+          "name": "数据库容灾",
+          "aliases": [
+            "灾备",
+            "容灾切换"
+          ],
+          "description": "关注数据库运维领域中「数据库容灾」相关的方法、流程与实践。",
+          "boundary": "关注「数据库容灾」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "db_database_monitoring",
+          "name": "数据库监控",
+          "aliases": [
+            "运行监控",
+            "指标监控"
+          ],
+          "description": "关注数据库运维领域中「数据库监控」相关的方法、流程与实践。",
+          "boundary": "关注「数据库监控」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "db_database_inspection",
+          "name": "数据库巡检",
+          "aliases": [
+            "日常巡检",
+            "健康检查"
+          ],
+          "description": "关注数据库运维领域中「数据库巡检」相关的方法、流程与实践。",
+          "boundary": "关注「数据库巡检」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "db_database_performance_tuning",
+          "name": "数据库性能优化",
+          "aliases": [
+            "数据库调优",
+            "性能调优"
+          ],
+          "description": "关注数据库运维领域中「数据库性能优化」相关的方法、流程与实践。",
+          "boundary": "关注「数据库性能优化」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "db_sql_optimization",
+          "name": "SQL优化",
+          "aliases": [
+            "SQL调优",
+            "语句优化"
+          ],
+          "description": "关注数据库运维领域中「SQL优化」相关的方法、流程与实践。",
+          "boundary": "关注「SQL优化」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "db_database_security",
           "name": "数据库安全",
-          "aliases": ["数据库权限", "数据访问控制"],
-          "description": "关注账号、权限、审计、加密和访问控制。",
-          "boundary": "关注数据库访问安全，不直接覆盖系统级安全策略。",
-          "status": "active"
+          "aliases": [
+            "数据安全",
+            "访问安全"
+          ],
+          "description": "关注数据库运维领域中「数据库安全」相关的方法、流程与实践。",
+          "boundary": "关注「数据库安全」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "fault_diagnosis",
-          "name": "故障诊断",
-          "aliases": ["故障排查", "数据库故障"],
-          "description": "关注数据库异常、告警、日志和恢复处置。",
-          "boundary": "关注故障定位和处置，不直接描述日常巡检。",
-          "status": "active"
+          "id": "db_database_permission_management",
+          "name": "数据库权限管理",
+          "aliases": [
+            "账号权限管理",
+            "访问控制"
+          ],
+          "description": "关注数据库运维领域中「数据库权限管理」相关的方法、流程与实践。",
+          "boundary": "关注「数据库权限管理」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "archive_log_management",
-          "name": "归档日志管理",
-          "aliases": ["归档日志", "archivelog", "日志归档"],
-          "description": "关注数据库归档日志的开启、清理、删除策略和归档空间管理。",
-          "boundary": "关注归档日志本身的管理，不直接等同于常规数据备份策略。",
-          "status": "active"
+          "id": "db_database_log_management",
+          "name": "数据库日志管理",
+          "aliases": [
+            "日志清理",
+            "归档日志管理"
+          ],
+          "description": "关注数据库运维领域中「数据库日志管理」相关的方法、流程与实践。",
+          "boundary": "关注「数据库日志管理」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "db_database_capacity_planning",
+          "name": "数据库容量规划",
+          "aliases": [
+            "容量评估",
+            "存储容量规划"
+          ],
+          "description": "关注数据库运维领域中「数据库容量规划」相关的方法、流程与实践。",
+          "boundary": "关注「数据库容量规划」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "db_database_fault_diagnosis",
+          "name": "数据库故障诊断",
+          "aliases": [
+            "故障排查",
+            "异常诊断"
+          ],
+          "description": "关注数据库运维领域中「数据库故障诊断」相关的方法、流程与实践。",
+          "boundary": "关注「数据库故障诊断」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "db_database_connection_management",
+          "name": "数据库连接管理",
+          "aliases": [
+            "连接池管理",
+            "会话管理"
+          ],
+          "description": "关注数据库运维领域中「数据库连接管理」相关的方法、流程与实践。",
+          "boundary": "关注「数据库连接管理」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "db_database_transaction_management",
+          "name": "数据库事务管理",
+          "aliases": [
+            "事务处理",
+            "事务一致性管理"
+          ],
+          "description": "关注数据库运维领域中「数据库事务管理」相关的方法、流程与实践。",
+          "boundary": "关注「数据库事务管理」本身，不直接覆盖数据库运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         }
       ]
     },
     {
       "id": "os_operations",
       "name": "操作系统运维",
-      "description": "用于理解 Linux/Windows 系统安装、配置、监控、性能、安全和故障处理。",
+      "description": "用于理解操作系统安装、部署、服务管理、用户权限、存储网络、性能安全和故障处理。",
       "status": "active",
       "entries": [
         {
-          "id": "process_management",
-          "name": "进程管理",
-          "aliases": ["服务进程", "进程状态"],
-          "description": "关注进程启动、停止、状态、资源占用和异常处理。",
-          "boundary": "关注操作系统进程，不直接覆盖应用业务逻辑。",
-          "status": "active"
+          "id": "os_system_installation",
+          "name": "系统安装",
+          "aliases": [
+            "操作系统安装",
+            "系统部署安装"
+          ],
+          "description": "关注操作系统运维领域中「系统安装」相关的方法、流程与实践。",
+          "boundary": "关注「系统安装」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "file_system",
-          "name": "文件系统",
-          "aliases": ["磁盘文件", "挂载点"],
-          "description": "关注目录、权限、磁盘、挂载和文件系统容量。",
-          "boundary": "关注文件和存储结构，不直接覆盖数据库数据模型。",
-          "status": "active"
+          "id": "os_system_deployment",
+          "name": "系统部署",
+          "aliases": [
+            "系统上线",
+            "环境部署"
+          ],
+          "description": "关注操作系统运维领域中「系统部署」相关的方法、流程与实践。",
+          "boundary": "关注「系统部署」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "network_config",
-          "name": "网络配置",
-          "aliases": ["网络连通", "端口配置"],
-          "description": "关注 IP、路由、DNS、端口、防火墙和网络连通性。",
-          "boundary": "关注主机网络层面，不直接覆盖应用协议设计。",
-          "status": "active"
+          "id": "os_system_startup",
+          "name": "系统启动",
+          "aliases": [
+            "开机启动",
+            "启动流程"
+          ],
+          "description": "关注操作系统运维领域中「系统启动」相关的方法、流程与实践。",
+          "boundary": "关注「系统启动」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "system_performance",
-          "name": "系统性能",
-          "aliases": ["CPU内存", "系统负载"],
-          "description": "关注 CPU、内存、磁盘 IO、网络 IO 和系统负载。",
-          "boundary": "关注操作系统资源，不直接等同于应用性能。",
-          "status": "active"
+          "id": "os_service_management",
+          "name": "服务管理",
+          "aliases": [
+            "服务进程管理",
+            "服务启停"
+          ],
+          "description": "关注操作系统运维领域中「服务管理」相关的方法、流程与实践。",
+          "boundary": "关注「服务管理」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "system_security",
-          "name": "系统安全",
-          "aliases": ["主机安全", "系统加固"],
-          "description": "关注账号、权限、补丁、防火墙、审计和安全加固。",
-          "boundary": "关注操作系统安全，不直接覆盖业务合规制度。",
-          "status": "active"
+          "id": "os_user_management",
+          "name": "用户管理",
+          "aliases": [
+            "账号管理",
+            "用户账户管理"
+          ],
+          "description": "关注操作系统运维领域中「用户管理」相关的方法、流程与实践。",
+          "boundary": "关注「用户管理」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_permission_management",
+          "name": "权限管理",
+          "aliases": [
+            "权限控制",
+            "访问权限管理"
+          ],
+          "description": "关注操作系统运维领域中「权限管理」相关的方法、流程与实践。",
+          "boundary": "关注「权限管理」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_file_management",
+          "name": "文件管理",
+          "aliases": [
+            "文件操作",
+            "文件系统管理"
+          ],
+          "description": "关注操作系统运维领域中「文件管理」相关的方法、流程与实践。",
+          "boundary": "关注「文件管理」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_disk_management",
+          "name": "磁盘管理",
+          "aliases": [
+            "磁盘分区管理",
+            "磁盘挂载"
+          ],
+          "description": "关注操作系统运维领域中「磁盘管理」相关的方法、流程与实践。",
+          "boundary": "关注「磁盘管理」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_storage_management",
+          "name": "存储管理",
+          "aliases": [
+            "存储配置",
+            "存储资源管理"
+          ],
+          "description": "关注操作系统运维领域中「存储管理」相关的方法、流程与实践。",
+          "boundary": "关注「存储管理」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_network_management",
+          "name": "网络管理",
+          "aliases": [
+            "网络配置",
+            "网络运维"
+          ],
+          "description": "关注操作系统运维领域中「网络管理」相关的方法、流程与实践。",
+          "boundary": "关注「网络管理」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_package_management",
+          "name": "软件包管理",
+          "aliases": [
+            "包管理",
+            "软件安装卸载"
+          ],
+          "description": "关注操作系统运维领域中「软件包管理」相关的方法、流程与实践。",
+          "boundary": "关注「软件包管理」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_scheduled_tasks",
+          "name": "计划任务",
+          "aliases": [
+            "定时任务",
+            "Cron任务"
+          ],
+          "description": "关注操作系统运维领域中「计划任务」相关的方法、流程与实践。",
+          "boundary": "关注「计划任务」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_log_management",
+          "name": "日志管理",
+          "aliases": [
+            "系统日志管理",
+            "日志分析"
+          ],
+          "description": "关注操作系统运维领域中「日志管理」相关的方法、流程与实践。",
+          "boundary": "关注「日志管理」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_performance_optimization",
+          "name": "性能优化",
+          "aliases": [
+            "系统调优",
+            "性能调优"
+          ],
+          "description": "关注操作系统运维领域中「性能优化」相关的方法、流程与实践。",
+          "boundary": "关注「性能优化」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_resource_management",
+          "name": "资源管理",
+          "aliases": [
+            "资源调度",
+            "系统资源管理"
+          ],
+          "description": "关注操作系统运维领域中「资源管理」相关的方法、流程与实践。",
+          "boundary": "关注「资源管理」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_security_management",
+          "name": "安全管理",
+          "aliases": [
+            "系统安全管理",
+            "安全加固"
+          ],
+          "description": "关注操作系统运维领域中「安全管理」相关的方法、流程与实践。",
+          "boundary": "关注「安全管理」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_monitoring_alerting",
+          "name": "监控告警",
+          "aliases": [
+            "监控预警",
+            "告警管理"
+          ],
+          "description": "关注操作系统运维领域中「监控告警」相关的方法、流程与实践。",
+          "boundary": "关注「监控告警」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_fault_diagnosis",
+          "name": "故障诊断",
+          "aliases": [
+            "故障排查",
+            "问题定位"
+          ],
+          "description": "关注操作系统运维领域中「故障诊断」相关的方法、流程与实践。",
+          "boundary": "关注「故障诊断」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_shell_scripting",
+          "name": "Shell脚本",
+          "aliases": [
+            "脚本编写",
+            "自动化脚本"
+          ],
+          "description": "关注操作系统运维领域中「Shell脚本」相关的方法、流程与实践。",
+          "boundary": "关注「Shell脚本」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "os_system_upgrade",
+          "name": "系统升级",
+          "aliases": [
+            "版本升级",
+            "补丁升级"
+          ],
+          "description": "关注操作系统运维领域中「系统升级」相关的方法、流程与实践。",
+          "boundary": "关注「系统升级」本身，不直接覆盖操作系统运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         }
       ]
     },
     {
       "id": "middleware_operations",
       "name": "中间件运维",
-      "description": "用于理解 Web 服务、消息队列、缓存、网关、服务注册和中间件故障处理。",
+      "description": "用于理解中间件服务的部署、配置、升级、监控、治理、高可用和故障处理。",
       "status": "active",
       "entries": [
         {
-          "id": "web_server",
-          "name": "Web 服务",
-          "aliases": ["Nginx", "Apache"],
-          "description": "关注 Web 服务器配置、反向代理、负载均衡和静态资源服务。",
-          "boundary": "关注 Web 中间件，不直接覆盖业务应用代码。",
-          "status": "active"
+          "id": "mw_service_deployment",
+          "name": "服务部署",
+          "aliases": [
+            "中间件部署",
+            "服务上线"
+          ],
+          "description": "关注中间件运维领域中「服务部署」相关的方法、流程与实践。",
+          "boundary": "关注「服务部署」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "message_queue",
-          "name": "消息队列",
-          "aliases": ["MQ", "消息中间件"],
-          "description": "关注消息生产、消费、堆积、确认、重试和顺序性。",
-          "boundary": "关注异步消息机制，不直接覆盖数据库事务。",
-          "status": "active"
+          "id": "mw_service_configuration",
+          "name": "服务配置",
+          "aliases": [
+            "参数配置",
+            "中间件配置"
+          ],
+          "description": "关注中间件运维领域中「服务配置」相关的方法、流程与实践。",
+          "boundary": "关注「服务配置」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "cache_service",
-          "name": "缓存服务",
-          "aliases": ["Redis", "缓存中间件"],
-          "description": "关注缓存读写、失效、穿透、击穿、雪崩和容量。",
-          "boundary": "关注缓存层，不直接覆盖持久化数据建模。",
-          "status": "active"
+          "id": "mw_service_upgrade",
+          "name": "服务升级",
+          "aliases": [
+            "版本升级",
+            "中间件升级"
+          ],
+          "description": "关注中间件运维领域中「服务升级」相关的方法、流程与实践。",
+          "boundary": "关注「服务升级」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "api_gateway",
-          "name": "API 网关",
-          "aliases": ["网关", "服务网关"],
-          "description": "关注路由、鉴权、限流、熔断和服务入口管理。",
-          "boundary": "关注统一入口和治理，不直接描述内部业务实现。",
-          "status": "active"
+          "id": "mw_service_migration",
+          "name": "服务迁移",
+          "aliases": [
+            "服务搬迁",
+            "跨环境迁移"
+          ],
+          "description": "关注中间件运维领域中「服务迁移」相关的方法、流程与实践。",
+          "boundary": "关注「服务迁移」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "middleware_monitoring",
-          "name": "中间件监控",
-          "aliases": ["运行监控", "中间件告警"],
-          "description": "关注中间件指标、日志、告警和运行状态。",
-          "boundary": "关注运行观测，不直接覆盖容量规划全部内容。",
-          "status": "active"
+          "id": "mw_service_monitoring",
+          "name": "服务监控",
+          "aliases": [
+            "运行监控",
+            "中间件监控"
+          ],
+          "description": "关注中间件运维领域中「服务监控」相关的方法、流程与实践。",
+          "boundary": "关注「服务监控」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_service_governance",
+          "name": "服务治理",
+          "aliases": [
+            "微服务治理",
+            "服务治理机制"
+          ],
+          "description": "关注中间件运维领域中「服务治理」相关的方法、流程与实践。",
+          "boundary": "关注「服务治理」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_load_balancing",
+          "name": "负载均衡",
+          "aliases": [
+            "流量分发",
+            "负载调度"
+          ],
+          "description": "关注中间件运维领域中「负载均衡」相关的方法、流程与实践。",
+          "boundary": "关注「负载均衡」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_high_availability",
+          "name": "高可用",
+          "aliases": [
+            "HA架构",
+            "高可用设计"
+          ],
+          "description": "关注中间件运维领域中「高可用」相关的方法、流程与实践。",
+          "boundary": "关注「高可用」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_cluster_management",
+          "name": "集群管理",
+          "aliases": [
+            "集群运维",
+            "集群节点管理"
+          ],
+          "description": "关注中间件运维领域中「集群管理」相关的方法、流程与实践。",
+          "boundary": "关注「集群管理」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_service_registration",
+          "name": "服务注册",
+          "aliases": [
+            "注册中心",
+            "服务注册中心"
+          ],
+          "description": "关注中间件运维领域中「服务注册」相关的方法、流程与实践。",
+          "boundary": "关注「服务注册」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_service_discovery",
+          "name": "服务发现",
+          "aliases": [
+            "服务寻址",
+            "服务发现机制"
+          ],
+          "description": "关注中间件运维领域中「服务发现」相关的方法、流程与实践。",
+          "boundary": "关注「服务发现」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_configuration_management",
+          "name": "配置管理",
+          "aliases": [
+            "配置中心",
+            "统一配置管理"
+          ],
+          "description": "关注中间件运维领域中「配置管理」相关的方法、流程与实践。",
+          "boundary": "关注「配置管理」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_message_passing",
+          "name": "消息传递",
+          "aliases": [
+            "消息通信",
+            "异步消息"
+          ],
+          "description": "关注中间件运维领域中「消息传递」相关的方法、流程与实践。",
+          "boundary": "关注「消息传递」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_cache_management",
+          "name": "缓存管理",
+          "aliases": [
+            "缓存策略",
+            "缓存运维"
+          ],
+          "description": "关注中间件运维领域中「缓存管理」相关的方法、流程与实践。",
+          "boundary": "关注「缓存管理」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_connection_management",
+          "name": "连接管理",
+          "aliases": [
+            "连接池管理",
+            "连接调优"
+          ],
+          "description": "关注中间件运维领域中「连接管理」相关的方法、流程与实践。",
+          "boundary": "关注「连接管理」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_thread_management",
+          "name": "线程管理",
+          "aliases": [
+            "线程池管理",
+            "并发线程管理"
+          ],
+          "description": "关注中间件运维领域中「线程管理」相关的方法、流程与实践。",
+          "boundary": "关注「线程管理」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_performance_optimization",
+          "name": "性能优化",
+          "aliases": [
+            "系统调优",
+            "性能调优"
+          ],
+          "description": "关注中间件运维领域中「性能优化」相关的方法、流程与实践。",
+          "boundary": "关注「性能优化」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_security_management",
+          "name": "安全管理",
+          "aliases": [
+            "系统安全管理",
+            "安全加固"
+          ],
+          "description": "关注中间件运维领域中「安全管理」相关的方法、流程与实践。",
+          "boundary": "关注「安全管理」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_log_management",
+          "name": "日志管理",
+          "aliases": [
+            "系统日志管理",
+            "日志分析"
+          ],
+          "description": "关注中间件运维领域中「日志管理」相关的方法、流程与实践。",
+          "boundary": "关注「日志管理」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "mw_fault_diagnosis",
+          "name": "故障诊断",
+          "aliases": [
+            "故障排查",
+            "问题定位"
+          ],
+          "description": "关注中间件运维领域中「故障诊断」相关的方法、流程与实践。",
+          "boundary": "关注「故障诊断」本身，不直接覆盖中间件运维下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         }
       ]
     },
     {
       "id": "software_development",
       "name": "程序开发",
-      "description": "用于理解编码、调试、测试、构建、接口实现和工程实践。",
+      "description": "用于理解需求分析、编码实现、测试、构建发布和工程实践。",
       "status": "active",
       "entries": [
         {
-          "id": "code_structure",
-          "name": "代码结构",
-          "aliases": ["代码组织", "目录结构"],
-          "description": "关注代码模块、目录、文件和职责组织。",
-          "boundary": "关注代码层面的组织，不直接等同于系统架构设计。",
-          "status": "active"
+          "id": "dev_requirement_analysis",
+          "name": "需求分析",
+          "aliases": [
+            "需求调研",
+            "需求梳理"
+          ],
+          "description": "关注程序开发领域中「需求分析」相关的方法、流程与实践。",
+          "boundary": "关注「需求分析」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "api_implementation",
-          "name": "接口实现",
-          "aliases": ["API开发", "接口开发"],
-          "description": "关注接口定义、参数、响应、错误处理和兼容性。",
-          "boundary": "关注程序接口实现，不直接覆盖产品需求定义。",
-          "status": "active"
+          "id": "dev_system_design",
+          "name": "系统设计",
+          "aliases": [
+            "架构设计",
+            "方案设计"
+          ],
+          "description": "关注程序开发领域中「系统设计」相关的方法、流程与实践。",
+          "boundary": "关注「系统设计」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "debugging",
+          "id": "dev_interface_design",
+          "name": "接口设计",
+          "aliases": [
+            "API设计",
+            "接口定义"
+          ],
+          "description": "关注程序开发领域中「接口设计」相关的方法、流程与实践。",
+          "boundary": "关注「接口设计」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_data_model",
+          "name": "数据模型",
+          "aliases": [
+            "数据结构设计",
+            "领域模型"
+          ],
+          "description": "关注程序开发领域中「数据模型」相关的方法、流程与实践。",
+          "boundary": "关注「数据模型」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_coding_standards",
+          "name": "编码规范",
+          "aliases": [
+            "代码规范",
+            "编程规范"
+          ],
+          "description": "关注程序开发领域中「编码规范」相关的方法、流程与实践。",
+          "boundary": "关注「编码规范」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_design_principles",
+          "name": "设计原则",
+          "aliases": [
+            "设计准则",
+            "编程原则"
+          ],
+          "description": "关注程序开发领域中「设计原则」相关的方法、流程与实践。",
+          "boundary": "关注「设计原则」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_design_patterns",
+          "name": "设计模式",
+          "aliases": [
+            "软件设计模式",
+            "常用设计模式"
+          ],
+          "description": "关注程序开发领域中「设计模式」相关的方法、流程与实践。",
+          "boundary": "关注「设计模式」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_exception_handling",
+          "name": "异常处理",
+          "aliases": [
+            "错误处理",
+            "异常捕获"
+          ],
+          "description": "关注程序开发领域中「异常处理」相关的方法、流程与实践。",
+          "boundary": "关注「异常处理」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_logging_design",
+          "name": "日志设计",
+          "aliases": [
+            "日志规范",
+            "日志记录设计"
+          ],
+          "description": "关注程序开发领域中「日志设计」相关的方法、流程与实践。",
+          "boundary": "关注「日志设计」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_configuration_management",
+          "name": "配置管理",
+          "aliases": [
+            "配置中心",
+            "统一配置管理"
+          ],
+          "description": "关注程序开发领域中「配置管理」相关的方法、流程与实践。",
+          "boundary": "关注「配置管理」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_dependency_management",
+          "name": "依赖管理",
+          "aliases": [
+            "包依赖管理",
+            "第三方依赖管理"
+          ],
+          "description": "关注程序开发领域中「依赖管理」相关的方法、流程与实践。",
+          "boundary": "关注「依赖管理」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_database_access",
+          "name": "数据库访问",
+          "aliases": [
+            "数据访问层",
+            "ORM访问"
+          ],
+          "description": "关注程序开发领域中「数据库访问」相关的方法、流程与实践。",
+          "boundary": "关注「数据库访问」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_cache_design",
+          "name": "缓存设计",
+          "aliases": [
+            "缓存方案设计",
+            "本地缓存设计"
+          ],
+          "description": "关注程序开发领域中「缓存设计」相关的方法、流程与实践。",
+          "boundary": "关注「缓存设计」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_concurrent_programming",
+          "name": "并发编程",
+          "aliases": [
+            "多线程编程",
+            "并发处理"
+          ],
+          "description": "关注程序开发领域中「并发编程」相关的方法、流程与实践。",
+          "boundary": "关注「并发编程」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_secure_development",
+          "name": "安全开发",
+          "aliases": [
+            "安全编码",
+            "安全开发规范"
+          ],
+          "description": "关注程序开发领域中「安全开发」相关的方法、流程与实践。",
+          "boundary": "关注「安全开发」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_test_development",
+          "name": "测试开发",
+          "aliases": [
+            "自动化测试开发",
+            "测试用例编写"
+          ],
+          "description": "关注程序开发领域中「测试开发」相关的方法、流程与实践。",
+          "boundary": "关注「测试开发」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_performance_optimization",
+          "name": "性能优化",
+          "aliases": [
+            "系统调优",
+            "性能调优"
+          ],
+          "description": "关注程序开发领域中「性能优化」相关的方法、流程与实践。",
+          "boundary": "关注「性能优化」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "dev_debugging",
           "name": "调试排错",
-          "aliases": ["Bug排查", "问题定位"],
-          "description": "关注复现、日志、断点、定位和修复程序问题。",
-          "boundary": "关注开发期和运行期代码问题，不直接覆盖运维平台告警。",
-          "status": "active"
+          "aliases": [
+            "Bug排查",
+            "问题定位"
+          ],
+          "description": "关注程序开发领域中「调试排错」相关的方法、流程与实践。",
+          "boundary": "关注「调试排错」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "testing",
-          "name": "测试",
-          "aliases": ["单元测试", "集成测试"],
-          "description": "关注测试用例、断言、覆盖率、回归和自动化测试。",
-          "boundary": "关注程序质量验证，不直接覆盖业务验收标准全部内容。",
-          "status": "active"
+          "id": "dev_code_refactoring",
+          "name": "代码重构",
+          "aliases": [
+            "重构优化",
+            "代码优化"
+          ],
+          "description": "关注程序开发领域中「代码重构」相关的方法、流程与实践。",
+          "boundary": "关注「代码重构」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "build_release",
-          "name": "构建发布",
-          "aliases": ["打包", "发布流程"],
-          "description": "关注编译、打包、版本、制品和发布流程。",
-          "boundary": "关注软件交付制品，不直接覆盖项目管理里程碑。",
-          "status": "active"
+          "id": "dev_continuous_integration",
+          "name": "持续集成",
+          "aliases": [
+            "CI/CD",
+            "自动化构建"
+          ],
+          "description": "关注程序开发领域中「持续集成」相关的方法、流程与实践。",
+          "boundary": "关注「持续集成」本身，不直接覆盖程序开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         }
       ]
     },
     {
       "id": "software_design",
       "name": "软件设计",
-      "description": "用于理解软件架构、模块划分、设计模式、数据模型和质量属性。",
+      "description": "用于理解软件架构、模块划分、领域建模和质量属性设计。",
       "status": "active",
       "entries": [
         {
-          "id": "module_decomposition",
-          "name": "模块划分",
-          "aliases": ["模块设计", "功能模块"],
-          "description": "关注系统如何拆分为模块、组件或服务。",
-          "boundary": "关注职责和边界，不直接描述具体代码实现细节。",
-          "status": "active"
+          "id": "sd_software_architecture",
+          "name": "软件架构",
+          "aliases": [
+            "系统架构",
+            "架构设计"
+          ],
+          "description": "关注软件设计领域中「软件架构」相关的方法、流程与实践。",
+          "boundary": "关注「软件架构」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "system_boundary",
-          "name": "系统边界",
-          "aliases": ["边界设计", "上下文边界"],
-          "description": "关注系统与外部系统、用户、数据和职责的边界。",
-          "boundary": "关注系统范围，不直接覆盖内部算法细节。",
-          "status": "active"
+          "id": "sd_architecture_patterns",
+          "name": "架构模式",
+          "aliases": [
+            "架构风格",
+            "架构范式"
+          ],
+          "description": "关注软件设计领域中「架构模式」相关的方法、流程与实践。",
+          "boundary": "关注「架构模式」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "data_model",
-          "name": "数据模型",
-          "aliases": ["领域模型", "数据结构"],
-          "description": "关注实体、字段、关系、约束和数据表达方式。",
-          "boundary": "关注数据表达，不直接等同于数据库运维。",
-          "status": "active"
+          "id": "sd_domain_modeling",
+          "name": "领域建模",
+          "aliases": [
+            "领域驱动设计",
+            "DDD建模"
+          ],
+          "description": "关注软件设计领域中「领域建模」相关的方法、流程与实践。",
+          "boundary": "关注「领域建模」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "design_pattern",
-          "name": "设计模式",
-          "aliases": ["模式设计", "软件模式"],
-          "description": "关注可复用的软件设计结构和适用场景。",
-          "boundary": "关注设计思想，不直接覆盖具体框架配置。",
-          "status": "active"
+          "id": "sd_system_layering",
+          "name": "系统分层",
+          "aliases": [
+            "分层架构",
+            "层次划分"
+          ],
+          "description": "关注软件设计领域中「系统分层」相关的方法、流程与实践。",
+          "boundary": "关注「系统分层」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "quality_attribute",
-          "name": "质量属性",
-          "aliases": ["非功能属性", "架构质量"],
-          "description": "关注性能、可用性、扩展性、安全性和可维护性。",
-          "boundary": "关注设计质量目标，不直接描述单个功能需求。",
-          "status": "active"
+          "id": "sd_module_design",
+          "name": "模块设计",
+          "aliases": [
+            "模块划分",
+            "组件设计"
+          ],
+          "description": "关注软件设计领域中「模块设计」相关的方法、流程与实践。",
+          "boundary": "关注「模块设计」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "sd_interface_design",
+          "name": "接口设计",
+          "aliases": [
+            "API设计",
+            "接口定义"
+          ],
+          "description": "关注软件设计领域中「接口设计」相关的方法、流程与实践。",
+          "boundary": "关注「接口设计」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "sd_data_design",
+          "name": "数据设计",
+          "aliases": [
+            "数据结构设计",
+            "数据表达设计"
+          ],
+          "description": "关注软件设计领域中「数据设计」相关的方法、流程与实践。",
+          "boundary": "关注「数据设计」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "sd_communication_design",
+          "name": "通信设计",
+          "aliases": [
+            "通信协议设计",
+            "接口通信设计"
+          ],
+          "description": "关注软件设计领域中「通信设计」相关的方法、流程与实践。",
+          "boundary": "关注「通信设计」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "sd_transaction_design",
+          "name": "事务设计",
+          "aliases": [
+            "事务方案设计",
+            "事务边界设计"
+          ],
+          "description": "关注软件设计领域中「事务设计」相关的方法、流程与实践。",
+          "boundary": "关注「事务设计」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "sd_consistency_design",
+          "name": "一致性设计",
+          "aliases": [
+            "数据一致性设计",
+            "一致性方案"
+          ],
+          "description": "关注软件设计领域中「一致性设计」相关的方法、流程与实践。",
+          "boundary": "关注「一致性设计」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "sd_extensibility_design",
+          "name": "扩展设计",
+          "aliases": [
+            "可扩展设计",
+            "扩展方案"
+          ],
+          "description": "关注软件设计领域中「扩展设计」相关的方法、流程与实践。",
+          "boundary": "关注「扩展设计」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "sd_high_availability_design",
+          "name": "高可用设计",
+          "aliases": [
+            "容灾设计",
+            "高可用方案"
+          ],
+          "description": "关注软件设计领域中「高可用设计」相关的方法、流程与实践。",
+          "boundary": "关注「高可用设计」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "sd_security_design",
+          "name": "安全设计",
+          "aliases": [
+            "安全架构设计",
+            "安全方案设计"
+          ],
+          "description": "关注软件设计领域中「安全设计」相关的方法、流程与实践。",
+          "boundary": "关注「安全设计」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "sd_performance_design",
+          "name": "性能设计",
+          "aliases": [
+            "性能方案设计",
+            "性能架构设计"
+          ],
+          "description": "关注软件设计领域中「性能设计」相关的方法、流程与实践。",
+          "boundary": "关注「性能设计」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "sd_maintainability",
+          "name": "可维护性",
+          "aliases": [
+            "维护性设计",
+            "易维护性"
+          ],
+          "description": "关注软件设计领域中「可维护性」相关的方法、流程与实践。",
+          "boundary": "关注「可维护性」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "sd_scalability",
+          "name": "可扩展性",
+          "aliases": [
+            "扩展能力",
+            "伸缩性"
+          ],
+          "description": "关注软件设计领域中「可扩展性」相关的方法、流程与实践。",
+          "boundary": "关注「可扩展性」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "sd_observability",
+          "name": "可观测性",
+          "aliases": [
+            "监控可观测性",
+            "Observability"
+          ],
+          "description": "关注软件设计领域中「可观测性」相关的方法、流程与实践。",
+          "boundary": "关注「可观测性」本身，不直接覆盖软件设计下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         }
       ]
     },
     {
       "id": "ai_fundamentals",
-      "name": "AI 基础知识",
-      "description": "用于理解机器学习、深度学习、模型训练、评估和大模型基础概念。",
+      "name": "AI基础知识",
+      "description": "用于理解机器学习、深度学习、大模型基础概念、训练推理和评测方法。",
       "status": "active",
       "entries": [
         {
-          "id": "machine_learning",
+          "id": "ai_machine_learning",
           "name": "机器学习",
-          "aliases": ["ML", "传统机器学习"],
-          "description": "关注监督学习、无监督学习、特征、训练和泛化。",
-          "boundary": "关注机器学习基本方法，不直接等同于大模型应用开发。",
-          "status": "active"
+          "aliases": [
+            "ML",
+            "传统机器学习"
+          ],
+          "description": "关注AI基础知识领域中「机器学习」相关的方法、流程与实践。",
+          "boundary": "关注「机器学习」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "deep_learning",
+          "id": "ai_deep_learning",
           "name": "深度学习",
-          "aliases": ["神经网络", "DL"],
-          "description": "关注神经网络、反向传播、表示学习和深度模型。",
-          "boundary": "关注深度模型原理，不直接覆盖业务应用方案。",
-          "status": "active"
+          "aliases": [
+            "DL",
+            "深度神经网络"
+          ],
+          "description": "关注AI基础知识领域中「深度学习」相关的方法、流程与实践。",
+          "boundary": "关注「深度学习」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "large_language_model",
-          "name": "大语言模型",
-          "aliases": ["LLM", "大模型"],
-          "description": "关注语言模型、上下文、推理、生成和模型能力边界。",
-          "boundary": "关注模型基础能力，不直接覆盖具体工具使用。",
-          "status": "active"
+          "id": "ai_neural_network",
+          "name": "神经网络",
+          "aliases": [
+            "人工神经网络",
+            "NN"
+          ],
+          "description": "关注AI基础知识领域中「神经网络」相关的方法、流程与实践。",
+          "boundary": "关注「神经网络」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "model_evaluation",
-          "name": "模型评估",
-          "aliases": ["评测", "评价指标"],
-          "description": "关注准确率、召回率、损失、基准测试和人工评估。",
-          "boundary": "关注模型效果判断，不直接覆盖上线运维。",
-          "status": "active"
+          "id": "ai_transformer",
+          "name": "Transformer",
+          "aliases": [
+            "Transformer架构",
+            "自注意力架构"
+          ],
+          "description": "关注AI基础知识领域中「Transformer」相关的方法、流程与实践。",
+          "boundary": "关注「Transformer」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "training_inference",
-          "name": "训练与推理",
-          "aliases": ["模型训练", "模型推理"],
-          "description": "关注训练数据、参数更新、推理调用和性能成本。",
-          "boundary": "关注模型生命周期中的训练和推理，不直接等同于提示词设计。",
-          "status": "active"
+          "id": "ai_embedding",
+          "name": "Embedding",
+          "aliases": [
+            "嵌入向量",
+            "向量嵌入"
+          ],
+          "description": "关注AI基础知识领域中「Embedding」相关的方法、流程与实践。",
+          "boundary": "关注「Embedding」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "ai_vector_representation",
+          "name": "向量表示",
+          "aliases": [
+            "特征向量",
+            "语义向量"
+          ],
+          "description": "关注AI基础知识领域中「向量表示」相关的方法、流程与实践。",
+          "boundary": "关注「向量表示」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "ai_token",
+          "name": "Token",
+          "aliases": [
+            "词元",
+            "分词单元"
+          ],
+          "description": "关注AI基础知识领域中「Token」相关的方法、流程与实践。",
+          "boundary": "关注「Token」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "ai_context_window",
+          "name": "上下文窗口",
+          "aliases": [
+            "Context Window",
+            "上下文长度"
+          ],
+          "description": "关注AI基础知识领域中「上下文窗口」相关的方法、流程与实践。",
+          "boundary": "关注「上下文窗口」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "ai_attention_mechanism",
+          "name": "注意力机制",
+          "aliases": [
+            "Attention机制",
+            "自注意力"
+          ],
+          "description": "关注AI基础知识领域中「注意力机制」相关的方法、流程与实践。",
+          "boundary": "关注「注意力机制」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "ai_positional_encoding",
+          "name": "位置编码",
+          "aliases": [
+            "Positional Encoding",
+            "位置信息编码"
+          ],
+          "description": "关注AI基础知识领域中「位置编码」相关的方法、流程与实践。",
+          "boundary": "关注「位置编码」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "ai_inference_mechanism",
+          "name": "推理机制",
+          "aliases": [
+            "Inference",
+            "模型推理机制"
+          ],
+          "description": "关注AI基础知识领域中「推理机制」相关的方法、流程与实践。",
+          "boundary": "关注「推理机制」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "ai_parameter_scale",
+          "name": "参数规模",
+          "aliases": [
+            "模型参数量",
+            "参数量级"
+          ],
+          "description": "关注AI基础知识领域中「参数规模」相关的方法、流程与实践。",
+          "boundary": "关注「参数规模」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "ai_training",
+          "name": "训练",
+          "aliases": [
+            "模型训练",
+            "预训练"
+          ],
+          "description": "关注AI基础知识领域中「训练」相关的方法、流程与实践。",
+          "boundary": "关注「训练」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "ai_fine_tuning",
+          "name": "微调",
+          "aliases": [
+            "Fine-tuning",
+            "模型微调"
+          ],
+          "description": "关注AI基础知识领域中「微调」相关的方法、流程与实践。",
+          "boundary": "关注「微调」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "ai_reinforcement_learning",
+          "name": "强化学习",
+          "aliases": [
+            "RL",
+            "强化学习训练"
+          ],
+          "description": "关注AI基础知识领域中「强化学习」相关的方法、流程与实践。",
+          "boundary": "关注「强化学习」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "ai_knowledge_distillation",
+          "name": "知识蒸馏",
+          "aliases": [
+            "模型蒸馏",
+            "Distillation"
+          ],
+          "description": "关注AI基础知识领域中「知识蒸馏」相关的方法、流程与实践。",
+          "boundary": "关注「知识蒸馏」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "ai_multimodal",
+          "name": "多模态",
+          "aliases": [
+            "Multimodal",
+            "跨模态"
+          ],
+          "description": "关注AI基础知识领域中「多模态」相关的方法、流程与实践。",
+          "boundary": "关注「多模态」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "ai_model_evaluation",
+          "name": "模型评测",
+          "aliases": [
+            "评测",
+            "评价指标"
+          ],
+          "description": "关注AI基础知识领域中「模型评测」相关的方法、流程与实践。",
+          "boundary": "关注「模型评测」本身，不直接覆盖AI基础知识下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         }
       ]
     },
     {
       "id": "ai_application_development",
-      "name": "AI 应用开发",
-      "description": "用于理解基于大模型和 AI 能力构建应用的架构、检索、工具调用和评估。",
+      "name": "AI应用开发",
+      "description": "用于理解基于大模型构建 Agent 与 RAG 应用的架构、知识处理、检索和协作机制。",
       "status": "active",
       "entries": [
         {
-          "id": "prompt_engineering",
-          "name": "提示词工程",
-          "aliases": ["Prompt", "提示词设计"],
-          "description": "关注如何设计输入指令、上下文和输出约束。",
-          "boundary": "关注模型交互设计，不直接等同于产品功能设计。",
-          "status": "active"
+          "id": "aiapp_prompt_engineering",
+          "name": "Prompt工程",
+          "aliases": [
+            "提示词工程",
+            "提示词设计"
+          ],
+          "description": "关注AI应用开发领域中「Prompt工程」相关的方法、流程与实践。",
+          "boundary": "关注「Prompt工程」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "rag",
-          "name": "检索增强生成",
-          "aliases": ["RAG", "知识库问答"],
-          "description": "关注检索、召回、重排、证据注入和生成回答。",
-          "boundary": "关注检索增强，不直接等同于完整知识大脑设计。",
-          "status": "active"
+          "id": "aiapp_knowledge_base_construction",
+          "name": "知识库构建",
+          "aliases": [
+            "知识库建设",
+            "知识库搭建"
+          ],
+          "description": "关注AI应用开发领域中「知识库构建」相关的方法、流程与实践。",
+          "boundary": "关注「知识库构建」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "tool_calling",
-          "name": "工具调用",
-          "aliases": ["Function Calling", "工具使用"],
-          "description": "关注模型选择和调用外部工具、函数或 API。",
-          "boundary": "关注模型和工具交互，不直接覆盖工具本身实现。",
-          "status": "active"
+          "id": "aiapp_document_parsing",
+          "name": "文档解析",
+          "aliases": [
+            "文档提取",
+            "文档结构化"
+          ],
+          "description": "关注AI应用开发领域中「文档解析」相关的方法、流程与实践。",
+          "boundary": "关注「文档解析」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "agent_workflow",
-          "name": "Agent 工作流",
-          "aliases": ["智能体流程", "Agent 编排"],
-          "description": "关注任务规划、步骤执行、工具编排和反馈循环。",
-          "boundary": "关注应用层智能体，不直接等同于底层模型训练。",
-          "status": "active"
+          "id": "aiapp_knowledge_extraction",
+          "name": "知识抽取",
+          "aliases": [
+            "信息抽取",
+            "知识点提取"
+          ],
+          "description": "关注AI应用开发领域中「知识抽取」相关的方法、流程与实践。",
+          "boundary": "关注「知识抽取」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "ai_evaluation",
-          "name": "AI 应用评估",
-          "aliases": ["应用评测", "效果评估"],
-          "description": "关注 AI 应用的正确性、稳定性、可解释性和用户反馈。",
-          "boundary": "关注应用效果，不直接覆盖模型基础评测全部内容。",
-          "status": "active"
+          "id": "aiapp_knowledge_compilation",
+          "name": "知识编译",
+          "aliases": [
+            "知识整合",
+            "知识汇编"
+          ],
+          "description": "关注AI应用开发领域中「知识编译」相关的方法、流程与实践。",
+          "boundary": "关注「知识编译」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_knowledge_retrieval",
+          "name": "知识检索",
+          "aliases": [
+            "检索召回",
+            "知识查询"
+          ],
+          "description": "关注AI应用开发领域中「知识检索」相关的方法、流程与实践。",
+          "boundary": "关注「知识检索」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_embedding",
+          "name": "Embedding",
+          "aliases": [
+            "嵌入向量",
+            "向量嵌入"
+          ],
+          "description": "关注AI应用开发领域中「Embedding」相关的方法、流程与实践。",
+          "boundary": "关注「Embedding」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_vector_retrieval",
+          "name": "向量检索",
+          "aliases": [
+            "向量搜索",
+            "语义检索"
+          ],
+          "description": "关注AI应用开发领域中「向量检索」相关的方法、流程与实践。",
+          "boundary": "关注「向量检索」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_reranking",
+          "name": "重排序",
+          "aliases": [
+            "Rerank",
+            "结果重排"
+          ],
+          "description": "关注AI应用开发领域中「重排序」相关的方法、流程与实践。",
+          "boundary": "关注「重排序」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_chunking",
+          "name": "Chunk切分",
+          "aliases": [
+            "文本切分",
+            "分块处理"
+          ],
+          "description": "关注AI应用开发领域中「Chunk切分」相关的方法、流程与实践。",
+          "boundary": "关注「Chunk切分」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_context_construction",
+          "name": "上下文构建",
+          "aliases": [
+            "上下文拼接",
+            "上下文组装"
+          ],
+          "description": "关注AI应用开发领域中「上下文构建」相关的方法、流程与实践。",
+          "boundary": "关注「上下文构建」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_memory",
+          "name": "Memory",
+          "aliases": [
+            "记忆机制",
+            "长期记忆"
+          ],
+          "description": "关注AI应用开发领域中「Memory」相关的方法、流程与实践。",
+          "boundary": "关注「Memory」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_planning",
+          "name": "Planning",
+          "aliases": [
+            "任务规划",
+            "规划机制"
+          ],
+          "description": "关注AI应用开发领域中「Planning」相关的方法、流程与实践。",
+          "boundary": "关注「Planning」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_reflection",
+          "name": "Reflection",
+          "aliases": [
+            "反思机制",
+            "自我反思"
+          ],
+          "description": "关注AI应用开发领域中「Reflection」相关的方法、流程与实践。",
+          "boundary": "关注「Reflection」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_agent",
+          "name": "Agent",
+          "aliases": [
+            "智能体",
+            "AI Agent"
+          ],
+          "description": "关注AI应用开发领域中「Agent」相关的方法、流程与实践。",
+          "boundary": "关注「Agent」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_workflow",
+          "name": "Workflow",
+          "aliases": [
+            "工作流",
+            "流程编排"
+          ],
+          "description": "关注AI应用开发领域中「Workflow」相关的方法、流程与实践。",
+          "boundary": "关注「Workflow」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_tool_calling",
+          "name": "Tool Calling",
+          "aliases": [
+            "Function Calling",
+            "工具调用"
+          ],
+          "description": "关注AI应用开发领域中「Tool Calling」相关的方法、流程与实践。",
+          "boundary": "关注「Tool Calling」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_mcp",
+          "name": "MCP",
+          "aliases": [
+            "Model Context Protocol",
+            "模型上下文协议"
+          ],
+          "description": "关注AI应用开发领域中「MCP」相关的方法、流程与实践。",
+          "boundary": "关注「MCP」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_a2a",
+          "name": "A2A",
+          "aliases": [
+            "Agent to Agent",
+            "智能体间协议"
+          ],
+          "description": "关注AI应用开发领域中「A2A」相关的方法、流程与实践。",
+          "boundary": "关注「A2A」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_multi_agent_collaboration",
+          "name": "多Agent协作",
+          "aliases": [
+            "多智能体协作",
+            "Multi-Agent"
+          ],
+          "description": "关注AI应用开发领域中「多Agent协作」相关的方法、流程与实践。",
+          "boundary": "关注「多Agent协作」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aiapp_model_routing",
+          "name": "模型路由",
+          "aliases": [
+            "Model Routing",
+            "路由分发"
+          ],
+          "description": "关注AI应用开发领域中「模型路由」相关的方法、流程与实践。",
+          "boundary": "关注「模型路由」本身，不直接覆盖AI应用开发下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         }
       ]
     },
     {
       "id": "ai_tool_usage",
-      "name": "AI 工具使用",
-      "description": "用于理解各类 AI 工具的使用方法、工作流、限制和实践经验。",
+      "name": "AI工具使用",
+      "description": "用于理解各类 AI 工具的使用方法、工作流设计和效率实践。",
       "status": "active",
       "entries": [
         {
-          "id": "chat_assistant",
-          "name": "对话助手",
-          "aliases": ["ChatGPT", "AI 助手"],
-          "description": "关注对话式 AI 的提问、上下文管理、输出使用和限制。",
-          "boundary": "关注使用方式，不直接覆盖模型底层原理。",
-          "status": "active"
+          "id": "aitool_model_selection",
+          "name": "模型选择",
+          "aliases": [
+            "选型",
+            "模型选型"
+          ],
+          "description": "关注AI工具使用领域中「模型选择」相关的方法、流程与实践。",
+          "boundary": "关注「模型选择」本身，不直接覆盖AI工具使用下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "coding_assistant",
-          "name": "代码助手",
-          "aliases": ["AI 编程", "编码助手"],
-          "description": "关注使用 AI 辅助阅读、修改、生成和测试代码。",
-          "boundary": "关注开发辅助工具使用，不直接替代软件设计原则。",
-          "status": "active"
+          "id": "aitool_prompt_design",
+          "name": "Prompt设计",
+          "aliases": [
+            "提示词设计",
+            "提示词编写"
+          ],
+          "description": "关注AI工具使用领域中「Prompt设计」相关的方法、流程与实践。",
+          "boundary": "关注「Prompt设计」本身，不直接覆盖AI工具使用下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "document_assistant",
-          "name": "文档助手",
-          "aliases": ["文档生成", "文档总结"],
-          "description": "关注 AI 辅助写作、总结、改写、审阅和资料整理。",
-          "boundary": "关注文档处理，不直接等同于知识结构构建。",
-          "status": "active"
+          "id": "aitool_context_management",
+          "name": "上下文管理",
+          "aliases": [
+            "会话上下文管理",
+            "上下文维护"
+          ],
+          "description": "关注AI工具使用领域中「上下文管理」相关的方法、流程与实践。",
+          "boundary": "关注「上下文管理」本身，不直接覆盖AI工具使用下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "image_generation",
-          "name": "图像生成",
-          "aliases": ["AI 绘图", "图片生成"],
-          "description": "关注使用 AI 生成、编辑和优化图像资产。",
-          "boundary": "关注图像工具使用，不直接覆盖视觉设计全部方法。",
-          "status": "active"
+          "id": "aitool_knowledge_management",
+          "name": "知识管理",
+          "aliases": [
+            "个人知识管理",
+            "知识沉淀"
+          ],
+          "description": "关注AI工具使用领域中「知识管理」相关的方法、流程与实践。",
+          "boundary": "关注「知识管理」本身，不直接覆盖AI工具使用下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "workflow_automation",
-          "name": "工作流自动化",
-          "aliases": ["自动化流程", "AI 工作流"],
-          "description": "关注使用 AI 串联任务、工具、文档和操作流程。",
-          "boundary": "关注使用层面的自动化，不直接覆盖底层 Agent 框架实现。",
-          "status": "active"
+          "id": "aitool_tool_invocation",
+          "name": "工具调用",
+          "aliases": [
+            "Function Calling",
+            "插件调用"
+          ],
+          "description": "关注AI工具使用领域中「工具调用」相关的方法、流程与实践。",
+          "boundary": "关注「工具调用」本身，不直接覆盖AI工具使用下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aitool_agent_collaboration",
+          "name": "Agent协作",
+          "aliases": [
+            "智能体协作",
+            "多Agent配合"
+          ],
+          "description": "关注AI工具使用领域中「Agent协作」相关的方法、流程与实践。",
+          "boundary": "关注「Agent协作」本身，不直接覆盖AI工具使用下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aitool_workflow_design",
+          "name": "工作流设计",
+          "aliases": [
+            "流程设计",
+            "自动化流程设计"
+          ],
+          "description": "关注AI工具使用领域中「工作流设计」相关的方法、流程与实践。",
+          "boundary": "关注「工作流设计」本身，不直接覆盖AI工具使用下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aitool_office_automation",
+          "name": "自动化办公",
+          "aliases": [
+            "办公自动化",
+            "AI办公"
+          ],
+          "description": "关注AI工具使用领域中「自动化办公」相关的方法、流程与实践。",
+          "boundary": "关注「自动化办公」本身，不直接覆盖AI工具使用下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aitool_code_generation",
+          "name": "代码生成",
+          "aliases": [
+            "AI编码",
+            "代码自动生成"
+          ],
+          "description": "关注AI工具使用领域中「代码生成」相关的方法、流程与实践。",
+          "boundary": "关注「代码生成」本身，不直接覆盖AI工具使用下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aitool_document_generation",
+          "name": "文档生成",
+          "aliases": [
+            "自动生成文档",
+            "报告生成"
+          ],
+          "description": "关注AI工具使用领域中「文档生成」相关的方法、流程与实践。",
+          "boundary": "关注「文档生成」本身，不直接覆盖AI工具使用下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aitool_data_analysis",
+          "name": "数据分析",
+          "aliases": [
+            "AI数据分析",
+            "数据洞察"
+          ],
+          "description": "关注AI工具使用领域中「数据分析」相关的方法、流程与实践。",
+          "boundary": "关注「数据分析」本身，不直接覆盖AI工具使用下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aitool_search_augmentation",
+          "name": "搜索增强",
+          "aliases": [
+            "检索增强",
+            "搜索优化"
+          ],
+          "description": "关注AI工具使用领域中「搜索增强」相关的方法、流程与实践。",
+          "boundary": "关注「搜索增强」本身，不直接覆盖AI工具使用下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "aitool_efficiency_optimization",
+          "name": "效率优化",
+          "aliases": [
+            "生产力提升",
+            "效率提升"
+          ],
+          "description": "关注AI工具使用领域中「效率优化」相关的方法、流程与实践。",
+          "boundary": "关注「效率优化」本身，不直接覆盖AI工具使用下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         }
       ]
     },
     {
       "id": "docker_container_operations",
-      "name": "Docker 容器维护",
-      "description": "用于理解 Docker 容器运行、镜像管理、网络配置、数据卷、日志监控、故障处理，以及 Docker Swarm / Kubernetes 等多机容器集群的部署、节点角色管理和集群编排。",
+      "name": "Docker容器维护",
+      "description": "用于理解容器部署、镜像管理、网络存储、编排集群、监控和故障处理。",
       "status": "active",
       "entries": [
         {
-          "id": "container_lifecycle",
-          "name": "容器生命周期",
-          "aliases": ["容器启动", "容器停止", "容器状态"],
-          "description": "关注容器创建、启动、停止、重启、删除和状态检查。",
-          "boundary": "关注容器运行状态管理，不直接覆盖镜像构建过程。",
-          "status": "active"
+          "id": "docker_container_deployment",
+          "name": "容器部署",
+          "aliases": [
+            "容器上线",
+            "容器化部署"
+          ],
+          "description": "关注Docker容器维护领域中「容器部署」相关的方法、流程与实践。",
+          "boundary": "关注「容器部署」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "image_management",
+          "id": "docker_image_management",
           "name": "镜像管理",
-          "aliases": ["Docker 镜像", "镜像构建"],
-          "description": "关注镜像拉取、构建、标记、推送、清理和版本管理。",
-          "boundary": "关注镜像制品管理，不直接处理容器运行时故障。",
-          "status": "active"
+          "aliases": [
+            "Docker镜像管理",
+            "镜像构建管理"
+          ],
+          "description": "关注Docker容器维护领域中「镜像管理」相关的方法、流程与实践。",
+          "boundary": "关注「镜像管理」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "container_networking",
+          "id": "docker_image_registry",
+          "name": "镜像仓库",
+          "aliases": [
+            "Registry",
+            "镜像仓库管理"
+          ],
+          "description": "关注Docker容器维护领域中「镜像仓库」相关的方法、流程与实践。",
+          "boundary": "关注「镜像仓库」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "docker_container_lifecycle",
+          "name": "容器生命周期",
+          "aliases": [
+            "容器启停",
+            "容器状态管理"
+          ],
+          "description": "关注Docker容器维护领域中「容器生命周期」相关的方法、流程与实践。",
+          "boundary": "关注「容器生命周期」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "docker_container_networking",
           "name": "容器网络",
-          "aliases": ["Docker 网络", "端口映射", "容器连通"],
-          "description": "关注容器网络模式、端口映射、DNS、网桥和容器间通信。",
-          "boundary": "关注容器网络层面，不直接覆盖宿主机完整网络架构。",
-          "status": "active"
+          "aliases": [
+            "Docker网络",
+            "容器网络配置"
+          ],
+          "description": "关注Docker容器维护领域中「容器网络」相关的方法、流程与实践。",
+          "boundary": "关注「容器网络」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "volume_management",
-          "name": "数据卷管理",
-          "aliases": ["Docker Volume", "目录挂载", "持久化存储"],
-          "description": "关注数据卷、绑定挂载、持久化数据、权限和挂载路径管理。",
-          "boundary": "关注容器数据持久化，不直接等同于数据库备份恢复。",
-          "status": "active"
+          "id": "docker_container_storage",
+          "name": "容器存储",
+          "aliases": [
+            "容器数据卷",
+            "持久化存储"
+          ],
+          "description": "关注Docker容器维护领域中「容器存储」相关的方法、流程与实践。",
+          "boundary": "关注「容器存储」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "container_logs_monitoring",
-          "name": "容器日志与监控",
-          "aliases": ["容器日志", "运行监控", "资源监控"],
-          "description": "关注容器日志查看、资源占用、健康检查、告警和运行指标。",
-          "boundary": "关注容器运行观测，不直接覆盖应用业务日志分析全部内容。",
-          "status": "active"
+          "id": "docker_resource_management",
+          "name": "资源管理",
+          "aliases": [
+            "资源调度",
+            "系统资源管理"
+          ],
+          "description": "关注Docker容器维护领域中「资源管理」相关的方法、流程与实践。",
+          "boundary": "关注「资源管理」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "container_fault_diagnosis",
-          "name": "容器故障诊断",
-          "aliases": ["容器故障", "容器排查", "启动失败"],
-          "description": "关注容器启动失败、异常退出、网络不通、挂载失败和资源不足等问题定位。",
-          "boundary": "关注容器层面的故障定位和处置，不直接覆盖应用代码缺陷修复。",
-          "status": "active"
+          "id": "docker_health_check",
+          "name": "健康检查",
+          "aliases": [
+            "Health Check",
+            "存活探针"
+          ],
+          "description": "关注Docker容器维护领域中「健康检查」相关的方法、流程与实践。",
+          "boundary": "关注「健康检查」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "compose_operations",
-          "name": "Compose 编排维护",
-          "aliases": ["Docker Compose", "compose 服务", "多容器编排"],
-          "description": "关注 compose 文件、服务依赖、环境变量、网络、数据卷和多容器启动维护。",
-          "boundary": "关注单机多容器编排，不直接等同于 Kubernetes 集群管理。",
-          "status": "active"
+          "id": "docker_container_monitoring",
+          "name": "容器监控",
+          "aliases": [
+            "容器指标监控",
+            "运行状态监控"
+          ],
+          "description": "关注Docker容器维护领域中「容器监控」相关的方法、流程与实践。",
+          "boundary": "关注「容器监控」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         },
         {
-          "id": "cluster_orchestration",
-          "name": "集群编排",
-          "aliases": ["Kubernetes", "K8s", "Docker Swarm", "容器集群管理", "集群部署"],
-          "description": "关注多机容器集群的部署、节点角色（Manager/Worker/Master）、加入/扩缩容和集群级故障处理。",
-          "boundary": "关注跨主机集群编排，不直接等同于单机容器生命周期管理。",
-          "status": "active"
+          "id": "docker_log_management",
+          "name": "日志管理",
+          "aliases": [
+            "系统日志管理",
+            "日志分析"
+          ],
+          "description": "关注Docker容器维护领域中「日志管理」相关的方法、流程与实践。",
+          "boundary": "关注「日志管理」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "docker_container_security",
+          "name": "容器安全",
+          "aliases": [
+            "镜像安全",
+            "运行时安全"
+          ],
+          "description": "关注Docker容器维护领域中「容器安全」相关的方法、流程与实践。",
+          "boundary": "关注「容器安全」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "docker_permission_management",
+          "name": "权限管理",
+          "aliases": [
+            "权限控制",
+            "访问权限管理"
+          ],
+          "description": "关注Docker容器维护领域中「权限管理」相关的方法、流程与实践。",
+          "boundary": "关注「权限管理」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "docker_container_orchestration",
+          "name": "容器编排",
+          "aliases": [
+            "Kubernetes编排",
+            "编排调度"
+          ],
+          "description": "关注Docker容器维护领域中「容器编排」相关的方法、流程与实践。",
+          "boundary": "关注「容器编排」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "docker_service_discovery",
+          "name": "服务发现",
+          "aliases": [
+            "服务寻址",
+            "服务发现机制"
+          ],
+          "description": "关注Docker容器维护领域中「服务发现」相关的方法、流程与实践。",
+          "boundary": "关注「服务发现」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "docker_rolling_upgrade",
+          "name": "滚动升级",
+          "aliases": [
+            "滚动更新",
+            "灰度发布"
+          ],
+          "description": "关注Docker容器维护领域中「滚动升级」相关的方法、流程与实践。",
+          "boundary": "关注「滚动升级」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "docker_cluster_management",
+          "name": "集群管理",
+          "aliases": [
+            "集群运维",
+            "集群节点管理"
+          ],
+          "description": "关注Docker容器维护领域中「集群管理」相关的方法、流程与实践。",
+          "boundary": "关注「集群管理」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "docker_node_management",
+          "name": "节点管理",
+          "aliases": [
+            "Node管理",
+            "节点运维"
+          ],
+          "description": "关注Docker容器维护领域中「节点管理」相关的方法、流程与实践。",
+          "boundary": "关注「节点管理」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "docker_fault_diagnosis",
+          "name": "故障诊断",
+          "aliases": [
+            "故障排查",
+            "问题定位"
+          ],
+          "description": "关注Docker容器维护领域中「故障诊断」相关的方法、流程与实践。",
+          "boundary": "关注「故障诊断」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
+        },
+        {
+          "id": "docker_performance_optimization",
+          "name": "性能优化",
+          "aliases": [
+            "系统调优",
+            "性能调优"
+          ],
+          "description": "关注Docker容器维护领域中「性能优化」相关的方法、流程与实践。",
+          "boundary": "关注「性能优化」本身，不直接覆盖Docker容器维护下其他并列概念的内容。",
+          "status": "active",
+          "kind": "concept"
         }
       ]
     }

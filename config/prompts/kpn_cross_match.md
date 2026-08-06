@@ -1,5 +1,5 @@
 ---
-version: v1
+version: v2
 ---
 
 ## System
@@ -16,6 +16,7 @@ version: v1
 
 - 只建立有明确依据的关系，不推测；
 - 语义等价（同一知识的不同表述）用 related，不合并知识点；
+- 判 contradicts 前必须先确认两条知识点的约束是否针对同一主体/范围（可参考 source_title 判断，如标题指向不同公司/组织的文件）；如果两条知识点分属不同主体，即使数值或规则表面不同，也不构成真实冲突，应判 related（同话题、不同范围）或不建立关系，不能判 contradicts；
 - 关系总数不超过 A 组知识点数的 2 倍。
 
 按以下 json 格式输出，不输出任何其他内容：
@@ -23,7 +24,7 @@ version: v1
 
 ## User
 
-A 组（格式：point_id TAB unit_center TAB content）：
+A 组（格式：point_id TAB source_title TAB unit_center TAB content）：
 {{new_points}}
 
 B 组（同格式）：

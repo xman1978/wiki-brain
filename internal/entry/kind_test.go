@@ -43,7 +43,7 @@ func TestService_ProposeAddCandidate_PersistsKind(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "Oracle RAC", "具体数据库产品", EntryKindFact, []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "Oracle RAC", "具体数据库产品", "", EntryKindFact, "", []string{"p1"}, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestService_ProposeAddCandidate_InvalidKindRejected(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	if _, err := svc.ProposeAddCandidate("d1", "topic", "desc", "bogus", []string{"p1"}, "s1"); err == nil {
+	if _, err := svc.ProposeAddCandidate("d1", "topic", "desc", "", "bogus", "", []string{"p1"}, "s1"); err == nil {
 		t.Fatal("expected error for invalid kind")
 	}
 }

@@ -25,10 +25,11 @@ func NewStore(db *sql.DB) *Store {
 // by the 知识领域 page's concept grid (docs/impl/v1/concept-evolution.md 未定义
 // 这块 UI，字段是纯展示性的附加信息，不影响任何匹配/确认逻辑).
 type EntryInfo struct {
-	EntryID   string
+	EntryID     string
 	Name        string
 	DomainID    string
 	Description string
+	Boundary    string
 	Kind        string
 	KPCount     int
 }
@@ -39,7 +40,7 @@ type EntryInfo struct {
 // pickers, and by the 知识领域 page's concept grid.
 func (s *Store) ListActiveEntries(domainID string) ([]EntryInfo, error) {
 	query := `
-		SELECT c.entry_id, c.name, c.domain_id, COALESCE(c.description, ''), c.kind,
+		SELECT c.entry_id, c.name, c.domain_id, COALESCE(c.description, ''), COALESCE(c.boundary, ''), c.kind,
 			(SELECT COUNT(*) FROM knowledge_points kp
 			 JOIN knowledge_units ku ON ku.unit_id = kp.unit_id
 			 WHERE ku.entry_id = c.entry_id AND kp.lifecycle = 'current' AND ku.lifecycle = 'current')
@@ -60,7 +61,7 @@ func (s *Store) ListActiveEntries(domainID string) ([]EntryInfo, error) {
 	var results []EntryInfo
 	for rows.Next() {
 		var c EntryInfo
-		if err := rows.Scan(&c.EntryID, &c.Name, &c.DomainID, &c.Description, &c.Kind, &c.KPCount); err != nil {
+		if err := rows.Scan(&c.EntryID, &c.Name, &c.DomainID, &c.Description, &c.Boundary, &c.Kind, &c.KPCount); err != nil {
 			return nil, fmt.Errorf("concept store: scan concept: %w", err)
 		}
 		results = append(results, c)
@@ -122,6 +123,14 @@ type EntryDetail struct {
 	Description string
 	Kind        string
 	Points      []AvailablePointOption
+	// RestorableCandidateID is the applied kind=add candidate that created
+	// this entry (resolved_entry_id points back at it), when Restore
+	// supports undoing it — i.e. it created a brand-new entry, not an
+	// "assign to existing" or a merge (see Service.Restore's own scope
+	// check). Empty when this entry either wasn't created via that path or
+	// isn't restorable, so the UI knows when to hide the 撤销 button rather
+	// than showing one that will just 400.
+	RestorableCandidateID string
 }
 
 // GetEntryDetail loads a concept's editable fields plus its current point
@@ -161,6 +170,15 @@ func (s *Store) GetEntryDetail(conceptID string) (*EntryDetail, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+
+	err = s.db.QueryRow(`SELECT candidate_id FROM entry_candidates
+		WHERE resolved_entry_id = ? AND status = ? AND kind = ? AND created_new_entry = 1`,
+		conceptID, StatusApplied, KindAdd,
+	).Scan(&d.RestorableCandidateID)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("concept store: get concept detail: restorable candidate: %w", err)
+	}
+
 	return &d, nil
 }
 
@@ -867,15 +885,18 @@ func (s *Store) SetCandidateKPNRelationIDs(candidateID string, relationIDs []str
 // (docs/impl/v1/concept-evolution.md 步骤 3): create the concept
 // (origin=evolved), migrate every entry_id-NULL KU behind pointIDs onto it,
 // and resolve the candidate + its learning_result to applied.
-func (s *Store) ConfirmAdd(candidateID, conceptID, domainID, name, description, kind string, pointIDs []string, reason string) (migratedKUs int, err error) {
+func (s *Store) ConfirmAdd(candidateID, conceptID, domainID, name, description, boundary, kind string, aliases, pointIDs []string, reason string) (migratedKUs int, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("concept store: confirm add: begin: %w", err)
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`INSERT INTO entries (entry_id, domain_id, name, description, kind, origin) VALUES (?, ?, ?, ?, ?, 'evolved')`,
-		conceptID, domainID, name, description, kind); err != nil {
+	if aliases == nil {
+		aliases = []string{}
+	}
+	if _, err := tx.Exec(`INSERT INTO entries (entry_id, domain_id, name, description, kind, origin, boundary, aliases) VALUES (?, ?, ?, ?, ?, 'evolved', ?, ?)`,
+		conceptID, domainID, name, description, kind, boundary, marshal(aliases)); err != nil {
 		return 0, fmt.Errorf("concept store: confirm add: insert concept: %w", err)
 	}
 

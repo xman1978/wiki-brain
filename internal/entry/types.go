@@ -94,6 +94,21 @@ type ContentDrivenEvidence struct {
 	Origin      string   `json:"origin"`
 	SourceIDs   []string `json:"source_ids"`
 	Description string   `json:"description"`
+	// Boundary is kpn_entry_propose.md's suggested_boundary (2026-08-05
+	// schema addition) — carried on the pending candidate so confirm-time
+	// can write entries.boundary for evolved (LLM-proposed) entries the
+	// same way preset entries already have one.
+	Boundary string `json:"boundary,omitempty"`
+	// Entity is the fact cluster's extracted entity name (empty for
+	// kind=concept candidates) — kept so a later merge (proposeAddCandidate
+	// folding more point_ids into this same pending candidate) can detect a
+	// new batch naming the same real-world thing under a different string
+	// and record it as an alias instead of silently ignoring the variant.
+	Entity string `json:"entity,omitempty"`
+	// Aliases accumulates alternate entity names observed across merges
+	// (2026-08-05, docs/impl/v1/kpn.md 步骤 3) — written to entries.aliases
+	// at confirm time. Never includes Entity itself.
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 // MergeEvidence is the evidence JSON for kind=merge candidates. OverlapRatio
@@ -191,6 +206,11 @@ type ConfirmAddRequest struct {
 	// path; ignored when EntryID is set (归入已有概念 keeps the existing
 	// concept's own kind).
 	EntryKind string `json:"entry_kind"`
+	// Boundary overrides the candidate's own evidence.boundary (kpn_entry_
+	// propose.md's suggested_boundary, 2026-08-05) — mirrors Description.
+	// Empty means "use whatever the LLM/merge pipeline produced, unchanged".
+	// Only used on the new-concept path.
+	Boundary string `json:"boundary"`
 	// EntryID, when set, skips creating a new concept and instead assigns
 	// the candidate's point_ids to this already-existing entry_id
 	// (docs/impl/v1/kpn.md 步骤 6 "归入已有概念") — mutually exclusive with

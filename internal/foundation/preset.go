@@ -26,6 +26,16 @@ type presetEntry struct {
 	Name        string   `json:"name"`
 	Aliases     []string `json:"aliases"`
 	Description string   `json:"description"`
+	// Boundary clarifies what this entry does/does not cover — written
+	// specifically to disambiguate near-neighbor entries during
+	// unit_entry_match. Previously authored in domains.json but never
+	// parsed or persisted; now stored on entries.boundary (migration 044)
+	// and surfaced to that matching prompt.
+	Boundary string `json:"boundary"`
+	// Kind is the concept/fact classification (docs/impl/v1/kpn.md 步骤 3).
+	// Empty defaults to "concept" (matches entries.kind's column default);
+	// anything else is normalized the same way at preset-load time.
+	Kind string `json:"kind"`
 }
 
 func LoadPresetData(db *sql.DB, filePath string) error {
@@ -57,17 +67,40 @@ func LoadPresetData(db *sql.DB, filePath string) error {
 		}
 
 		for _, c := range d.Concepts {
+			kind := c.Kind
+			switch kind {
+			case "", "concept":
+				kind = "concept"
+			case "fact":
+				kind = "fact"
+			default:
+				slog.Warn("preset entry has unrecognized kind, defaulting to concept", "entry_id", c.ID, "kind", c.Kind)
+				kind = "concept"
+			}
+			aliasesJSON, err := json.Marshal(c.Aliases)
+			if err != nil {
+				return err
+			}
+			var boundary sql.NullString
+			if c.Boundary != "" {
+				boundary = sql.NullString{String: c.Boundary, Valid: true}
+			}
+
 			// Real UPSERT (not INSERT OR IGNORE): re-running preset should
-			// refresh name/description, but must never clear merged_into or
-			// rewrite origin — a merged-away concept doesn't get revived by
-			// still existing in domains.json, and a human-confirmed evolved
-			// concept isn't reclassified back to preset just because preset
-			// happens to define the same entry_id
-			// (docs/impl/v1/concept-evolution.md 步骤 4).
-			_, err := tx.Exec(
-				`INSERT INTO entries (entry_id, domain_id, name, description) VALUES (?, ?, ?, ?)
-				 ON CONFLICT(entry_id) DO UPDATE SET name = excluded.name, description = excluded.description`,
-				c.ID, d.ID, c.Name, c.Description,
+			// refresh name/description/boundary/aliases/kind, but must never
+			// clear merged_into or rewrite origin — a merged-away concept
+			// doesn't get revived by still existing in domains.json, and a
+			// human-confirmed evolved concept isn't reclassified back to
+			// preset just because preset happens to define the same entry_id
+			// (docs/impl/v1/concept-evolution.md 步骤 4). boundary/aliases/kind
+			// are preset-authored curation data, same trust level as
+			// name/description, so they refresh unconditionally like those
+			// two already did.
+			_, err = tx.Exec(
+				`INSERT INTO entries (entry_id, domain_id, name, description, boundary, aliases, kind) VALUES (?, ?, ?, ?, ?, ?, ?)
+				 ON CONFLICT(entry_id) DO UPDATE SET name = excluded.name, description = excluded.description,
+				   boundary = excluded.boundary, aliases = excluded.aliases, kind = excluded.kind`,
+				c.ID, d.ID, c.Name, c.Description, boundary, string(aliasesJSON), kind,
 			)
 			if err != nil {
 				return err
