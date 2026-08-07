@@ -390,42 +390,65 @@
     .file-drawer.open { transform:translateX(0); }
     .file-drawer .drawer-header { padding:18px 24px; }
     .drawer-body { flex:1; overflow:hidden; display:flex; }
-    .drawer-upload { width:260px; border-right:1px solid var(--border-lt); padding:16px; display:flex; flex-direction:column; gap:12px; }
-    .drawer-sources { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+    #fileDrawer .drawer-body { flex-direction:column; gap:12px; padding:16px; }
+    .drawer-top { display:flex; gap:12px; flex-shrink:0; align-items:stretch; }
+    .drawer-upload { width:200px; border:1px solid var(--border-lt); border-right:none; border-radius:var(--radius); padding:10px; display:flex; flex-direction:column; gap:8px; background:var(--bg); overflow:hidden; }
+    .drawer-timeline { flex:1; min-width:0; border:1px solid var(--border-lt); border-radius:var(--radius); padding:12px 14px; background:var(--bg); overflow:hidden; display:flex; flex-direction:column; }
+    #timelinePanel { flex:1; display:flex; flex-direction:column; min-width:0; overflow:hidden; }
+    #timelinePanel:has(.tl-empty) { justify-content:center; }
+    #fileDrawer { width:min(820px, 96vw); }
+    .drawer-sources { flex:1; display:flex; flex-direction:column; overflow:hidden; border:1px solid var(--border-lt); border-radius:var(--radius); }
     .drawer-sources-header { padding:12px 16px; border-bottom:1px solid var(--border-lt); font-size:14px; font-weight:600; }
     .drawer-sources-list { flex:1; overflow-y:auto; padding:8px; }
 
-    .upload-zone { border:2px dashed var(--border); border-radius:var(--radius); padding:28px 16px; text-align:center; cursor:pointer; transition:.15s; background:var(--bg-alt); }
+    .upload-zone { border:1.5px dashed var(--border); border-radius:var(--radius-sm); padding:14px 10px; text-align:center; cursor:pointer; transition:.15s; background:var(--bg-alt); }
     .upload-zone:hover, .upload-zone.drag-over { border-color:var(--accent); background:var(--accent-lt); }
-    .upload-zone .uz-icon { font-size:28px; margin-bottom:8px; }
-    .upload-zone .uz-text { font-size:13px; color:var(--text-2); }
-    .upload-zone .uz-hint { font-size:11px; color:var(--text-3); margin-top:6px; }
+    .upload-zone .uz-icon { font-size:22px; margin-bottom:6px; line-height:1; }
+    .upload-zone .uz-text { font-size:12px; color:var(--text-2); }
+    .upload-zone .uz-hint { font-size:10px; color:var(--text-3); margin-top:4px; line-height:1.4; }
+    #sourceNameFilter {
+      box-sizing:border-box;
+      padding:6px 10px;
+      border:1px solid var(--border);
+      border-radius:var(--radius-xs);
+      font-size:13px;
+      background:var(--bg);
+      outline:none;
+      color:var(--text);
+      font-family:inherit;
+      min-width:200px;
+      flex:1;
+    }
     /* ── TIMELINE ─────────────────────────────────────────── */
-    .timeline { padding:4px 0; }
-    .timeline-title { font-size:12px; font-weight:600; color:var(--text-2); margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; }
-    .timeline-title .tl-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
-    .tl-step { display:flex; gap:10px; position:relative; min-height:36px; }
-    .tl-rail { display:flex; flex-direction:column; align-items:center; width:16px; flex-shrink:0; }
+    .timeline { padding:0; min-width:0; }
+    .timeline-title { font-size:12px; font-weight:600; color:var(--text-2); margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .timeline-title .tl-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; min-width:0; }
+    .timeline-steps { display:flex; align-items:flex-start; width:100%; gap:0; }
+    .tl-step { flex:1; min-width:0; display:flex; flex-direction:column; position:relative; align-items:stretch; }
+    .tl-rail { display:flex; flex-direction:row; align-items:center; width:100%; height:14px; }
     .tl-dot { width:10px; height:10px; border-radius:50%; border:2px solid var(--border); background:var(--bg); flex-shrink:0; z-index:1; }
     .tl-dot.done { border-color:var(--green); background:var(--green); }
     .tl-dot.active { border-color:var(--accent); background:var(--accent); animation:tl-pulse 1.5s infinite; }
     .tl-dot.fail { border-color:var(--red); background:var(--red); }
     @keyframes tl-pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-    .tl-line { flex:1; width:2px; background:var(--border); }
+    .tl-line { flex:1; height:2px; width:auto; background:var(--border); }
     .tl-line.done { background:var(--green); }
-    .tl-body { flex:1; padding-bottom:10px; }
-    .tl-label { font-size:12px; font-weight:500; color:var(--text); line-height:1; margin-top:-1px; }
+    .tl-step:first-child .tl-line-left { visibility:hidden; }
+    .tl-step:last-child .tl-line-right { visibility:hidden; }
+    .tl-body { padding:6px 4px 0; text-align:center; }
+    .tl-label { font-size:11px; font-weight:500; color:var(--text); line-height:1.35; }
     .tl-label.wait { color:var(--text-3); }
     .tl-time { font-size:10px; color:var(--text-3); margin-top:3px; font-family:'SF Mono',SFMono-Regular,Menlo,monospace; }
-    .tl-step:last-child .tl-line { display:none; }
-    .tl-empty { font-size:12px; color:var(--text-3); padding:12px 0; text-align:center; }
+    .tl-empty { font-size:12px; color:var(--text-3); padding:8px 4px; text-align:center; line-height:1.5; }
+    .tl-error { margin-top:8px; font-size:11px; color:var(--red); padding:6px 8px; background:var(--red-lt); border-radius:var(--radius-xs); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
-    .source-card { border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:6px; cursor:pointer; transition:.12s; }
+    .source-card { border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:6px; cursor:pointer; transition:.12s; display:flex; align-items:center; gap:12px; }
     .source-card:hover { border-color:var(--text-3); background:var(--bg-alt); }
-    .source-card.active { border-color:var(--accent); background:var(--accent-lt); }
-    .source-card .sc-title { font-size:13px; font-weight:500; }
-    .source-card .sc-meta { display:flex; gap:6px; margin-top:4px; align-items:center; flex-wrap:wrap; }
-    .source-card .sc-actions { display:flex; gap:4px; margin-top:6px; }
+    .source-card.active { border-color:var(--border); background:var(--surface-alt); }
+    .source-card .sc-main { flex:1; min-width:0; display:flex; align-items:center; gap:8px; }
+    .source-card .sc-title { font-size:13px; font-weight:500; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:1; }
+    .source-card .sc-meta { display:flex; gap:6px; align-items:center; flex-wrap:nowrap; flex-shrink:0; margin-left:auto; }
+    .source-card .sc-actions { display:flex; gap:4px; justify-content:flex-end; flex-wrap:wrap; align-items:center; flex-shrink:0; }
     .status-chip { font-size:10px; padding:2px 7px; border-radius:10px; font-weight:500; }
     .status-pending    { background:#fef3c7; color:#92400e; }
     .status-processing { background:#dbeafe; color:#1e40af; }
@@ -795,19 +818,22 @@
     <button class="btn-ghost" onclick="closeFileDrawer()">✕</button>
   </div>
   <div class="drawer-body">
-    <div class="drawer-upload">
-      <div>
-        <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropFile(event)">
-          <div class="uz-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
-          <div class="uz-text">点击或拖拽上传文件</div>
-          <div class="uz-hint">MD · TXT · PDF · DOCX · HTML · PPT/PPTX · XLS/XLSX</div>
+    <div class="drawer-top">
+      <div class="drawer-upload">
+        <div>
+          <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropFile(event)">
+            <div class="uz-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
+            <div class="uz-text">点击或拖拽上传文件</div>
+            <div class="uz-hint">MD · TXT · PDF · DOCX · HTML · PPT/PPTX · XLS/XLSX</div>
+          </div>
+          <input type="file" id="fileInput" style="display:none" accept=".pdf,.docx,.md,.txt,.html,.ppt,.pptx,.xls,.xlsx" onchange="fileSelected(event)" />
+          <input type="file" id="reuploadFileInput" style="display:none" accept=".pdf,.docx,.md,.txt,.html,.ppt,.pptx,.xls,.xlsx" onchange="onReuploadFileSelected(event)" />
         </div>
-        <input type="file" id="fileInput" style="display:none" accept=".pdf,.docx,.md,.txt,.html,.ppt,.pptx,.xls,.xlsx" onchange="fileSelected(event)" />
-        <input type="file" id="reuploadFileInput" style="display:none" accept=".pdf,.docx,.md,.txt,.html,.ppt,.pptx,.xls,.xlsx" onchange="onReuploadFileSelected(event)" />
       </div>
-      <div class="sidebar-divider"></div>
-      <div id="timelinePanel">
-        <div class="tl-empty">选择右侧文件查看处理过程</div>
+      <div class="drawer-timeline">
+        <div id="timelinePanel">
+          <div class="tl-empty">选择下方文件查看处理过程</div>
+        </div>
       </div>
     </div>
     <div class="drawer-sources">
@@ -815,7 +841,7 @@
         <span>来源列表 <span id="sourcesCount" style="font-size:11px;color:var(--text-3)"></span></span>
         <button class="btn btn-sm" onclick="loadSources()">刷新</button>
       </div>
-      <div style="padding:8px 12px;border-bottom:1px solid var(--border-lt);display:flex;gap:8px;flex-wrap:wrap;">
+      <div style="padding:8px 12px;border-bottom:1px solid var(--border-lt);display:flex;gap:8px;flex-wrap:nowrap;align-items:center;">
         <select id="sourceStatusFilter" onchange="sourcePage=0;loadSources()" style="font-size:12px;padding:4px 8px;">
           <option value="">全部状态</option>
           <option value="completed">已完成</option>
@@ -827,6 +853,7 @@
         <select id="sourceDomainFilter" onchange="sourcePage=0;loadSources()" style="font-size:12px;padding:4px 8px;">
           <option value="">全部领域</option>
         </select>
+        <input id="sourceNameFilter" placeholder="按文件名搜索" oninput="scheduleSourceSearch()" />
       </div>
       <div class="drawer-sources-list" id="sourcesList">
         <div style="text-align:center;padding:40px 16px;color:var(--text-3);font-size:13px">打开后自动加载</div>
@@ -2113,7 +2140,7 @@ async function doUploadFile(file) {
   }, 1500);
 }
 
-function resetUploadZone() { document.getElementById('uploadZone').innerHTML = '<div class="uz-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div><div class="uz-text">点击或拖拽上传文件</div><div class="uz-hint">MD · TXT · PDF · DOCX · HTML · PPT/PPTX · XLS/XLSX</div>'; }
+function resetUploadZone() { document.getElementById('uploadZone').innerHTML = '<div class="uz-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div><div class="uz-text">点击或拖拽上传文件</div><div class="uz-hint">MD · TXT · PDF · DOCX · HTML · PPT/PPTX · XLS/XLSX</div>'; }
 
 // ── TIMELINE ──────────────────────────────────────────
 var TL_STEPS = [
@@ -2327,20 +2354,22 @@ function buildStepsFromSource(d) {
 function renderTimeline(title, steps, sourceData) {
   var html = '<div class="timeline"><div class="timeline-title"><span class="tl-name">' + esc(title) + '</span>';
   if (sourceData && sourceData.source_id) html += '<button class="copy-btn" onclick="event.stopPropagation();copy(\'' + esc(sourceData.source_id) + '\',this)">ID</button>';
-  html += '</div>';
+  html += '</div><div class="timeline-steps">';
   steps.forEach(function(s, i) {
+    var prev = i > 0 ? steps[i - 1] : null;
+    var leftDone = prev && (prev.state === 'done' || prev.state === 'active') ? ' done' : '';
+    var rightDone = (s.state === 'done' || s.state === 'active') ? ' done' : '';
     var dotCls = 'tl-dot' + (s.state !== 'wait' ? ' ' + s.state : '');
-    var lineDone = (s.state === 'done' || s.state === 'active') ? ' done' : '';
     var labelCls = s.state === 'wait' ? ' wait' : '';
     html += '<div class="tl-step">\
-      <div class="tl-rail"><div class="' + dotCls + '"></div><div class="tl-line' + lineDone + '"></div></div>\
+      <div class="tl-rail"><div class="tl-line tl-line-left' + leftDone + '"></div><div class="' + dotCls + '"></div><div class="tl-line tl-line-right' + rightDone + '"></div></div>\
       <div class="tl-body"><div class="tl-label' + labelCls + '">' + esc(s.label) + '</div>' +
       (s.time ? '<div class="tl-time">' + esc(s.time) + '</div>' : '') +
       '</div></div>';
   });
-  html += '</div>';
+  html += '</div></div>';
   if (sourceData && sourceData.message) {
-    html += '<div style="margin-top:8px;font-size:11px;color:var(--red);padding:6px 8px;background:var(--red-lt);border-radius:var(--radius-xs)">' + esc(sourceData.message) + '</div>';
+    html += '<div class="tl-error" title="' + esc(sourceData.message) + '">' + esc(sourceData.message) + '</div>';
   }
   return html;
 }
@@ -2416,9 +2445,16 @@ async function updateSourceDomain(sourceId, selectEl) {
 
 var sourcePage = 0;
 var sourcePageSize = 10;
+var sourceSearchTimer = null;
+function scheduleSourceSearch() {
+  sourcePage = 0;
+  clearTimeout(sourceSearchTimer);
+  sourceSearchTimer = setTimeout(function() { loadSources(); }, 250);
+}
 async function loadSources() {
   var filter = document.getElementById('sourceStatusFilter')?.value || '';
   var domainFilter = document.getElementById('sourceDomainFilter')?.value || '';
+  var nameFilter = document.getElementById('sourceNameFilter')?.value || '';
   var list = document.getElementById('sourcesList');
   if (!list) return;
   list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">加载中...</div>';
@@ -2426,6 +2462,7 @@ async function loadSources() {
     var params = 'limit=' + sourcePageSize + '&offset=' + (sourcePage * sourcePageSize);
     if (filter) params += '&status=' + filter;
     if (domainFilter) params += '&domain_id=' + domainFilter;
+    if (nameFilter) params += '&q=' + encodeURIComponent(nameFilter);
     var r = await api('GET', '/sources?' + params);
     var body = r.data || {};
     var src = Array.isArray(body.items) ? body.items : (Array.isArray(body) ? body : []);
@@ -2452,12 +2489,14 @@ async function loadSources() {
     }
     if (!src.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无来源</div>'; return; }
     list.innerHTML = src.map(function(s) {
-      return '<div class="source-card" id="sc-' + esc(s.source_id) + '" onclick="showTimelineForSource(\'' + esc(s.source_id) + '\')"><div class="sc-title">' + esc(s.title || s.source_id) + '</div><div class="sc-meta">\
+      return '<div class="source-card" id="sc-' + esc(s.source_id) + '" onclick="showTimelineForSource(\'' + esc(s.source_id) + '\')"><div class="sc-main">\
         <span class="status-chip status-' + (sourceDisplayStatus(s) || 'unknown') + '">' + statusLabel(sourceDisplayStatus(s)) + '</span>\
-        <span class="badge">' + esc(s.format || '') + '</span>\
-        ' + sourceDomainSelectHtml(s) + '\
-        <span id="sd-status-' + esc(s.source_id) + '" style="font-size:10px;color:var(--text-3)"></span>\
-        <span style="font-size:10px;color:var(--text-3)">' + dateStr(s.created_at) + '</span>\
+        <div class="sc-title">' + esc(s.title || s.source_id) + '</div>\
+        <div class="sc-meta">\
+          <span class="badge">' + esc(s.format || '') + '</span>\
+          ' + sourceDomainSelectHtml(s) + '\
+          <span id="sd-status-' + esc(s.source_id) + '" style="font-size:10px;color:var(--text-3)"></span>\
+        </div>\
       </div><div class="sc-actions">\
         <button class="btn btn-sm" onclick="viewSource(\'' + esc(s.source_id) + '\')">详情</button>\
         ' + (s.status==='completed' ? '<button class="btn btn-sm" onclick="window.open(S.baseUrl+\'/sources/' + esc(s.source_id) + '/preview\',\'_blank\')">预览</button>' : '') + '\
@@ -2466,7 +2505,6 @@ async function loadSources() {
         ' + (sourceDisplayStatus(s)==='failed' ? '<button class="btn btn-sm" onclick="event.stopPropagation();retrySource(\'' + esc(s.source_id) + '\')">重试</button>' : '') + '\
         ' + (sourceDisplayStatus(s)==='failed' ? '<button class="btn btn-sm" style="color:var(--red)" onclick="event.stopPropagation();deleteSource(\'' + esc(s.source_id) + '\',true)">删除</button>' : '') + '\
         ' + (s.status==='deleted' ? '<button class="btn btn-sm" style="color:var(--green)" onclick="event.stopPropagation();restoreSource(\'' + esc(s.source_id) + '\')">恢复</button>' : '') + '\
-        <button class="copy-btn" onclick="event.stopPropagation();copy(\'' + esc(s.source_id) + '\',this)">复制ID</button>\
       </div></div>';
     }).join('');
   } catch(e) { list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--red);font-size:12px">加载失败</div>'; }
@@ -2719,7 +2757,7 @@ async function deleteSource(sourceId, isFailed) {
   try {
     var r = await api('DELETE', '/sources/' + sourceId);
     if (r.ok) {
-      document.getElementById('timelinePanel').innerHTML = '<div class="tl-empty">选择右侧文件查看处理过程</div>';
+      document.getElementById('timelinePanel').innerHTML = '<div class="tl-empty">选择下方文件查看处理过程</div>';
       loadSources();
     } else {
       alert('删除失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
@@ -3748,8 +3786,20 @@ async function loadActivationDomainRail() {
   if (!S.activationDomainSelectedId || !S.activationDomainList.some(function(d) { return d.domain_id === S.activationDomainSelectedId; })) {
     S.activationDomainSelectedId = (S.activationDomainList[0] && S.activationDomainList[0].domain_id) || null;
   }
+  await refreshActivationDomainStats();
   renderActivationDomainRail();
   renderActivationDomainPane();
+}
+
+async function refreshActivationDomainStats() {
+  var domains = S.activationDomainList || [];
+  S.activationDomainStats = S.activationDomainStats || {};
+  await Promise.all(domains.map(async function(d) {
+    var links = [];
+    try { links = await fetchActivationLinksForDomain(d.domain_id); } catch (e) { links = []; }
+    var pending = links.filter(function(l) { return activationConfirmStatus(l.status) === 'pending_confirm'; }).length;
+    S.activationDomainStats[d.domain_id] = { total: links.length, pending: pending };
+  }));
 }
 
 function filterActivationDomainRail(v) { S.activationDomainFilter = v; renderActivationDomainRail(); }
@@ -3765,7 +3815,7 @@ function renderActivationDomainRail() {
   }
   list.innerHTML = items.map(function(d) {
     var stats = (S.activationDomainStats || {})[d.domain_id] || {};
-    var count = stats.total != null ? stats.total : '·';
+    var count = stats.total != null ? stats.total : 0;
     var pending = stats.pending || 0;
     return '<div class="domain-rail-item' + (d.domain_id === S.activationDomainSelectedId ? ' active' : '') + '" onclick="selectActivationDomainRail(\'' + esc(d.domain_id) + '\')">\
       <span class="domain-rail-name">' + esc(d.name) + '</span>\

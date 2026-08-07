@@ -164,7 +164,7 @@ func TestList_ExcludesShadowSources(t *testing.T) {
 		ShadowOf: sql.NullString{String: "vis-1", Valid: true},
 	})
 
-	list, err := svc.store.List("", "", 100, 0)
+	list, err := svc.store.List("", "", "", 100, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestList_ExcludesShadowSources(t *testing.T) {
 		}
 	}
 
-	count, err := svc.store.Count("", "")
+	count, err := svc.store.Count("", "", "")
 	if err != nil {
 		t.Fatalf("Count: %v", err)
 	}

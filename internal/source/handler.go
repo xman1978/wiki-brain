@@ -86,6 +86,7 @@ func (h *Handler) createSource(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	domainID := r.URL.Query().Get("domain_id")
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	limit := 10
 	offset := 0
 	if v := r.URL.Query().Get("limit"); v != "" {
@@ -99,14 +100,14 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	total, err := h.svc.store.Count(status, domainID)
+	total, err := h.svc.store.Count(status, domainID, q)
 	if err != nil {
 		slog.Error("count sources failed", "error", err)
 		foundation.WriteError(w, http.StatusInternalServerError, "count failed")
 		return
 	}
 
-	sources, err := h.svc.store.List(status, domainID, limit, offset)
+	sources, err := h.svc.store.List(status, domainID, q, limit, offset)
 	if err != nil {
 		slog.Error("list sources failed", "error", err)
 		foundation.WriteError(w, http.StatusInternalServerError, "list failed")

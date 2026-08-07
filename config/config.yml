@@ -113,6 +113,9 @@ evidence:
   max_fragments_per_ku: 5      # 单 KU 最多保留片段数（超出按输出顺序截断）
   min_fragment_chars:   8      # 短于该长度的片段丢弃（无信息量）
   retry:                1      # 批次级 JSON/Schema 失败重试次数
+  concurrency:           4      # 候选被切分为多个 batch 时并发执行的 batch 数上限
+                                 # （docs/impl/v1/evidence.md 步骤 1 允许并发，此前实现是串行的；
+                                 #  2026-08-07 实测：5 batch 的问题串行挖掘耗时 13.1s，是长尾主因）
 
 # 跨 Source KPN 模块
 kpn:

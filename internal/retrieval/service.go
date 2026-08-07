@@ -446,10 +446,10 @@ func (s *Service) SlowPathVerifyEnabled() bool {
 func (s *Service) VerifyEvidenceSufficient(ctx context.Context, question string, es *EvidenceSet) (bool, error) {
 	var evidenceText strings.Builder
 	for i, ev := range es.DirectEvidence {
-		fmt.Fprintf(&evidenceText, "[direct-%d] %s\n", i+1, ev.Content)
+		fmt.Fprintf(&evidenceText, "[direct-%d] （来源：%s）%s\n", i+1, ev.SourceTitle, ev.Content)
 	}
 	for i, ev := range es.Supporting {
-		fmt.Fprintf(&evidenceText, "[supporting-%d] %s\n", i+1, ev.Content)
+		fmt.Fprintf(&evidenceText, "[supporting-%d] （来源：%s）%s\n", i+1, ev.SourceTitle, ev.Content)
 	}
 
 	resp, err := s.llmClient.CompleteJSON(ctx, "fast_verify.md", map[string]string{

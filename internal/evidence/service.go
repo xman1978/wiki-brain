@@ -9,12 +9,17 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 	"github.com/jxman78/wiki-brain/internal/foundation/textmatch"
 )
+
+// defaultMineConcurrency mirrors defaultRerankJudgeConcurrency in
+// internal/retrieval/service.go — same resolution pattern, same default.
+const defaultMineConcurrency = 4
 
 // configAssignmentLine matches bare KEY=value / KEY = value parameter lines
 // (dm.ini / spfile-style), used to recognize unsplittable config blocks.
@@ -64,14 +69,39 @@ func (s *Service) Mine(ctx context.Context, question, subject, intent string, ca
 	start := time.Now()
 	batches := batchCandidates(candidates, s.cfg.BatchMaxChars)
 
+	// Batches run concurrently, bounded by mineConcurrency() (docs/impl/v1/
+	// evidence.md 步骤 1 explicitly allows this: "批次串行或并发执行均可，
+	// 并发受 llm.max_concurrency 约束"). Results are collected into a
+	// per-batch slot and flattened in original batch order afterward, so
+	// output order/determinism is unchanged from the old sequential loop —
+	// only wall-clock time changes when a question's candidates span more
+	// than one batch.
+	results := make([][]EvidenceItem, len(batches))
+	counters := make([][3]int, len(batches)) // [fragmentsProduced, droppedFragments, wholeSegmentFallbacks]
+
+	sem := make(chan struct{}, s.mineConcurrency())
+	var wg sync.WaitGroup
+	for i, batch := range batches {
+		i, batch := i, batch
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			items, fp, df, wf := s.mineBatch(ctx, question, subject, intent, batch, lastResort)
+			results[i] = items
+			counters[i] = [3]int{fp, df, wf}
+		}()
+	}
+	wg.Wait()
+
 	var out []EvidenceItem
 	fragmentsProduced, droppedFragments, wholeSegmentFallbacks := 0, 0, 0
-	for _, batch := range batches {
-		items, fp, df, wf := s.mineBatch(ctx, question, subject, intent, batch, lastResort)
-		out = append(out, items...)
-		fragmentsProduced += fp
-		droppedFragments += df
-		wholeSegmentFallbacks += wf
+	for i := range batches {
+		out = append(out, results[i]...)
+		fragmentsProduced += counters[i][0]
+		droppedFragments += counters[i][1]
+		wholeSegmentFallbacks += counters[i][2]
 	}
 
 	slog.Info("evidence: mine complete",
@@ -80,6 +110,16 @@ func (s *Service) Mine(ctx context.Context, question, subject, intent string, ca
 		"whole_segment_fallbacks", wholeSegmentFallbacks,
 		"duration_ms", time.Since(start).Milliseconds())
 	return out
+}
+
+// mineConcurrency resolves config.EvidenceConfig.Concurrency, defaulting to
+// defaultMineConcurrency when unset/invalid (same pattern as
+// internal/retrieval/service.go rerankJudgeConcurrency()).
+func (s *Service) mineConcurrency() int {
+	if s.cfg.Concurrency > 0 {
+		return s.cfg.Concurrency
+	}
+	return defaultMineConcurrency
 }
 
 // batchCandidates packs candidates (in caller order — direct first) so each

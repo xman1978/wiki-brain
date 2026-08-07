@@ -178,6 +178,11 @@ type EvidenceConfig struct {
 	MaxFragmentsPerKU int  `yaml:"max_fragments_per_ku"`
 	MinFragmentChars  int  `yaml:"min_fragment_chars"`
 	Retry             int  `yaml:"retry"`
+	// Concurrency bounds how many batches Mine() runs in parallel
+	// (docs/impl/v1/evidence.md 步骤 1: "批次串行或并发执行均可，并发受
+	// llm.max_concurrency 约束"). <=0 defaults to 4, mirroring
+	// RetrievalConfig.RerankJudgeConcurrency's resolution pattern.
+	Concurrency int `yaml:"concurrency"`
 }
 
 // KPNConfig — docs/impl/v1/kpn.md 配置项.

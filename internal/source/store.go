@@ -182,7 +182,7 @@ func (s *Store) GetSourcesByIDs(sourceIDs []string) ([]Source, error) {
 
 // List returns sources visible to the outside world — shadow rows created for
 // POST /sources/:id/reupload are always excluded (docs/impl/v1/lifecycle.md 步骤 2).
-func (s *Store) List(status, domainID string, limit, offset int) ([]Source, error) {
+func (s *Store) List(status, domainID, q string, limit, offset int) ([]Source, error) {
 	var rows *sql.Rows
 	var err error
 	base := `SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at, units_built_at, origin, origin_page_id, reflow_skipped_edges FROM sources`
@@ -196,10 +196,14 @@ func (s *Store) List(status, domainID string, limit, offset int) ([]Source, erro
 		where = append(where, "domain_id = ?")
 		args = append(args, domainID)
 	}
-	q := base + " WHERE " + strings.Join(where, " AND ")
-	q += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	if q != "" {
+		where = append(where, "file_name LIKE ?")
+		args = append(args, "%"+q+"%")
+	}
+	query := base + " WHERE " + strings.Join(where, " AND ")
+	query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
-	rows, err = s.db.Query(q, args...)
+	rows, err = s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("source store: list: %w", err)
 	}
@@ -368,9 +372,9 @@ func (s *Store) UpdateDomainID(sourceID string, domainID *string) error {
 }
 
 // Count mirrors List's visibility rule: shadow rows are always excluded.
-func (s *Store) Count(status, domainID string) (int, error) {
+func (s *Store) Count(status, domainID, q string) (int, error) {
 	var count int
-	q := `SELECT COUNT(*) FROM sources`
+	query := `SELECT COUNT(*) FROM sources`
 	where := []string{"shadow_of IS NULL"}
 	var args []any
 	if status != "" {
@@ -381,8 +385,12 @@ func (s *Store) Count(status, domainID string) (int, error) {
 		where = append(where, "domain_id = ?")
 		args = append(args, domainID)
 	}
-	q += " WHERE " + strings.Join(where, " AND ")
-	err := s.db.QueryRow(q, args...).Scan(&count)
+	if q != "" {
+		where = append(where, "file_name LIKE ?")
+		args = append(args, "%"+q+"%")
+	}
+	query += " WHERE " + strings.Join(where, " AND ")
+	err := s.db.QueryRow(query, args...).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("source store: count: %w", err)
 	}

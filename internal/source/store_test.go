@@ -2,6 +2,7 @@ package source
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
@@ -160,7 +161,7 @@ func TestStoreUpdateUnitsStatus(t *testing.T) {
 	}
 
 	// List must surface it too — it's a separate SELECT/scan from GetByID.
-	list, err := store.List("", "", 10, 0)
+	list, err := store.List("", "", "", 10, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -274,7 +275,7 @@ func TestStoreUnitStageLifecycle(t *testing.T) {
 		t.Fatalf("units_completed_at should be set")
 	}
 
-	list, err := store.List("", "", 10, 0)
+	list, err := store.List("", "", "", 10, 0)
 	if err != nil {
 		t.Fatalf("list sources: %v", err)
 	}
@@ -294,12 +295,45 @@ func TestStoreList(t *testing.T) {
 		})
 	}
 
-	all, err := store.List("", "", 20, 0)
+	all, err := store.List("", "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if len(all) != 3 {
 		t.Errorf("len = %d, want 3", len(all))
+	}
+}
+
+func TestStoreListAndCount_FilterByFileName(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	store := NewStore(db)
+
+	for _, name := range []string{"alpha-spec.md", "beta-notes.md", "alpha-plan.pdf"} {
+		store.Create(&Source{
+			Title: name, Format: "markdown", FileName: name,
+			OriginalPath: "o/" + name, MarkdownPath: "m/" + name, Status: "pending",
+		})
+	}
+
+	list, err := store.List("", "", "alpha", 20, 0)
+	if err != nil {
+		t.Fatalf("List with q: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("len = %d, want 2", len(list))
+	}
+	for _, src := range list {
+		if !strings.Contains(src.FileName, "alpha") {
+			t.Fatalf("unexpected file_name %q", src.FileName)
+		}
+	}
+
+	count, err := store.Count("", "", "alpha")
+	if err != nil {
+		t.Fatalf("Count with q: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("count = %d, want 2", count)
 	}
 }
 

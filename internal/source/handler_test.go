@@ -112,6 +112,45 @@ func TestHandlerListSources(t *testing.T) {
 	}
 }
 
+func TestHandlerListSources_FilterByFileName(t *testing.T) {
+	svc, _ := setupTestService(t)
+	handler := NewHandler(svc)
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	for _, name := range []string{"alpha-spec.md", "beta-notes.md", "alpha-plan.pdf"} {
+		svc.store.Create(&Source{
+			Title: name, Format: "markdown", FileName: name,
+			OriginalPath: "o/" + name, MarkdownPath: "m/" + name, Status: "pending",
+		})
+	}
+
+	req := httptest.NewRequest("GET", "/sources?q=alpha", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+
+	var resp struct {
+		Items []struct {
+			Title string `json:"title"`
+		} `json:"items"`
+		Total int `json:"total"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Total != 2 {
+		t.Fatalf("total = %d, want 2", resp.Total)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("len = %d, want 2", len(resp.Items))
+	}
+}
+
 func TestHandlerGetSource(t *testing.T) {
 	svc, _ := setupTestService(t)
 	handler := NewHandler(svc)
