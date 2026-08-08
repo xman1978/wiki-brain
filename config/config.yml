@@ -97,6 +97,10 @@ retrieval:
                                          # 说明文字（仅用于 debug 日志，不参与判断逻辑），
                                          # 用于 A/B 测试是否能降低 rerank 阶段延迟；
                                          # 省略该键等价于 true（保留现有行为）
+  rerank_two_step:                true  # 旁路验证：true 时把 rerank_judge.md 单次调用拆成两步——
+                                         # rerank_relevance.md（只判 relevant/irrelevant）→
+                                         # rerank_classify.md（只对已确认相关的候选判 direct/supporting）。
+                                         # 默认 false（沿用现有单次调用），验证稳定后再转正
   activation_match_top:          5     # 匹配结果保留条数（四元组完全匹配，无阈值可调）
   fast_path:              true   # false 时激活层只记录命中、不走快路径（灰度开关）
   fast_path_verify:       true   # 快路径证据充分性校验开关（false 时跳过校验，仅灰度/评估用）
@@ -142,6 +146,7 @@ wiki:
                                      # 相同的 DaysActive 计算口径）
   topic_candidate_kp_max:       50   # 候选范围语义检索的知识点数上限
   topic_reliability_min:        0.5  # 二阶准入「整体可靠度」：候选范围全部知识点中 verified 覆盖占比下限
+  topic_rerank_batch_max_chars: 6000 # 人工触发候选检索的 LLM 相关性判定，每批候选内容总字数上限
 
   # 生成质量（docs/impl/v1/wiki-generation.md 阶段 E/G）
   claim_verify_enabled:          true

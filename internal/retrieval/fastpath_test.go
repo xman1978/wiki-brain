@@ -3,6 +3,7 @@ package retrieval
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
@@ -42,10 +43,12 @@ func seedVerifiedLink(t *testing.T, activationSvc *activation.Service, questionT
 }
 
 func TestRetrieve_FastPath_Hit(t *testing.T) {
-	svc, _, _, activationSvc := setupTestServiceWithActivation(t)
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
 	question := "什么是线性方程"
 	qTerms := text.Terms(text.Normalize(question))
 	seedVerifiedLink(t, activationSvc, qTerms, "p1")
+
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "kpn neighbor"}, {"candidate_id": "c2", "role": "supporting", "analysis": "kpn neighbor"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -66,10 +69,12 @@ func TestRetrieve_FastPath_Hit(t *testing.T) {
 }
 
 func TestRetrieve_FastPath_KPNExpansion(t *testing.T) {
-	svc, _, _, activationSvc := setupTestServiceWithActivation(t)
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
 	question := "什么是线性方程"
 	qTerms := text.Terms(text.Normalize(question))
 	seedVerifiedLink(t, activationSvc, qTerms, "p1")
+
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "kpn neighbor"}, {"candidate_id": "c2", "role": "supporting", "analysis": "kpn neighbor"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -85,17 +90,42 @@ func TestRetrieve_FastPath_KPNExpansion(t *testing.T) {
 	}
 }
 
-// TestRetrieve_FastPath_MultipleMatches_FallsBackToSlowPath covers the
-// ambiguity guard added after real-question testing showed the (looser,
-// substring-based) subject core match makes >1 link matching the same query
-// more likely: activation scores are all 1.0 with nothing to rank multiple
-// candidates by, so bundling every matched point's KP as "direct" evidence
-// risks smuggling a wrong-but-plausible fact in alongside the right one.
-// >1 distinct match must fall back to the slow path entirely (which knows
-// how to synthesize across multiple KPs properly) rather than trusting the
-// fast path's un-differentiated evidence — while still recording every
-// matched link in activation_hits so Trace grades them normally.
-func TestRetrieve_FastPath_MultipleMatches_FallsBackToSlowPath(t *testing.T) {
+// TestRetrieve_FastPath_KPNExpansion_TwoStepSkipsClassify confirms
+// judgeKPNExpansion's optimization under config.Retrieval.RerankTwoStep: a
+// KPN neighbor's role is always coerced to "supporting" regardless of what
+// classify would say, so it should only ever go through rerank_relevance.md
+// — rerank_classify.md must never be called for it.
+func TestRetrieve_FastPath_KPNExpansion_TwoStepSkipsClassify(t *testing.T) {
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
+	svc.cfg.Retrieval.RerankTwoStep = true
+	question := "什么是线性方程"
+	qTerms := text.Terms(text.Normalize(question))
+	seedVerifiedLink(t, activationSvc, qTerms, "p1")
+
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "kpn neighbor"}, {"candidate_id": "c2", "relevant": true, "analysis": "kpn neighbor"}]}`})
+
+	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	supportingUnits := make(map[string]bool)
+	for _, e := range es.Supporting {
+		supportingUnits[e.UnitID] = true
+	}
+	if !supportingUnits["u2"] || !supportingUnits["u3"] {
+		t.Errorf("expected u2 and u3 as KPN supporting evidence, got %+v", es.Supporting)
+	}
+	for _, c := range fake.Calls() {
+		if c.PromptFile == "rerank_classify.md" || c.PromptFile == "rerank_judge.md" {
+			t.Errorf("KPN expansion under RerankTwoStep must only call rerank_relevance.md, saw %q", c.PromptFile)
+		}
+	}
+}
+
+// TestRetrieve_FastPath_MultipleUnits_FallsBackToSlowPath: >1 distinct KU
+// among verified matches is ambiguity (no ranking at score=1.0) → full.
+// p1→u1 and p2→u2 are different units in seedTestData.
+func TestRetrieve_FastPath_MultipleUnits_FallsBackToSlowPath(t *testing.T) {
 	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
 
 	question := "什么是线性方程"
@@ -113,10 +143,43 @@ func TestRetrieve_FastPath_MultipleMatches_FallsBackToSlowPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	if es.PathType != PathTypeFull {
-		t.Errorf("path_type = %q, want full (ambiguous activation match must not use the fast path)", es.PathType)
+		t.Errorf("path_type = %q, want full (multi-unit activation match must not use the fast path)", es.PathType)
 	}
 	if len(es.ActivationHits) != 2 {
 		t.Fatalf("expected both ambiguous matches recorded in activation_hits, got %+v", es.ActivationHits)
+	}
+}
+
+// TestRetrieve_FastPath_MultipleLinksSameUnit_TakesFastPath: two verified
+// links whose KPs share one KU are not ambiguous — fast path may answer
+// from that single unit body.
+func TestRetrieve_FastPath_MultipleLinksSameUnit_TakesFastPath(t *testing.T) {
+	svc, fake, store, activationSvc := setupTestServiceWithActivation(t)
+
+	if _, err := store.db.Exec(`INSERT INTO knowledge_points (point_id, unit_id, source_id, content, point_type)
+		VALUES ('p1b', 'u1', 's1', 'another fact on same unit', 'fact')`); err != nil {
+		t.Fatalf("insert p1b: %v", err)
+	}
+
+	question := "什么是线性方程"
+	qTerms := text.Terms(text.Normalize(question))
+	seedVerifiedLink(t, activationSvc, qTerms, "p1")
+	seedVerifiedLink(t, activationSvc, qTerms, "p1b")
+
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "kpn neighbor"}, {"candidate_id": "c2", "role": "supporting", "analysis": "kpn neighbor"}]}`})
+
+	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if es.PathType != PathTypeFast {
+		t.Fatalf("path_type = %q, want fast (same-unit multi-link)", es.PathType)
+	}
+	if len(es.ActivationHits) != 2 {
+		t.Fatalf("expected both hits recorded, got %+v", es.ActivationHits)
+	}
+	if len(es.DirectEvidence) != 1 || es.DirectEvidence[0].UnitID != "u1" {
+		t.Fatalf("expected single direct unit u1, got %+v", es.DirectEvidence)
 	}
 }
 
@@ -219,6 +282,7 @@ func TestRetrieve_FastPathVerify_Sufficient_KeepsFastPath(t *testing.T) {
 	seedVerifiedLink(t, activationSvc, qTerms, "p1")
 
 	fake.SetResponse("fast_verify.md", llm.FakeResponse{Output: `{"sufficient": true, "reason": "证据已给出完整定义"}`})
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "kpn neighbor"}, {"candidate_id": "c2", "role": "supporting", "analysis": "kpn neighbor"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -347,5 +411,109 @@ func TestRetrieve_CandidateMatch_RecordsHitsButNotFastPath(t *testing.T) {
 	}
 	if es.ActivationHits[0].LinkID != link.LinkID || es.ActivationHits[0].PointID != "p1" {
 		t.Errorf("unexpected hit: %+v", es.ActivationHits[0])
+	}
+}
+
+// TestRetrieve_NormalizeTupleBeforeMatch_RescuesSubjectJitter: jittered subject
+// would miss Match on tuple0; session_normalize_tuple aligns to an observed
+// group before Match so the verified link still takes the fast path — even on
+// a first-turn session (FollowUp=false).
+func TestRetrieve_NormalizeTupleBeforeMatch_RescuesSubjectJitter(t *testing.T) {
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
+
+	now := time.Now().UTC()
+	cond := activation.NormalizeObservedCondition(
+		"数据库连接句柄异常", "查询解决方法", "", "达梦", "", now,
+	)
+	link, err := activationSvc.CreateLink("句柄 异常", activation.LinkCondition{
+		ObservedConditions: []activation.ObservedCondition{cond},
+	}, "p1", nil)
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if _, err := activationSvc.TransitionLink(link.LinkID, activation.StatusVerified, "test", nil); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+
+	fake.SetResponse("session_normalize_tuple.md", llm.FakeResponse{Output: `{
+		"subject": "数据库连接句柄异常",
+		"intent": "查询解决方法",
+		"audience": "",
+		"constraint": "达梦"
+	}`})
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "kpn neighbor"}, {"candidate_id": "c2", "role": "supporting", "analysis": "kpn neighbor"}]}`})
+
+	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{
+		Question:       "达梦报语句句柄个数超过上限怎么解决？",
+		Subject:        "数据库连接句柄超限",
+		Intent:         "查询解决方法",
+		Audience:       "",
+		Constraint:     "达梦",
+		DomainIDs:      []string{"d1"},
+		DomainResolved: true,
+		FollowUp:       false,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if es.PathType != PathTypeFast {
+		t.Fatalf("path_type = %q, want fast after pre-match normalize", es.PathType)
+	}
+	if es.Subject != "数据库连接句柄异常" {
+		t.Errorf("evidence subject = %q, want normalized 数据库连接句柄异常", es.Subject)
+	}
+	called := false
+	for _, c := range fake.Calls() {
+		if c.PromptFile == "session_normalize_tuple.md" {
+			called = true
+		}
+	}
+	if !called {
+		t.Fatal("expected session_normalize_tuple.md to be called before Match")
+	}
+}
+
+// TestRetrieve_NormalizeTuple_RejectsHardSetWrongGroup: normalize invents a
+// tuple that is not any observed group → discard and keep tuple0 (still miss).
+func TestRetrieve_NormalizeTuple_RejectsHardSetWrongGroup(t *testing.T) {
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
+
+	now := time.Now().UTC()
+	cond := activation.NormalizeObservedCondition(
+		"数据库连接句柄异常", "查询解决方法", "", "达梦", "", now,
+	)
+	link, err := activationSvc.CreateLink("句柄 异常", activation.LinkCondition{
+		ObservedConditions: []activation.ObservedCondition{cond},
+	}, "p1", nil)
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if _, err := activationSvc.TransitionLink(link.LinkID, activation.StatusVerified, "test", nil); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+
+	fake.SetResponse("session_normalize_tuple.md", llm.FakeResponse{Output: `{
+		"subject": "完全无关的主题",
+		"intent": "胡乱意图",
+		"audience": "",
+		"constraint": "神通"
+	}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "x"}]}`})
+
+	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{
+		Question:       "达梦报语句句柄个数超过上限怎么解决？",
+		Subject:        "数据库连接句柄超限",
+		Intent:         "查询解决方法",
+		Constraint:     "达梦",
+		DomainIDs:      []string{"d1"},
+		DomainResolved: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if es.PathType != PathTypeFull {
+		t.Fatalf("path_type = %q, want full when normalize hard-set is rejected", es.PathType)
 	}
 }

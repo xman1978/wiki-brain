@@ -127,7 +127,9 @@ ALTER TABLE knowledge_points ADD COLUMN edited_at DATETIME;
 - 写入后 `manually_edited = 1`、`edited_at = now`；
 - **不触发**增量 KPN——已有关系不因内容微调失效，避免每次小修改都重新付一次 LLM 调用（关系语义仍然基于原先建立时的判断，若改动大到需要重新评估关系，走"新增 KP + 后续人工清理旧 KP 关系"的路径，本期不做自动失效检测）。
 
-不提供 KP 的 DELETE：需要作废一条 KP 时，走既有重抽取工具并显式确认覆盖，或等 Reupload 让整个 KU 连同其 KP 一起 superseded（见下节边界）。
+### POST /points/:id/deprecate（撤销手动 KP）
+
+仅允许撤销 `manually_edited=1` 的 KP：将 `lifecycle` 置为 `deprecated`（非硬删），并更新 Bleve lifecycle 字段。已 deprecated 幂等成功。LLM 提取产物仍不可经此接口作废——需要作废时走既有重抽取工具并显式确认覆盖，或等 Reupload 让整个 KU 连同其 KP 一起 superseded。
 
 ## 防覆盖
 
@@ -174,16 +176,17 @@ retrieval: rerank judge role       候选 unit_id ↔ 最终 role 对照
 下半区：分两块
   rerank 语义（可编辑表单）：
     content_theme / intent / object / scope / source_theme   单行文本框
-    manually_edited  为 true 时显示 ✍️ 徽标（KU 列表行同）
+    manually_edited  为 true 时显示系统 `.badge`「人工」（KU 列表行同）
     missing 状态     显示"该 KU 无语义记录，被召回将导致检索报错"警示，
                      表单为空白待填
     [保存] → PUT /units/:id/semantics（只提交 semantics）
 
-  KP 列表（可增删改）：
-    每条显示 content / point_type / manually_edited 徽标
+  KP 列表（可增、可撤销手动项）：
+    每条显示 content / point_type；手动项另标 `.badge`「人工」
     [新增知识点] → 弹出 content + point_type 表单 → POST /units/:id/points
       成功后提示"已新增，关联出 N 条新关系"
-    每条 [编辑] → PUT /points/:id
+    手动项 [撤销] → POST /points/:id/deprecate（lifecycle=deprecated）
+    每条 [编辑] → PUT /points/:id（可选）
 ```
 
 修正的典型入口路径写入界面文案：问答结果不对/为空 → 解释抽屉看证据 → 缺了本该在的文档 → 打开该文档 KU 列表 → 检查对应 KU 的知识点 → 新增缺失的知识点。
@@ -223,7 +226,7 @@ lifecycle 保护：对非 current 的 KU/KP 的写操作均返回 409；
 校验：语义五字段缺失 400；KP content 为空 / point_type 不在五种枚举内 400；
 增量 KPN：新增 KP 后与同 Source 现有 KP 之间的 related/contradicts 关系
   被写入，重复触发不产生重复关系；
-Page：KU 页面（本体只读 + 语义可编辑 + KP 增删改）、保存、✍️ 徽标、
-  missing 警示、reupload 提示可用；
+Page：KU 页面（本体只读 + 语义可编辑 + KP 新增/手动撤销）、保存、系统
+  `.badge`「人工」标记、missing 警示、reupload 提示可用；
 go test ./... 全绿。
 ```

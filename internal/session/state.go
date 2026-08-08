@@ -118,6 +118,11 @@ type ExpandedQuery struct {
 	Intent             string   `json:"intent"`
 	Audience           string   `json:"audience,omitempty"`
 	Constraint         string   `json:"constraint,omitempty"`
+	DomainIDs          []string `json:"domain_ids,omitempty"`
+	// FollowUp is true when this turn had a prior LastQuestion before parse
+	// (non-first user question in the session). Retrieval uses it to decide
+	// whether to run fast-path tuple normalization against ActivationLink vocab.
+	FollowUp           bool     `json:"follow_up,omitempty"`
 	DefaultAssumptions []string `json:"default_assumptions"`
 	AllowRetrieval     bool     `json:"allow_retrieval"`
 }
@@ -161,4 +166,5 @@ type ParseResult struct {
 	Audience           string
 	Constraint         string
 	StandaloneQuestion string
+	DomainIDs          []string
 }

@@ -255,10 +255,25 @@ generate 链路的两个入口，**不是两套生成逻辑**，`result_id` 是�
 分支点：
 
 ```text
-唯一硬门槛（不可绕过）：该 concept 至少要有 1 条 qualifying KP（lifecycle=
-  current 且已 verified 的 ActivationLink）——没有材料就没有页面，这条本来
-  就是 analyze 阶段的既有校验（gatherAnalyzeInputs 在调 LLM 之前就检查），
-  人工触发不豁免。
+唯一硬门槛（不可绕过）：该 concept 至少要有 1 条 qualifying KP——没有材料
+  就没有页面，这条本来就是 analyze 阶段的既有校验（gatherAnalyzeInputs 在
+  调 LLM 之前就检查）。
+
+  qualifying 的定义按触发来源分两档（2026-08-07 修订，取代此前"两条口径
+  统一要求 verified"的说法）：
+    - Study 推荐（result_id 非空）：qualifying = lifecycle=current 且已有
+      verified 的 ActivationLink——不变，因为进入这条口径本身就代表 Study
+      判定过这批材料已经过真实使用验证，是"够格立传"的前提之一。
+    - 人工手动触发（result_id 为空）：qualifying 只要求 lifecycle=current
+      （+ 已归属该 concept），不要求 verified——口径与步骤 8「候选范围
+      检索」的主题范围材料一致。理由：人工手动指定本身就是一次显式确认
+      动作，材料是否已被真实使用验证是概念页发布正式化前才需要回答的
+      问题，不应该挡在"能不能生成草稿"这一步；否则新入库、还没有真实
+      使用积累的材料永远无法通过人工手动编译走到草稿阶段（详见分步向导
+      一节，2026-08-07 新增，`docs/impl/v1/wiki.md` 步骤 8「分步向导」）。
+      该口径只影响 analyze/compile 阶段"能不能生成"，**不影响** publish
+      阶段既有的 selfcheck 质量核验（引用支持度等）——生成草稿容易，
+      正式发布的质量门槛不因此降低。
 
 Study 的五项 ready 判定（广度/related/contradicts/活跃天数/内聚度）在人工
   触发时改为仅展示、不阻断：POST /wiki/compile/analyze 的响应新增可选字段
@@ -569,6 +584,15 @@ POST /wiki/pages/:id/publish
   c. 成员页面变化传导（两层架构，见步骤 9）：概念页进入 needs_recompile
      或 archived → 经 contains 反查其父主题页 → needs_recompile
      （reason=member_page_changed）；不再向上传导（只有两层）；
+  d. verified 传导（2026-08-07 新增）：ActivationLink 状态转为 verified
+     （TransitionLink 唯一入口，覆盖人工确认 / Study 自动 promote / Study
+     reverify 三种触发来源）时，若其 point_id 被某已发布页面的
+     source_point_ids 引用 → needs_recompile（reason=link_verified）；
+     解决 observed_conditions（确证问法）编译后不随验证结果自动刷新的问题
+     （见 docs/design/wiki-compilation.md「触发问法取材真实观测」）；
+     activation → wiki 的跨模块通知走 WikiNotifier 接口（同 unit 模块已有的
+     WikiNotifier 惯例），wiki 侧实现 NotifyLinkVerified(pointID)，全表扫描
+     published 页面按 source_point_ids 命中；
 
 MarkNeedsRecompile：status=needs_recompile、从 wiki index 删除
   （旧结论可能失效，宁可回落慢路径也不用可疑页面直答）、记录原因日志；
@@ -709,9 +733,14 @@ lifecycle 过滤：判定只使用 lifecycle=current 的 KP 与 published 页面
 
 3. 候选范围检索：以该分组的 subject/intent/audience/constraint_text
    拼接为查询词，对知识点全文索引做语义检索——不限领域、不限概念，
-   不要求历史上已被任何 trace 引用过，取分数 ≥ retrieval.wiki_min_score
-   的知识点，上限 wiki.topic_candidate_kp_max（默认 50，超出按分数
-   降序截取）；
+   不要求历史上已被任何 trace 引用过；**不设分数门槛**（2026-08-07
+   修订：`retrieval.wiki_min_score` 是为「Wiki 直答」这一精确匹配场景
+   校准的门槛，候选范围检索是召回任务而非精确匹配——目的是把主题范围
+   内现存的 KP 尽量收全，真正的把关在下一步 lifecycle/entry_id 过滤、
+   以及步骤 7 的关联/可靠度判定，此处误收代价低、漏收代价高，复用直答
+   门槛会导致主题范围检索被静默滤空，此前口径已废弃），全文索引召回结果
+   直接进入下一步过滤，上限 wiki.topic_candidate_kp_max（默认 50，
+   超出按分数降序截取，分数仍用于排序，只是不再作为过滤门槛）；
 
 4. 从检索结果中筛出**主题范围材料 KP**（lifecycle=current，且已归属到
    词条 `entry_id IS NOT NULL`；**不**要求 ActivationLink 已 verified——
@@ -803,10 +832,33 @@ lifecycle 过滤：判定只使用 lifecycle=current 的 KP 与 published 页面
   人工直接给出一个主题的名称/范围描述（domain_id 可选，限定检索领域）；
 
 处理：
-  1. 以 topic_name + topic_description 为查询词，对知识点全文索引做
-     语义检索（domain_id 非空时限定该领域），口径同步骤 8「候选范围
-     检索」；筛主题范围材料 KP（lifecycle=current，不要求 verified，
-     同步骤 8 第 4 步）；手动生成的是草稿，正式化仍看使用验证 /
+  1. 候选检索（2026-08-07 再次修订：全文 ∪ 目录结构，取代此前"只做全文
+     检索"的口径——**仅适用于人工触发的这两条口径**——`POST /wiki/topics`
+     一把梭与分步向导第 1 步共用同一个 `retrieveAndGroupQualifyingKPs`
+     实现，Study 自动路径 `DetectTopicCandidate`（上面步骤 8 第 3 步）
+     不受影响，仍是纯全文检索，理由见「分步向导」小节末尾的范围说明）：
+       a. 全文检索：以 topic_name + topic_description 为查询词，对知识点
+          全文索引（points 索引）做语义检索（domain_id 非空时限定该
+          领域），不设分数门槛（2026-08-07 首次修订，理由同步骤 8 第 3
+          步）；
+       b. 目录结构检索：同一查询词对 source_outlines 目录索引做语义检索，
+          命中的目录节点按 source_id 分组展开子孙节点（同一来源下的
+          子章节一并收进来，避免只命中父标题漏掉子章节材料），解析出
+          知识单元，再取这些单元下**全部** lifecycle=current 的 KP（不是
+          "每个单元只取一条代表 KP"——候选范围要广度，不是精确证据）；
+       c. 两路结果取并集去重，domain 过滤统一在并集上做一次，按
+          wiki.topic_candidate_kp_max 截断；
+     筛主题范围材料 KP（lifecycle=current，不要求 verified，同步骤 8
+     第 4 步）；
+  1b. LLM 相关性判定（2026-08-07 新增）：候选检索是召回，召回结果里混有
+     只是词面相关、实际不属于该主题范围的材料——对步骤 1 qualifying 过滤
+     后的候选批量调用 LLM（`config/prompts/wiki_topic_candidate_rerank.md`，
+     版式仿照检索慢路径 `rerank_judge.md`，但判断目标简化为二元"是否属于
+     该主题范围"而非慢路径的 direct/supporting/irrelevant 三态——候选
+     语义字段复用摄取阶段已经算好的 `unit_rerank_semantics`
+     source_theme/content_theme/intent/object/scope，不重新抽取）；
+     LLM 调用或解析失败时该批候选原样保留（fail-open，不因为判定环节
+     本身出错反而让候选变少）；手动生成的是草稿，正式化仍看使用验证 /
      强制发布；
   2. 按归属分组，已发布概念页直接复用，未发布但满足概念级 ready 判定
      （ready 仍依赖一阶 qualifying = current 且 verified）的分组一并写
@@ -832,9 +884,57 @@ Study 的关联 / 整体可靠度判定（步骤 8 第 7 步）在人工触发�
   同口径）；不写 topic_page_candidate learning_result（无 pending_confirm
   可驳回对象——壳页本身可直接 archive 清理）。
 
+**分步向导（2026-08-07 新增，与上面的一把梭 `POST /wiki/topics` 并存，不是
+替换）**：一把梭流程对"候选已经 ready"的场景仍然好用（未发布词条不满足
+`isEntryReady` 时会被静默跳过，`uncovered_entries` 只是展示）；但对刚入库、
+还没有真实使用积累的材料，`isEntryReady` 几乎必然不过（需要 ≥1 条 related
+KPN 关系、`days_active` 达标），人工手动指定又拿不到"现在就编译"的选项。
+分步向导把同一条检索/分组/编译/组页链路拆成人工可控的三步，新增两个端点，
+复用两个已有端点（前端拆成两屏：步骤 1 屏做逐词条编译/发布并可展开查看
+KP，步骤 2 屏勾选已发布成员并 `POST /wiki/topics/draft` 建主题壳——先子后父）：
+
+```text
+POST /wiki/topics/candidates   步骤 1，只读预览：{topic_name, topic_description,
+  domain_id?} → 检索（全文 ∪ 目录结构 → LLM 相关性判定，口径同上面的
+  一把梭步骤 1/1b，2026-08-07 再次修订）+ qualifying 过滤（result_id 为空
+  → qualifying = lifecycle=current，不要求 verified，见步骤 2「人工指定
+  主题手动编译」2026-08-07 修订）+ 按 entry_id 分组，不写任何
+  wiki_candidate / 不建壳页；对每个词条返回 entry_id / entry_name /
+  qualifying_kp_count / already_published_page_id（若有）/ is_ready
+  （isEntryReady 只读结果，这一项仍要求 verified——它是"readiness 参考
+  信号"，不是"能不能生成"的门槛，两者口径本来就不同）/ readiness 明细；
+
+POST /wiki/compile             步骤 2a，逐词条编译（复用步骤 2 已有端点，
+  未改动，效果自然生效——manual 触发口径改为不要求 verified 后，未就绪
+  词条也能编译）：人工对预览里挑中的未发布词条逐个调用，产出 status=draft
+  页面；
+
+POST /wiki/pages/:id/publish   步骤 2b，发布（复用已有端点，未改动）：草稿
+  需要人工显式发布才能成为已发布概念页——publish 的 selfcheck 质量核验
+  （引用支持度等）不受 qualifying 口径修订影响，材料越薄、支持度越难达标，
+  这是符合预期的（生成容易，正式发布仍要经得起核验）；
+
+POST /wiki/topics/draft        步骤 3，显式成员建草稿：{topic_name,
+  member_page_ids} → 人工从"预览里已发布的 + 刚发布出的"概念页中勾选，
+  显式给出主题成员列表（不再由系统按 ready 自动决定谁进谁出）；校验每个
+  member 都是 status=published 且非 topic 类型页面，不满足报
+  ErrMembersNotPublished；直接调用 createTopicShell 建 draft 壳页 +
+  contains（与一把梭最终落库逻辑相同，只是成员列表由人工显式给出而不是
+  程序按 ready 判定筛出）；compiled_from 同样存 "manual_trigger"。
+```
+
 不新建编译管线：壳页建好后的分析/生成完全复用
   POST /wiki/pages/:id/topic/analyze|compile。
 ```
+
+**检索升级范围边界（2026-08-07）**：全文 ∪ 目录结构 → LLM 相关性判定这套
+升级只覆盖 `retrieveAndGroupQualifyingKPs`——一把梭 `POST /wiki/topics`
+与分步向导步骤 1 共用的实现，两者都是人工触发、偶发调用。上面步骤 8 第 3
+步的 `DetectTopicCandidate`（Study 周期扫描、自动识别主题候选）**不受
+影响**，仍是纯全文检索：那条路径是自动、高频触发的（每个扫描周期对每个
+新识别出的稳定簇都跑一次），加一次 LLM 相关性判定会把常驻成本乘上候选簇
+数量，且这次改动动机是提升人工触发场景的候选质量，不是普遍收紧 Study
+自动路径的召回。
 
 **二阶编译**：
 

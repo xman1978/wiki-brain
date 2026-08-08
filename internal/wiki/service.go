@@ -38,17 +38,13 @@ type Service struct {
 	llmClient     llm.LLMClient
 	wikiIndex     bleve.Index
 	pointsIndex   bleve.Index
+	outlinesIndex bleve.Index
 	cfg           config.WikiConfig
 	activationSvc *activation.Service
-	// topicSearchMinScore is retrieval.wiki_min_score (docs/impl/v1/wiki.md
-	// 步骤 8 第 3 步 "候选范围检索": score >= retrieval.wiki_min_score) —
-	// injected rather than duplicated into wiki.Config since it's owned by
-	// retrieval's config section and reused verbatim here.
-	topicSearchMinScore float64
 }
 
-func NewService(store *Store, llmClient llm.LLMClient, wikiIndex, pointsIndex bleve.Index, cfg config.WikiConfig, topicSearchMinScore float64) *Service {
-	return &Service{store: store, llmClient: llmClient, wikiIndex: wikiIndex, pointsIndex: pointsIndex, cfg: cfg, topicSearchMinScore: topicSearchMinScore}
+func NewService(store *Store, llmClient llm.LLMClient, wikiIndex, pointsIndex, outlinesIndex bleve.Index, cfg config.WikiConfig) *Service {
+	return &Service{store: store, llmClient: llmClient, wikiIndex: wikiIndex, pointsIndex: pointsIndex, outlinesIndex: outlinesIndex, cfg: cfg}
 }
 
 // SetActivationSvc wires the (optional) dependency Compile needs to resolve
@@ -75,7 +71,13 @@ func (s *Service) Analyze(ctx context.Context, req AnalyzeRequest) (*AnalyzeResu
 		return nil, fmt.Errorf("wiki: invalid page_type %q (topic pages are compiled via POST /wiki/pages/:id/topic/analyze|compile)", req.PageType)
 	}
 
-	in, err := s.gatherAnalyzeInputs(req.EntryID)
+	// requireVerified: result_id present means Study already recommended this
+	// concept (verified material is part of that judgment); empty means a
+	// human triggered this directly, and qualifying drops the verified
+	// requirement (docs/impl/v1/wiki.md 步骤 2 "人工指定主题手动编译"
+	// 2026-08-07 修订).
+	requireVerified := req.ResultID != ""
+	in, err := s.gatherAnalyzeInputs(req.EntryID, requireVerified)
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +193,12 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 		return nil, ErrPageAlreadyExists
 	}
 
+	// requireVerified: see the identical comment in Analyze — result_id
+	// present means Study already recommended this concept on verified
+	// material; empty means a human triggered this directly, and qualifying
+	// drops the verified requirement.
+	requireVerified := req.ResultID != ""
+
 	claims, tensions := req.Claims, req.Tensions
 	if len(claims) == 0 {
 		// No analysis round-tripped back (caller skipped /wiki/compile/analyze
@@ -198,13 +206,13 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 		// path) — run it internally so generation is still constrained to an
 		// analysis result, not raw material access.
 		var err error
-		claims, tensions, err = s.analyzeClaims(ctx, req.EntryID)
+		claims, tensions, err = s.analyzeClaims(ctx, req.EntryID, requireVerified)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	compiled, err := s.compileContent(ctx, req.EntryID, req.PageType, claims, tensions)
+	compiled, err := s.compileContent(ctx, req.EntryID, req.PageType, claims, tensions, requireVerified)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +254,7 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 	if err := s.store.InsertRevision(rev); err != nil {
 		slog.Error("wiki: insert initial revision failed", "page_id", page.PageID, "error", err)
 	} else {
-		s.verifyClaims(ctx, page.PageID, rev.RevisionID, req.EntryID, claims)
+		s.verifyClaims(ctx, page.PageID, rev.RevisionID, req.EntryID, claims, requireVerified)
 	}
 
 	slog.Info("wiki: compiled draft page", "page_id", page.PageID, "entry_id", req.EntryID,
@@ -277,16 +285,22 @@ func (s *Service) Recompile(ctx context.Context, pageID, reason string, compiled
 		conceptID = page.EntryID.String
 	}
 
+	// requireVerified follows the page's own original origin (docs/impl/v1/
+	// wiki.md 步骤 2 2026-08-07 修订) — a page first compiled manually stays
+	// on the not-required-verified qualifying definition across recompiles;
+	// a Study-recommended page keeps requiring verified.
+	requireVerified := !isManualCompiledFrom(page.CompiledFrom)
+
 	// Recompile has no exposed analyze-preview step (docs/impl/v1/wiki.md
 	// 步骤 5): the human confirming "recompile" on the Page is itself the
 	// confirmation of this new analysis round. Always a full page regeneration
 	// (阶段 A→D rerun) — no per-section incremental diffing (docs/impl/v1/
 	// wiki-generation.md 第 8 节, 明确不做).
-	claims, tensions, err := s.analyzeClaims(ctx, conceptID)
+	claims, tensions, err := s.analyzeClaims(ctx, conceptID, requireVerified)
 	if err != nil {
 		return nil, err
 	}
-	compiled, err := s.compileContent(ctx, conceptID, page.PageType, claims, tensions)
+	compiled, err := s.compileContent(ctx, conceptID, page.PageType, claims, tensions, requireVerified)
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +317,7 @@ func (s *Service) Recompile(ctx context.Context, pageID, reason string, compiled
 	if err := s.store.InsertRevision(rev); err != nil {
 		slog.Error("wiki: insert recompile revision failed", "page_id", pageID, "error", err)
 	} else {
-		s.verifyClaims(ctx, pageID, rev.RevisionID, conceptID, claims)
+		s.verifyClaims(ctx, pageID, rev.RevisionID, conceptID, claims, requireVerified)
 	}
 
 	// A page must not answer directly while it's being recompiled/awaiting
@@ -379,7 +393,7 @@ type analyzeInputs struct {
 // (largest first) to fit wiki.compile_max_chars — never by individual KP —
 // so whatever survives still forms complete aspects (docs/impl/v1/
 // wiki-generation.md 3.1).
-func (s *Service) gatherAnalyzeInputs(conceptID string) (*analyzeInputs, error) {
+func (s *Service) gatherAnalyzeInputs(conceptID string, requireVerified bool) (*analyzeInputs, error) {
 	conceptName, conceptDesc, domainID, conceptKind, err := s.store.GetEntryInfo(conceptID)
 	if err != nil {
 		return nil, fmt.Errorf("wiki: get concept info: %w", err)
@@ -389,7 +403,7 @@ func (s *Service) gatherAnalyzeInputs(conceptID string) (*analyzeInputs, error) 
 		slog.Warn("wiki: get domain name failed, continuing without it", "entry_id", conceptID, "error", err)
 	}
 
-	qualifying, err := s.store.ListQualifyingPoints(conceptID)
+	qualifying, err := s.store.ListQualifyingPoints(conceptID, requireVerified)
 	if err != nil {
 		return nil, fmt.Errorf("wiki: list qualifying points: %w", err)
 	}
@@ -549,8 +563,8 @@ func (s *Service) renderContradictions(aspects []Aspect, whitelist map[string]bo
 // whitelist, then correct each claim's optional AspectID against the
 // aspect set it was actually validated against (3.4). Shared by Analyze,
 // Compile (debug/no-analysis path) and Recompile.
-func (s *Service) analyzeClaims(ctx context.Context, conceptID string) ([]Claim, []Tension, error) {
-	in, err := s.gatherAnalyzeInputs(conceptID)
+func (s *Service) analyzeClaims(ctx context.Context, conceptID string, requireVerified bool) ([]Claim, []Tension, error) {
+	in, err := s.gatherAnalyzeInputs(conceptID, requireVerified)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -728,12 +742,12 @@ func extractSection(content, heading string) string {
 // and Recompile. Aspects are recomputed here rather than threaded through
 // from analyzeClaims, since Compile also accepts a caller-supplied
 // claims/tensions pair that may have skipped analyzeClaims entirely.
-func (s *Service) compileContent(ctx context.Context, conceptID, pageType string, claims []Claim, tensions []Tension) (*compiledContent, error) {
+func (s *Service) compileContent(ctx context.Context, conceptID, pageType string, claims []Claim, tensions []Tension, requireVerified bool) (*compiledContent, error) {
 	if len(claims) == 0 {
 		return nil, fmt.Errorf("wiki: no confirmed claims for concept %s", conceptID)
 	}
 
-	qualifying, err := s.store.ListQualifyingPoints(conceptID)
+	qualifying, err := s.store.ListQualifyingPoints(conceptID, requireVerified)
 	if err != nil {
 		return nil, fmt.Errorf("wiki: list qualifying points: %w", err)
 	}
@@ -1148,12 +1162,12 @@ func filterContentTags(content string, whitelist map[string]bool) (filtered stri
 // rows; results only gate Publish, via Selfcheck's
 // UnsupportedClaimCount lookup, separately (so a verify failure never fails
 // the compile itself). No-op when wiki.claim_verify_enabled is off.
-func (s *Service) verifyClaims(ctx context.Context, pageID, revisionID, conceptID string, claims []Claim) {
+func (s *Service) verifyClaims(ctx context.Context, pageID, revisionID, conceptID string, claims []Claim, requireVerified bool) {
 	if !s.cfg.ClaimVerifyEnabled || len(claims) == 0 {
 		return
 	}
 
-	qualifying, err := s.store.ListQualifyingPoints(conceptID)
+	qualifying, err := s.store.ListQualifyingPoints(conceptID, requireVerified)
 	if err != nil {
 		slog.Warn("wiki: claim verify list qualifying points failed, skipping", "page_id", pageID, "error", err)
 		return
@@ -1351,7 +1365,7 @@ func (s *Service) Selfcheck(ctx context.Context, pageID string) (*QualityCheck, 
 		metrics.ReplaySufficientRate = 1.0
 	}
 
-	qualifying, err := s.store.ListQualifyingPoints(conceptIDOf(page))
+	qualifying, err := s.store.ListQualifyingPoints(conceptIDOf(page), !isManualCompiledFrom(page.CompiledFrom))
 	if err != nil {
 		slog.Warn("wiki: selfcheck list qualifying points failed", "page_id", pageID, "error", err)
 	}
@@ -1643,6 +1657,43 @@ func (s *Service) NotifyPointsLifecycleChanged(pointIDs []string) error {
 		}
 		if err := s.MarkNeedsRecompile(p.PageID, "lifecycle_changed"); err != nil {
 			slog.Error("wiki: mark needs_recompile from lifecycle change failed", "page_id", p.PageID, "error", err)
+		}
+	}
+	return nil
+}
+
+// NotifyLinkVerified implements activation.WikiNotifier (docs/impl/v1/wiki.md
+// 步骤5 触发(d)): any published page whose source_point_ids contains pointID
+// is marked needs_recompile, so a stale wiki_pages.observed_conditions
+// (synced from VerifiedLinksObservedConditions only at compile time) picks up
+// the KP's just-verified confirming questions on the next recompile.
+func (s *Service) NotifyLinkVerified(pointID string) error {
+	if pointID == "" {
+		return nil
+	}
+
+	pages, err := s.store.ListPublishedPages()
+	if err != nil {
+		return fmt.Errorf("wiki: list published pages: %w", err)
+	}
+
+	for _, p := range pages {
+		var sourcePointIDs []string
+		if err := json.Unmarshal([]byte(p.SourcePointIDs), &sourcePointIDs); err != nil {
+			continue
+		}
+		affected := false
+		for _, pid := range sourcePointIDs {
+			if pid == pointID {
+				affected = true
+				break
+			}
+		}
+		if !affected {
+			continue
+		}
+		if err := s.MarkNeedsRecompile(p.PageID, "link_verified"); err != nil {
+			slog.Error("wiki: mark needs_recompile from link verified failed", "page_id", p.PageID, "error", err)
 		}
 	}
 	return nil
@@ -2080,6 +2131,25 @@ func nonEmpty(s string) []string {
 		return nil
 	}
 	return []string{s}
+}
+
+// isManualCompiledFrom reports whether a page's compiled_from (its most
+// recent compile/recompile provenance, docs/impl/v1/wiki.md 步骤 2) is the
+// manual-trigger sentinel rather than a Study wiki_candidate result_id —
+// used to carry the not-required-verified qualifying definition
+// (2026-08-07 修订) across Recompile/Selfcheck for pages that were manually
+// compiled.
+func isManualCompiledFrom(compiledFrom string) bool {
+	var ids []string
+	if err := json.Unmarshal([]byte(compiledFrom), &ids); err != nil {
+		return false
+	}
+	for _, id := range ids {
+		if id == ManualTriggerSentinel {
+			return true
+		}
+	}
+	return false
 }
 
 func nullableString(s string) sql.NullString {

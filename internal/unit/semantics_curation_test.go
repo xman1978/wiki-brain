@@ -345,3 +345,80 @@ func TestUpdatePoint_NotFound(t *testing.T) {
 		t.Errorf("status = %d, want 404", w.Code)
 	}
 }
+
+func TestDeprecatePoint_ManualSucceeds(t *testing.T) {
+	svc, _ := setupCurationTest(t)
+	if err := svc.store.InsertManualPoint(&KnowledgePoint{
+		PointID: "kp-manual", UnitID: "ku-1", SourceID: "src-1",
+		Content: "wrong fact", PointType: "rule", Lifecycle: LifecycleCurrent,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mux := curationMux(svc)
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("POST", "/points/kp-manual/deprecate", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST deprecate status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		PointID   string `json:"point_id"`
+		Lifecycle string `json:"lifecycle"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.PointID != "kp-manual" || resp.Lifecycle != LifecycleDeprecated {
+		t.Fatalf("resp = %+v", resp)
+	}
+
+	kp, err := svc.store.GetPointByID("kp-manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kp.Lifecycle != LifecycleDeprecated {
+		t.Fatalf("lifecycle = %q, want deprecated", kp.Lifecycle)
+	}
+
+	// Idempotent: second call still 200.
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, httptest.NewRequest("POST", "/points/kp-manual/deprecate", nil))
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second deprecate status = %d, want 200", w2.Code)
+	}
+}
+
+func TestDeprecatePoint_ExtractedRejected(t *testing.T) {
+	svc, _ := setupCurationTest(t)
+	if err := svc.store.InsertPoint(&KnowledgePoint{
+		PointID: "kp-auto", UnitID: "ku-1", SourceID: "src-1",
+		Content: "extracted fact", PointType: "rule",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mux := curationMux(svc)
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("POST", "/points/kp-auto/deprecate", nil))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for extracted KP; body=%s", w.Code, w.Body.String())
+	}
+	kp, err := svc.store.GetPointByID("kp-auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kp.Lifecycle != LifecycleCurrent {
+		t.Fatalf("extracted KP lifecycle changed to %q", kp.Lifecycle)
+	}
+}
+
+func TestDeprecatePoint_NotFound(t *testing.T) {
+	svc, _ := setupCurationTest(t)
+	mux := curationMux(svc)
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("POST", "/points/nope/deprecate", nil))
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}

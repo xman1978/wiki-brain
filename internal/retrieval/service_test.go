@@ -129,7 +129,7 @@ func TestDomainPreFilter(t *testing.T) {
 		Output: `{"domain_ids": ["d1"]}`,
 	})
 
-	sources, err := svc.domainPreFilter(context.Background(), "what is linear equation?")
+	sources, err := svc.domainPreFilter(context.Background(), QueryContext{Question: "what is linear equation?"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,13 +151,30 @@ func TestDomainPreFilterFallback(t *testing.T) {
 		Output: `{"domain_ids": []}`,
 	})
 
-	sources, err := svc.domainPreFilter(context.Background(), "something")
+	sources, err := svc.domainPreFilter(context.Background(), QueryContext{Question: "something"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(sources) != 3 {
 		t.Fatalf("expected 3 sources (all), got %d", len(sources))
 	}
+}
+
+func TestDomainPreFilterUpstreamResolved(t *testing.T) {
+	svc, fake, _ := setupTestService(t)
+	// Should not need LLM when DomainResolved.
+	sources, err := svc.domainPreFilter(context.Background(), QueryContext{
+		Question:       "ignored",
+		DomainIDs:      []string{"d1"},
+		DomainResolved: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 2 {
+		t.Fatalf("expected 2 sources for d1+null, got %d", len(sources))
+	}
+	_ = fake
 }
 
 // TestDomainPreFilterZeroMatchFallback covers the case where the LLM returns
@@ -181,7 +198,7 @@ func TestDomainPreFilterZeroMatchFallback(t *testing.T) {
 
 	svc := NewService(store, fake, nil, nil, nil, &config.Config{}, nil, nil, nil)
 
-	sources, err := svc.domainPreFilter(context.Background(), "something")
+	sources, err := svc.domainPreFilter(context.Background(), QueryContext{Question: "something"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,6 +432,101 @@ func TestRerankJudgeIncludeAnalysisFalseUsesNoAnalysisPrompt(t *testing.T) {
 	}
 	if calls[0].PromptFile != "rerank_judge_no_analysis.md" {
 		t.Errorf("expected rerank_judge_no_analysis.md, got %q", calls[0].PromptFile)
+	}
+}
+
+// TestRerankTwoStep_RelevanceThenClassify covers config.Retrieval.
+// RerankTwoStep's side path (2026-08-08 决策: 先旁路验证): rerank_relevance.md
+// runs first over all candidates, then rerank_classify.md runs only over the
+// ones judged relevant — the irrelevant one must never reach the classify
+// call at all.
+func TestRerankTwoStep_RelevanceThenClassify(t *testing.T) {
+	svc, fake, _ := setupTestService(t)
+	svc.cfg.Retrieval.RerankTwoStep = true
+
+	candidates := []candidate{
+		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25, score: 1.0},
+		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50, score: 0.5},
+	}
+
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}, {"candidate_id": "c2", "relevant": false, "analysis": "wrong object"}]}`,
+	})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "answers fully"}]}`,
+	})
+
+	kept, filtered, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 1 || kept[0].unitID != "u1" || kept[0].sourcePaths[0] != "direct" {
+		t.Fatalf("expected u1 kept as direct, got %+v", kept)
+	}
+	if len(filtered) != 1 || filtered[0].UnitID != "u2" {
+		t.Fatalf("expected u2 filtered as irrelevant (from Step 1, before classify ran), got %+v", filtered)
+	}
+
+	var sawRelevance, sawClassify bool
+	for _, c := range fake.Calls() {
+		switch c.PromptFile {
+		case "rerank_relevance.md":
+			sawRelevance = true
+			var payload []map[string]any
+			if err := json.Unmarshal([]byte(c.Vars["candidates"]), &payload); err != nil {
+				t.Fatalf("parse relevance payload: %v", err)
+			}
+			if len(payload) != 2 {
+				t.Errorf("expected relevance step to see both candidates, got %d", len(payload))
+			}
+		case "rerank_judge.md":
+			t.Error("combined rerank_judge.md must not be called when RerankTwoStep is enabled")
+		case "rerank_classify.md":
+			sawClassify = true
+			var payload []map[string]any
+			if err := json.Unmarshal([]byte(c.Vars["candidates"]), &payload); err != nil {
+				t.Fatalf("parse classify payload: %v", err)
+			}
+			if len(payload) != 1 {
+				t.Errorf("expected classify step to see only the relevant candidate, got %d", len(payload))
+			}
+		}
+	}
+	if !sawRelevance || !sawClassify {
+		t.Errorf("expected both rerank_relevance.md and rerank_classify.md to be called, calls=%+v", fake.Calls())
+	}
+}
+
+// TestRerankTwoStep_AllIrrelevantSkipsClassifyCall confirms Step 2 is never
+// invoked when nothing survives Step 1 — no point paying for a classify call
+// with an empty candidate set, and it also means an empty relevance result
+// can't accidentally produce a spurious classify request.
+func TestRerankTwoStep_AllIrrelevantSkipsClassifyCall(t *testing.T) {
+	svc, fake, _ := setupTestService(t)
+	svc.cfg.Retrieval.RerankTwoStep = true
+
+	candidates := []candidate{
+		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25, score: 1.0},
+	}
+
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "relevant": false, "analysis": "wrong object"}]}`,
+	})
+
+	kept, filtered, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 0 {
+		t.Errorf("expected nothing kept, got %+v", kept)
+	}
+	if len(filtered) != 1 || filtered[0].UnitID != "u1" {
+		t.Fatalf("expected u1 filtered as irrelevant, got %+v", filtered)
+	}
+	for _, c := range fake.Calls() {
+		if c.PromptFile == "rerank_classify.md" {
+			t.Error("classify call must not happen when Step 1 found nothing relevant")
+		}
 	}
 }
 

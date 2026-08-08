@@ -9,13 +9,27 @@ import (
 	"github.com/jxman78/wiki-brain/internal/session"
 )
 
+// WikiNotifier lets Wiki learn a cited KP's ActivationLink just became
+// verified, so it can mark dependent pages needs_recompile
+// (docs/impl/v1/wiki.md 步骤5 触发(d)) — mirrors unit.WikiNotifier's
+// existing cross-module notification shape. SetWikiNotifier no-ops when
+// unset.
+type WikiNotifier interface {
+	NotifyLinkVerified(pointID string) error
+}
+
 type Service struct {
-	store   *Store
-	matcher *Matcher
+	store        *Store
+	matcher      *Matcher
+	wikiNotifier WikiNotifier
 }
 
 func NewService(store *Store, matcher *Matcher) *Service {
 	return &Service{store: store, matcher: matcher}
+}
+
+func (s *Service) SetWikiNotifier(n WikiNotifier) {
+	s.wikiNotifier = n
 }
 
 func (s *Service) Store() *Store {
@@ -162,6 +176,12 @@ func (s *Service) TransitionLink(linkID, to, reason string, eventIDs []string) (
 
 	if s.matcher != nil {
 		s.matcher.InvalidateCache()
+	}
+
+	if to == StatusVerified && s.wikiNotifier != nil {
+		if err := s.wikiNotifier.NotifyLinkVerified(updated.PointID); err != nil {
+			slog.Warn("activation: notify wiki link verified failed", "link_id", linkID, "point_id", updated.PointID, "error", err)
+		}
 	}
 
 	return updated, nil

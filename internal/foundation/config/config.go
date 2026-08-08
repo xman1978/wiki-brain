@@ -162,6 +162,15 @@ type RetrievalConfig struct {
 	// rerankJudgeIncludeAnalysis() resolves it. Set to false to A/B test
 	// whether dropping the analysis field speeds up rerank latency.
 	RerankJudgeIncludeAnalysis *bool `yaml:"rerank_judge_include_analysis"`
+	// RerankTwoStep gates an experimental split of the single rerank_judge
+	// call (relevance + direct/supporting classification done together) into
+	// two sequential calls: rerank_relevance.md (relevant/irrelevant only,
+	// same object/scenario hard gate) then rerank_classify.md (direct/
+	// supporting, only over candidates already confirmed relevant). Default
+	// false — this is a side path being validated against the combined
+	// prompt before promotion, not yet the default (2026-08-08 决策: 先旁路
+	// 验证效果，确认稳定后再转正，替换 rerank_judge.md 单次调用).
+	RerankTwoStep bool `yaml:"rerank_two_step"`
 	// SkeletonInjectionEnabled gates topic-page skeleton injection into the
 	// slow path (docs/impl/v1/wiki.md 步骤 8「检索接入」, docs/impl/v1/wiki.md
 	// 两层架构扩展): default false — injection stakes recall quality on how
@@ -228,6 +237,11 @@ type WikiConfig struct {
 	// full candidate-range KP set (not just the qualifying subset) that has
 	// a verified ActivationLink.
 	TopicReliabilityMin float64 `yaml:"topic_reliability_min"`
+	// TopicRerankBatchMaxChars caps each LLM relevance-judge batch's total
+	// candidate content size for retrieveAndGroupQualifyingKPs's manual-
+	// trigger candidate search (docs/impl/v1/wiki.md 步骤 8 "人工手动指定
+	// 主题" 2026-08-07 修订). <=0 defaults to 6000.
+	TopicRerankBatchMaxChars int `yaml:"topic_rerank_batch_max_chars"`
 
 	// —— 生成质量（docs/impl/v1/wiki-generation.md 阶段 E/G，P0）——
 	// ClaimVerifyEnabled toggles the post-compile support check (阶段 E):

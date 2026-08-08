@@ -37,6 +37,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /units/{id}/points", h.addPoint)
 	mux.HandleFunc("GET /points/{id}", h.getPoint)
 	mux.HandleFunc("PUT /points/{id}", h.updatePoint)
+	mux.HandleFunc("POST /points/{id}/deprecate", h.deprecatePoint)
 	mux.HandleFunc("GET /points/{id}/relations", h.listRelations)
 }
 
@@ -671,6 +672,36 @@ func (h *Handler) updatePoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	foundation.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// deprecatePoint implements POST /points/:id/deprecate — 撤销人工新增的 KP
+// （docs/impl/v1/semantics-curation.md）：仅 manually_edited=1 可撤销，
+// 置 lifecycle=deprecated（非硬删）。
+func (h *Handler) deprecatePoint(w http.ResponseWriter, r *http.Request) {
+	pointID := r.PathValue("id")
+	if pointID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "missing point id")
+		return
+	}
+
+	kp, err := h.svc.DeprecateManualPoint(pointID)
+	if errors.Is(err, ErrNotManualPoint) {
+		foundation.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		foundation.WriteError(w, http.StatusNotFound, "point not found")
+		return
+	}
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"point_id":  kp.PointID,
+		"lifecycle": kp.Lifecycle,
+	})
 }
 
 func (h *Handler) listRelations(w http.ResponseWriter, r *http.Request) {

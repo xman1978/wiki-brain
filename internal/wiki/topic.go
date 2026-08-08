@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/search/query"
@@ -25,13 +26,13 @@ var requiredTopicSections = []string{"## 主题概览", "## 主线结论", "## �
 // (docs/impl/v1/wiki.md 步骤 8, 2026-08-03 修订): a draft topic shell page
 // was created with contains rows for every already-published member.
 type TopicCandidate struct {
-	PageID            string   // the newly created draft shell page
-	MemberPageIDs     []string // published members with a contains row
+	PageID           string   // the newly created draft shell page
+	MemberPageIDs    []string // published members with a contains row
 	PendingEntries   []string // entry_id list that cleared 步骤3 ready but has no published page yet — "待发布成员", a wiki_candidate was written and will get a contains row once it publishes (步骤 7b)
 	UncoveredEntries []string // entry_id list that did NOT clear 步骤3 ready — 缺材料, no wiki_candidate written
-	RelatedCount      int
-	ContradictsCount  int
-	Reason            string
+	RelatedCount     int
+	ContradictsCount int
+	Reason           string
 }
 
 // TopicSignalUnderfilled is 步骤 8 第 4 步's "有需求、缺材料" outcome: a
@@ -94,9 +95,6 @@ func (s *Service) DetectTopicCandidate(subject, intent, audience, constraintText
 			return nil, nil, fmt.Errorf("wiki: topic candidate range search: %w", err)
 		}
 		for _, hit := range res.Hits {
-			if hit.Score < s.topicSearchMinScore {
-				continue
-			}
 			candidateIDs = append(candidateIDs, hit.ID)
 		}
 	}
@@ -241,7 +239,11 @@ func (s *Service) DetectTopicCandidate(subject, intent, audience, constraintText
 // implementation of the qualifying-KP/cohesion SQL. kpMin ("广度" leg) is a
 // parameter because it's study.wiki_kp_min, owned by Study's config.
 func (s *Service) isEntryReady(conceptID string, kpMin int) (bool, *Readiness, error) {
-	in, err := s.gatherAnalyzeInputs(conceptID)
+	// Readiness stays verified-gated regardless of trigger source (docs/impl/
+	// v1/wiki.md 步骤 2 2026-08-07 修订: only the qualifying-for-compile
+	// definition drops verified on the manual path — "ready" is a distinct,
+	// unchanged signal).
+	in, err := s.gatherAnalyzeInputs(conceptID, true)
 	if err != nil {
 		// No qualifying points (or lookup failure) — not ready, not an error
 		// the caller needs to abort over.
@@ -277,6 +279,513 @@ type ErrInvalidTopicMembers struct {
 
 func (e *ErrInvalidTopicMembers) Error() string { return e.Message }
 
+// retrieveAndGroupQualifyingKPs is 步骤 8 第 1-1b 步 shared between
+// CreateTopicManual (一把梭) and PreviewTopicCandidates (分步向导第 1 步,
+// 2026-08-07 新增): candidate-range KP retrieval — full-text ∪ outline
+// recall (2026-08-07 再次修订, 对齐检索慢路径的召回质量; 只覆盖这两条人工
+// 触发口径, 不含 Study 自动路径 DetectTopicCandidate, 见 docs/impl/v1/
+// wiki.md 步骤 8「分步向导」末尾的范围说明) — 之后 domain 过滤 + qualifying
+// 过滤 + LLM 相关性判定 + group by entry_id。
+func (s *Service) retrieveAndGroupQualifyingKPs(ctx context.Context, topicName, topicDescription, domainID string) (byEntry map[string][]string, conceptOrder []string, candidateIDs []string, err error) {
+	if strings.TrimSpace(topicName) == "" {
+		return nil, nil, nil, &ErrInvalidTopicMembers{Message: "wiki: topic_name is required"}
+	}
+	queryText := strings.TrimSpace(topicName + " " + topicDescription)
+
+	kpMax := s.cfg.TopicCandidateKPMax
+	if kpMax <= 0 {
+		kpMax = 50
+	}
+
+	seen := make(map[string]bool)
+	addCandidate := func(pointID string) {
+		if !seen[pointID] {
+			seen[pointID] = true
+			candidateIDs = append(candidateIDs, pointID)
+		}
+	}
+
+	// 1a. 全文检索（points 索引）。
+	req := bleve.NewSearchRequest(lifecyclePointsQuery(queryText))
+	req.Size = kpMax
+	req.Fields = []string{"point_id"}
+	if s.pointsIndex != nil {
+		res, err := s.pointsIndex.Search(req)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("wiki: manual topic candidate search: %w", err)
+		}
+		for _, hit := range res.Hits {
+			addCandidate(hit.ID)
+		}
+	}
+
+	// 1b. 目录结构检索（outlines 索引）：命中的目录节点按来源分组、展开
+	// 子孙节点，解析出知识单元，取单元下全部 current KP（要广度，不是
+	// 慢路径 outlineRecall 那种"每单元取一条代表 KP"）。
+	if outlineCandidates, err := s.outlineRecallCandidates(queryText); err != nil {
+		slog.Warn("wiki: outline recall failed, continuing with full-text candidates only", "error", err)
+	} else {
+		for _, pid := range outlineCandidates {
+			addCandidate(pid)
+		}
+	}
+
+	// domain 过滤统一在并集上做一次（此前是内联在全文检索循环里，目录检索
+	// 分支加入后必须挪到并集之后，否则目录来源的候选漏过滤）。
+	if domainID != "" {
+		filtered := candidateIDs[:0]
+		for _, pid := range candidateIDs {
+			d, err := s.store.PointDomainID(pid)
+			if err == nil && d != domainID {
+				continue
+			}
+			filtered = append(filtered, pid)
+		}
+		candidateIDs = filtered
+	}
+	if len(candidateIDs) > kpMax {
+		candidateIDs = candidateIDs[:kpMax]
+	}
+
+	qualifying, err := s.store.QualifyingPointsByIDs(candidateIDs)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("wiki: manual topic qualifying filter: %w", err)
+	}
+	if len(qualifying) == 0 {
+		return nil, nil, nil, &ErrInvalidTopicMembers{Message: "wiki: no current knowledge points found for this topic scope"}
+	}
+
+	qualifying, err = s.judgeTopicCandidateRelevance(ctx, topicName, topicDescription, qualifying)
+	if err != nil {
+		slog.Warn("wiki: topic candidate relevance judge failed, keeping all qualifying candidates", "error", err)
+	}
+	if len(qualifying) == 0 {
+		return nil, nil, nil, &ErrInvalidTopicMembers{Message: "wiki: no current knowledge points found for this topic scope"}
+	}
+
+	byEntry = make(map[string][]string)
+	for _, q := range qualifying {
+		if _, ok := byEntry[q.EntryID]; !ok {
+			conceptOrder = append(conceptOrder, q.EntryID)
+		}
+		byEntry[q.EntryID] = append(byEntry[q.EntryID], q.PointID)
+	}
+	sort.Strings(conceptOrder)
+	return byEntry, conceptOrder, candidateIDs, nil
+}
+
+// outlineRecallCandidates implements 步骤 8 候选检索 1b：目录结构召回，
+// mirrors 检索慢路径 outlineRecall 的召回结构 (bleve match → 按来源分组
+// → 展开子孙节点 → 解析知识单元) 但简化 (不设分数门槛、不做 LLM 兜底、
+// 每单元取全部 current KP 而非一条代表 KP)。
+func (s *Service) outlineRecallCandidates(queryText string) ([]string, error) {
+	if s.outlinesIndex == nil {
+		return nil, nil
+	}
+	req := bleve.NewSearchRequest(bleve.NewMatchQuery(queryText))
+	req.Size = 100
+	req.Fields = []string{"source_id"}
+	res, err := s.outlinesIndex.Search(req)
+	if err != nil {
+		return nil, fmt.Errorf("wiki: outline candidate search: %w", err)
+	}
+
+	bySource := make(map[string][]string)
+	for _, hit := range res.Hits {
+		sourceID, _ := hit.Fields["source_id"].(string)
+		if sourceID == "" {
+			continue
+		}
+		bySource[sourceID] = append(bySource[sourceID], hit.ID)
+	}
+
+	var unitIDs []string
+	for sourceID, outlineIDs := range bySource {
+		expanded, err := s.store.ChildOutlineIDs(outlineIDs, sourceID)
+		if err != nil {
+			slog.Warn("wiki: outline child expansion failed, using direct hits only", "source_id", sourceID, "error", err)
+			expanded = outlineIDs
+		}
+		ids, err := s.store.UnitIDsByOutlineIDs(expanded)
+		if err != nil {
+			return nil, fmt.Errorf("wiki: unit ids by outline ids: %w", err)
+		}
+		unitIDs = append(unitIDs, ids...)
+	}
+	if len(unitIDs) == 0 {
+		return nil, nil
+	}
+	return s.store.PointIDsByUnitIDs(unitIDs)
+}
+
+// judgeTopicCandidateRelevance implements 步骤 8 候选检索 1b 的 LLM 相关性
+// 判定：候选检索是召回，混有仅词面相关、实际不属于该主题范围的材料——
+// 批量让模型判断每条候选是否真的属于这个主题范围。LLM 调用或解析失败时
+// fail-open（该批候选原样保留），不因为判定环节本身出错反而让候选变少。
+func (s *Service) judgeTopicCandidateRelevance(ctx context.Context, topicName, topicDescription string, qualifying []QualifyingPointRef) ([]QualifyingPointRef, error) {
+	if len(qualifying) == 0 {
+		return qualifying, nil
+	}
+	pointIDs := make([]string, len(qualifying))
+	for i, q := range qualifying {
+		pointIDs[i] = q.PointID
+	}
+	semantics, err := s.store.CandidateSemantics(pointIDs)
+	if err != nil {
+		return qualifying, fmt.Errorf("wiki: candidate semantics: %w", err)
+	}
+	if len(semantics) == 0 {
+		return qualifying, nil
+	}
+
+	batchMaxChars := s.cfg.TopicRerankBatchMaxChars
+	if batchMaxChars <= 0 {
+		batchMaxChars = 6000
+	}
+
+	type judgeCandidate struct {
+		CandidateID  string `json:"candidate_id"`
+		Content      string `json:"content"`
+		UnitCenter   string `json:"unit_center"`
+		SourceTitle  string `json:"source_title"`
+		SourceTheme  string `json:"source_theme"`
+		ContentTheme string `json:"content_theme"`
+		Intent       string `json:"intent"`
+		Object       string `json:"object"`
+		Scope        string `json:"scope"`
+	}
+
+	relevant := make(map[string]bool, len(semantics))
+	var batch []judgeCandidate
+	batchChars := 0
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		candidatesJSON, err := json.Marshal(batch)
+		if err != nil {
+			return fmt.Errorf("wiki: marshal topic candidates: %w", err)
+		}
+		raw, err := s.llmClient.CompleteJSON(ctx, "wiki_topic_candidate_rerank.md", map[string]string{
+			"topic_name":        topicName,
+			"topic_description": topicDescription,
+			"candidates":        string(candidatesJSON),
+		}, "classification")
+		if err != nil {
+			for _, c := range batch {
+				relevant[c.CandidateID] = true // fail-open
+			}
+			return fmt.Errorf("wiki: topic candidate rerank llm call: %w", err)
+		}
+		var output struct {
+			Results []struct {
+				CandidateID string `json:"candidate_id"`
+				Relevant    bool   `json:"relevant"`
+				Reason      string `json:"reason"`
+			} `json:"results"`
+		}
+		if err := json.Unmarshal(raw, &output); err != nil {
+			for _, c := range batch {
+				relevant[c.CandidateID] = true // fail-open
+			}
+			return fmt.Errorf("wiki: topic candidate rerank parse: %w", err)
+		}
+		for _, r := range output.Results {
+			relevant[r.CandidateID] = r.Relevant
+		}
+		// A candidate the model dropped from its response is kept, not
+		// dropped (fail-open, same rationale as an outright call failure).
+		for _, c := range batch {
+			if _, ok := relevant[c.CandidateID]; !ok {
+				relevant[c.CandidateID] = true
+			}
+		}
+		return nil
+	}
+
+	var flushErr error
+	for _, sem := range semantics {
+		c := judgeCandidate{
+			CandidateID: sem.PointID, Content: sem.Content, UnitCenter: sem.UnitCenter,
+			SourceTitle: sem.SourceTitle, SourceTheme: sem.SourceTheme, ContentTheme: sem.ContentTheme,
+			Intent: sem.Intent, Object: sem.Object, Scope: sem.Scope,
+		}
+		cChars := len(c.Content) + len(c.UnitCenter) + len(c.SourceTitle) + len(c.SourceTheme) + len(c.ContentTheme) + len(c.Intent) + len(c.Object) + len(c.Scope)
+		if len(batch) > 0 && batchChars+cChars > batchMaxChars {
+			if err := flush(); err != nil {
+				flushErr = err
+			}
+			batch = nil
+			batchChars = 0
+		}
+		batch = append(batch, c)
+		batchChars += cChars
+	}
+	if err := flush(); err != nil {
+		flushErr = err
+	}
+
+	out := make([]QualifyingPointRef, 0, len(qualifying))
+	for _, q := range qualifying {
+		if relevant[q.PointID] {
+			out = append(out, q)
+		}
+	}
+	return out, flushErr
+}
+
+// TopicCandidateEntry is one qualifying entry in a PreviewTopicCandidates
+// response (docs/impl/v1/wiki.md 步骤 8 "分步向导" 步骤 1) — enough for a
+// human to decide whether to compile it via the existing POST /wiki/compile.
+type TopicCandidateEntry struct {
+	EntryID                string     `json:"entry_id"`
+	EntryName              string     `json:"entry_name"`
+	QualifyingKPCount      int        `json:"qualifying_kp_count"`
+	AlreadyPublishedPageID string     `json:"already_published_page_id,omitempty"`
+	DraftPageID            string     `json:"draft_page_id,omitempty"`
+	IsReady                bool       `json:"is_ready"`
+	Readiness              *Readiness `json:"readiness,omitempty"`
+}
+
+// PreviewTopicCandidates implements 步骤 8 "分步向导" 步骤 1: the same
+// retrieval + qualifying + grouping as CreateTopicManual, but read-only — no
+// wiki_candidate learning_result written, no shell page created. Lets a human
+// see, per entry, whether it's already published, whether it clears the
+// isEntryReady gate, and how many qualifying KP it has, before deciding
+// whether to force-compile it via POST /wiki/compile (which has no ready
+// gate of its own).
+func (s *Service) PreviewTopicCandidates(ctx context.Context, topicName, topicDescription, domainID string) ([]TopicCandidateEntry, error) {
+	byEntry, conceptOrder, _, err := s.retrieveAndGroupQualifyingKPs(ctx, topicName, topicDescription, domainID)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]TopicCandidateEntry, 0, len(conceptOrder))
+	for _, entryID := range conceptOrder {
+		name, _, _, _, err := s.store.GetEntryInfo(entryID)
+		if err != nil {
+			slog.Warn("wiki: preview topic candidate entry info lookup failed", "entry_id", entryID, "error", err)
+		}
+		entry := TopicCandidateEntry{
+			EntryID:           entryID,
+			EntryName:         name,
+			QualifyingKPCount: len(byEntry[entryID]),
+		}
+		s.entryPublishReadiness(&entry)
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
+// entryPublishReadiness fills entry.AlreadyPublishedPageID/IsReady/Readiness
+// in place — the per-entry "is this already published, or does it clear the
+// informational ready signal" lookup shared by PreviewTopicCandidates and
+// GetWizardTaskDetail's live refresh (docs/impl/v1/wiki.md 步骤 8 "分步向导"
+// 断点续开, 2026-08-07): a task reopened after the human compiled/published
+// entries in an earlier session must show current state, not the snapshot
+// from when the (expensive) retrieval first ran.
+func (s *Service) entryPublishReadiness(entry *TopicCandidateEntry) {
+	const wikiKPMin = 0 // same fallback-to-4 rationale as CreateTopicManual
+	entry.AlreadyPublishedPageID = ""
+	entry.DraftPageID = ""
+	if page, err := s.store.GetActivePageByEntryID(entry.EntryID); err == nil && page != nil {
+		if page.Status == StatusPublished {
+			entry.AlreadyPublishedPageID = page.PageID
+			entry.IsReady = true
+			entry.Readiness = nil
+			return
+		}
+		// Compiled but not published yet (draft/needs_recompile) — surfaced
+		// so a reopened wizard task shows "编译过、待发布" instead of
+		// re-offering a 编译 button that would 409 (ErrPageAlreadyExists).
+		entry.DraftPageID = page.PageID
+	}
+	ready, r, err := s.isEntryReady(entry.EntryID, wikiKPMin)
+	if err != nil {
+		slog.Warn("wiki: entry publish readiness check failed", "entry_id", entry.EntryID, "error", err)
+	}
+	entry.IsReady = ready
+	entry.Readiness = r
+}
+
+// WizardTaskDetail is GET /wiki/wizard/tasks/:id's response shape
+// (docs/impl/v1/wiki.md 步骤 8 "分步向导" 断点续开, 2026-08-07 新增).
+type WizardTaskDetail struct {
+	TaskID           string                `json:"task_id"`
+	DomainID         string                `json:"domain_id"`
+	TopicName        string                `json:"topic_name"`
+	TopicDescription string                `json:"topic_description"`
+	Status           string                `json:"status"`
+	Entries          []TopicCandidateEntry `json:"entries"`
+	SelectedMembers  []string              `json:"selected_members"`
+	ErrorMessage     string                `json:"error_message,omitempty"`
+}
+
+// StartWizardTask implements 步骤 8 "分步向导" 步骤 1 的断点续开入口: if
+// domainID already has an active task (UNIQUE constraint, at most one),
+// return it as-is rather than starting a second retrieval — the caller
+// resumes from whatever status it's in. Otherwise inserts a
+// candidates_loading row and launches the (expensive, 30-60s) retrieval in
+// a background goroutine using context.Background() (NOT the caller's
+// request ctx, which is canceled the moment the HTTP handler returns) so the
+// LLM calls survive past the request that started them.
+func (s *Service) StartWizardTask(topicName, topicDescription, domainID string) (*WizardTask, error) {
+	if strings.TrimSpace(topicName) == "" {
+		return nil, &ErrInvalidTopicMembers{Message: "wiki: topic_name is required"}
+	}
+	if strings.TrimSpace(domainID) == "" {
+		return nil, &ErrInvalidTopicMembers{Message: "wiki: domain_id is required for a wizard task"}
+	}
+
+	existing, err := s.store.GetWizardTaskByDomain(domainID)
+	if err != nil {
+		return nil, fmt.Errorf("wiki: get wizard task by domain: %w", err)
+	}
+	if existing != nil {
+		return existing, nil
+	}
+
+	task := &WizardTask{
+		TaskID:           uuid.New().String(),
+		DomainID:         domainID,
+		TopicName:        topicName,
+		TopicDescription: topicDescription,
+		Status:           WizardTaskStatusCandidatesLoading,
+	}
+	if err := s.store.InsertWizardTask(task); err != nil {
+		return nil, err
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		entries, err := s.PreviewTopicCandidates(ctx, topicName, topicDescription, domainID)
+		if err != nil {
+			slog.Warn("wiki: wizard task candidate retrieval failed", "task_id", task.TaskID, "error", err)
+			if uerr := s.store.UpdateWizardTaskError(task.TaskID, err.Error()); uerr != nil {
+				slog.Error("wiki: update wizard task error failed", "task_id", task.TaskID, "error", uerr)
+			}
+			return
+		}
+		candidatesJSON, err := json.Marshal(entries)
+		if err != nil {
+			slog.Error("wiki: marshal wizard task candidates failed", "task_id", task.TaskID, "error", err)
+			_ = s.store.UpdateWizardTaskError(task.TaskID, "internal error: marshal candidates")
+			return
+		}
+		if err := s.store.UpdateWizardTaskCandidatesReady(task.TaskID, string(candidatesJSON)); err != nil {
+			slog.Error("wiki: update wizard task candidates ready failed", "task_id", task.TaskID, "error", err)
+		}
+	}()
+
+	return task, nil
+}
+
+// GetWizardTaskDetail loads a task and, when candidates_ready, live-refreshes
+// each cached entry's AlreadyPublishedPageID/IsReady (entryPublishReadiness)
+// so reopening a task after compiling/publishing entries in an earlier
+// session shows current state instead of the retrieval-time snapshot.
+// qualifying_kp_count/entry_name stay cached — refreshing them would mean
+// re-running the expensive retrieval, which defeats the point of persisting
+// the task in the first place.
+func (s *Service) GetWizardTaskDetail(taskID string) (*WizardTaskDetail, error) {
+	task, err := s.store.GetWizardTaskByID(taskID)
+	if err != nil {
+		return nil, fmt.Errorf("wiki: get wizard task: %w", err)
+	}
+	if task == nil {
+		return nil, nil
+	}
+
+	var entries []TopicCandidateEntry
+	if err := json.Unmarshal([]byte(task.CandidatesJSON), &entries); err != nil {
+		slog.Warn("wiki: unmarshal wizard task candidates failed", "task_id", taskID, "error", err)
+	}
+	if task.Status == WizardTaskStatusCandidatesReady {
+		for i := range entries {
+			s.entryPublishReadiness(&entries[i])
+		}
+	}
+
+	var selected []string
+	if err := json.Unmarshal([]byte(task.SelectedMembersJSON), &selected); err != nil {
+		slog.Warn("wiki: unmarshal wizard task selected members failed", "task_id", taskID, "error", err)
+	}
+
+	return &WizardTaskDetail{
+		TaskID: task.TaskID, DomainID: task.DomainID, TopicName: task.TopicName,
+		TopicDescription: task.TopicDescription, Status: task.Status,
+		Entries: entries, SelectedMembers: selected, ErrorMessage: task.ErrorMessage,
+	}, nil
+}
+
+func (s *Service) UpdateWizardTaskSelectedMembers(taskID string, memberPageIDs []string) error {
+	b, err := json.Marshal(memberPageIDs)
+	if err != nil {
+		return fmt.Errorf("wiki: marshal selected members: %w", err)
+	}
+	return s.store.UpdateWizardTaskSelectedMembers(taskID, string(b))
+}
+
+func (s *Service) DeleteWizardTask(taskID string) error {
+	return s.store.DeleteWizardTask(taskID)
+}
+
+// CreateTopicFromMembers implements 步骤 8 "分步向导" 步骤 3: build a draft
+// topic shell from an explicit, human-picked list of already-published
+// concept/fact pages — unlike CreateTopicManual, membership is not computed
+// from isEntryReady, it's given directly. Rejects topic-type pages (no
+// nesting — 两层架构 only) and any page not yet published.
+func (s *Service) CreateTopicFromMembers(topicName string, memberPageIDs []string) (*TopicCandidate, error) {
+	if strings.TrimSpace(topicName) == "" {
+		return nil, &ErrInvalidTopicMembers{Message: "wiki: topic_name is required"}
+	}
+	if len(memberPageIDs) == 0 {
+		return nil, &ErrInvalidTopicMembers{Message: "wiki: member_page_ids is required"}
+	}
+
+	pending := make(map[string]string)
+	for _, id := range memberPageIDs {
+		p, err := s.store.GetPage(id)
+		if err != nil {
+			return nil, fmt.Errorf("wiki: get member page: %w", err)
+		}
+		if p == nil {
+			pending[id] = "not_found"
+			continue
+		}
+		if p.PageType == PageTypeTopic {
+			pending[id] = "topic_page_not_allowed_as_member"
+			continue
+		}
+		if p.Status != StatusPublished {
+			pending[id] = p.Status
+		}
+	}
+	if len(pending) > 0 {
+		return nil, &ErrMembersNotPublished{Pending: pending}
+	}
+
+	relatedCount, err := s.store.CountRelationEdgesWithin(memberPageIDs, RelationRelated)
+	if err != nil {
+		return nil, fmt.Errorf("wiki: draft topic count related edges: %w", err)
+	}
+	contradictsCount, err := s.store.CountRelationEdgesWithin(memberPageIDs, RelationContradicts)
+	if err != nil {
+		return nil, fmt.Errorf("wiki: draft topic count contradicts edges: %w", err)
+	}
+
+	cand, err := s.createTopicShell(memberPageIDs, relatedCount, contradictsCount, marshalIDs([]string{ManualTriggerSentinel}))
+	if err != nil {
+		return nil, err
+	}
+	cand.Reason = fmt.Sprintf("分步向导人工显式指定主题 %q 成员 %d 个，related 边 %d 条，contradicts 边 %d 条",
+		topicName, len(memberPageIDs), relatedCount, contradictsCount)
+
+	slog.Info("wiki: created topic shell from explicit members", "page_id", cand.PageID, "members", len(memberPageIDs))
+	return cand, nil
+}
+
 // CreateTopicManual implements docs/impl/v1/wiki.md 步骤 8 "人工手动指定
 // 主题" (2026-08-03 修订): the human gives a topic *scope* (name +
 // description [+ domain]), not a member-page list — the same candidate-range
@@ -285,59 +794,11 @@ func (e *ErrInvalidTopicMembers) Error() string { return e.Message }
 // shown rather than enforced. No topic_page_candidate learning_result is
 // written (no pending_confirm object to resolve — the shell itself can be
 // archived directly to reject it).
-func (s *Service) CreateTopicManual(topicName, topicDescription, domainID string) (*TopicCandidate, *TopicReadiness, error) {
-	if strings.TrimSpace(topicName) == "" {
-		return nil, nil, &ErrInvalidTopicMembers{Message: "wiki: topic_name is required"}
-	}
-	queryText := strings.TrimSpace(topicName + " " + topicDescription)
-
-	kpMax := s.cfg.TopicCandidateKPMax
-	if kpMax <= 0 {
-		kpMax = 50
-	}
-	req := bleve.NewSearchRequest(lifecyclePointsQuery(queryText))
-	req.Size = kpMax
-	req.Fields = []string{"point_id"}
-	var candidateIDs []string
-	if s.pointsIndex != nil {
-		res, err := s.pointsIndex.Search(req)
-		if err != nil {
-			return nil, nil, fmt.Errorf("wiki: manual topic candidate search: %w", err)
-		}
-		for _, hit := range res.Hits {
-			if hit.Score < s.topicSearchMinScore {
-				continue
-			}
-			if domainID != "" {
-				d, err := s.store.PointDomainID(hit.ID)
-				if err == nil && d != domainID {
-					continue
-				}
-			}
-			candidateIDs = append(candidateIDs, hit.ID)
-		}
-	}
-	if len(candidateIDs) > kpMax {
-		candidateIDs = candidateIDs[:kpMax]
-	}
-
-	qualifying, err := s.store.QualifyingPointsByIDs(candidateIDs)
+func (s *Service) CreateTopicManual(ctx context.Context, topicName, topicDescription, domainID string) (*TopicCandidate, *TopicReadiness, error) {
+	byEntry, conceptOrder, candidateIDs, err := s.retrieveAndGroupQualifyingKPs(ctx, topicName, topicDescription, domainID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("wiki: manual topic qualifying filter: %w", err)
+		return nil, nil, err
 	}
-	if len(qualifying) == 0 {
-		return nil, nil, &ErrInvalidTopicMembers{Message: "wiki: no current knowledge points found for this topic scope"}
-	}
-
-	byEntry := make(map[string][]string)
-	var conceptOrder []string
-	for _, q := range qualifying {
-		if _, ok := byEntry[q.EntryID]; !ok {
-			conceptOrder = append(conceptOrder, q.EntryID)
-		}
-		byEntry[q.EntryID] = append(byEntry[q.EntryID], q.PointID)
-	}
-	sort.Strings(conceptOrder)
 
 	// wiki.Service has no visibility into study.wiki_kp_min (owned by
 	// Study's config); isEntryReady falls back to its own default (4) when

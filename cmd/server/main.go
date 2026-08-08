@@ -99,8 +99,20 @@ func main() {
 	// Preset data
 	foundation.LoadPresetData(database, "preset/domains.json")
 
-	// Bleve indexes
-	idxMgr, err := index.NewManager(cfg.Index.Path)
+	// Bleve indexes — EnsureHealthy checks doc counts against the DB and
+	// tokenizer searchability, rebuilding from scratch when they drift
+	// (NewManager alone just opens whatever is on disk, even if stale/empty).
+	idxMgr, err := index.EnsureHealthy(cfg.Index.Path, database, func(sourceID string) ([]string, error) {
+		var mdPath string
+		if err := database.QueryRow("SELECT markdown_path FROM sources WHERE source_id = ?", sourceID).Scan(&mdPath); err != nil {
+			return nil, err
+		}
+		data, err := os.ReadFile(mdPath)
+		if err != nil {
+			return nil, err
+		}
+		return strings.Split(string(data), "\n"), nil
+	})
 	if err != nil {
 		slog.Error("初始化索引失败", "error", err)
 		os.Exit(1)
@@ -167,9 +179,10 @@ func main() {
 
 	evidenceSvc := evidence.NewService(llmClient, cfg.Evidence)
 
-	wikiSvc := wiki.NewService(wikiStore, llmClient, idxMgr.Wiki, idxMgr.Points, cfg.Wiki, cfg.Retrieval.WikiMinScore)
+	wikiSvc := wiki.NewService(wikiStore, llmClient, idxMgr.Wiki, idxMgr.Points, idxMgr.Outlines, cfg.Wiki)
 	wikiSvc.SetActivationSvc(activationSvc)
 	unitSvc.SetWikiNotifier(wikiSvc)
+	activationSvc.SetWikiNotifier(wikiSvc)
 
 	retrievalSvc := retrieval.NewService(retrievalStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, activationSvc, evidenceSvc, wikiSvc)
 	answerSvc := answer.NewService(answerStore, llmClient, q, retrievalSvc)
@@ -295,7 +308,9 @@ func main() {
 	answerHandler.RegisterRoutes(apiMux)
 	trace.NewHandler(traceSvc).RegisterRoutes(apiMux)
 	study.NewHandler(studySvc).RegisterRoutes(apiMux)
-	session.NewHandler(sessionStore, session.NewParser(llmClient)).RegisterRoutes(apiMux)
+	sessionParser := session.NewParser(llmClient)
+	sessionParser.SetDomainCatalog(retrievalDomainCatalog{store: retrievalStore})
+	session.NewHandler(sessionStore, sessionParser).RegisterRoutes(apiMux)
 	activation.NewHandler(activationSvc).RegisterRoutes(apiMux)
 	wiki.NewHandler(wikiSvc).RegisterRoutes(apiMux)
 	entry.NewHandler(entrySvc).RegisterRoutes(apiMux)
@@ -405,4 +420,26 @@ func parseDuration(s string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// retrievalDomainCatalog adapts retrieval.Store.ListDomains for session.Parser
+// merged parse+domain routing (avoids session→retrieval import cycle).
+type retrievalDomainCatalog struct {
+	store *retrieval.Store
+}
+
+func (c retrievalDomainCatalog) ListDomainEntries() ([]session.DomainEntry, error) {
+	domains, err := c.store.ListDomains()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]session.DomainEntry, 0, len(domains))
+	for _, d := range domains {
+		out = append(out, session.DomainEntry{
+			ID:          d.DomainID,
+			Name:        d.Name,
+			Description: d.Description,
+		})
+	}
+	return out, nil
 }

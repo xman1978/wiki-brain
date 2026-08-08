@@ -3,6 +3,7 @@ package wiki
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -28,6 +29,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /wiki/catalog", h.listCatalog)
 	mux.HandleFunc("GET /wiki/topics", h.listTopicPages)
 	mux.HandleFunc("POST /wiki/topics", h.createTopic)
+	mux.HandleFunc("POST /wiki/topics/candidates", h.previewTopicCandidates)
+	mux.HandleFunc("POST /wiki/topics/draft", h.createTopicDraft)
+	mux.HandleFunc("POST /wiki/wizard/tasks", h.startWizardTask)
+	mux.HandleFunc("GET /wiki/wizard/tasks/{id}", h.getWizardTask)
+	mux.HandleFunc("PATCH /wiki/wizard/tasks/{id}", h.patchWizardTask)
+	mux.HandleFunc("DELETE /wiki/wizard/tasks/{id}", h.deleteWizardTask)
 	mux.HandleFunc("GET /wiki/topics/{id}/members", h.listTopicMembers)
 	mux.HandleFunc("GET /wiki/unassigned-entries", h.listUnassignedEntryPages)
 	mux.HandleFunc("GET /wiki/pages/{id}", h.getPage)
@@ -125,6 +132,133 @@ func writeTopicError(w http.ResponseWriter, err error) {
 	writePageError(w, err)
 }
 
+// previewTopicCandidates is POST /wiki/topics/candidates — docs/impl/v1/wiki.md
+// 步骤 8 "分步向导" 步骤 1: read-only preview of the same candidate-range
+// retrieval + qualifying + grouping CreateTopicManual uses, but with no side
+// effects, so a human can see per-entry readiness before choosing which
+// unready entries to force-compile via the existing POST /wiki/compile.
+func (h *Handler) previewTopicCandidates(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TopicName        string `json:"topic_name"`
+		TopicDescription string `json:"topic_description"`
+		DomainID         string `json:"domain_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	entries, err := h.svc.PreviewTopicCandidates(r.Context(), req.TopicName, req.TopicDescription, req.DomainID)
+	if err != nil {
+		writeTopicError(w, err)
+		return
+	}
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{"entries": entries})
+}
+
+// createTopicDraft is POST /wiki/topics/draft — docs/impl/v1/wiki.md 步骤 8
+// "分步向导" 步骤 3: build a draft topic shell from an explicit, human-picked
+// member_page_ids list (unlike createTopic/CreateTopicManual, membership is
+// not computed from isEntryReady).
+func (h *Handler) createTopicDraft(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TopicName     string   `json:"topic_name"`
+		MemberPageIDs []string `json:"member_page_ids"`
+		TaskID        string   `json:"task_id,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	cand, err := h.svc.CreateTopicFromMembers(req.TopicName, req.MemberPageIDs)
+	if err != nil {
+		writeTopicError(w, err)
+		return
+	}
+	// 分步向导提交成功即释放该领域的向导任务名额（docs/impl/v1/wiki.md
+	// 步骤 8 "分步向导" 断点续开）——任务完成后没有继续存在的意义，不设
+	// completed 状态，直接删除。
+	if req.TaskID != "" {
+		if err := h.svc.DeleteWizardTask(req.TaskID); err != nil {
+			slog.Warn("wiki: delete wizard task after draft creation failed", "task_id", req.TaskID, "error", err)
+		}
+	}
+	title := ""
+	if page, err := h.svc.store.GetPage(cand.PageID); err == nil && page != nil {
+		title = page.Title
+	}
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"page_id":         cand.PageID,
+		"status":          StatusDraft,
+		"title":           title,
+		"member_page_ids": cand.MemberPageIDs,
+	})
+}
+
+// wizard task routes (docs/impl/v1/wiki.md 步骤 8 "分步向导" 断点续开,
+// 2026-08-07 新增): persist step-1 candidate retrieval progress so it
+// survives a page reload / accidental modal close.
+
+func (h *Handler) startWizardTask(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DomainID         string `json:"domain_id"`
+		TopicName        string `json:"topic_name"`
+		TopicDescription string `json:"topic_description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	task, err := h.svc.StartWizardTask(req.TopicName, req.TopicDescription, req.DomainID)
+	if err != nil {
+		writeTopicError(w, err)
+		return
+	}
+	foundation.WriteJSON(w, http.StatusOK, wizardTaskResp(task))
+}
+
+func (h *Handler) getWizardTask(w http.ResponseWriter, r *http.Request) {
+	detail, err := h.svc.GetWizardTaskDetail(r.PathValue("id"))
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if detail == nil {
+		foundation.WriteError(w, http.StatusNotFound, "wizard task not found")
+		return
+	}
+	foundation.WriteJSON(w, http.StatusOK, detail)
+}
+
+func (h *Handler) patchWizardTask(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SelectedMembers []string `json:"selected_members"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.svc.UpdateWizardTaskSelectedMembers(r.PathValue("id"), req.SelectedMembers); err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	foundation.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) deleteWizardTask(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.DeleteWizardTask(r.PathValue("id")); err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	foundation.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func wizardTaskResp(t *WizardTask) map[string]interface{} {
+	return map[string]interface{}{
+		"task_id": t.TaskID, "domain_id": t.DomainID, "topic_name": t.TopicName,
+		"topic_description": t.TopicDescription, "status": t.Status,
+	}
+}
+
 // createTopic is POST /wiki/topics — docs/impl/v1/wiki.md 步骤 8
 // "人工手动指定主题" (2026-08-03 修订): the request gives a topic *scope*
 // (name/description[/domain]), not a member-page list. Builds a draft shell
@@ -140,7 +274,7 @@ func (h *Handler) createTopic(w http.ResponseWriter, r *http.Request) {
 		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	cand, readiness, err := h.svc.CreateTopicManual(req.TopicName, req.TopicDescription, req.DomainID)
+	cand, readiness, err := h.svc.CreateTopicManual(r.Context(), req.TopicName, req.TopicDescription, req.DomainID)
 	if err != nil {
 		writeTopicError(w, err)
 		return

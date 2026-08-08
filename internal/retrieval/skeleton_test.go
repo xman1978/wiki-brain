@@ -20,8 +20,12 @@ func TestSkeletonInjection_FullBypassSkipsDomainAndSourcePrefilter(t *testing.T)
 	svc.cfg.Retrieval.SkeletonInjectionEnabled = true
 	svc.cfg.Retrieval.RerankTopN = 2 // skeleton below will supply exactly 2 points
 
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "ok"}, {"candidate_id": "c2", "role": "supporting", "analysis": "ok"}]}`,
+	// First call judges the two skeleton candidates (c1/c2); the KPN expansion
+	// step then re-judges p1's remaining KPN neighbor (not already among the
+	// skeleton candidates) as its own single-candidate batch (c1).
+	fake.SetResponseSequence("rerank_judge.md", []llm.FakeResponse{
+		{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "ok"}, {"candidate_id": "c2", "role": "supporting", "analysis": "ok"}]}`},
+		{Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "kpn neighbor"}]}`},
 	})
 
 	skeletonMembers := []SkeletonMemberInfo{

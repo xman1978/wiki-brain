@@ -262,6 +262,35 @@ func (s *Store) GetCurrentUnitsByPointIDs(pointIDs []string) ([]DirectHit, error
 	return result, rows.Err()
 }
 
+// PointDomainIDs returns source.domain_id for each current point (points whose
+// source has NULL domain_id are omitted). Used by fast-path domain filtering.
+func (s *Store) PointDomainIDs(pointIDs []string) (map[string]string, error) {
+	out := make(map[string]string)
+	if len(pointIDs) == 0 {
+		return out, nil
+	}
+	ph, args := buildPlaceholders(pointIDs)
+	query := fmt.Sprintf(`
+		SELECT p.point_id, s.domain_id
+		FROM knowledge_points p
+		JOIN sources s ON s.source_id = p.source_id
+		WHERE p.point_id IN (%s) AND p.lifecycle = 'current'
+		  AND s.domain_id IS NOT NULL AND s.shadow_of IS NULL`, ph)
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval store: point domain ids: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pid, did string
+		if err := rows.Scan(&pid, &did); err != nil {
+			return nil, fmt.Errorf("retrieval store: scan point domain: %w", err)
+		}
+		out[pid] = did
+	}
+	return out, rows.Err()
+}
+
 // UnitLifecycleCurrent re-checks a KU's lifecycle right before its content is
 // sliced for Rerank, guarding against a lifecycle change in the gap between
 // recall and rerank (docs/impl/v1/retrieval.md 步骤 5, "防扫描间隙状态变更").

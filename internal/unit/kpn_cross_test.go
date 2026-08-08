@@ -452,6 +452,51 @@ func TestCrossSourceKPN_Idempotent(t *testing.T) {
 	}
 }
 
+// TestMatchEntries_DropsStaleCrossRelationsOnEntryReclassify covers the fix
+// for 2026-08-08's stale-relation finding: a Source's scope=cross KPN
+// relations are built against whatever entry_id CrossSourceKPN grouped its
+// points under at the time; if a later manual domain reassignment
+// (source.Service.SetDomain -> MatchEntries) reclassifies those points into
+// a different (or no) entry_id, the old cross relations no longer
+// correspond to any current entry_id grouping and must be dropped rather
+// than left as unexplained edges between points that no longer share an
+// entry.
+func TestMatchEntries_DropsStaleCrossRelationsOnEntryReclassify(t *testing.T) {
+	svc, fake, db := setupTestService(t)
+	store := NewStore(db)
+
+	seedDomain(t, db, "d1", "D")
+	seedEntry(t, db, "c1", "d1", "C")
+	seedSourceWithDomain(t, db, "new-src", "d1")
+	seedSourceWithDomain(t, db, "existing-src", "d1")
+	seedKUWithEntry(t, store, "ku-new", "new-src", "c1", "new topic")
+	seedKP(t, store, "kp-new", "ku-new", "new-src", "new content")
+	seedKUWithEntry(t, store, "ku-existing", "existing-src", "c1", "existing topic")
+	seedKP(t, store, "kp-existing", "ku-existing", "existing-src", "existing content")
+
+	fake.SetResponse("kpn_cross_match.md", llm.FakeResponse{
+		Output: `{"relations": [{"from": "kp-new", "to": "kp-existing", "type": "related"}]}`,
+	})
+	if _, err := svc.CrossSourceKPN(context.Background(), "new-src"); err != nil {
+		t.Fatalf("initial cross kpn: %v", err)
+	}
+	rels, _ := store.GetRelationsByPointID("kp-new", "")
+	if len(rels) != 1 {
+		t.Fatalf("expected 1 relation seeded before reclassify, got %d", len(rels))
+	}
+
+	// Reassign new-src to a domain with no entries at all — matchEntries
+	// clears entry_id and finds nothing to reassign it to, so kp-new's KU
+	// ends up with no entry_id, no longer matching kp-existing's c1 grouping.
+	seedDomain(t, db, "d2", "D2")
+	svc.MatchEntries(context.Background(), "new-src", "d2")
+
+	rels, _ = store.GetRelationsByPointID("kp-new", "")
+	if len(rels) != 0 {
+		t.Errorf("expected stale cross relation dropped after entry reclassify, got %+v", rels)
+	}
+}
+
 func TestCrossSourceKPN_RejectsWrongDirection(t *testing.T) {
 	svc, fake, db := setupTestService(t)
 	store := NewStore(db)

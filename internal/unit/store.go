@@ -494,6 +494,26 @@ func (s *Store) UpdateManualPoint(pointID, content, pointType string) error {
 	return nil
 }
 
+// UpdatePointLifecycle sets a single KP's lifecycle (and lifecycle_changed_at).
+// Used by DeprecateManualPoint for manual-KP revoke; bulk KU→KP cascades use
+// UpdatePointsLifecycleByUnitIDs instead.
+func (s *Store) UpdatePointLifecycle(pointID, lifecycle string) error {
+	res, err := s.db.Exec(`UPDATE knowledge_points
+		SET lifecycle = ?, lifecycle_changed_at = CURRENT_TIMESTAMP
+		WHERE point_id = ?`, lifecycle, pointID)
+	if err != nil {
+		return fmt.Errorf("unit store: update point lifecycle: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("unit store: update point lifecycle: rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("unit store: update point lifecycle: point %s not found", pointID)
+	}
+	return nil
+}
+
 // InsertRelation is INSERT OR IGNORE against idx_kp_relations_uniq
 // (source_point_id, target_point_id, relation_type) — both the existing
 // intra-Source path and the new cross-Source path (docs/impl/v1/kpn.md 步骤
@@ -520,6 +540,33 @@ func (s *Store) InsertRelation(r *KnowledgePointRelation) (bool, error) {
 		return false, fmt.Errorf("unit store: insert relation rows affected: %w", err)
 	}
 	return n > 0, nil
+}
+
+// DeleteCrossRelationsBySourceID removes every scope=cross relation
+// touching sourceID's own points (on either side — a point can be the
+// "new" side of one run and later show up as the "existing/opposite" side
+// of a different Source's own cross-match run). Used by MatchEntries when a
+// manual domain reassignment clears and recomputes a Source's entry_id: the
+// Source's prior cross-Source relations were built against its old entry_id
+// grouping and no longer correspond to anything once that grouping changes,
+// so they must be dropped rather than left as stale edges pointing at
+// whatever the old entry_id happened to pool together. Intra-Source
+// relations are untouched — those don't depend on entry_id at all.
+func (s *Store) DeleteCrossRelationsBySourceID(sourceID string) (int, error) {
+	res, err := s.db.Exec(`DELETE FROM knowledge_point_relations
+		WHERE scope = ?
+		AND (
+			source_point_id IN (SELECT point_id FROM knowledge_points WHERE source_id = ?)
+			OR target_point_id IN (SELECT point_id FROM knowledge_points WHERE source_id = ?)
+		)`, RelationScopeCross, sourceID, sourceID)
+	if err != nil {
+		return 0, fmt.Errorf("unit store: delete cross relations by source: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("unit store: delete cross relations by source rows affected: %w", err)
+	}
+	return int(n), nil
 }
 
 func (s *Store) UpdateUnitStatus(unitID, status string, errorMsg *string) error {
@@ -917,24 +964,6 @@ func (s *Store) GetCrossSourcePointsByEntryID(conceptID, excludeSourceID string)
 		ORDER BY kp.created_at ASC`, conceptID, excludeSourceID)
 	if err != nil {
 		return nil, fmt.Errorf("unit store: get cross source points by concept: %w", err)
-	}
-	defer rows.Close()
-	return scanKnowledgePoints(rows)
-}
-
-// GetCrossSourcePointsByDomainID returns lifecycle=current KPs (with a
-// current KU) whose Source is under domainID, excluding excludeSourceID —
-// priority-2 fallback "对端 KP 集合" when the new KU has no entry_id
-// (docs/impl/v1/kpn.md 步骤 2).
-func (s *Store) GetCrossSourcePointsByDomainID(domainID, excludeSourceID string) ([]KnowledgePoint, error) {
-	rows, err := s.db.Query(`SELECT kp.point_id, kp.unit_id, kp.source_id, kp.content, kp.point_type, kp.lifecycle, kp.lifecycle_changed_at, kp.created_at
-		FROM knowledge_points kp
-		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
-		JOIN sources src ON ku.source_id = src.source_id
-		WHERE src.domain_id = ? AND kp.source_id != ? AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
-		ORDER BY kp.created_at ASC`, domainID, excludeSourceID)
-	if err != nil {
-		return nil, fmt.Errorf("unit store: get cross source points by domain: %w", err)
 	}
 	defer rows.Close()
 	return scanKnowledgePoints(rows)

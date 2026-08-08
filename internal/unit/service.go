@@ -292,7 +292,7 @@ const (
 	promptVersionExtractRetry = "v7" // unit_extract_retry.md
 	promptVersionGapExtract   = "v1" // unit_gap_extract.md
 	promptVersionKPNExtract   = "v2" // kpn_extract.md
-	promptVersionKPNCross     = "v2" // kpn_cross_match.md
+	promptVersionKPNCross     = "v3" // kpn_cross_match.md
 )
 
 type llmUnit struct {
@@ -663,6 +663,18 @@ type unitKindClassifyOutput struct {
 // writes a match it found and never clears one that came up empty, so without
 // this a KU that doesn't fit any concept in the new domain would keep
 // pointing at a concept from its old one.
+//
+// The Source's existing scope=cross KPN relations are dropped and rebuilt
+// (2026-08-08 决策: 修复 entry_id 重分类留下的孤儿关系 — CrossSourceKPN groups
+// its matching by entry_id, so every cross relation this Source currently
+// has was built against its *old* entry_id grouping; once that grouping is
+// cleared and replaced by re-matching, those relations no longer correspond
+// to anything and would sit as unexplained noise (e.g. two point_ids linked
+// "related" whose current entry_ids don't agree) rather than being
+// re-validated. Dropping and letting CrossSourceKPN rebuild from scratch
+// under the corrected entry_id is the only way to keep the graph consistent
+// with entry_id at all times, not just at initial-extraction time. Intra
+// relations are untouched — those never depended on entry_id.
 func (s *Service) MatchEntries(ctx context.Context, sourceID, domainID string) {
 	if err := s.store.ClearEntryIDBySourceID(sourceID); err != nil {
 		slog.Warn("unit: clear concept id before rematch failed", "source_id", sourceID, "error", err)
@@ -672,6 +684,16 @@ func (s *Service) MatchEntries(ctx context.Context, sourceID, domainID string) {
 		did = sql.NullString{String: domainID, Valid: true}
 	}
 	s.matchEntries(ctx, sourceID, did)
+
+	deleted, err := s.store.DeleteCrossRelationsBySourceID(sourceID)
+	if err != nil {
+		slog.Warn("unit: delete stale cross kpn relations after rematch failed", "source_id", sourceID, "error", err)
+	} else if deleted > 0 {
+		slog.Info("unit: dropped stale cross kpn relations after entry rematch", "source_id", sourceID, "deleted", deleted)
+	}
+	if _, err := s.CrossSourceKPN(ctx, sourceID); err != nil {
+		slog.Warn("unit: rebuild cross kpn after entry rematch failed", "source_id", sourceID, "error", err)
+	}
 }
 
 func (s *Service) matchEntries(ctx context.Context, sourceID string, domainID sql.NullString) {

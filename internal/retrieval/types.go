@@ -8,6 +8,16 @@ type QueryContext struct {
 	Intent     string
 	Audience   string
 	Constraint string
+	// DomainIDs from session merged parse+domain. When DomainResolved is true,
+	// slow path skips question_domain_match and uses these IDs (empty ⇒ all
+	// sources). Fast path filters ActivationLink candidates by source domain.
+	DomainIDs      []string
+	DomainResolved bool
+	// FollowUp is true for non-first questions in a session (Session layer).
+	// Fast-path tuple normalization against domain condition groups no longer
+	// requires FollowUp — it runs before Match whenever DomainResolved and
+	// domain verified condition groups are non-empty.
+	FollowUp bool
 	// ForceFull skips the activation fast path and forces the full MVP
 	// pipeline — POST /retrieval's force_full request field
 	// (docs/impl/v1/retrieval.md 步骤 7), for debugging/comparison evals.

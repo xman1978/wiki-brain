@@ -118,14 +118,16 @@ func (h *Handler) postTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. SessionParser (LLM) — context-aware parse: resolves the current input
-	// against the previous turn (question, answer tail, parsed slots) into a
-	// complete slot tuple plus a standalone question.
+	// 3. SessionParser (LLM) — merged domain routing + context-aware parse
+	// (docs/impl/v1/plan-parser-vocab-and-unit-ambiguity.md). FollowUp is
+	// computed before LastQuestion is overwritten by this turn.
+	followUp := state.Dialogue.LastQuestion != ""
 	parsed := h.parser.Parse(r.Context(), input.UserInput, state)
 
 	slog.Info("session parse result", "input", input.UserInput, "intent", parsed.Intent,
 		"subject", parsed.Subject, "audience", parsed.Audience, "constraint", parsed.Constraint,
-		"standalone", parsed.StandaloneQuestion, "current_subject", state.Working.CurrentSubject)
+		"standalone", parsed.StandaloneQuestion, "domain_ids", parsed.DomainIDs,
+		"follow_up", followUp, "current_subject", state.Working.CurrentSubject)
 
 	// 4. Update state
 	state.Dialogue.Intent = parsed.Intent
@@ -153,8 +155,10 @@ func (h *Handler) postTurn(w http.ResponseWriter, r *http.Request) {
 		if parsed.StandaloneQuestion != "" {
 			eq.ExpandedQuestion = parsed.StandaloneQuestion
 		}
+		eq.DomainIDs = parsed.DomainIDs
+		eq.FollowUp = followUp
 		state.Dialogue.LastQuestion = eq.ExpandedQuestion
-		slog.Info("session expand result", "expanded_question", eq.ExpandedQuestion, "subject", eq.Subject, "plan_subject", plan.Subject)
+		slog.Info("session expand result", "expanded_question", eq.ExpandedQuestion, "subject", eq.Subject, "plan_subject", plan.Subject, "domain_ids", eq.DomainIDs)
 		result.Action = "retrieve"
 		result.ExpandedQuery = &eq
 		h.store.Set(input.SessionID, state)
@@ -189,6 +193,8 @@ func (h *Handler) postTurn(w http.ResponseWriter, r *http.Request) {
 		if parsed.StandaloneQuestion != "" {
 			eq.ExpandedQuestion = parsed.StandaloneQuestion
 		}
+		eq.DomainIDs = parsed.DomainIDs
+		eq.FollowUp = followUp
 		state.Dialogue.LastQuestion = eq.ExpandedQuestion
 		result.Action = "retrieve"
 		result.ExpandedQuery = &eq

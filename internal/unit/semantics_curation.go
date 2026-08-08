@@ -31,6 +31,11 @@ var ErrInvalidPointType = errors.New("unit: point_type must be one of definition
 // ErrEmptyPointContent is returned when a manual KP's content is blank.
 var ErrEmptyPointContent = errors.New("unit: point content must not be empty")
 
+// ErrNotManualPoint is returned when POST /points/:id/deprecate targets a
+// non-manual (LLM-extracted) KP — only manually_edited rows may be revoked
+// this way; extracted points are retired via re-extract / reupload.
+var ErrNotManualPoint = errors.New("unit: only manually-added points can be deprecated via this endpoint")
+
 var validPointTypes = map[string]bool{
 	"definition": true,
 	"rule":       true,
@@ -222,4 +227,29 @@ func (s *Service) UpdateManualPoint(pointID, content, pointType string) error {
 		return fmt.Errorf("%w: got %q", ErrInvalidPointType, pointType)
 	}
 	return s.store.UpdateManualPoint(pointID, content, pointType)
+}
+
+// DeprecateManualPoint revokes a human-added KP (POST /points/:id/deprecate):
+// sets lifecycle=deprecated so retrieval / qualifying stop seeing it, without
+// hard-deleting the row (KPN / ActivationLink / Wiki citations may still
+// reference point_id). Only manually_edited=1 points are eligible; already-
+// deprecated is idempotent success.
+func (s *Service) DeprecateManualPoint(pointID string) (*KnowledgePoint, error) {
+	kp, err := s.store.GetPointByID(pointID)
+	if err != nil {
+		return nil, err
+	}
+	if !kp.ManuallyEdited {
+		return nil, ErrNotManualPoint
+	}
+	if kp.Lifecycle == LifecycleDeprecated {
+		return kp, nil
+	}
+	if err := s.store.UpdatePointLifecycle(pointID, LifecycleDeprecated); err != nil {
+		return nil, err
+	}
+	kp.Lifecycle = LifecycleDeprecated
+	s.indexPoint(kp)
+	slog.Info("unit: deprecated manual point", "point_id", pointID, "unit_id", kp.UnitID)
+	return kp, nil
 }

@@ -217,6 +217,9 @@ def ask_via_session(base_url, question, deep=False, timeout=180, session_id=None
         "intent": eq.get("intent") or "",
         "audience": eq.get("audience") or "",
         "constraint": eq.get("constraint") or "",
+        "domain_ids": eq.get("domain_ids") or [],
+        "domain_resolved": True,
+        "follow_up": bool(eq.get("follow_up")),
     }
     result = http_post_sse(base_url, "/answer/stream", payload, timeout=timeout)
     return turn, result

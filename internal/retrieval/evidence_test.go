@@ -82,8 +82,10 @@ func TestRetrieve_FastPath_WithMining(t *testing.T) {
 	seedVerifiedLink(t, activationSvc, qTerms, "p1")
 
 	// The matched link's KP (p1) has KPN neighbors (p2, p3 — see seedTestData),
-	// so the batch also carries those as supporting candidates; cover all of
-	// them so the coverage check doesn't treat this as a batch failure.
+	// which must now clear the rerank judge (judgeKPNExpansion) before being
+	// trusted as supporting candidates; cover all of them so the coverage
+	// check doesn't treat this as a batch failure.
+	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "kpn neighbor"}, {"candidate_id": "c2", "role": "supporting", "analysis": "kpn neighbor"}]}`})
 	fake.SetResponse("evidence_mine.md", llm.FakeResponse{
 		Output: `{"results": [
 			{"candidate_id": "c1", "fragments": ["Linear equations ax+b=0"]},

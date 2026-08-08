@@ -309,6 +309,81 @@ func (s *Store) ListMatchableLinksForCurrentKP() ([]ActivationLink, error) {
 	return s.listLinksForCurrentKP(StatusVerified, StatusCandidate)
 }
 
+// ListVerifiedConditionGroups loads observed_conditions from verified links
+// whose KP source is in domainIDs (newest last_used first), capped at limit.
+// Used for session_normalize_tuple vocab and for accepting normalized tuples.
+func (s *Store) ListVerifiedConditionGroups(domainIDs []string, limit int) ([]ObservedCondition, error) {
+	if len(domainIDs) == 0 || limit <= 0 {
+		return nil, nil
+	}
+	ph := make([]string, len(domainIDs))
+	args := make([]interface{}, 0, len(domainIDs)+1)
+	for i, id := range domainIDs {
+		ph[i] = "?"
+		args = append(args, id)
+	}
+	args = append(args, StatusVerified, "current")
+
+	rows, err := s.db.Query(`
+		SELECT al.observed_conditions, al.last_used_at
+		FROM activation_links al
+		JOIN knowledge_points kp ON kp.point_id = al.point_id
+		JOIN sources src ON src.source_id = kp.source_id
+		WHERE src.domain_id IN (`+strings.Join(ph, ",")+`)
+		  AND al.status = ? AND kp.lifecycle = ?
+		  AND src.shadow_of IS NULL
+		ORDER BY al.last_used_at IS NULL, al.last_used_at DESC, al.updated_at DESC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("activation store: list condition groups: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]ObservedCondition, 0, limit)
+	for rows.Next() {
+		var raw string
+		var lastUsed interface{}
+		if err := rows.Scan(&raw, &lastUsed); err != nil {
+			return nil, fmt.Errorf("activation store: scan condition groups: %w", err)
+		}
+		conds, err := decodeObservedConditions(raw)
+		if err != nil {
+			continue
+		}
+		for _, c := range conds {
+			if len(out) >= limit {
+				break
+			}
+			out = append(out, c)
+		}
+		if len(out) >= limit {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// FormatVerifiedConditionGroups renders verified links' observed_conditions
+// whose KP source is in domainIDs, for session_normalize_tuple.md. Returns
+// the prompt text and the number of condition groups included.
+func (s *Store) FormatVerifiedConditionGroups(domainIDs []string, limit int) (string, int, error) {
+	conds, err := s.ListVerifiedConditionGroups(domainIDs, limit)
+	if err != nil {
+		return "", 0, err
+	}
+	if len(conds) == 0 {
+		return "（无）", 0, nil
+	}
+	var b strings.Builder
+	for _, c := range conds {
+		fmt.Fprintf(&b, "- subject=%s | intent=%s | audience=%s | constraint=%s\n",
+			c.Subject, c.Intent, c.Audience, c.Constraint)
+	}
+	return b.String(), len(conds), nil
+}
+
 func (s *Store) listLinksForCurrentKP(statuses ...string) ([]ActivationLink, error) {
 	if len(statuses) == 0 {
 		return nil, nil

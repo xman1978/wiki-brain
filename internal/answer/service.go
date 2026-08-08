@@ -101,26 +101,45 @@ func (s *Service) generate(ctx context.Context, es *retrieval.EvidenceSet) *gene
 // citations — instead of letting the answer model rewrite adjacent
 // material into a confident how-to. Call/parse errors proceed with
 // generation (slow path has nowhere to fall back; unlike fast path).
+// verifyOutcome carries the sufficiency-gate result for callers that want to
+// surface it (e.g. AnswerStream's "verify" phase event) without re-running
+// the check.
+type verifyOutcome struct {
+	ran        bool
+	sufficient bool
+	reason     string
+	durationMs int64
+	err        error
+}
+
 func (s *Service) refuseIfSlowPathInsufficient(ctx context.Context, es *retrieval.EvidenceSet) *generated {
+	refused, _ := s.checkSlowPathSufficiency(ctx, es)
+	return refused
+}
+
+func (s *Service) checkSlowPathSufficiency(ctx context.Context, es *retrieval.EvidenceSet) (*generated, verifyOutcome) {
 	if es.PathType == retrieval.PathTypeWiki || es.PathType == retrieval.PathTypeFast {
-		return nil
+		return nil, verifyOutcome{}
 	}
 	if s.retSvc == nil || !s.retSvc.SlowPathVerifyEnabled() {
-		return nil
+		return nil, verifyOutcome{}
 	}
-	ok, err := s.retSvc.VerifyEvidenceSufficient(ctx, es.Question, es)
+	start := time.Now()
+	ok, reason, err := s.retSvc.VerifyEvidenceSufficient(ctx, es.Question, es)
+	outcome := verifyOutcome{ran: true, sufficient: ok, reason: reason, durationMs: time.Since(start).Milliseconds(), err: err}
 	if err != nil {
 		slog.Warn("answer: slow path verify error, proceeding with generation", "error", err)
-		return nil
+		return nil, outcome
 	}
 	if ok {
-		return nil
+		return nil, outcome
 	}
 	slog.Info("answer: slow path verify judged evidence insufficient, refusing",
 		"question", es.Question,
 		"direct", len(es.DirectEvidence),
-		"supporting", len(es.Supporting))
-	return s.handleNone(ctx, es)
+		"supporting", len(es.Supporting),
+		"reason", reason)
+	return s.handleNone(ctx, es), outcome
 }
 
 func (s *Service) generateWithDeep(ctx context.Context, es *retrieval.EvidenceSet, forceDeep bool) *generated {
@@ -198,17 +217,31 @@ func (s *Service) maybeFallbackToSlowPath(ctx context.Context, qc retrieval.Quer
 	return s.generateWithDeep(ctx, slowES, forceDeep)
 }
 
+// AnswerStreamParams carries session-parsed slots plus domain routing into
+// retrieval (docs/impl/v1/plan-parser-vocab-and-unit-ambiguity.md).
+type AnswerStreamParams struct {
+	Question       string
+	ForceDeep      bool
+	Subject        string
+	Intent         string
+	Audience       string
+	Constraint     string
+	DomainIDs      []string
+	DomainResolved bool
+	FollowUp       bool
+}
+
 // AnswerStream does retrieval then streams LLM output. The returned channel
 // emits StreamChunk (thinking/content/done/error). After ChunkDone the caller
 // can read the final AnswerResult via the callback.
-func (s *Service) AnswerStream(ctx context.Context, question string, forceDeep bool, subject, intent, audience, constraint string) (<-chan llm.StreamChunk, func() *AnswerResult, error) {
+func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-chan llm.StreamChunk, func() *AnswerResult, error) {
 	outCh := make(chan llm.StreamChunk, 32)
 	var finalResult *AnswerResult
 
 	go func() {
 		defer close(outCh)
 		totalStart := time.Now()
-		slog.Debug("answer: stream start", "question", question, "force_deep", forceDeep)
+		slog.Debug("answer: stream start", "question", p.Question, "force_deep", p.ForceDeep)
 
 		outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: `{"phase":"retrieval","status":"start"}`}
 		retrievalStart := time.Now()
@@ -221,11 +254,14 @@ func (s *Service) AnswerStream(ctx context.Context, question string, forceDeep b
 		}
 
 		es, err := s.retSvc.RetrieveWithProgress(ctx, retrieval.QueryContext{
-			Question:   question,
-			Subject:    subject,
-			Intent:     intent,
-			Audience:   audience,
-			Constraint: constraint,
+			Question:       p.Question,
+			Subject:        p.Subject,
+			Intent:         p.Intent,
+			Audience:       p.Audience,
+			Constraint:     p.Constraint,
+			DomainIDs:      p.DomainIDs,
+			DomainResolved: p.DomainResolved,
+			FollowUp:       p.FollowUp,
 		}, progress)
 		if err != nil {
 			slog.Error("answer: retrieval failed", "error", err)
@@ -268,7 +304,7 @@ func (s *Service) AnswerStream(ctx context.Context, question string, forceDeep b
 			return
 		}
 
-		if forceDeep {
+		if p.ForceDeep {
 			hasEvidence := len(es.DirectEvidence) > 0 || len(es.Supporting) > 0
 			if hasEvidence {
 				slog.Debug("answer: stream force deep override", "original_path", es.Path)
@@ -290,7 +326,23 @@ func (s *Service) AnswerStream(ctx context.Context, question string, forceDeep b
 			return
 		}
 
-		if refused := s.refuseIfSlowPathInsufficient(ctx, es); refused != nil {
+		verifyStart := time.Now()
+		outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: `{"phase":"verify","status":"start"}`}
+		refused, verifyResult := s.checkSlowPathSufficiency(ctx, es)
+		if verifyResult.ran {
+			verifyMs := time.Since(verifyStart).Milliseconds()
+			if verifyResult.err != nil {
+				outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
+					`{"phase":"verify","status":"error","duration_ms":%d}`, verifyMs)}
+			} else {
+				outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
+					`{"phase":"verify","status":"done","duration_ms":%d,"sufficient":%v,"reason":%q}`,
+					verifyMs, verifyResult.sufficient, verifyResult.reason)}
+			}
+		} else {
+			outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: `{"phase":"verify","status":"skipped"}`}
+		}
+		if refused != nil {
 			totalMs := time.Since(totalStart).Milliseconds()
 			slog.Debug("answer: stream slow path verify refused", "total_ms", totalMs)
 			outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(

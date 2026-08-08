@@ -10,12 +10,29 @@ import (
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 )
 
+// DomainEntry is one row from the domains catalog for session_parse domain routing.
+type DomainEntry struct {
+	ID          string
+	Name        string
+	Description string
+}
+
+// DomainCatalog supplies domain_list for the merged parse+domain prompt.
+type DomainCatalog interface {
+	ListDomainEntries() ([]DomainEntry, error)
+}
+
 type Parser struct {
-	llm llm.LLMClient
+	llm     llm.LLMClient
+	domains DomainCatalog
 }
 
 func NewParser(client llm.LLMClient) *Parser {
 	return &Parser{llm: client}
+}
+
+func (p *Parser) SetDomainCatalog(c DomainCatalog) {
+	p.domains = c
 }
 
 func (p *Parser) Parse(ctx context.Context, input string, state *SessionState) ParseResult {
@@ -24,6 +41,7 @@ func (p *Parser) Parse(ctx context.Context, input string, state *SessionState) P
 		"last_answer":   truncateTail(state.Working.StepSummary, 300, "（无）"),
 		"last_parse":    formatLastParse(state),
 		"user_input":    truncate(input, 200, ""),
+		"domain_list":   p.formatDomainList(),
 	}
 
 	raw, err := p.llm.Complete(ctx, "session_parse.md", vars, "classification")
@@ -37,6 +55,21 @@ func (p *Parser) Parse(ctx context.Context, input string, state *SessionState) P
 	}
 
 	return p.retryFields(ctx, input, state, result)
+}
+
+func (p *Parser) formatDomainList() string {
+	if p.domains == nil {
+		return "（无）"
+	}
+	entries, err := p.domains.ListDomainEntries()
+	if err != nil || len(entries) == 0 {
+		return "（无）"
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		fmt.Fprintf(&b, "[%s] %s：%s\n", e.ID, e.Name, e.Description)
+	}
+	return b.String()
 }
 
 func formatRecentSubjects(subjects []string) string {
@@ -92,14 +125,16 @@ func formatLastParse(state *SessionState) string {
 		d.Subject, d.Audience, d.Intent, d.Constraint)
 }
 
-var jsonBlockRe = regexp.MustCompile(`\{[^{}]*\}`)
+// Allow nested arrays in domain_ids; still a single JSON object.
+var jsonBlockRe = regexp.MustCompile(`\{(?:[^{}]|\[(?:[^\[\]])*\])*\}`)
 
 type parseOutput struct {
-	Intent             string `json:"intent"`
-	Subject            string `json:"subject"`
-	Audience           string `json:"audience"`
-	Constraint         string `json:"constraint"`
-	StandaloneQuestion string `json:"standalone_question"`
+	DomainIDs          []string `json:"domain_ids"`
+	Intent             string   `json:"intent"`
+	Subject            string   `json:"subject"`
+	Audience           string   `json:"audience"`
+	Constraint         string   `json:"constraint"`
+	StandaloneQuestion string   `json:"standalone_question"`
 }
 
 func repairLayer1(raw string) (ParseResult, bool) {
@@ -134,6 +169,11 @@ func repairLayer1(raw string) (ParseResult, bool) {
 	result.Audience = out.Audience
 
 	result.Constraint = out.Constraint
+	if out.DomainIDs == nil {
+		result.DomainIDs = []string{}
+	} else {
+		result.DomainIDs = out.DomainIDs
+	}
 
 	sqRunes := []rune(out.StandaloneQuestion)
 	if len(sqRunes) > 200 {
@@ -156,6 +196,9 @@ func (p *Parser) retryFields(ctx context.Context, input string, state *SessionSt
 			}
 			partial.Intent = string(r)
 		}
+	}
+	if partial.DomainIDs == nil {
+		partial.DomainIDs = []string{}
 	}
 
 	return partial

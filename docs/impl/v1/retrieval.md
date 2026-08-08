@@ -101,6 +101,14 @@ EvidenceItem 新增：
 
 ### 步骤 2：激活层（快路径证据构建）
 
+上游 Session 合并定域+Parse 产出的 `domain_ids` 经 `QueryContext` 传入时：
+- 快路径 Match 前按 Source.domain 过滤候选 link（`domain_ids` 空则不过滤）；
+- **Match 之前**：若 `DomainResolved` 且域内 verified 条件组非空，先调
+  `session_normalize_tuple.md`，把四元组拉齐到观测组已有名字；程序校验
+  （规范化结果须能 `MatchConditionGroups` 命中词表中某一组，且不得把问句里
+  已有的非空 constraint 改成冲突值），不通过则丢弃、仍用 Session 原四元组；
+- 慢路径 Domain 预过滤直接复用 `domain_ids`，不再调用 `question_domain_match`（空则全库）。
+
 ```text
 1. 调 activation.Match(expandedQuery) 得 LinkMatch 列表（≤ activation_match_top）；
    输入是 Session 产出的完整 ExpandedQuery（expanded_question + 四元组），
@@ -111,14 +119,12 @@ EvidenceItem 新增：
    （activation_hits 照常写入 EvidenceSet，供灰度期观察命中质量）；
    全部命中均为 candidate → 记录 activation_hits 后回落慢路径
    （candidate 只记信号、不直答；2026-07-22）；
-   其中 verified 命中 >1 条不同链接 → 视为歧义，同样回落慢路径（2026-07-19
-   实测发现：命中分数恒为 1.0，没有排序依据取舍，若不管直接把
-   多个 point 的 KP 都当 direct 证据塞入，等于让一条不相关但读起来
-   沾边的证据免检直接进答案；慢路径的 rerank + 证据挖掘本就能正确
-   处理"一个问题需要综合多个 KP"的情况，交给它比在快路径里无差别
-   打包更安全）；此时 TouchLastUsed 不触发（这些链接没有被真正用于
-   回答），但 activation_hits 仍照常写入（含 candidate），Trace 按普通
-   快路径未命中一样评分；
+   其中 verified 命中反查后对应 **多个不同 unit** → 视为歧义，回落慢路径
+   （命中分数恒为 1.0，没有排序依据；跨 KU 打包进快路径 direct 等于免检。
+   同 unit 上多条 verified / 多个 point 不视为歧义——证据仍是同一 KU 正文，
+   可走快路径；2026-08 修订，见 plan-parser-vocab-and-unit-ambiguity.md）；
+   跨 unit 歧义时 TouchLastUsed 不触发，但 activation_hits 仍照常写入
+   （含 candidate），Trace 按普通快路径未命中一样评分；
 
 2. 取命中链接的 point_id → 反查所属 KU：
      SELECT ... FROM knowledge_points p JOIN knowledge_units u ...
@@ -292,8 +298,8 @@ verified 链接存在时同类问题走快路径，LLM 调用 ≤ 3 次（日志
 四元组任一维度不等时不走快路径（行为与无链接一致）；
 无链接命中时行为与 MVP 慢路径一致（加 lifecycle 过滤与挖掘）；
 fast_path=false 时全部走慢路径但 activation_hits 照常记录；
-命中 >1 条不同链接时不走快路径、回落慢路径，activation_hits 仍记录
-  全部命中链接，且不触发 TouchLastUsed；
+命中反查后对应多个不同 unit 时不走快路径、回落慢路径，activation_hits 仍记录
+  全部命中链接，且不触发 TouchLastUsed；同 unit 多 link 可走快路径；
 force_full=true 强制慢路径生效；
 fast_path_verify=true 时校验不通过自动回落慢路径且只回落一次，
   trace 记录 path_type=full、activation_hits 保留（产生 activation_failure）；

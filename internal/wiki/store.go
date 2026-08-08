@@ -359,23 +359,39 @@ func (s *Store) GetRevision(pageID, revisionID string) (*Revision, error) {
 
 // ListQualifyingPoints implements the qualifying-KP definition from
 // docs/design/wiki-compilation.md "ActivationLink 回答'这条管不管用'，Wiki
-// 编译回答'这个主题够不够格立传'": reliability is answered once, by the KP
-// having a verified ActivationLink — no separate confident_count floor
-// (re-checking a second count on top of verified would just re-ask the same
-// question verified already answered). confident_count is still selected
-// (MAX) and used to order results descending — the order compile input
-// truncation relies on when over compile_max_chars, not a filter.
-func (s *Store) ListQualifyingPoints(conceptID string) ([]QualifyingPoint, error) {
-	rows, err := s.db.Query(`
+// 编译回答'这个主题够不够格立传'": for the Study-recommended path
+// (requireVerified=true) reliability is answered once, by the KP having a
+// verified ActivationLink — no separate confident_count floor (re-checking a
+// second count on top of verified would just re-ask the same question
+// verified already answered).
+//
+// requireVerified=false (2026-08-07 修订, docs/impl/v1/wiki.md 步骤 2
+// "人工指定主题手动编译"): the manual-trigger path (result_id=="") drops the
+// verified requirement — qualifying is just lifecycle=current + entry
+// membership, same scope as 步骤 8's topic-scope material — so material with
+// no real-usage history yet can still reach a draft page. Callers thread
+// requireVerified through from whether the triggering request carried a
+// Study result_id; it does not affect isEntryReady's own readiness signal
+// (still verified-gated) or Publish's selfcheck quality gate.
+//
+// confident_count is still selected (MAX, 0 when the KP was never matched as
+// a link candidate) and used to order results descending — the order compile
+// input truncation relies on when over compile_max_chars, not a filter.
+func (s *Store) ListQualifyingPoints(conceptID string, requireVerified bool) ([]QualifyingPoint, error) {
+	query := `
 		SELECT kp.point_id, kp.unit_id, kp.source_id, kp.content, ku.center, ku.line_start, ku.line_end,
-			MAX(lc.confident_count) AS max_confident
-		FROM link_candidates lc
-		JOIN knowledge_points kp ON lc.point_id = kp.point_id
+			COALESCE(MAX(lc.confident_count), 0) AS max_confident
+		FROM knowledge_points kp
 		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
-		WHERE ku.entry_id = ? AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
-			AND EXISTS (SELECT 1 FROM activation_links al WHERE al.point_id = kp.point_id AND al.status = 'verified')
+		LEFT JOIN link_candidates lc ON lc.point_id = kp.point_id
+		WHERE ku.entry_id = ? AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'`
+	if requireVerified {
+		query += ` AND EXISTS (SELECT 1 FROM activation_links al WHERE al.point_id = kp.point_id AND al.status = 'verified')`
+	}
+	query += `
 		GROUP BY kp.point_id
-		ORDER BY max_confident DESC`, conceptID)
+		ORDER BY max_confident DESC`
+	rows, err := s.db.Query(query, conceptID)
 	if err != nil {
 		return nil, fmt.Errorf("wiki store: list qualifying points: %w", err)
 	}

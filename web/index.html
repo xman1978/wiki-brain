@@ -485,8 +485,11 @@
     /* ── BUTTONS ──────────────────────────────────────────── */
     .btn { padding:6px 14px; border-radius:var(--radius-xs); border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:13px; cursor:pointer; transition:.12s; white-space:nowrap; font-weight:500; }
     .btn:hover { background:var(--bg-alt); border-color:var(--text-3); }
+    .btn:disabled { opacity:.55; cursor:not-allowed; }
+    .btn:disabled:hover { background:var(--bg); border-color:var(--border); }
     .btn-primary { background:var(--text); color:#fff; border-color:var(--text); }
     .btn-primary:hover { background:#000; }
+    .btn-primary:disabled:hover { background:var(--text); border-color:var(--text); }
     .btn-sm { padding:4px 10px; font-size:12px; }
     .btn-ghost { border:none; background:transparent; color:var(--text-3); padding:6px 8px; }
     .btn-ghost:hover { background:rgba(0,0,0,.05); color:var(--text); }
@@ -1281,11 +1284,13 @@ async function doSubmit(question) {
   var queryIntent = eq.intent || '';
   var queryAudience = eq.audience || '';
   var queryConstraint = eq.constraint || '';
+  var queryDomainIds = Array.isArray(eq.domain_ids) ? eq.domain_ids : [];
+  var queryFollowUp = !!eq.follow_up;
   var loadingEl = appendLoading();
   var retrievalStart = Date.now();
 
   try {
-    await doStreamAnswer(expandedQuestion, loadingEl, totalStart, retrievalStart, question, querySubject, queryIntent, queryAudience, queryConstraint);
+    await doStreamAnswer(expandedQuestion, loadingEl, totalStart, retrievalStart, question, querySubject, queryIntent, queryAudience, queryConstraint, queryDomainIds, queryFollowUp);
   } catch (e) {
     if (e.name !== 'AbortError') {
       loadingEl.remove();
@@ -1302,10 +1307,20 @@ async function doSubmit(question) {
   document.getElementById('questionInput').focus();
 }
 
-function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, originalQuestion, subject, intent, audience, constraint) {
+function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, originalQuestion, subject, intent, audience, constraint, domainIds, followUp) {
   return new Promise(function(resolve, reject) {
     var url = S.baseUrl + '/answer/stream';
-    var body = JSON.stringify({ question: question, session_id: S.sessionId, subject: subject || '', intent: intent || '', audience: audience || '', constraint: constraint || '' });
+    var body = JSON.stringify({
+      question: question,
+      session_id: S.sessionId,
+      subject: subject || '',
+      intent: intent || '',
+      audience: audience || '',
+      constraint: constraint || '',
+      domain_ids: Array.isArray(domainIds) ? domainIds : [],
+      domain_resolved: true,
+      follow_up: !!followUp
+    });
     _abortCtrl = new AbortController();
 
     fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: body, signal: _abortCtrl.signal }).then(function(res) {
@@ -1353,18 +1368,33 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
               if (p.status === 'start') {
                 updateProcessStep('activation', 'active');
               } else if (p.status === 'done') {
-                updateProcessStep('generation', 'active', '生成回答');
-                generationStart = Date.now();
+                updateProcessStep('verify', 'active');
               } else if (p.status === 'error') {
                 updateProcessStep('activation', 'fail', null, p.duration_ms);
+              }
+            } else if (p.phase === 'verify') {
+              if (p.status === 'start') {
+                updateProcessStep('verify', 'active', null, null, '');
+              } else if (p.status === 'done') {
+                var verifyDetail = p.sufficient ? (p.reason || '证据充分') : ('证据不足：' + (p.reason || ''));
+                updateProcessStep('verify', 'done', null, p.duration_ms, verifyDetail);
+              } else if (p.status === 'error') {
+                updateProcessStep('verify', 'done', null, p.duration_ms, '校验出错，按证据充分处理');
+              } else if (p.status === 'skipped') {
+                updateProcessStep('verify', 'done', null, 0, '不适用（快路径/Wiki）');
               }
             } else if (p.phase === 'answer' && p.status === 'no_evidence') {
               // 只补齐尚未完成的阶段（如快路径下没有逐阶段事件），已完成阶段保留
               // 实时流入的真实耗时与结果，不得清零覆盖为"无证据"。
-              ['activation','outline','fts','rerank','evidence'].forEach(function(id) {
+              ['activation','outline','fts','rerank','evidence','verify'].forEach(function(id) {
                 if (!PP_STATE[id] || PP_STATE[id].state !== 'done') updateProcessStep(id, 'done', null, 0, '无证据');
               });
               updateProcessStep('generation', 'done', '生成回答', 0, '无需生成');
+            } else if (p.phase === 'answer' && p.status === 'insufficient') {
+              // 证据充分性判断已拒答，"生成回答"这一步不会执行，标记为跳过而非留在
+              // active/未完成状态，避免看起来像卡死或出错。
+              updateProcessStep('generation', 'done', '生成回答', 0, '证据不足，未生成');
+              updateProcessStep('total', 'done', '总计', p.total_ms || (Date.now() - totalStart));
             } else if (p.phase === 'generation') {
               if (p.status === 'start') {
                 var pathDetail = p.path === 'deep' ? '深度推理' : '简洁模式';
@@ -1442,7 +1472,7 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
 // ═══════════════════════════════════════════════════════
 // PROCESS PANEL
 // ═══════════════════════════════════════════════════════
-var PP_STEPS = ['session','activation','outline','fts','rerank','evidence','generation','trace','total'];
+var PP_STEPS = ['session','activation','outline','fts','rerank','evidence','verify','generation','trace','total'];
 var PP_STATE = {};
 
 function initProcessPanel(startTime) {
@@ -1456,6 +1486,7 @@ function initProcessPanel(startTime) {
   PP_STATE.fts.label = '全文检索';
   PP_STATE.rerank.label = '证据分类';
   PP_STATE.evidence.label = '证据提取';
+  PP_STATE.verify.label = '证据充分性判断';
   PP_STATE.generation.label = '生成回答';
   PP_STATE.trace.label = '追踪记录';
   PP_STATE.total.label = '总计';
@@ -1540,7 +1571,9 @@ async function selectClarification(ref) {
     var loadingEl = appendLoading();
     var totalStart = Date.now();
     try {
-      await doStreamAnswer(eq.expanded_question, loadingEl, totalStart, totalStart, eq.expanded_question);
+      await doStreamAnswer(eq.expanded_question, loadingEl, totalStart, totalStart, eq.expanded_question,
+        eq.subject || '', eq.intent || '', eq.audience || '', eq.constraint || '',
+        Array.isArray(eq.domain_ids) ? eq.domain_ids : [], !!eq.follow_up);
     } catch(e) { loadingEl.remove(); appendErrorMsg('请求失败：' + e.message, null); }
   } else {
     appendSystemMsg('无法确定对象，请重新描述');
@@ -2780,8 +2813,9 @@ async function restoreSource(sourceId) {
 // ── REUPLOAD (Shadow Source, docs/impl/v1/lifecycle.md) ──────────────
 // ── KU 语义编辑（docs/impl/v1/semantics-curation.md）────────────────
 // KU 本体（center/行号/正文）是提取产物，只读；人工修正权落在 rerank 语义
-// （五个分类字段）与 KP（知识点，取代旧版 key_facts）上。KP 只允许新增，
-// 新增走 POST /units/:id/points，立即生效并触发该 Source 内的增量 KPN 分析。
+// （五个分类字段）与 KP（知识点，取代旧版 key_facts）上。KP 允许新增与
+// 撤销手动项（POST /points/:id/deprecate）；新增走 POST /units/:id/points，
+// 立即生效并触发该 Source 内的增量 KPN 分析。
 var kuSemanticsUnitId = null;
 
 var KU_POINT_TYPES = [
@@ -2820,7 +2854,7 @@ async function openKuSemantics(unitId) {
     </div>';
   }
 
-  content.innerHTML = '<h2>知识单元语义 ' + (sem.manually_edited ? '<span title="人工修正过">✍️</span>' : '') + '</h2>\
+  content.innerHTML = '<h2>知识单元语义 ' + (sem.manually_edited ? '<span class="badge" title="人工修正过">人工</span>' : '') + '</h2>\
     <div style="font-size:12px;margin-bottom:14px">\
       <div style="display:flex;gap:14px;color:var(--text-2);margin-bottom:6px">\
         <span>中心句：<b style="color:var(--text-1)">' + esc(u.center || '') + '</b></span>\
@@ -2841,7 +2875,7 @@ async function openKuSemantics(unitId) {
       <label style="width:110px;font-size:12px;color:var(--text-2);flex-shrink:0;padding-top:5px">知识点</label>\
       <div id="kuSemPoints" style="flex:1"></div>\
     </div>\
-    <div style="font-size:11px;color:var(--text-3);margin-left:118px">检索靠知识点匹配问题——把「问题会怎么问」对应的具体规则/数字逐字补进来（如“不跨年累计，次年清零”）。已有知识点为提取产物，只可新增补漏，不可修改。</div>\
+    <div style="font-size:11px;color:var(--text-3);margin-left:118px">检索靠知识点匹配问题——把「问题会怎么问」对应的具体规则/数字逐字补进来（如“不跨年累计，次年清零”）。提取产物只读；手动新增的可撤销。</div>\
     ' + (sem.edited_at ? '<div style="font-size:11px;color:var(--text-3);margin-top:6px">最近人工修正：' + dateStr(sem.edited_at) + '</div>' : '') + '\
     <div class="modal-actions">\
       <button class="btn" onclick="closeKuSemantics()">取消</button>\
@@ -2850,7 +2884,7 @@ async function openKuSemantics(unitId) {
   loadKuPoints(unitId);
 }
 
-// 知识点列表：已有 KP 只读展示（✍️ 标记人工新增的），底部一行新增表单。
+// 知识点列表：已有 KP 只读展示（.badge「人工」标记手动新增的，可撤销），底部一行新增表单。
 async function loadKuPoints(unitId) {
   var el = document.getElementById('kuSemPoints');
   if (!el) return;
@@ -2865,10 +2899,16 @@ function renderKuPoints(points) {
   var el = document.getElementById('kuSemPoints');
   if (!el) return;
   var rows = points.filter(function(p){ return p.lifecycle === 'current'; }).map(function(p) {
+    var manualBadge = p.manually_edited
+      ? '<span class="badge" title="人工新增" style="flex-shrink:0">人工</span>'
+      : '';
+    var revokeBtn = p.manually_edited
+      ? '<button type="button" class="btn btn-sm" style="flex-shrink:0;color:var(--red)" onclick="deprecateKuPoint(\'' + esc(p.point_id) + '\')">撤销</button>'
+      : '';
     return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">\
       <span class="badge" style="flex-shrink:0">' + esc(pointTypeLabel(p.point_type)) + '</span>\
       <span style="flex:1;font-size:12px;color:var(--text-1);padding:5px 8px;border:1px solid var(--border-lt);border-radius:4px;background:var(--bg-2)">' + esc(p.content) + '</span>\
-      ' + (p.manually_edited ? '<span title="人工新增" style="flex-shrink:0">✍️</span>' : '') + '\
+      ' + manualBadge + revokeBtn + '\
     </div>';
   }).join('');
   el.innerHTML = (rows || '<div style="font-size:12px;color:var(--text-3);margin-bottom:6px">（无知识点）</div>') + '\
@@ -2879,6 +2919,16 @@ function renderKuPoints(points) {
       <input id="kuNewPointContent" placeholder="新增知识点内容" style="flex:1;padding:5px 8px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg)" />\
       <button class="btn btn-sm" id="kuNewPointBtn" onclick="addKuPoint()">＋ 新增</button>\
     </div>';
+}
+
+async function deprecateKuPoint(pointId) {
+  if (!(await showConfirm('确认撤销该手动知识点？撤销后不再参与检索（可重新新增）。'))) return;
+  var r = await api('POST', '/points/' + encodeURIComponent(pointId) + '/deprecate');
+  if (r.ok) {
+    await loadKuPoints(kuSemanticsUnitId);
+  } else {
+    alert('撤销失败：' + ((r.data && (r.data.message || r.data.error)) || r.status));
+  }
 }
 
 async function addKuPoint() {
@@ -4148,7 +4198,10 @@ var WIKI_STATUS_LABELS = {
   draft: '草稿',
   needs_recompile: '待重编译',
   published: '已发布',
-  archived: '已删除'
+  archived: '已删除',
+  candidates_loading: '检索中',
+  candidates_ready: '待选择成员',
+  error: '出错'
 };
 
 function openWikiView() {
@@ -4270,8 +4323,11 @@ function renderWikiCatalogCardHtml(p) {
   var cls = isOfficial ? 'confirmed' : 'candidate';
   if (status === 'archived') cls += ' status-archived';
   else if (status === 'pending_compile') cls += ' status-pending_confirm';
+  else if (p.kind === 'wizard_task') cls += ' status-pending_confirm';
   var badgeCls = 'status-' + status;
-  var onclick = p.kind === 'candidate'
+  var onclick = p.kind === 'wizard_task'
+    ? 'resumeWikiWizardTask(\'' + esc(p.task_id) + '\')'
+    : p.kind === 'candidate'
     ? 'openWikiCompileCandidate(\'' + esc(p.result_id) + '\')'
     : 'openWikiEntryDetail(\'' + esc(p.page_id) + '\')';
   return '<div class="domain-concept-card ' + cls + '" onclick="' + onclick + '">\
@@ -4301,16 +4357,16 @@ function openWikiCompileCandidate(resultId) {
 function closeWikiDetailModal() {
   document.getElementById('wikiDetailModal').classList.add('hidden');
   S.wikiConceptId = null;
+  clearWikiWizardPoll();
 }
 
 // 人工手动指定主题（docs/design/wiki.md「主题：从真实使用中识别」一节 +
-// docs/impl/v1/wiki.md 步骤 8「人工手动指定主题」，2026-08-03 修订）：
-// 只有一个输入口径——给主题名称/范围描述（不选 concept），系统据此检索
-// qualifying KP、按概念归属分组；落在几个概念名下决定编译停在一阶还是
-// 走完二阶（docs/design/wiki.md:84），不是两条并行的生成逻辑。
-// 复用现有 POST /wiki/topics（已实现同样的检索+分组）；当结果只落在一个
-// 已发布概念上时，说明不需要主题页这一层，直接把候选建的壳页归档，改为
-// 打开那个概念页本身（见 submitWikiTopicResolve）。
+// docs/impl/v1/wiki.md 步骤 8「人工手动指定主题」/「分步向导」，2026-08-07
+// 修订）：只有一个输入口径——给主题名称/范围描述（不选 concept），系统据此
+// 检索 qualifying KP、按概念归属分组；落在几个概念名下决定编译停在一阶还是
+// 走完二阶（docs/design/wiki.md:84），不是两条并行的生成逻辑。这个弹窗只
+// 收集主题名称/范围描述/领域，实际检索+分组+编译+建页全部走分步向导
+// （openWikiWizardStep1），人工逐词条确认，而不是一次性自动决定。
 function openManualWikiCompilePicker() {
   var detail = document.getElementById('wikiDetailModalContent');
   document.getElementById('wikiDetailModal').classList.remove('hidden');
@@ -4344,62 +4400,419 @@ function openManualWikiCompilePicker() {
         </select>\
       </label>\
     </div>\
-    <div style="margin-top:12px"><button class="btn btn-primary btn-sm" onclick="submitWikiTopicResolve()">检索并生成</button></div>\
     <div id="wikiManualTopicCreateStatus" style="margin-top:8px;font-size:12px;color:var(--text-3)"></div>\
+    <div class="modal-actions">\
+      <button class="btn btn-primary btn-sm" onclick="openWikiWizardStep1()">分步向导</button>\
+      <button class="btn btn-sm" onclick="closeWikiDetailModal()">关闭</button>\
+    </div>';
+}
+
+// 分步向导（docs/impl/v1/wiki.md 步骤 8「分步向导」，2026-08-07 新增/断点
+// 续开修订，是手动生成 wiki 的唯一入口）：新入库材料因为还没有真实使用
+// 积累，isEntryReady 判定几乎必然不过，但这只是参考信号（is_ready 只读
+// 展示，不阻断），且人工触发的编译本身也不再要求 verified ActivationLink
+// （docs/impl/v1/wiki.md 步骤 2）。
+//
+// 进度持久化在后端 wiki_wizard_tasks 表（一个领域同时只有一个进行中的
+// 任务）：候选检索（30-60 秒，含全文+目录+LLM 相关性判定）在服务端 goroutine
+// 里跑，前端只负责发起+轮询+续开——不小心点空白处关掉弹窗、或刷新页面，
+// 都能从该领域的 Wiki 卡片列表里点回来（renderWikiCatalogCardHtml 的
+// kind=wizard_task 分支），不会丢进度。
+// 前端拆成两屏（先子后父）：
+//   1. POST /wiki/wizard/tasks 发起（或续开已存在的同域任务），状态
+//      candidates_loading 时轮询 GET 直到变化；
+//   2. 步骤 1 屏：对未发布词条挨个「编译」→ POST /wiki/compile，再「发布」
+//      → POST /wiki/pages/:id/publish；可点「合格 KP N 个」行内展开查看
+//      GET /entries/:id 的 KP 正文；至少 1 个已发布词条后才能「下一步」；
+//   3. 步骤 2 屏：只勾选已发布成员（PATCH 持久化），提交
+//      POST /wiki/topics/draft（带 task_id）建主题壳——成功后后端删除任务行，
+//      领域名额释放；主题正文仍在壳页详情里 analyze/compile。
+function openWikiWizardStep1() {
+  var nameEl = document.getElementById('wikiManualTopicName');
+  var descEl = document.getElementById('wikiManualTopicDescription');
+  var domainSel = document.getElementById('wikiManualPickerDomain');
+  var topicName = nameEl ? nameEl.value.trim() : '';
+  var domainId = domainSel ? domainSel.value : '';
+  var statusEl = document.getElementById('wikiManualTopicCreateStatus');
+  if (!topicName) {
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">请先填写主题名称</span>';
+    return;
+  }
+  if (!domainId) {
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">分步向导需要先选定一个知识领域（用于限定检索范围、判断该领域是否已有进行中的任务）</span>';
+    return;
+  }
+  startWikiWizardTask(topicName, descEl ? descEl.value.trim() : '', domainId);
+}
+
+async function startWikiWizardTask(topicName, topicDescription, domainId) {
+  try {
+    var r = await api('POST', '/wiki/wizard/tasks', {
+      topic_name: topicName, topic_description: topicDescription, domain_id: domainId
+    });
+    if (!r.ok || !r.data) {
+      var statusEl = document.getElementById('wikiManualTopicCreateStatus');
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">发起失败：' + esc(r.data && (r.data.message || r.data.error) ? (r.data.message || r.data.error) : JSON.stringify(r.data)) + '</span>';
+      return;
+    }
+    resumeWikiWizardTask(r.data.task_id);
+  } catch (e) {
+    var statusEl2 = document.getElementById('wikiManualTopicCreateStatus');
+    if (statusEl2) statusEl2.innerHTML = '<span style="color:var(--red)">发起出错：' + esc(e.message) + '</span>';
+  }
+}
+
+// resumeWikiWizardTask 是断点续开的唯一入口——新发起、点卡片续开、轮询
+// 期间状态变化，都走这一个函数按当前 status 重新渲染。
+async function resumeWikiWizardTask(taskId) {
+  clearWikiWizardPoll();
+  document.getElementById('wikiDetailModal').classList.remove('hidden');
+  S.wikiConceptId = null;
+  var detail = document.getElementById('wikiDetailModalContent');
+  try {
+    var r = await api('GET', '/wiki/wizard/tasks/' + taskId);
+    if (!r.ok || !r.data) {
+      detail.innerHTML = '<div style="color:var(--red);padding:20px">任务不存在或已被清除</div>\
+        <div class="modal-actions"><button class="btn btn-sm" onclick="closeWikiDetailModal()">关闭</button></div>';
+      loadWikiCatalog();
+      return;
+    }
+    var d = r.data;
+    // 同任务内刷新（编译/发布后）保留 uiStep / KP 展开缓存；从卡片新开则回步骤 1。
+    var sameTask = S.wikiWizard && S.wikiWizard.taskId === taskId;
+    var prevUiStep = sameTask ? (S.wikiWizard.uiStep || 1) : 1;
+    var prevKpCache = sameTask ? (S.wikiWizard.kpCache || {}) : {};
+    var prevExpanded = sameTask ? (S.wikiWizard.expanded || {}) : {};
+    S.wikiWizard = {
+      taskId: d.task_id, topicName: d.topic_name, topicDescription: d.topic_description,
+      domainId: d.domain_id, entries: d.entries || [],
+      selected: {}, // page_id -> true
+      uiStep: prevUiStep,
+      kpCache: prevKpCache,
+      expanded: prevExpanded
+    };
+    (d.selected_members || []).forEach(function(id) { S.wikiWizard.selected[id] = true; });
+    if (d.status === 'candidates_loading') {
+      renderWikiWizardLoading();
+      S.wikiWizardPollTimer = setInterval(function() { resumeWikiWizardTask(taskId); }, 3000);
+    } else if (d.status === 'error') {
+      renderWikiWizardError(d.error_message);
+    } else {
+      renderWikiWizardByStep();
+    }
+  } catch (e) {
+    detail.innerHTML = '<div style="color:var(--red);padding:20px">加载出错：' + esc(e.message) + '</div>';
+  }
+}
+
+function clearWikiWizardPoll() {
+  if (S.wikiWizardPollTimer) { clearInterval(S.wikiWizardPollTimer); S.wikiWizardPollTimer = null; }
+}
+
+function renderWikiWizardLoading() {
+  var detail = document.getElementById('wikiDetailModalContent');
+  var w = S.wikiWizard;
+  detail.innerHTML = '\
+    <h2 style="font-size:16px;font-weight:700;margin-bottom:8px">分步向导：' + esc(w.topicName) + '</h2>\
+    <div class="msg-loading" style="padding:4px 0 12px"><div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div> 检索中（全文 + 目录结构 + 相关性判定，可能需要 30-60 秒）…</div>\
+    <div style="font-size:12px;color:var(--text-3)">可以放心关闭这个弹窗——检索在后台继续，回到该领域的 Wiki 卡片列表随时能点回来。</div>\
     <div class="modal-actions"><button class="btn btn-sm" onclick="closeWikiDetailModal()">关闭</button></div>';
 }
 
-async function submitWikiTopicResolve() {
-  var statusEl = document.getElementById('wikiManualTopicCreateStatus');
-  var nameEl = document.getElementById('wikiManualTopicName');
-  var descEl = document.getElementById('wikiManualTopicDescription');
-  var topicName = nameEl ? nameEl.value.trim() : '';
-  if (!topicName) {
-    if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">请填写主题名称</span>';
+function renderWikiWizardError(errorMessage) {
+  clearWikiWizardPoll();
+  var detail = document.getElementById('wikiDetailModalContent');
+  var w = S.wikiWizard;
+  detail.innerHTML = '\
+    <h2 style="font-size:16px;font-weight:700;margin-bottom:8px">分步向导：' + esc(w.topicName) + '</h2>\
+    <div style="color:var(--red);margin-bottom:12px">检索失败：' + esc(errorMessage || '未知错误') + '</div>\
+    <div style="display:flex;gap:8px">\
+      <button class="btn btn-primary btn-sm" onclick="retryWikiWizardTask()">重试</button>\
+      <button class="btn btn-sm" onclick="dismissWikiWizardTask()">清除</button>\
+    </div>';
+}
+
+async function retryWikiWizardTask() {
+  var w = S.wikiWizard;
+  try { await api('DELETE', '/wiki/wizard/tasks/' + w.taskId); } catch (e) { /* best-effort */ }
+  await loadWikiCatalog();
+  startWikiWizardTask(w.topicName, w.topicDescription, w.domainId);
+}
+
+async function dismissWikiWizardTask() {
+  var w = S.wikiWizard;
+  try { await api('DELETE', '/wiki/wizard/tasks/' + w.taskId); } catch (e) { /* best-effort */ }
+  S.wikiWizard = null;
+  closeWikiDetailModal();
+  loadWikiCatalog();
+}
+
+function renderWikiWizardByStep() {
+  var w = S.wikiWizard;
+  if (!w) return;
+  if (w.uiStep === 2) renderWikiWizardStep2();
+  else renderWikiWizardStep1();
+}
+
+function wikiWizardPublishedCount() {
+  var w = S.wikiWizard;
+  if (!w || !w.entries) return 0;
+  return w.entries.filter(function(e) { return !!e.already_published_page_id; }).length;
+}
+
+function wizardEntryKPToggleHtml(e) {
+  var expanded = S.wikiWizard && S.wikiWizard.expanded && S.wikiWizard.expanded[e.entry_id];
+  var mark = expanded ? '▼' : '▶';
+  return '<button type="button" class="btn-ghost" style="padding:0 4px;font-size:12px;color:var(--text-3);cursor:pointer" onclick="event.stopPropagation();toggleWizardEntryKP(\'' + esc(e.entry_id) + '\')">' + mark + ' 合格 KP ' + (e.qualifying_kp_count || 0) + ' 个</button>';
+}
+
+function wizardEntryKPPanelHtml(entryId) {
+  var w = S.wikiWizard;
+  if (!w || !w.expanded || !w.expanded[entryId]) return '';
+  if (w.expanded[entryId] === 'loading') {
+    return '<div id="wizardKpPanel-' + esc(entryId) + '" style="padding:8px 12px 10px 28px;font-size:12px;color:var(--text-3);border-top:1px solid var(--border-lt)">加载 KP 中…</div>';
+  }
+  var cached = (w.kpCache || {})[entryId];
+  if (!cached) {
+    return '<div style="padding:8px 12px 10px 28px;font-size:12px;color:var(--text-3);border-top:1px solid var(--border-lt)">加载 KP 中…</div>';
+  }
+  if (cached.error) {
+    return '<div style="padding:8px 12px 10px 28px;font-size:12px;color:var(--red);border-top:1px solid var(--border-lt)">加载失败：' + esc(cached.error) + '</div>';
+  }
+  var points = cached.points || [];
+  if (!points.length) {
+    return '<div style="padding:8px 12px 10px 28px;font-size:12px;color:var(--text-3);border-top:1px solid var(--border-lt)">该词条下暂无 current KP</div>';
+  }
+  var list = points.map(function(p) {
+    var src = p.source_title ? '<span style="color:var(--text-3)"> · ' + esc(p.source_title) + '</span>' : '';
+    return '<div style="margin-top:6px;line-height:1.45">· ' + esc(p.content || '') + src + '</div>';
+  }).join('');
+  return '<div style="padding:8px 12px 10px 28px;font-size:12px;color:var(--text-2);border-top:1px solid var(--border-lt);background:var(--bg-alt, rgba(0,0,0,.02))"><div style="color:var(--text-3);margin-bottom:4px">编译将使用该词条下的 current KP：</div>' + list + '</div>';
+}
+
+async function toggleWizardEntryKP(entryId) {
+  var w = S.wikiWizard;
+  if (!w) return;
+  w.expanded = w.expanded || {};
+  w.kpCache = w.kpCache || {};
+  if (w.expanded[entryId] === 'loading') return;
+  if (w.expanded[entryId]) {
+    delete w.expanded[entryId];
+    renderWikiWizardByStep();
     return;
   }
-  if (statusEl) statusEl.textContent = '检索中...';
-  var domainSel = document.getElementById('wikiManualPickerDomain');
-  try {
-    var r = await api('POST', '/wiki/topics', {
-      topic_name: topicName,
-      topic_description: descEl ? descEl.value.trim() : '',
-      domain_id: domainSel ? domainSel.value : ''
+  w.expanded[entryId] = 'loading';
+  renderWikiWizardByStep();
+  if (!w.kpCache[entryId]) {
+    try {
+      var r = await api('GET', '/entries/' + encodeURIComponent(entryId));
+      if (!S.wikiWizard || S.wikiWizard.taskId !== w.taskId) return;
+      if (!r.ok || !r.data) {
+        w.kpCache[entryId] = { error: (r.data && (r.data.message || r.data.error)) ? (r.data.message || r.data.error) : '请求失败' };
+      } else {
+        w.kpCache[entryId] = { points: r.data.points || [] };
+      }
+    } catch (err) {
+      if (!S.wikiWizard || S.wikiWizard.taskId !== w.taskId) return;
+      w.kpCache[entryId] = { error: err.message || '请求失败' };
+    }
+  }
+  if (!S.wikiWizard || S.wikiWizard.taskId !== w.taskId) return;
+  w.expanded[entryId] = true;
+  renderWikiWizardByStep();
+}
+
+function goWikiWizardStep1() {
+  if (!S.wikiWizard) return;
+  S.wikiWizard.uiStep = 1;
+  renderWikiWizardStep1();
+}
+
+function goWikiWizardStep2() {
+  var w = S.wikiWizard;
+  if (!w) return;
+  if (wikiWizardPublishedCount() < 1) return;
+  // 尚无勾选时，默认勾选全部已发布词条（与旧文案「已发布默认勾选」一致）。
+  if (!Object.keys(w.selected || {}).length) {
+    (w.entries || []).forEach(function(e) {
+      if (e.already_published_page_id) w.selected[e.already_published_page_id] = true;
     });
+    api('PATCH', '/wiki/wizard/tasks/' + w.taskId, {
+      selected_members: Object.keys(w.selected)
+    }).catch(function() { /* best-effort */ });
+  }
+  w.uiStep = 2;
+  renderWikiWizardStep2();
+}
+
+function renderWikiWizardStep1() {
+  clearWikiWizardPoll();
+  var detail = document.getElementById('wikiDetailModalContent');
+  var w = S.wikiWizard;
+  w.uiStep = 1;
+  var rowsHtml = (w.entries || []).map(function(e, i) {
+    var statusHtml, actionHtml;
+    if (e.already_published_page_id) {
+      statusHtml = '<span style="color:var(--green)">已发布</span>';
+      actionHtml = '<span style="font-size:12px;color:var(--text-3)">可在下一步勾选为主题成员</span>';
+    } else if (e.draft_page_id) {
+      statusHtml = '<span style="color:var(--text-2)">已编译为草稿，待发布</span>';
+      actionHtml = '<button class="btn btn-sm" id="wizardPublishBtn-' + i + '" onclick="wizardPublishEntry(' + i + ')">发布</button>\
+        <button class="btn btn-sm" onclick="openWikiEntryDetail(\'' + esc(e.draft_page_id) + '\')">查看草稿</button>';
+    } else {
+      var readyHtml = e.is_ready ? '<span style="color:var(--green)">就绪</span>' : '<span style="color:var(--orange, #b8860b)">未就绪（参考信号，不阻断编译）</span>';
+      statusHtml = readyHtml;
+      actionHtml = '<button class="btn btn-sm" id="wizardCompileBtn-' + i + '" onclick="wizardCompileEntry(' + i + ')">编译</button>';
+    }
+    return '\
+      <div style="border-bottom:1px solid var(--border-lt)">\
+        <div class="detail-row" style="align-items:center">\
+          <span class="dv">' + esc(e.entry_name || e.entry_id) + ' ' + wizardEntryKPToggleHtml(e) + ' ' + statusHtml + '</span>\
+          <span>' + actionHtml + '</span>\
+        </div>\
+        ' + wizardEntryKPPanelHtml(e.entry_id) + '\
+      </div>';
+  }).join('');
+  var publishedN = wikiWizardPublishedCount();
+  var nextDisabled = publishedN < 1;
+  var nextHint = nextDisabled
+    ? '<div style="margin-top:6px;font-size:12px;color:var(--text-3)">至少发布 1 个词条页后才能进入下一步勾选主题成员。</div>'
+    : '';
+  detail.innerHTML = '\
+    <h2 style="font-size:16px;font-weight:700;margin-bottom:8px">分步向导：' + esc(w.topicName) + '</h2>\
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:10px">步骤 1/2：逐词条编译与发布。未就绪也可编译（ready 只是参考信号）；编译产出草稿，需再发布后才能作为主题成员。点击「合格 KP N 个」可展开查看将用于编译的 KP。关闭弹窗不会丢进度。</div>\
+    <div style="max-height:360px;overflow-y:auto;border:1px solid var(--border-lt);border-radius:var(--radius-xs)">' + (rowsHtml || '<div style="padding:12px;font-size:12px;color:var(--text-3)">没有检索到候选词条</div>') + '</div>\
+    <div style="margin-top:12px;display:flex;gap:8px;align-items:center">\
+      <button class="btn btn-sm" onclick="dismissWikiWizardTask()">✕ 放弃该任务</button>\
+      <button class="btn btn-primary btn-sm" onclick="goWikiWizardStep2()"' + (nextDisabled ? ' disabled' : '') + '>下一步：勾选主题成员</button>\
+    </div>\
+    ' + nextHint + '\
+    <div id="wikiWizardStep1Status" style="margin-top:8px;font-size:12px;color:var(--text-3);line-height:1.45;word-break:break-word"></div>\
+    <div class="modal-actions"><button class="btn btn-sm" onclick="closeWikiDetailModal()">关闭</button></div>';
+}
+
+function renderWikiWizardStep2() {
+  clearWikiWizardPoll();
+  var detail = document.getElementById('wikiDetailModalContent');
+  var w = S.wikiWizard;
+  w.uiStep = 2;
+  var published = (w.entries || []).filter(function(e) { return !!e.already_published_page_id; });
+  var rowsHtml = published.map(function(e) {
+    var pageId = e.already_published_page_id;
+    var checked = w.selected[pageId] ? ' checked' : '';
+    return '\
+      <div style="border-bottom:1px solid var(--border-lt)">\
+        <div class="detail-row" style="align-items:center">\
+          <span class="dv">\
+            <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer">\
+              <input type="checkbox"' + checked + ' onchange="toggleWikiWizardMember(\'' + esc(pageId) + '\', this.checked)">\
+              <span>' + esc(e.entry_name || e.entry_id) + '</span>\
+            </label>\
+            ' + wizardEntryKPToggleHtml(e) + '\
+            <span style="color:var(--green);margin-left:4px">已发布</span>\
+          </span>\
+          <span><button class="btn btn-sm" onclick="openWikiEntryDetail(\'' + esc(pageId) + '\')">查看页面</button></span>\
+        </div>\
+        ' + wizardEntryKPPanelHtml(e.entry_id) + '\
+      </div>';
+  }).join('');
+  detail.innerHTML = '\
+    <h2 style="font-size:16px;font-weight:700;margin-bottom:8px">分步向导：' + esc(w.topicName) + '</h2>\
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:10px">步骤 2/2：勾选要纳入主题的<strong style="font-weight:600;color:var(--text-2)">已发布</strong>词条页，生成主题壳（空正文 + contains 关系）。主题正文需在壳页详情里继续分析/编译。未发布词条请先回上一步编译并发布。</div>\
+    <div style="max-height:360px;overflow-y:auto;border:1px solid var(--border-lt);border-radius:var(--radius-xs)">' + (rowsHtml || '<div style="padding:12px;font-size:12px;color:var(--text-3)">还没有已发布的词条，请回上一步</div>') + '</div>\
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">\
+      <button class="btn btn-sm" onclick="goWikiWizardStep1()">← 上一步</button>\
+      <button class="btn btn-primary btn-sm" onclick="submitWikiWizardDraft()">生成主题壳</button>\
+      <button class="btn btn-sm" onclick="dismissWikiWizardTask()">✕ 放弃该任务</button>\
+    </div>\
+    <div id="wikiWizardDraftStatus" style="margin-top:8px;font-size:12px;color:var(--text-3)"></div>\
+    <div class="modal-actions"><button class="btn btn-sm" onclick="closeWikiDetailModal()">关闭</button></div>';
+}
+
+function toggleWikiWizardMember(pageId, checked) {
+  if (!S.wikiWizard) return;
+  if (checked) S.wikiWizard.selected[pageId] = true;
+  else delete S.wikiWizard.selected[pageId];
+  // 勾选状态持久化（fire-and-forget，不阻塞 UI）——刷新页面/续开任务时保留。
+  api('PATCH', '/wiki/wizard/tasks/' + S.wikiWizard.taskId, {
+    selected_members: Object.keys(S.wikiWizard.selected)
+  }).catch(function() { /* best-effort */ });
+}
+
+async function wizardCompileEntry(i) {
+  var w = S.wikiWizard;
+  var e = w.entries[i];
+  var statusEl = document.getElementById('wikiWizardStep1Status');
+  var btnEl = document.getElementById('wizardCompileBtn-' + i);
+  var entryLabel = e.entry_name || e.entry_id;
+  if (btnEl) { btnEl.disabled = true; btnEl.textContent = '正在编译'; }
+  if (statusEl) statusEl.textContent = '';
+  try {
+    var r = await api('POST', '/wiki/compile', { entry_id: e.entry_id });
+    if (!r.ok || !r.data || !r.data.page_id) {
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">「' + esc(entryLabel) + '」编译失败：' + esc(r.data && r.data.message ? r.data.message : JSON.stringify(r.data)) + '</span>';
+      if (btnEl) { btnEl.disabled = false; btnEl.textContent = '编译'; }
+      return;
+    }
+    loadWikiCatalog();
+    await resumeWikiWizardTask(w.taskId);
+  } catch (err) {
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">「' + esc(entryLabel) + '」编译出错：' + esc(err.message) + '</span>';
+    if (btnEl) { btnEl.disabled = false; btnEl.textContent = '编译'; }
+  }
+}
+
+async function wizardPublishEntry(i) {
+  var w = S.wikiWizard;
+  var e = w.entries[i];
+  var statusEl = document.getElementById('wikiWizardStep1Status');
+  var btnEl = document.getElementById('wizardPublishBtn-' + i);
+  var entryLabel = e.entry_name || e.entry_id;
+  if (btnEl) { btnEl.disabled = true; btnEl.textContent = '发布中'; }
+  if (statusEl) statusEl.textContent = '';
+  try {
+    var r = await api('POST', '/wiki/pages/' + e.draft_page_id + '/publish', {});
     if (!r.ok) {
-      if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">检索失败：' + esc(r.data && (r.data.message || r.data.error) ? (r.data.message || r.data.error) : JSON.stringify(r.data)) + '</span>';
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">「' + esc(entryLabel) + '」发布失败：' + esc(r.data && r.data.message ? r.data.message : JSON.stringify(r.data)) + '</span>';
+      if (btnEl) { btnEl.disabled = false; btnEl.textContent = '发布'; }
       return;
     }
-    var d = r.data || {};
-    var memberIds = d.member_page_ids || [];
-    var pendingEntries = d.pending_concepts || [];
-    var uncoveredConcepts = d.uncovered_entries || [];
-    // docs/design/wiki.md:84——检索结果只落在一个概念下时，不需要主题页
-    // 这一层，直接把候选建的壳页归档，改为打开这个概念页本身。
-    var singleConcept = memberIds.length === 1 && !pendingEntries.length && !uncoveredConcepts.length;
-    if (singleConcept) {
-      if (statusEl) statusEl.textContent = '结果只落在一个词条下，直接打开该词条页...';
-      try { await api('POST', '/wiki/pages/' + d.page_id + '/archive'); } catch (e) { /* best-effort cleanup */ }
-      await loadWikiCatalog();
-      closeWikiDetailModal();
-      openWikiEntryDetail(memberIds[0]);
-      return;
+    // 发布成功后预勾选，方便步骤 2 直接用。
+    if (e.draft_page_id) {
+      w.selected[e.draft_page_id] = true;
+      api('PATCH', '/wiki/wizard/tasks/' + w.taskId, {
+        selected_members: Object.keys(w.selected)
+      }).catch(function() { /* best-effort */ });
     }
-    var readiness = d.readiness || {};
-    if (statusEl) {
-      statusEl.innerHTML = '\
-        <div style="color:var(--green)">已创建主题页壳「' + esc(d.title || '') + '」</div>\
-        <div style="margin-top:4px">已发布成员 ' + (readiness.member_count || 0) + ' 个 · related ' + (readiness.related_connection_count || 0) + ' 条 · contradicts ' + (readiness.contradicts_connection_count || 0) + ' 条 · 可靠度 ' + ((readiness.reliability_ratio || 0).toFixed ? readiness.reliability_ratio.toFixed(2) : readiness.reliability_ratio) + '（参考阈值 ' + readiness.reliability_min + '）</div>' +
-        (pendingEntries.length ? '<div style="margin-top:4px">待发布概念 ' + pendingEntries.length + ' 个（已推进候选，发布后自动补入）</div>' : '') +
-        (uncoveredConcepts.length ? '<div style="margin-top:4px">未覆盖概念 ' + uncoveredConcepts.length + ' 个</div>' : '');
+    loadWikiCatalog();
+    await resumeWikiWizardTask(w.taskId);
+  } catch (err) {
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">「' + esc(entryLabel) + '」发布出错：' + esc(err.message) + '</span>';
+    if (btnEl) { btnEl.disabled = false; btnEl.textContent = '发布'; }
+  }
+}
+
+async function submitWikiWizardDraft() {
+  var statusEl = document.getElementById('wikiWizardDraftStatus');
+  var w = S.wikiWizard;
+  var memberIds = Object.keys(w.selected || {});
+  if (!memberIds.length) {
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">请至少勾选一个主题成员</span>';
+    return;
+  }
+  if (statusEl) statusEl.textContent = '生成主题壳中...';
+  try {
+    var r = await api('POST', '/wiki/topics/draft', { topic_name: w.topicName, member_page_ids: memberIds, task_id: w.taskId });
+    if (!r.ok || !r.data) {
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">生成失败：' + esc(r.data && (r.data.message || r.data.error) ? (r.data.message || r.data.error) : JSON.stringify(r.data)) + '</span>';
+      return;
     }
     await loadWikiCatalog();
-    if (d.page_id) {
-      closeWikiDetailModal();
-      openWikiEntryDetail(d.page_id);
-    }
+    S.wikiWizard = null;
+    closeWikiDetailModal();
+    openWikiEntryDetail(r.data.page_id);
   } catch (e) {
-    if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">检索出错：' + esc(e.message) + '</span>';
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">生成出错：' + esc(e.message) + '</span>';
   }
 }
 
@@ -4667,6 +5080,10 @@ function renderWikiPageDetail(p) {
       <button class="btn btn-sm" style="color:var(--red)" onclick="rejectTopicShell(\'' + esc(p.page_id) + '\')">驳回</button>';
   } else if (p.status === 'draft') {
     actionsHtml = '<button class="btn btn-primary btn-sm" onclick="publishWikiPage(\'' + esc(p.page_id) + '\',\'wikiQualityGate\')">发布</button>';
+    // 概念/事实草稿可删除（走 archive，释放 entry_id 以便重新编译）；主题页壳走「驳回」。
+    if (p.page_type === 'concept' || p.page_type === 'fact') {
+      actionsHtml += '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteWikiEntryDraftPage(\'' + esc(p.page_id) + '\')">删除</button>';
+    }
   } else if (p.status === 'needs_recompile') {
     actionsHtml = '<button class="btn btn-primary btn-sm" onclick="recompileWikiPage(\'' + esc(p.page_id) + '\')">重编译</button>';
   } else if (p.status === 'published') {
@@ -4986,6 +5403,23 @@ async function archiveWikiPage(pageId) {
     if (r.ok) { refreshWikiPageEverywhere(pageId); }
     else alert('归档失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
   } catch(e) { alert('归档出错：' + e.message); }
+}
+
+// 删除概念/事实草稿页：复用 POST /wiki/pages/:id/archive（docs/impl/v1/wiki.md
+// 无硬删除端点；archive 后 GetActivePageByEntryID 不再命中，可重新编译）。
+async function deleteWikiEntryDraftPage(pageId) {
+  if (!(await showConfirm('确认删除该草稿页？删除后该词条可重新编译。'))) return;
+  try {
+    var r = await api('POST', '/wiki/pages/' + pageId + '/archive');
+    if (r.ok) {
+      closeWikiDetailModal();
+      loadWikiCatalog();
+    } else {
+      alert('删除失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+    }
+  } catch (e) {
+    alert('删除出错：' + e.message);
+  }
 }
 
 // ═══════════════════════════════════════════════════════

@@ -177,6 +177,59 @@ func TestCompile_RecordsVerifiedLinkIDs(t *testing.T) {
 	}
 }
 
+// TestCompile_ManualTriggerDropsVerifiedRequirement locks docs/impl/v1/
+// wiki.md 步骤 2 "人工指定主题手动编译" (2026-08-07 修订): a manual trigger
+// (no result_id) qualifies KPs on lifecycle=current alone — a KP with no
+// verified ActivationLink (only a link_candidate row) must still be
+// compilable.
+func TestCompile_ManualTriggerDropsVerifiedRequirement(t *testing.T) {
+	svc, fake, db, _ := setupTestService(t)
+
+	seedEntry(t, db, "c-unverified", "d1", "Unverified Concept")
+	seedKU(t, db, "u-unverified", "s1", "c-unverified", "Topic U", 1, 5)
+	seedKP(t, db, "p-unverified", "u-unverified", "s1", "unverified point content")
+	seedLinkCandidate(t, db, "lc-unverified", "t-u", "p-unverified", 5)
+	// Deliberately no seedVerifiedLink for p-unverified.
+
+	fake.SetResponse("wiki_analyze.md", llm.FakeResponse{Output: `{
+		"claims": [{"summary": "未验证材料的核心结论", "cited_point_ids": ["p-unverified"], "aspect_id": "misc"}],
+		"tensions": []
+	}`})
+	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: "## 摘要\n\n未验证概念。\n\n" +
+		"## 稳定结论\n\n未验证材料的核心结论 [p-unverified]\n\n" +
+		"## 展开说明\n\n### 核心内容\n\n详细说明。[p-unverified]\n\n" +
+		"## 待验证点\n\n暂无。\n\n" +
+		"## 依赖来源\n\n见引用。\n"})
+
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c-unverified", PageType: PageTypeConcept})
+	if err != nil {
+		t.Fatalf("expected manual compile to succeed without a verified ActivationLink, got: %v", err)
+	}
+	if page.Status != StatusDraft {
+		t.Errorf("expected draft page, got status=%s", page.Status)
+	}
+}
+
+// TestCompile_StudyTriggerStillRequiresVerified locks the other half of the
+// same 2026-08-07 修订: a Study-recommended trigger (result_id present)
+// keeps the verified requirement unchanged — the same unverified-only
+// concept must still fail to compile.
+func TestCompile_StudyTriggerStillRequiresVerified(t *testing.T) {
+	svc, _, db, _ := setupTestService(t)
+
+	seedEntry(t, db, "c-unverified", "d1", "Unverified Concept")
+	seedKU(t, db, "u-unverified", "s1", "c-unverified", "Topic U", 1, 5)
+	seedKP(t, db, "p-unverified", "u-unverified", "s1", "unverified point content")
+	seedLinkCandidate(t, db, "lc-unverified", "t-u", "p-unverified", 5)
+
+	_, err := svc.Compile(context.Background(), CompileRequest{
+		EntryID: "c-unverified", PageType: PageTypeConcept, ResultID: "fake-result-id",
+	})
+	if err == nil {
+		t.Fatal("expected Study-triggered compile to fail without a verified ActivationLink")
+	}
+}
+
 func TestCompile_DuplicateRejected(t *testing.T) {
 	svc, _, _, _ := setupTestService(t)
 

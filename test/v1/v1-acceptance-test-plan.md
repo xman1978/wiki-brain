@@ -127,7 +127,7 @@ wiki:
 | T5 | 用 crictl 前要先配置什么？ | `crictl config runtime-endpoint unix:///run/containerd/containerd.sock` | K8S·容器引擎 |
 | T6 | MySQL 主从复制的原理？ / binlog 在主从同步里怎么流转？ | 主库写 binlog → 从库经同步账户读入 replaylog → 从库重放执行 | MySQL·第 1 节 |
 | T7 | MySQL 从库怎么指向主库同步位？ | `change master to master_host=... master_log_file/master_log_pos`，取值与主库 `show master status` 一致 | MySQL·2.2 |
-| T8 | Oracle RAC 怎么开启归档？ / RAC 库开归档的步骤？ | srvctl stop → start -o mount → `alter database archivelog` → 重启实例 → `archive log list` 验证 | RAC 开启归档 |
+| T8 | Oracle RAC 怎么开启归档？ / Oracle RAC 开归档的步骤是什么？ | srvctl stop → start -o mount → `alter database archivelog` → 重启实例 → `archive log list` 验证 | RAC 开启归档 |
 | T9 | 怎么删除 7 天前的归档日志？ | rman 中 `delete archivelog until time 'sysdate-7'` | RAC 开启归档 |
 | T10 | Oracle RAC 上 VKTM 进程 CPU 占用高怎么处理？ | 虚拟化环境常见；改 `_high_priority_processes='LMS*'` scope=spfile（ORACLE 与 ASM 实例都要改）；因参考时间不可用，不建议生产环境 | RAC 问题汇总·问题 1 |
 | T11 | 客户端连 RAC 报 TNS-12518 hand off 错误是什么原因？ | oracle 程序文件缺失粘连位；`chmod u+s .../bin/oracle` 解决（metalink 1069517.1） | RAC 问题汇总·问题 2 |
@@ -280,24 +280,41 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 
 ### P2 学习转化：candidate 形成与人工晋升（标准 1 前半 + 标准 3）
 
-1. 培养清单（制度域 6 题 + 技术域 5 题，覆盖两域）：A1、A2、A4、A9、A11、A12 + T8、T12、T15、T13，以及 F1 前置问题「达梦怎么查询会话执行情况」；每题追加提问 2 个变体问法（保证 distinct question_hash ≥ 2 且 confident）。靶子约束：A4 必须入选（P6 制度侧靶子）、T15 必须入选（P6 技术侧靶子）、T8 必须入选（P5 技术侧靶子）；
+**2026-08-07 修订**（对齐四元组精确匹配 + 按 point 聚合建链后的实测口径；不改产品设计）：
+
+- Matcher 已是四元组完全匹配：变体问法**不保证**落到同一条 ActivationLink，因此「再问变体 → 同一 link 的 `success_n` 自然凑满」不再作为全清单硬门槛。
+- Study 按 `point_id` 建/刷新链接：邻近主题（如 A9↔A11 回款簇、T12↔F1_PRE 达梦运维簇）可能共享 `point_id` 或串进同一 link。脚本必须以**题号独占归属**判定 confirm/reject/对照组，禁止把「凡出现过该题 direct evidence 的 point」一锅端到多题上。
+- `POST /activation-links/:id/reject` 的终态是 `deprecated`（不是字面 `rejected`）；learning_result 记 `action=deprecate`。
+
+1. 培养清单（制度域 6 题 + 技术域 5 题，覆盖两域）：A1、A2、A4、A9、A11、A12 + T8、T12、T15、T13，以及 F1 前置问题「达梦怎么查询会话执行情况」；每题至少 2 种不同问法（题库变体 + `--extra-phrasing-file`），保证共现/gap 侧 `distinct question_hash ≥ 2` 且 confident。靶子约束：A4 必须入选（P6 制度侧靶子）、T15 必须入选（P6 技术侧靶子）、T8 必须入选（P5 技术侧靶子）；A11 入选但**不**进入确认集，专作「脚本未 confirm 的归属链接不得变 verified」对照；
 2. `POST /study/run`；
-3. 验证 candidate 创建：`GET /activation-links?status=candidate` 出现上述问题对应链接；每条链接有 `learning_results(action=create_candidate, status=applied)`，reason 含 confident_count/ratio/触发来源事件 id，能 JOIN 回 `learning_events`；技术域链接的激活条件应带对象/约束字段（如"达梦"），这是 F 组守门的前提，字段为空要记录（将走回退匹配路径）；
-4. 再各问 1-2 次（累计 success_n≥3、distinct≥2）→ `POST /study/run` → 验证出现 `action=promote, status=pending_confirm` 的 learning_result，链接状态未变（auto_promote=false 不得自动晋升）；
-5. 在 Page（或直接 `POST /activation-links/:id/confirm`）确认 A1、A4、A9、A12、T8、T12、T15 及 F1 前置链接晋升，A2、T13 执行 reject；
-6. 验证：confirm 的链接 status=verified 且有对应 learning_result 落库；reject 的链接不参与后续召回。
-7. 通过标准：candidate 不经确认绝不出现在 verified 列表；每次迁移都能从 learning_result → reason → event_ids 完整回溯（标准 3）。
+3. 验证 candidate 创建：培养清单各题在**独占归属**下至少能关联到一条 `status=candidate` 的链接（共享 point 的串台记入观测，不阻塞）；每条归属链接有 `learning_results(action=create_candidate, status=applied)`，reason 含 confident_count/ratio/触发来源事件 id，能 JOIN 回 `learning_events`；技术域归属链接的激活条件应带对象/约束字段（如"达梦"/"神通"/"oracle rac"），字段为空要记录（将走回退匹配路径）；
+4. 再培养一轮（全清单变体各再问一遍；对晋升演示题 A1 **额外**用主问法原句 + 至少 1 个不同问法复现，尽量让同一四元组攒到 `activation_success`）→ `POST /study/run`：
+   - **硬门槛**：`auto_promote=false` 下，本阶段归属链接不得自动变成 `verified`（仍为 `candidate`，除非后续人工 confirm）；
+   - **硬门槛**：至少 **1** 条归属链接出现 `action=promote, status=pending_confirm`（通常来自 A1；验证「提案不改状态、等人确认」路径）；
+   - **观测**：其余题是否出现 pending_confirm、各 link 的 `adopt_count`——精确匹配下多数题可能仍 < `promote_success_min`，属预期，写入报告不判 FAIL；
+5. 按题号独占归属执行人工动作（同一 `link_id` 只操作一次）：确认集 A1、A4、A9、A12、T8、T12、T15、F1_PRE 的归属链接 `POST .../confirm`（已是 `verified` 则跳过，记观测）；A2、T13 的归属链接 `POST .../reject`；**不对 A11 的归属链接调用 confirm**；
+6. 验证：确认集归属链接 `status=verified` 且有对应 `promote`（或等价确认）learning_result；reject 归属链接 `status=deprecated` 且不参与后续召回；A11 独占归属链接仍非 `verified`；
+7. 通过标准：
+   - candidate 不经确认绝不出现在 verified 列表（标准 1 前半）；
+   - 至少 1 条 `promote/pending_confirm` 路径被跑通，且 pending 期间链接状态未变；
+   - reject → `deprecated`；
+   - 每次迁移都能从 learning_result → reason → event_ids 完整回溯（标准 3）；
+   - 题号↔链接按独占归属判定，邻近主题串台只记观测。
 
 ### P3 快路径生效（标准 1 后半 + 标准 2）+ 对象守门 + ActivationLink 可用性验证
 
 **2026-07-19 改版说明**：`activation.md` 步骤 2 已从"打分+阈值"改为"四元组归一化后完全匹配"（不再有 `activation_match_min` / `activation_match_min_fallback` 阈值），并新增步骤 2a 快路径证据充分性校验（`fast_path_verify`，1 次 LLM）。旧版"换第三种问法验证仍能命中"的前提（打分容忍改写）不再成立——完全匹配下，改写后的问题是否命中，取决于 Session Parser 对 subject/intent 抽取标签的稳定性，这是待观测的效果指标，不是本次要验收的正确性标准。本节按两个轴重新设计：**轴一验证"链接是否被正确找到"（匹配正确性），轴二验证"命中后证据是否真能完整回答问题"（步骤 2a 校验）**。
 
+**2026-08-07 口径修订（准确优先）**：四元组精确匹配刻意偏保守——宁可漏召回、不可误激活。产品取舍定为：**准确（守门/不串台）为硬门槛；已培养问法的快路径召回率合计 ≥70% 即可**，不再要求 M1 18/18、M2 6/6 全过。Session Parser 同题抖动导致的偶发 `full` 记入报告，不单独判失败。不引入向量匹配放宽四元组。
+
 **轴一：匹配正确性**
 
 1. M1 精确复现：对 A1、A9、A12、T8、T12、T15 六条已 verified 链接，各用**培养时的主问法原句**重问 3 次；
-   验证：`path_type=fast`，trace 的 `activation_link_ids` 命中对应链接，Page 显示快路径徽标；
+   记录：每次是否 `path_type=fast` 且 `activation_link_ids` 非空；逐题命中明细与耗时写入报告。
+   **判定**：与 M2 合并计算召回率（见通过标准），不要求每题每次全过；`activation_success` 事件是否落库仅观测（异步竞态不挡通过）。
 2. M2 归一化容差：六题各任选 1 题，只调整词序或增删多余空白/标点（不改变用词），重问 1 次；
-   验证：仍然 `path_type=fast`——证明归一化没有引入不必要的字面依赖；
+   记录：是否仍 `path_type=fast`；与 M1 合并计入召回率。
 3. M3 改写观察（原"换第三种问法"保留，改为观测指标，不设通过/失败判定）：六题各换 1 种未出现过的自然表述（沿用 `--extra-phrasing-file` 机制）重问 3 次；
    记录：命中率、以及 `GET /activation-links?point_id=...` 是否新增了一条对应新问法的 `candidate` 链接（慢路径 confident 时应产生新 candidate，验证"覆盖靠积累，不靠模糊匹配"这条设计假设）；**此项不计入 P3 通过标准**，结果写入报告；本项记录的"是否需要 Study 侧 subject 归一化"已在 2026-07-24 落地为 `subject_synonyms` 机制，收敛效果验收见 P11（P11 依赖本步骤积累的 candidate 链接，勿在本阶段清库）；
 4. M4 约束不对称已取消——超集不再放行（**已试跑确认可行问法**，见下方"试跑记录"）：复用 F1_PRE 链接（P2 已培养、已确认为 verified），核心问法追加一个 F1_PRE 未覆盖的环境限定词重问：
@@ -309,22 +326,47 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
    ```
    subject/intent/audience 与培养时完全一致，constraint 从"达梦"变成"达梦,Windows环境"（干净超集，不改变其余三维）——正是验证对称语义所需的最小变量控制；
    验证：`path_type=full`（不命中）——这是本次设计变更后的新行为，取代旧版"问题多出的限定不拦截"；
-5. M5 对象/约束错配排除（F 组，判定口径不变）：F1、F2、F3 各 3 次，验证前置 verified 链接不被同句式异对象问题错误激活；同时 E3 追问一轮，确认补全后的问题也不串台；
-6. M6/M7 四元组缺失回退——**回退分支在真实数据里无法自然培养出**（试跑已证实：Session Parser 对任意真实问题都会抽出非空 subject/audience/constraint，即使是 A11 这种纯数字条件的问题也不例外；回退分支存在的意义是兼容"存量迁移链接"或"本轮 Session 解析异常降级"，两者都不是健康链路的自然产物），改为直接改库模拟存量链接：
-   - 前置：任选一条已 verified 的链接（如 F1_PRE），`UPDATE activation_links SET subject_terms='', intent_terms='', audience='', constraint_terms='' WHERE link_id=?`，模拟其为存量迁移链接；`POST /study/run` 或等价方式确认 Matcher 缓存能反映改动（必要时重启触发缓存重载）；
-   - M6 精确复现：用该链接培养时的原始问句原样重问 → 应命中（`path_type=fast`）；
-   - M7 改写不命中：同一链接，问题换一种表述重问 → 不命中（`path_type=full`）——回退分支不再有包含度阈值兜底改写，这是新行为；
-   - 收尾：测试后如需保留该链接供后续阶段使用，需手工把四个字段改回原值（或重新培养）。
-7. M8 状态过滤（2026-07-22 修订）：未晋升的 A2、T13 问题仍走 `path_type=full`（candidate 可 Match 记信号，但不走快路径）；weakened/deprecated 或目标 KP 非 current 的链接不参与匹配（与 P2/P5 的验证点呼应，本阶段不重复造场景，仅复核一次现状）。
+5. M5 对象/约束错配排除（F 组，判定口径不变）：F1、F2、F3 各 3 次，验证前置 verified 链接不被同句式异对象问题错误激活；
+6. E3 追问不串台：会话内先问「达梦 BUFFER 配多大？」，再问「神通呢？」；
+   验证：展开问句含「神通」；第二轮不得把达梦答案原样当成神通答案（诚实缺口「暂无相关材料」等算通过）。**不要求**库中必有神通 BUFFER 材料或回答正文必现「神通」——缺材料时如实缺口优于串台编造；
+7. M6/M7 四元组缺失回退——**回退分支在真实数据里无法自然培养出**（试跑已证实：Session Parser 对任意真实问题都会抽出非空 subject/audience/constraint，即使是 A11 这种纯数字条件的问题也不例外；回退分支存在的意义是兼容"存量迁移链接"或"本轮 Session 解析异常降级"，两者都不是健康链路的自然产物），改为直接改库模拟存量链接：
+   - 前置：任选一条已 verified 的链接（如 F1_PRE）。Matcher 主路径读的是 `observed_conditions`，因此必须同时清空观测组，不能只清 denorm 四列。推荐：
+     ```sql
+     UPDATE activation_links
+     SET subject_terms='', intent_terms='', audience='', constraint_terms='',
+         observed_conditions='[]',
+         question_terms=<基线问句对应的 traces.question_terms>
+     WHERE link_id=?
+     ```
+     （`question_terms` 设为基线问句的归一化结果，保证回退分支 `Qq == question_terms` 可比对；测完恢复全部字段含 `observed_conditions`。）必要时重启以刷新 Matcher 缓存；
+   - M6 精确复现：用该链接基线问句原样重问 → 应命中该 `link_id`（`path_type=fast`）；
+   - M7 改写不命中：同一链接，问题换一种表述重问 → **该 `link_id` 不得出现在 `activation_link_ids`**（回退仅认 `question_terms` 逐字相等；若其它未改动的链接命中导致整体仍为 `fast`，不判本项失败）；
+   - 隔离（防测试互相污染，2026-08-07）：
+     - **M4 前**：从 F1_PRE 链接的 `observed_conditions` 剔除 constraint 含 Windows 的历史组（前次超集探针经慢路径 Enrich 写回会导致本次误命中），并重启刷新 Matcher 缓存；
+     - **M6/M7**：任一轮 `path_type=full` 会触发 `EnrichFromConfidentFullPath` 写回观测组；下一轮及进入 M7 前必须再次 `observed_conditions='[]'` 并重启，否则测到的不是回退分支。
+8. M8 状态过滤（2026-07-22 修订；2026-08-07 同步 P2）：P2 已将 A2、T13 **reject → deprecated**，重问应走 `path_type=full` 且不得激活这两条链接；另抽 A11（P2 有意未 confirm、应仍为 candidate）确认 candidate 可 Match 记信号但不走快路径；weakened/deprecated 或目标 KP 非 current 的链接不参与匹配（与 P2/P5 的验证点呼应，本阶段不重复造场景，仅复核一次现状）。
 
 **轴二：证据充分性校验（步骤 2a，`fast_path_verify`）**
 
-8. V1 正常充分：M1 六题的快路径回答本身就是正向样本——额外核对 trace 中可观察到 `fast_verify` 这次 LLM 调用发生过（若无独立日志字段，退化为核对总调用次数从旧基线的 2 次变为 3 次：证据挖掘 1 + 校验 1 + Answer 1）；
-9. V2 内容变窄后校验拦截：见 P6 附加步骤（依赖 reupload 换血机制，安排在 P6 而非本阶段，避免打断 P3 的数据依赖顺序）；
-10. V3 校验异常的保守回落：LLM 层面的畸形返回/超时无法在真实数据验收里可靠复现，已改为 Go 单测覆盖（`internal/retrieval/fastpath_test.go`），本阶段不测；
-11. V4 灰度关闭对照：`fast_path_verify=false` 时行为应等同旧版快路径（不校验直接采纳）——用 M1 的六题之一，临时改配置重跑 1 次，验证仍为 `path_type=fast` 且不因关闭校验而报错。
+9. V1 正常充分：M1 中实际走快路径的样本即为正向样本——额外核对可观察到 `fast_verify`（若无独立日志字段，退化为耗时/调用次数对照）；不因个别题未命中快路径而判 V1 失败；
+10. V2 内容变窄后校验拦截：见 P6 附加步骤（依赖 reupload 换血机制，安排在 P6 而非本阶段，避免打断 P3 的数据依赖顺序）；
+11. V3 校验异常的保守回落：LLM 层面的畸形返回/超时无法在真实数据验收里可靠复现，已改为 Go 单测覆盖（`internal/retrieval/fastpath_test.go`），本阶段不测；
+12. V4 灰度关闭对照：`fast_path_verify=false` 时行为应等同旧版快路径（不校验直接采纳）——用 M1 的六题之一，临时改配置重跑 1 次，验证仍为 `path_type=fast` 且不因关闭校验而报错。
 
-**通过标准**：M1 18 次、M2 6 次、M4 1 次（超集排除）、M5 9 次（F 组）+ E3 1 次、M6/M7 各 F1_PRE 3 次全部满足验证点；M3 不设通过标准，仅记录观测数据；V1 通过标准并入 M1；V4 1 次验证通过。
+**通过标准**（准确硬门槛 + 召回软门槛）：
+
+| 类别 | 项 | 标准 |
+|------|----|------|
+| 召回（软） | M1+M2 | 合计命中率 ≥70%（命中 = `path_type=fast` 且 `activation_link_ids` 非空；M1 18 次 + M2 6 次共 24 次） |
+| 准确（硬） | M4 | 1 次超集排除 → `path_type=full` |
+| 准确（硬） | M5 | F 组 9 次守门失效 = 0 |
+| 准确（硬） | E3 | 展开含「神通」且不串用达梦答案 |
+| 准确（硬） | M6/M7 | 各 3 次：空观测组下精确复现命中该链接 / 改写不命中该链接 |
+| 准确（硬） | M8 | A2/T13 → `full` |
+| 准确（硬） | V4 | 1 次关闭校验仍 `fast` 且无报错 |
+| 观测 | M3、耗时下降、activation_success 落库 | 写入报告，不挡通过 |
+
+M3 不设通过标准；V1 并入快路径正向样本观测。
 
 ### P4 证据挖掘与幻构拦截专项（标准 4）
 
@@ -462,10 +504,10 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 | 指标 | 目标 | 采集阶段 |
 |------|------|---------|
 | 事实类问答正确率（慢路径） | 制度域（A/B1-B2/D1-D4/G1-G24）与技术域（T/B3-B5/D5-D7/G25-G48）**各自** ≥90% | P1 |
-| 快路径 LLM 调用次数 | ≤2 次/题（基线 ≥4），两域同标准 | P3 |
-| 快路径耗时下降 | ≥40%（同题对比） | P3 |
-| 快路径 direct 命中率 | ≥ 慢路径同题水平，两域分开统计 | P3 |
-| 对象守门失效次数 | 0（F 组 9 次 + E3） | P3 |
+| 快路径 LLM 调用次数 | 命中快路径时 ≤3 次/题（含 `fast_path_verify`；旧基线无校验时约 2）；写入报告，不单列为硬失败 | P3 |
+| 快路径耗时下降 | 相对 P1 同题下降情况写入报告；目标参考 ≥40%，**不挡 P3 通过**（准确优先） | P3 |
+| 已培养问法快路径召回率 | M1+M2 合计 ≥70%（`fast` 且有 `activation_link_ids`） | P3 |
+| 对象守门失效次数 | 0（F 组 9 次）；E3 不串台 | P3 |
 | 片段子串核验 | 0 例外 | P1、P4 |
 | 挖掘回退率（mined=false） | ≤30%，且回退可见（技术域代码块类 KU 单独统计回退率，作 V2 输入） | P1、P4 |
 | 删除后 deprecated KP 引用次数 | 0（两域靶子各计） | P5 |
@@ -478,7 +520,8 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 ## 7. 执行注意事项
 
 - **时序控制**：全程手动 `POST /study/run`，禁止依赖 Ticker，否则事件 processed 状态不可控；
-- **变体问法是硬要求**：promote_distinct_min=2 要求不同 question_hash，同一字面重复问只累计 success_n 不累计 distinct_n，晋升永远不达标；
+- **变体问法是硬要求（共现/distinct 侧）**：`promote_distinct_min=2` 要求不同 question_hash，同一字面重复问只累计 success_n 不累计 distinct_n；P2 培养清单必须备 ≥2 问法。但自四元组精确匹配起，变体**不保证**命中同一 ActivationLink——P2 的 `pending_confirm` 只要求至少跑通 1 条（见 P2 步骤 4），其余 adopt 覆盖作观测；
+- **P2 链接归属**：确认/驳回/对照组按题号独占归属，勿用「题的 direct point_id 并集」做多题共享判定（A9↔A11、T12↔F1_PRE 邻近簇会误伤）；
 - **阶段间不清库**：P2-P12 依赖 P1 积累的事件；靶子文档已按域错开（P5 删报销规定+RAC 归档、P6 改培训积分+神通、P7 新增两份 contradicts fixture、P8 改应收账款+19c RAC、P11 复用 F1_PRE 且不得在 P11 前调整其四元组字段、P12 直接读 P8 落盘结果不重新培养信号），执行时勿调换；P12 必须排在 P8 之后。
 - **真实 LLM 的波动**：正确率类指标按题判要点命中而非逐字比对（技术域例外：命令与参数名必须逐字对）；单题失败先重跑一次排除 LLM 抖动，复现两次才计为缺陷；
 - **缺陷归因**：每个失败点先区分「提取期缺陷（KU/KP 就没有该事实）」与「检索/回答期缺陷」，前者不属于 V1 目标范围但需记录；

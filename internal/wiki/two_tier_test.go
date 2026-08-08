@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
@@ -135,7 +138,6 @@ func TestDetectTopicCandidate_QuadrupleClusterAndSecondTierCompile(t *testing.T)
 	cfg.TopicCandidateKPMax = 50
 	cfg.TopicReliabilityMin = 0 // this test's focus is grouping/compile, not reliability tuning
 	svc.cfg = cfg
-	svc.topicSearchMinScore = 0
 
 	seedDomain(t, db, "d2", "Domain Two")
 	seedEntry(t, db, "c2", "d2", "Concept Two")
@@ -337,7 +339,6 @@ func TestCreateTopicManual_BuildsShellFromScopeSearch(t *testing.T) {
 	cfg.TopicMemberMin = 3
 	cfg.TopicCandidateKPMax = 50
 	svc.cfg = cfg
-	svc.topicSearchMinScore = 0
 
 	seedDomain(t, db, "d2", "Domain Two")
 	seedEntry(t, db, "c2", "d2", "Concept Two")
@@ -358,11 +359,11 @@ func TestCreateTopicManual_BuildsShellFromScopeSearch(t *testing.T) {
 		indexPointForSearch(t, svc.pointsIndex, id, "手动主题测试内容 "+id)
 	}
 
-	if _, _, err := svc.CreateTopicManual("", "空主题名不允许", ""); err == nil {
+	if _, _, err := svc.CreateTopicManual(context.Background(), "", "空主题名不允许", ""); err == nil {
 		t.Fatal("expected error for empty topic_name")
 	}
 
-	cand, readiness, err := svc.CreateTopicManual("手动主题测试", "范围描述", "")
+	cand, readiness, err := svc.CreateTopicManual(context.Background(), "手动主题测试", "范围描述", "")
 	if err != nil {
 		t.Fatalf("CreateTopicManual: %v", err)
 	}
@@ -390,6 +391,354 @@ func TestCreateTopicManual_BuildsShellFromScopeSearch(t *testing.T) {
 	}
 	if len(members) != 3 {
 		t.Fatalf("expected 3 members (one per published concept), got %v", members)
+	}
+}
+
+// TestPreviewTopicCandidates_ReadOnlyAndShowsReadiness locks 分步向导步骤 1
+// (docs/impl/v1/wiki.md 步骤 8): PreviewTopicCandidates must report per-entry
+// readiness/publication state without writing anything (no wiki_candidate
+// learning_result, no shell page) — unlike CreateTopicManual, which silently
+// drops unready entries into uncovered_entries.
+func TestPreviewTopicCandidates_ReadOnlyAndShowsReadiness(t *testing.T) {
+	svc, _, db, _ := setupTestService(t)
+	cfg := svc.cfg
+	cfg.TopicCandidateKPMax = 50
+	svc.cfg = cfg
+
+	// c1 is already published by setupTestService's baseline data (page1-style
+	// fixtures) — reuse it as the "already published" case; add a fresh,
+	// never-published, never-verified entry as the "unready" case.
+	seedDomain(t, db, "d3", "Domain Three")
+	seedEntry(t, db, "c-unready", "d3", "Unready Concept")
+	seedKU(t, db, "u-unready", "s1", "c-unready", "Topic E", 1, 5)
+	seedKP(t, db, "p-unready", "u-unready", "s1", "unready point content")
+
+	publishEntryPage(t, svc, "page-preview", "c1", "Preview Page", []string{"p1"})
+
+	for _, id := range []string{"p1", "p-unready"} {
+		indexPointForSearch(t, svc.pointsIndex, id, "预览向导测试内容 "+id)
+	}
+
+	entries, err := svc.PreviewTopicCandidates(context.Background(), "预览向导测试", "范围描述", "")
+	if err != nil {
+		t.Fatalf("PreviewTopicCandidates: %v", err)
+	}
+
+	byEntry := make(map[string]TopicCandidateEntry, len(entries))
+	for _, e := range entries {
+		byEntry[e.EntryID] = e
+	}
+	published, ok := byEntry["c1"]
+	if !ok {
+		t.Fatalf("expected c1 in preview entries, got %+v", entries)
+	}
+	if published.AlreadyPublishedPageID != "page-preview" || !published.IsReady {
+		t.Errorf("expected c1 to report already-published page and is_ready=true, got %+v", published)
+	}
+
+	unready, ok := byEntry["c-unready"]
+	if !ok {
+		t.Fatalf("expected c-unready in preview entries, got %+v", entries)
+	}
+	if unready.AlreadyPublishedPageID != "" || unready.IsReady {
+		t.Errorf("expected c-unready to be unpublished and not ready, got %+v", unready)
+	}
+	if unready.QualifyingKPCount != 1 {
+		t.Errorf("expected c-unready qualifying_kp_count=1, got %d", unready.QualifyingKPCount)
+	}
+
+	pending, err := svc.store.HasPendingWikiCandidate("c-unready")
+	if err != nil {
+		t.Fatalf("HasPendingWikiCandidate: %v", err)
+	}
+	if pending {
+		t.Error("PreviewTopicCandidates must not write a wiki_candidate learning_result (read-only)")
+	}
+}
+
+// waitWizardTaskStatus polls GetWizardTaskDetail until status leaves
+// candidates_loading or the timeout fires — the retrieval runs in a
+// background goroutine (docs/impl/v1/wiki.md 步骤 8 "分步向导" 断点续开).
+func waitWizardTaskStatus(t *testing.T, svc *Service, taskID string) *WizardTaskDetail {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		detail, err := svc.GetWizardTaskDetail(taskID)
+		if err != nil {
+			t.Fatalf("GetWizardTaskDetail: %v", err)
+		}
+		if detail == nil {
+			t.Fatal("wizard task disappeared while waiting")
+		}
+		if detail.Status != WizardTaskStatusCandidatesLoading {
+			return detail
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for wizard task to leave candidates_loading")
+	return nil
+}
+
+// TestStartWizardTask_ResumesExistingActiveTask locks 步骤 8 "分步向导"
+// 断点续开: domain_id is UNIQUE, so a second StartWizardTask call for the
+// same domain must return the existing task rather than starting a second
+// retrieval (which would also just fail the UNIQUE constraint).
+func TestStartWizardTask_ResumesExistingActiveTask(t *testing.T) {
+	svc, _, db, _ := setupTestService(t)
+	seedDomain(t, db, "d-wizard", "Domain Wizard")
+
+	first, err := svc.StartWizardTask("向导续开测试", "", "d-wizard")
+	if err != nil {
+		t.Fatalf("StartWizardTask: %v", err)
+	}
+	second, err := svc.StartWizardTask("向导续开测试（换一个名字也一样）", "", "d-wizard")
+	if err != nil {
+		t.Fatalf("StartWizardTask (resume): %v", err)
+	}
+	if second.TaskID != first.TaskID {
+		t.Fatalf("expected resuming the same task, got first=%s second=%s", first.TaskID, second.TaskID)
+	}
+	waitWizardTaskStatus(t, svc, first.TaskID)
+}
+
+// TestWizardTask_DetailRefreshesLiveStateAndDeleteFreesDomainSlot locks two
+// things in one flow: GetWizardTaskDetail must re-derive publish state live
+// (not serve the retrieval-time snapshot) once a candidate is compiled +
+// published elsewhere, and DeleteWizardTask must free the domain_id slot for
+// a fresh StartWizardTask.
+func TestWizardTask_DetailRefreshesLiveStateAndDeleteFreesDomainSlot(t *testing.T) {
+	svc, _, db, _ := setupTestService(t)
+	seedDomain(t, db, "d-wizard2", "Domain Wizard Two")
+	seedEntry(t, db, "c-wizard", "d-wizard2", "Wizard Concept")
+	seedKU(t, db, "u-wizard", "s1", "c-wizard", "Topic Wizard", 1, 5)
+	seedKP(t, db, "p-wizard", "u-wizard", "s1", "wizard task test content")
+	indexPointForSearch(t, svc.pointsIndex, "p-wizard", "向导任务刷新测试内容 p-wizard")
+
+	task, err := svc.StartWizardTask("向导任务刷新测试", "", "d-wizard2")
+	if err != nil {
+		t.Fatalf("StartWizardTask: %v", err)
+	}
+	detail := waitWizardTaskStatus(t, svc, task.TaskID)
+	if detail.Status != WizardTaskStatusCandidatesReady {
+		t.Fatalf("expected candidates_ready, got status=%s error=%s", detail.Status, detail.ErrorMessage)
+	}
+	found := false
+	for _, e := range detail.Entries {
+		if e.EntryID == "c-wizard" {
+			found = true
+			if e.AlreadyPublishedPageID != "" {
+				t.Errorf("expected c-wizard not yet published, got %+v", e)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected c-wizard among wizard task entries, got %+v", detail.Entries)
+	}
+
+	// Compile + publish c-wizard out of band (as the wizard's "编译"/"发布"
+	// buttons would), then confirm the next GetWizardTaskDetail call reports
+	// it as published without having re-run the expensive retrieval.
+	publishEntryPage(t, svc, "page-wizard", "c-wizard", "Wizard Page", []string{"p-wizard"})
+	refreshed, err := svc.GetWizardTaskDetail(task.TaskID)
+	if err != nil {
+		t.Fatalf("GetWizardTaskDetail (refresh): %v", err)
+	}
+	refreshedFound := false
+	for _, e := range refreshed.Entries {
+		if e.EntryID == "c-wizard" {
+			refreshedFound = true
+			if e.AlreadyPublishedPageID != "page-wizard" {
+				t.Errorf("expected live-refreshed already_published_page_id=page-wizard, got %+v", e)
+			}
+		}
+	}
+	if !refreshedFound {
+		t.Fatalf("expected c-wizard among refreshed entries, got %+v", refreshed.Entries)
+	}
+
+	if err := svc.DeleteWizardTask(task.TaskID); err != nil {
+		t.Fatalf("DeleteWizardTask: %v", err)
+	}
+	if gone, err := svc.GetWizardTaskDetail(task.TaskID); err != nil || gone != nil {
+		t.Fatalf("expected task gone after delete, got detail=%+v err=%v", gone, err)
+	}
+
+	again, err := svc.StartWizardTask("新任务", "", "d-wizard2")
+	if err != nil {
+		t.Fatalf("StartWizardTask after delete: %v", err)
+	}
+	if again.TaskID == task.TaskID {
+		t.Fatal("expected a fresh task after delete, got the same task_id")
+	}
+	waitWizardTaskStatus(t, svc, again.TaskID)
+}
+
+// TestOutlineRecallCandidates_FindsCandidateFullTextMisses locks 步骤 8
+// 候选检索 1b (2026-08-07 修订): a KP whose content wouldn't full-text-match
+// the topic query, but whose source outline heading does, must still surface
+// via the outline-recall branch.
+func TestOutlineRecallCandidates_FindsCandidateFullTextMisses(t *testing.T) {
+	svc, _, db, _ := setupTestService(t)
+	cfg := svc.cfg
+	cfg.TopicCandidateKPMax = 50
+	svc.cfg = cfg
+
+	seedDomain(t, db, "d-outline", "Domain Outline")
+	seedEntry(t, db, "c-outline", "d-outline", "Outline Concept")
+	if _, err := db.Exec(`INSERT INTO source_outlines (outline_id, source_id, parent_id, level, title, summary, line_start, line_end, node_type, position)
+		VALUES ('o1', 's1', NULL, 1, '达梦数据库性能调优章节', '', 1, 5, 'structural', 0)`); err != nil {
+		t.Fatalf("seed outline: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO knowledge_units (unit_id, source_id, entry_id, outline_id, center, line_start, line_end, status, prompt_version)
+		VALUES ('u-outline', 's1', 'c-outline', 'o1', 'Topic Outline', 1, 5, 'completed', 'v1')`); err != nil {
+		t.Fatalf("seed KU with outline_id: %v", err)
+	}
+	seedKP(t, db, "p-outline", "u-outline", "s1", "跟主题查询词完全不重合的内容")
+	// Deliberately NOT indexed into svc.pointsIndex — only reachable via
+	// outline recall, not the full-text branch.
+	if err := svc.outlinesIndex.Index("o1", map[string]interface{}{
+		"outline_id": "o1", "source_id": "s1", "title": "达梦数据库性能调优章节", "summary": "", "level": 1, "node_type": "structural",
+	}); err != nil {
+		t.Fatalf("index outline: %v", err)
+	}
+
+	entries, err := svc.PreviewTopicCandidates(context.Background(), "达梦数据库性能调优", "", "")
+	if err != nil {
+		t.Fatalf("PreviewTopicCandidates: %v", err)
+	}
+	for _, e := range entries {
+		if e.EntryID == "c-outline" {
+			return
+		}
+	}
+	t.Fatalf("expected c-outline (reachable only via outline recall) in preview entries, got %+v", entries)
+}
+
+// TestJudgeTopicCandidateRelevance_FiltersIrrelevant locks 步骤 8 候选检索
+// 1b's LLM relevance judge: a candidate the model marks relevant=false must
+// be dropped before grouping by entry_id.
+func TestJudgeTopicCandidateRelevance_FiltersIrrelevant(t *testing.T) {
+	svc, fake, db, _ := setupTestService(t)
+	cfg := svc.cfg
+	cfg.TopicCandidateKPMax = 50
+	svc.cfg = cfg
+
+	seedDomain(t, db, "d-relevance", "Domain Relevance")
+	seedEntry(t, db, "c-irrelevant", "d-relevance", "Irrelevant Concept")
+	seedKU(t, db, "u-irrelevant", "s1", "c-irrelevant", "Topic Irrelevant", 1, 5)
+	seedKP(t, db, "p-irrelevant", "u-irrelevant", "s1", "irrelevant point content")
+
+	for _, id := range []string{"p1", "p-irrelevant"} {
+		indexPointForSearch(t, svc.pointsIndex, id, "相关性判定测试内容 "+id)
+	}
+
+	fake.SetResponse("wiki_topic_candidate_rerank.md", llm.FakeResponse{Output: `{
+		"results": [
+			{"candidate_id": "p1", "relevant": true, "reason": "属于该主题"},
+			{"candidate_id": "p-irrelevant", "relevant": false, "reason": "只是词面相关，实际属于另一个主题"}
+		]
+	}`})
+
+	entries, err := svc.PreviewTopicCandidates(context.Background(), "相关性判定测试", "", "")
+	if err != nil {
+		t.Fatalf("PreviewTopicCandidates: %v", err)
+	}
+	for _, e := range entries {
+		if e.EntryID == "c-irrelevant" {
+			t.Fatalf("expected c-irrelevant to be filtered out by relevance judge, got %+v", entries)
+		}
+	}
+	found := false
+	for _, e := range entries {
+		if e.EntryID == "c1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected c1 (relevant=true) to remain, got %+v", entries)
+	}
+}
+
+// TestJudgeTopicCandidateRelevance_FailOpenOnLLMError locks the fail-open
+// contract: when the relevance-judge LLM call errors, candidates are kept
+// unfiltered rather than the whole preview failing or silently emptying.
+func TestJudgeTopicCandidateRelevance_FailOpenOnLLMError(t *testing.T) {
+	svc, fake, _, _ := setupTestService(t)
+	cfg := svc.cfg
+	cfg.TopicCandidateKPMax = 50
+	svc.cfg = cfg
+
+	fake.SetResponse("wiki_topic_candidate_rerank.md", llm.FakeResponse{Err: fmt.Errorf("simulated LLM outage")})
+
+	for _, id := range []string{"p1", "p2"} {
+		indexPointForSearch(t, svc.pointsIndex, id, "失败开放测试内容 "+id)
+	}
+
+	entries, err := svc.PreviewTopicCandidates(context.Background(), "失败开放测试", "", "")
+	if err != nil {
+		t.Fatalf("PreviewTopicCandidates: %v", err)
+	}
+	found := false
+	for _, e := range entries {
+		if e.EntryID == "c1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected c1 kept despite relevance-judge LLM failure (fail-open), got %+v", entries)
+	}
+}
+
+// TestCreateTopicFromMembers_ExplicitList locks 分步向导步骤 3
+// (docs/impl/v1/wiki.md 步骤 8): membership comes directly from the caller,
+// not from isEntryReady — and non-published / topic-type members are
+// rejected via ErrMembersNotPublished.
+func TestCreateTopicFromMembers_ExplicitList(t *testing.T) {
+	svc, _, db, _ := setupTestService(t)
+
+	seedDomain(t, db, "d4", "Domain Four")
+	seedEntry(t, db, "c5", "d4", "Concept Five")
+	seedKU(t, db, "u5", "s1", "c5", "Topic F", 1, 5)
+	seedKP(t, db, "p5", "u5", "s1", "point five content")
+	seedVerifiedLink(t, db, "link-p5", "p5")
+
+	page1 := publishEntryPage(t, svc, "page-explicit-1", "c1", "Explicit Page One", []string{"p1"})
+	page2 := publishEntryPage(t, svc, "page-explicit-2", "c5", "Explicit Page Two", []string{"p5"})
+
+	if _, err := svc.CreateTopicFromMembers("显式成员主题", nil); err == nil {
+		t.Fatal("expected error for empty member_page_ids")
+	}
+
+	draftPage := &Page{
+		PageID: "draft-not-published", PageType: PageTypeConcept, Title: "Draft",
+		Content: "", Status: StatusDraft,
+	}
+	if err := svc.store.InsertPage(draftPage); err != nil {
+		t.Fatalf("insert draft page: %v", err)
+	}
+	_, err := svc.CreateTopicFromMembers("显式成员主题", []string{page1.PageID, draftPage.PageID})
+	var notPublished *ErrMembersNotPublished
+	if !errors.As(err, &notPublished) {
+		t.Fatalf("expected ErrMembersNotPublished for unpublished member, got %v", err)
+	}
+
+	cand, err := svc.CreateTopicFromMembers("显式成员主题", []string{page1.PageID, page2.PageID})
+	if err != nil {
+		t.Fatalf("CreateTopicFromMembers: %v", err)
+	}
+	page, err := svc.store.GetPage(cand.PageID)
+	if err != nil || page == nil {
+		t.Fatalf("get shell: %v", err)
+	}
+	if page.PageType != PageTypeTopic || page.Status != StatusDraft {
+		t.Errorf("expected topic/draft shell, got type=%s status=%s", page.PageType, page.Status)
+	}
+	members, err := svc.store.ContainsMembers(cand.PageID)
+	if err != nil {
+		t.Fatalf("contains: %v", err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("expected 2 explicit members, got %v", members)
 	}
 }
 
