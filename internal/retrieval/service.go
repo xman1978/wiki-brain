@@ -597,7 +597,8 @@ func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, source
 	slog.Info("retrieval: step6 rrf merge done", "merged", len(merged))
 
 	if len(merged) == 0 {
-		emit("rerank", "done", "无候选", 0)
+		emit("screen", "done", "0 条", 0)
+		emit("rerank", "done", "0 直接 · 0 间接", 0)
 		return &EvidenceSet{
 			Question:       question,
 			Subject:        qc.Subject,
@@ -623,18 +624,32 @@ func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, source
 // (docs/impl/v1/wiki.md 步骤 8「检索接入」, decision A: skeleton_point_ids ≥
 // rerank_top_n skips Domain/Source prefilter and Outline/FTS/RRF entirely)
 // can reuse it without going through Domain/Source/Outline/FTS at all.
+//
+// Progress is split into two UI phases when possible: "screen"（证据筛选 /
+// relevance）then "rerank"（证据分类 / direct·supporting + KPN expansion）.
 func (s *Service) rerankAndBuildEvidenceSet(ctx context.Context, qc QueryContext, merged []candidate, emit func(phase, status, detail string, dur int64), progress ProgressFunc, lastResort bool) (*EvidenceSet, error) {
 	question := qc.Question
 
-	// Step 7: 证据分类（LLM Rerank）
-	emit("rerank", "start", fmt.Sprintf("%d 条候选", len(merged)), 0)
-	rerankStart := time.Now()
-	reranked, filteredEvidence, err := s.rerank(ctx, qc, merged)
+	// Step 7: 证据筛选 + 证据分类（LLM Rerank）。classifyStart 在收到
+	// rerank/start 时重置，done 耗时覆盖 classify + 后续 KPN 扩展。
+	classifyStart := time.Now()
+	sawRerankStart := false
+	progressEmit := func(phase, status, detail string, dur int64) {
+		if phase == "rerank" && status == "start" {
+			classifyStart = time.Now()
+			sawRerankStart = true
+		}
+		emit(phase, status, detail, dur)
+	}
+	reranked, filteredEvidence, err := s.rerankWithProgress(ctx, qc, merged, progressEmit)
 	if err != nil {
-		emit("rerank", "error", err.Error(), time.Since(rerankStart).Milliseconds())
 		return nil, fmt.Errorf("retrieval: rerank: %w", err)
 	}
-	slog.Info("retrieval: step7 rerank done", "kept", len(reranked), "filtered", len(filteredEvidence), "duration_ms", time.Since(rerankStart).Milliseconds())
+	if !sawRerankStart {
+		emit("rerank", "start", "0 条", 0)
+		classifyStart = time.Now()
+	}
+	slog.Info("retrieval: step7 rerank done", "kept", len(reranked), "filtered", len(filteredEvidence))
 
 	// Step 8: KPN expansion
 	kpnLookupStart := time.Now()
@@ -667,8 +682,7 @@ func (s *Service) rerankAndBuildEvidenceSet(ctx context.Context, qc QueryContext
 		path = "short"
 	}
 	slog.Info("retrieval: step9 sufficiency", "path", path, "direct", len(direct), "supporting", len(supporting), "conflicts", len(conflictCandidates))
-	emit("rerank", "done", fmt.Sprintf("%d 直接 · %d 补充", len(direct), len(supporting)), time.Since(rerankStart).Milliseconds())
-
+	emit("rerank", "done", fmt.Sprintf("%d 直接 · %d 间接", len(direct), len(supporting)), time.Since(classifyStart).Milliseconds())
 	// Step 10: Build EvidenceSet
 	es, err := s.buildEvidenceSet(ctx, question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, path, direct, supporting, conflictCandidates, progress, lastResort)
 	if err != nil {
@@ -1254,11 +1268,15 @@ func (s *Service) rrfMerge(lists ...[]candidate) []candidate {
 
 // Step 7: LLM Rerank
 func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []candidate) ([]candidate, []Evidence, error) {
+	return s.rerankWithProgress(ctx, qc, candidates, nil)
+}
+
+func (s *Service) rerankWithProgress(ctx context.Context, qc QueryContext, candidates []candidate, emit func(phase, status, detail string, dur int64)) ([]candidate, []Evidence, error) {
 	// Re-check KU lifecycle right before reranking — recall
 	// happened moments earlier via Bleve, which can lag a DB lifecycle change
 	// (docs/impl/v1/retrieval.md 步骤 5, "防扫描间隙状态变更").
 	candidates = s.filterCurrentUnits(candidates)
-	return s.judgeCandidates(ctx, qc, candidates)
+	return s.judgeCandidates(ctx, qc, candidates, emit)
 }
 
 // judgeCandidates runs the LLM rerank judge over an arbitrary candidate set
@@ -1270,7 +1288,11 @@ func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []cand
 // only says two points are topically related, not that the neighbor fits
 // this question's object/scenario, so it must clear the same judge before
 // being trusted as supporting evidence).
-func (s *Service) judgeCandidates(ctx context.Context, qc QueryContext, candidates []candidate) ([]candidate, []Evidence, error) {
+//
+// emit, when non-nil, receives screen/rerank progress for the process panel
+// (nil for KPN expansion — those judgments must not overwrite the main-path
+// screen/classify steps already shown to the user).
+func (s *Service) judgeCandidates(ctx context.Context, qc QueryContext, candidates []candidate, emit func(phase, status, detail string, dur int64)) ([]candidate, []Evidence, error) {
 	for i := range candidates {
 		candidates[i].candidateID = fmt.Sprintf("c%d", i+1)
 	}
@@ -1280,12 +1302,7 @@ func (s *Service) judgeCandidates(ctx context.Context, qc QueryContext, candidat
 		return nil, nil, err
 	}
 
-	var roles map[string]string
-	if s.cfg != nil && s.cfg.Retrieval.RerankTwoStep {
-		roles, err = s.judgeRerankTwoStep(ctx, qc, judgeItems)
-	} else {
-		roles, err = s.judgeRerankBatches(ctx, qc, judgeItems)
-	}
+	roles, err := s.judgeRerankTwoStep(ctx, qc, judgeItems, emit)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1405,10 +1422,9 @@ func (s *Service) splitKeptFiltered(candidates []candidate, roles map[string]str
 	return kept, filtered
 }
 
-// judgeCandidatesRelevanceOnly runs just Step 1 of the two-step split
-// (rerank_relevance.md) — used by judgeKPNExpansion under
-// config.Retrieval.RerankTwoStep, where a classify call would be wasted:
-// a KPN-expanded neighbor's role is always coerced to "supporting"
+// judgeCandidatesRelevanceOnly runs just Step 1 (rerank_relevance.md) of the
+// two-step judge — used by judgeKPNExpansion, where a classify call would be
+// wasted: a KPN-expanded neighbor's role is always coerced to "supporting"
 // regardless of what classify would say, so skipping it saves a full LLM
 // round trip per expansion batch without changing the outcome.
 func (s *Service) judgeCandidatesRelevanceOnly(ctx context.Context, qc QueryContext, candidates []candidate) ([]candidate, []Evidence, error) {
@@ -1471,36 +1487,29 @@ func buildRerankJudgeCandidate(candidateID, sourceTitle, center string, semantic
 	}
 }
 
-func (s *Service) judgeRerankBatches(ctx context.Context, qc QueryContext, candidates []rerankJudgeCandidate) (map[string]string, error) {
-	// Resolved once per request (not per batch) since it's the same choice
-	// for every batch of this call — see rerankJudgePromptFile.
-	promptFile := s.rerankJudgePromptFile()
-	subject, intent, audience, constraint := judgeContextDefaults(qc)
-	return s.runRerankJudgeBatches(ctx, candidates, func(ctx context.Context, batch []rerankJudgeCandidate) (map[string]string, error) {
-		return s.judgeExtractedEvidence(ctx, qc, promptFile, subject, intent, audience, constraint, batch)
-	})
-}
-
-// judgeRerankTwoStep implements the side-path split of the combined
-// rerank_judge.md call into two sequential LLM passes (config.Retrieval.
-// RerankTwoStep — 2026-08-08 决策: 先旁路验证效果，确认稳定后再转正替换
-// judgeRerankBatches 的单次调用). Step 1 (rerank_relevance.md) judges only
-// relevance (relevant/irrelevant), applying the same object/scenario hard
-// gate the combined prompt uses, but as its own narrower task. Step 2
-// (rerank_classify.md) then classifies only the candidates Step 1 confirmed
-// relevant into direct/supporting — a task that no longer needs to re-derive
-// object/scenario matching, since Step 1 already guaranteed it. This is
-// meant to remove the failure mode observed with the combined prompt: a
+// judgeRerankTwoStep splits candidate judging into two sequential LLM
+// passes. Step 1 (rerank_relevance.md) judges only relevance (relevant/
+// irrelevant) — the object/scenario hard gate — as its own narrower task.
+// Step 2 (rerank_classify.md) then classifies only the candidates Step 1
+// confirmed relevant into direct/supporting, a task that no longer needs to
+// re-derive object/scenario matching since Step 1 already guaranteed it.
+// This removes a failure mode a single combined judgment was prone to: a
 // well-formed but wrong-object candidate (e.g. a complete price table for
-// the wrong audience) gets judged direct because, mid-reasoning through both
-// relevance and classification at once, its completeness outweighs an
-// object mismatch the model already noticed.
-func (s *Service) judgeRerankTwoStep(ctx context.Context, qc QueryContext, candidates []rerankJudgeCandidate) (map[string]string, error) {
+// the wrong audience) getting judged direct because, mid-reasoning through
+// both relevance and classification at once, its completeness outweighed an
+// object mismatch the model had already noticed (2026-08-08 决策: 旁路验证后
+// 转正，替换原来的单次 rerank_judge.md 调用).
+func (s *Service) judgeRerankTwoStep(ctx context.Context, qc QueryContext, candidates []rerankJudgeCandidate, emit func(phase, status, detail string, dur int64)) (map[string]string, error) {
+	if emit == nil {
+		emit = func(string, string, string, int64) {}
+	}
+	emit("screen", "start", fmt.Sprintf("%d 条候选", len(candidates)), 0)
 	relevanceStart := time.Now()
 	relevant, err := s.judgeRelevanceBatches(ctx, qc, candidates)
 	relevanceMs := time.Since(relevanceStart).Milliseconds()
 	if err != nil {
 		slog.Info("retrieval: rerank two-step relevance timing", "candidates", len(candidates), "duration_ms", relevanceMs, "error", err)
+		emit("screen", "error", err.Error(), relevanceMs)
 		return nil, fmt.Errorf("retrieval: rerank two-step relevance: %w", err)
 	}
 
@@ -1514,15 +1523,18 @@ func (s *Service) judgeRerankTwoStep(ctx context.Context, qc QueryContext, candi
 		}
 	}
 	slog.Info("retrieval: rerank two-step relevance timing", "candidates", len(candidates), "relevant", len(relevantItems), "duration_ms", relevanceMs)
+	emit("screen", "done", fmt.Sprintf("%d 条", len(relevantItems)), relevanceMs)
 	if len(relevantItems) == 0 {
 		return roles, nil
 	}
 
+	emit("rerank", "start", fmt.Sprintf("%d 条", len(relevantItems)), 0)
 	classifyStart := time.Now()
 	classified, err := s.judgeClassifyBatches(ctx, qc, relevantItems)
 	classifyMs := time.Since(classifyStart).Milliseconds()
 	if err != nil {
 		slog.Info("retrieval: rerank two-step classify timing", "candidates", len(relevantItems), "duration_ms", classifyMs, "error", err)
+		emit("rerank", "error", err.Error(), classifyMs)
 		return nil, fmt.Errorf("retrieval: rerank two-step classify: %w", err)
 	}
 	slog.Info("retrieval: rerank two-step classify timing", "candidates", len(relevantItems), "duration_ms", classifyMs)
@@ -1591,11 +1603,10 @@ func judgeContextDefaults(qc QueryContext) (subject, intent, audience, constrain
 }
 
 // runRerankJudgeBatches shares the batch-splitting + bounded-concurrency
-// fan-out used by every rerank judge prompt variant — the combined
-// rerank_judge.md call and the two-step split's rerank_relevance.md /
-// rerank_classify.md side path. callBatch judges one batch and returns
-// per-candidate string values (role, or "relevant"/"irrelevant" for the
-// relevance step); callers interpret them.
+// fan-out used by both rerank_relevance.md and rerank_classify.md.
+// callBatch judges one batch and returns per-candidate string values (role,
+// or "relevant"/"irrelevant" for the relevance step); callers interpret
+// them.
 func (s *Service) runRerankJudgeBatches(ctx context.Context, candidates []rerankJudgeCandidate, callBatch func(ctx context.Context, batch []rerankJudgeCandidate) (map[string]string, error)) (map[string]string, error) {
 	batches := splitRerankJudgeBatches(candidates, s.rerankJudgeBatchMaxChars())
 	if len(batches) == 0 {
@@ -1648,47 +1659,6 @@ launchBatches:
 		return nil, err
 	}
 	return results, nil
-}
-
-func (s *Service) judgeExtractedEvidence(ctx context.Context, qc QueryContext, promptFile, subject, intent, audience, constraint string, candidates []rerankJudgeCandidate) (map[string]string, error) {
-	payload, err := json.Marshal(candidates)
-	if err != nil {
-		return nil, fmt.Errorf("retrieval: rerank judge payload: %w", err)
-	}
-	slog.Debug("retrieval: rerank judge payload", "payload", string(payload))
-	resp, err := s.llmClient.CompleteJSON(ctx, promptFile, map[string]string{
-		"question":   qc.Question,
-		"subject":    subject,
-		"intent":     intent,
-		"audience":   audience,
-		"constraint": constraint,
-		"candidates": string(payload),
-	}, "classification")
-	if err != nil {
-		return nil, fmt.Errorf("retrieval: rerank judge llm: %w", err)
-	}
-
-	var result rerankJudgeResult
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("retrieval: rerank judge parse: %w", err)
-	}
-
-	cidSet := make(map[string]bool, len(candidates))
-	for _, c := range candidates {
-		cidSet[c.CandidateID] = true
-	}
-	roles := make(map[string]string, len(result.Results))
-	for _, r := range result.Results {
-		if !cidSet[r.CandidateID] {
-			return nil, fmt.Errorf("retrieval: rerank judge returned unknown candidate_id: %s", r.CandidateID)
-		}
-		if r.Role != "direct" && r.Role != "supporting" && r.Role != "irrelevant" {
-			return nil, fmt.Errorf("retrieval: rerank judge invalid role: %s", r.Role)
-		}
-		slog.Info("retrieval: rerank judge analysis", "question", qc.Question, "candidate_id", r.CandidateID, "role", r.Role, "analysis", r.Analysis)
-		roles[r.CandidateID] = r.Role
-	}
-	return roles, nil
 }
 
 func (s *Service) judgeRelevanceExtractedEvidence(ctx context.Context, qc QueryContext, subject, intent, audience, constraint string, candidates []rerankJudgeCandidate) (map[string]bool, error) {
@@ -1784,29 +1754,6 @@ func (s *Service) rerankJudgeConcurrency() int {
 	return defaultRerankJudgeConcurrency
 }
 
-// rerankJudgeIncludeAnalysis resolves config.Retrieval.RerankJudgeIncludeAnalysis.
-// nil (key absent from config.yml) means "unset", which keeps the historical
-// behavior (true / include analysis) rather than silently flipping to false —
-// a plain bool couldn't distinguish "absent" from "explicitly false" here.
-func (s *Service) rerankJudgeIncludeAnalysis() bool {
-	if s.cfg == nil || s.cfg.Retrieval.RerankJudgeIncludeAnalysis == nil {
-		return true
-	}
-	return *s.cfg.Retrieval.RerankJudgeIncludeAnalysis
-}
-
-// rerankJudgePromptFile picks between the two rerank_judge prompt variants
-// based on rerankJudgeIncludeAnalysis: rerank_judge_no_analysis.md drops the
-// per-candidate `analysis` explanation (debug-log-only, not decision logic)
-// from both the model's output contract and the local Schema validation, to
-// A/B test whether the extra generated text is a meaningful latency cost.
-func (s *Service) rerankJudgePromptFile() string {
-	if s.rerankJudgeIncludeAnalysis() {
-		return "rerank_judge.md"
-	}
-	return "rerank_judge_no_analysis.md"
-}
-
 func splitRerankJudgeBatches(candidates []rerankJudgeCandidate, maxChars int) [][]rerankJudgeCandidate {
 	if len(candidates) == 0 {
 		return nil
@@ -1857,17 +1804,8 @@ type rerankJudgePoint struct {
 	Type    string `json:"type"`
 }
 
-type rerankJudgeResult struct {
-	Results []struct {
-		CandidateID string `json:"candidate_id"`
-		Role        string `json:"role"`
-		Analysis    string `json:"analysis"`
-	} `json:"results"`
-}
-
-// rerankRelevanceResult / rerankClassifyResult are the two-step split's
-// result shapes (config.Retrieval.RerankTwoStep side path) — see
-// judgeRerankTwoStep.
+// rerankRelevanceResult / rerankClassifyResult are the two-step judge's
+// per-prompt result shapes — see judgeRerankTwoStep.
 type rerankRelevanceResult struct {
 	Results []struct {
 		CandidateID string `json:"candidate_id"`
@@ -1997,19 +1935,10 @@ func (s *Service) judgeKPNExpansion(ctx context.Context, qc QueryContext, candid
 		return candidates, nil, nil
 	}
 
-	// Under the two-step split, only relevance needs checking here — a
-	// KPN neighbor's role is always coerced to "supporting" below regardless
-	// of what a classify call would say, so running one is a wasted round
-	// trip (see judgeCandidatesRelevanceOnly). The combined single-call path
-	// has no such split to skip; it already produces a role in one call.
-	var kept []candidate
-	var filtered []Evidence
-	var err error
-	if s.cfg != nil && s.cfg.Retrieval.RerankTwoStep {
-		kept, filtered, err = s.judgeCandidatesRelevanceOnly(ctx, qc, expanded)
-	} else {
-		kept, filtered, err = s.judgeCandidates(ctx, qc, expanded)
-	}
+	// Only relevance needs checking here — a KPN neighbor's role is always
+	// coerced to "supporting" below regardless of what a classify call would
+	// say, so running one is a wasted round trip.
+	kept, filtered, err := s.judgeCandidatesRelevanceOnly(ctx, qc, expanded)
 	if err != nil {
 		return nil, nil, fmt.Errorf("retrieval: judge kpn expansion: %w", err)
 	}

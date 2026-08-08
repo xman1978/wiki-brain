@@ -85,7 +85,7 @@ func TestRetrieve_FastPath_WithMining(t *testing.T) {
 	// which must now clear the rerank judge (judgeKPNExpansion) before being
 	// trusted as supporting candidates; cover all of them so the coverage
 	// check doesn't treat this as a batch failure.
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "kpn neighbor"}, {"candidate_id": "c2", "role": "supporting", "analysis": "kpn neighbor"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "kpn neighbor"}, {"candidate_id": "c2", "relevant": true, "analysis": "kpn neighbor"}]}`})
 	fake.SetResponse("evidence_mine.md", llm.FakeResponse{
 		Output: `{"results": [
 			{"candidate_id": "c1", "fragments": ["Linear equations ax+b=0"]},

@@ -1355,7 +1355,7 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
         if (evt === 'phase') {
           try {
             var p = JSON.parse(data);
-            if (p.phase === 'activation' || p.phase === 'outline' || p.phase === 'fts' || p.phase === 'rerank' || p.phase === 'evidence') {
+            if (p.phase === 'activation' || p.phase === 'outline' || p.phase === 'fts' || p.phase === 'screen' || p.phase === 'rerank' || p.phase === 'evidence') {
               var stepId = p.phase;
               if (p.status === 'start') {
                 updateProcessStep(stepId, 'active', null, null, p.detail || '');
@@ -1376,7 +1376,10 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
               if (p.status === 'start') {
                 updateProcessStep('verify', 'active', null, null, '');
               } else if (p.status === 'done') {
-                var verifyDetail = p.sufficient ? (p.reason || '证据充分') : ('证据不足：' + (p.reason || ''));
+                var countDetail = (p.direct_count || 0) + ' 直接 · ' + (p.supporting_count || 0) + ' 间接';
+                var verifyDetail = p.sufficient
+                  ? (countDetail + ' · ' + (p.reason || '证据充分'))
+                  : (countDetail + ' · 证据不足：' + (p.reason || ''));
                 updateProcessStep('verify', 'done', null, p.duration_ms, verifyDetail);
               } else if (p.status === 'error') {
                 updateProcessStep('verify', 'done', null, p.duration_ms, '校验出错，按证据充分处理');
@@ -1386,7 +1389,7 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
             } else if (p.phase === 'answer' && p.status === 'no_evidence') {
               // 只补齐尚未完成的阶段（如快路径下没有逐阶段事件），已完成阶段保留
               // 实时流入的真实耗时与结果，不得清零覆盖为"无证据"。
-              ['activation','outline','fts','rerank','evidence','verify'].forEach(function(id) {
+              ['activation','outline','fts','screen','rerank','evidence','verify'].forEach(function(id) {
                 if (!PP_STATE[id] || PP_STATE[id].state !== 'done') updateProcessStep(id, 'done', null, 0, '无证据');
               });
               updateProcessStep('generation', 'done', '生成回答', 0, '无需生成');
@@ -1472,7 +1475,7 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
 // ═══════════════════════════════════════════════════════
 // PROCESS PANEL
 // ═══════════════════════════════════════════════════════
-var PP_STEPS = ['session','activation','outline','fts','rerank','evidence','verify','generation','trace','total'];
+var PP_STEPS = ['session','activation','outline','fts','screen','rerank','evidence','verify','generation','trace','total'];
 var PP_STATE = {};
 
 function initProcessPanel(startTime) {
@@ -1484,6 +1487,7 @@ function initProcessPanel(startTime) {
   PP_STATE.activation.label = '知识点激活';
   PP_STATE.outline.label = '目录结构检索';
   PP_STATE.fts.label = '全文检索';
+  PP_STATE.screen.label = '证据筛选';
   PP_STATE.rerank.label = '证据分类';
   PP_STATE.evidence.label = '证据提取';
   PP_STATE.verify.label = '证据充分性判断';
@@ -2863,7 +2867,7 @@ async function openKuSemantics(unitId) {
       </div>\
       ' + (u.outline_path ? '<div style="color:var(--text-2);margin-bottom:6px">所属目录：' + esc(u.outline_path) + (u.outline_node_type ? ' <span class="badge">' + esc(u.outline_node_type) + '</span>' : '') + '</div>' : '') + '\
       <div style="max-height:180px;overflow:auto;background:var(--bg-2);border:1px solid var(--border-lt);border-radius:4px;padding:8px;white-space:pre-wrap;font-family:monospace;font-size:11px;color:var(--text-2)">' + esc(u.content || '') + '</div>\
-      <div style="color:var(--text-3);margin-top:4px">KU 内容与字段为提取产物，只读；下方 rerank 语义可编辑，检索的证据分类（rerank_judge）依据语义字段与知识点判断。</div>\
+      <div style="color:var(--text-3);margin-top:4px">KU 内容与字段为提取产物，只读；下方 rerank 语义可编辑，检索的相关性筛选与证据分类依据语义字段与知识点判断。</div>\
     </div>\
     ' + (missing ? '<div style="font-size:12px;color:var(--red);margin-bottom:10px">该 KU 无语义记录，被召回将导致检索报错——请补写后保存。</div>' : '') + '\
     ' + fieldRow('内容主题', 'kuSemContentTheme', sem.content_theme)

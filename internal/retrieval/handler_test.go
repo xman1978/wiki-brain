@@ -22,7 +22,10 @@ func TestHandlerRetrieve(t *testing.T) {
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{
 		Output: `{"outline_ids": ["o2"]}`,
 	})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`,
+	})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{
 		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据说明线性方程定义，可直接回答"}]}`,
 	})
 

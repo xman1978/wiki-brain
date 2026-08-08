@@ -333,8 +333,11 @@ func TestRerankPreservesCandidateOrderAndFiltersIrrelevant(t *testing.T) {
 		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50, score: 0.5},
 	}
 
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据说明线性方程定义，可直接回答"}, {"candidate_id": "c2", "role": "irrelevant", "analysis": "证据主题与问题不匹配"}]}`,
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}, {"candidate_id": "c2", "relevant": false, "analysis": "证据主题与问题不匹配"}]}`,
+	})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据说明线性方程定义，可直接回答"}]}`,
 	})
 
 	kept, filtered, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates)
@@ -367,82 +370,12 @@ func TestRerankPreservesCandidateOrderAndFiltersIrrelevant(t *testing.T) {
 	}
 }
 
-// TestRerankJudgeIncludeAnalysisDefaultUsesAnalysisPrompt confirms that
-// leaving RerankJudgeIncludeAnalysis unset (nil) in config keeps calling
-// rerank_judge.md — the pre-existing behavior — rather than silently
-// switching to the no-analysis variant just because the zero value of a
-// plain bool would be false.
-func TestRerankJudgeIncludeAnalysisDefaultUsesAnalysisPrompt(t *testing.T) {
+// TestRerank_RelevanceThenClassify confirms rerank's two-step judge:
+// rerank_relevance.md runs first over all candidates, then rerank_classify.md
+// runs only over the ones judged relevant — the irrelevant one must never
+// reach the classify call at all.
+func TestRerank_RelevanceThenClassify(t *testing.T) {
 	svc, fake, _ := setupTestService(t)
-
-	candidates := []candidate{
-		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25, score: 1.0},
-	}
-
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "matches"}]}`,
-	})
-
-	if _, _, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates); err != nil {
-		t.Fatal(err)
-	}
-
-	calls := fake.Calls()
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 judge call, got %d", len(calls))
-	}
-	if calls[0].PromptFile != "rerank_judge.md" {
-		t.Errorf("expected default prompt rerank_judge.md, got %q", calls[0].PromptFile)
-	}
-}
-
-// TestRerankJudgeIncludeAnalysisFalseUsesNoAnalysisPrompt confirms that
-// setting RerankJudgeIncludeAnalysis=false switches the judge call to
-// rerank_judge_no_analysis.md, and that a response without an `analysis`
-// field (the whole point of the variant) still parses and assigns roles
-// correctly — the field was already unread by decision logic, only logged.
-func TestRerankJudgeIncludeAnalysisFalseUsesNoAnalysisPrompt(t *testing.T) {
-	svc, fake, _ := setupTestService(t)
-	includeAnalysis := false
-	svc.cfg.Retrieval.RerankJudgeIncludeAnalysis = &includeAnalysis
-
-	candidates := []candidate{
-		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25, score: 1.0},
-		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50, score: 0.5},
-	}
-
-	fake.SetResponse("rerank_judge_no_analysis.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "c1", "role": "direct"}, {"candidate_id": "c2", "role": "irrelevant"}]}`,
-	})
-
-	kept, filtered, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(kept) != 1 || kept[0].unitID != "u1" {
-		t.Fatalf("expected only u1 kept as direct, got %+v", kept)
-	}
-	if len(filtered) != 1 || filtered[0].UnitID != "u2" {
-		t.Fatalf("expected u2 filtered as irrelevant, got %+v", filtered)
-	}
-
-	calls := fake.Calls()
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 judge call, got %d", len(calls))
-	}
-	if calls[0].PromptFile != "rerank_judge_no_analysis.md" {
-		t.Errorf("expected rerank_judge_no_analysis.md, got %q", calls[0].PromptFile)
-	}
-}
-
-// TestRerankTwoStep_RelevanceThenClassify covers config.Retrieval.
-// RerankTwoStep's side path (2026-08-08 决策: 先旁路验证): rerank_relevance.md
-// runs first over all candidates, then rerank_classify.md runs only over the
-// ones judged relevant — the irrelevant one must never reach the classify
-// call at all.
-func TestRerankTwoStep_RelevanceThenClassify(t *testing.T) {
-	svc, fake, _ := setupTestService(t)
-	svc.cfg.Retrieval.RerankTwoStep = true
 
 	candidates := []candidate{
 		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25, score: 1.0},
@@ -479,8 +412,6 @@ func TestRerankTwoStep_RelevanceThenClassify(t *testing.T) {
 			if len(payload) != 2 {
 				t.Errorf("expected relevance step to see both candidates, got %d", len(payload))
 			}
-		case "rerank_judge.md":
-			t.Error("combined rerank_judge.md must not be called when RerankTwoStep is enabled")
 		case "rerank_classify.md":
 			sawClassify = true
 			var payload []map[string]any
@@ -497,13 +428,51 @@ func TestRerankTwoStep_RelevanceThenClassify(t *testing.T) {
 	}
 }
 
-// TestRerankTwoStep_AllIrrelevantSkipsClassifyCall confirms Step 2 is never
+// TestRerank_EmitsScreenThenClassifyProgress ensures the process panel
+// can show 证据筛选 / 证据分类 as separate phases with screened count
+// (screen done → rerank start; final rerank done is emitted by
+// rerankAndBuildEvidenceSet after KPN).
+func TestRerank_EmitsScreenThenClassifyProgress(t *testing.T) {
+	svc, fake, _ := setupTestService(t)
+
+	candidates := []candidate{
+		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25, score: 1.0},
+		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50, score: 0.5},
+	}
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}, {"candidate_id": "c2", "relevant": false, "analysis": "wrong object"}]}`,
+	})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "answers fully"}]}`,
+	})
+
+	var events []ProgressEvent
+	emit := func(phase, status, detail string, dur int64) {
+		events = append(events, ProgressEvent{Phase: phase, Status: status, Detail: detail, Duration: dur})
+	}
+	if _, _, err := svc.rerankWithProgress(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates, emit); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) < 3 {
+		t.Fatalf("expected screen start/done + rerank start, got %+v", events)
+	}
+	if events[0].Phase != "screen" || events[0].Status != "start" {
+		t.Fatalf("expected screen start first, got %+v", events[0])
+	}
+	if events[1].Phase != "screen" || events[1].Status != "done" || events[1].Detail != "1 条" {
+		t.Fatalf("expected screen done with screened count, got %+v", events[1])
+	}
+	if events[2].Phase != "rerank" || events[2].Status != "start" || events[2].Detail != "1 条" {
+		t.Fatalf("expected rerank start after screen, got %+v", events[2])
+	}
+}
+
+// TestRerank_AllIrrelevantSkipsClassifyCall confirms Step 2 is never
 // invoked when nothing survives Step 1 — no point paying for a classify call
 // with an empty candidate set, and it also means an empty relevance result
 // can't accidentally produce a spurious classify request.
-func TestRerankTwoStep_AllIrrelevantSkipsClassifyCall(t *testing.T) {
+func TestRerank_AllIrrelevantSkipsClassifyCall(t *testing.T) {
 	svc, fake, _ := setupTestService(t)
-	svc.cfg.Retrieval.RerankTwoStep = true
 
 	candidates := []candidate{
 		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25, score: 1.0},
@@ -537,8 +506,11 @@ func TestRerankUsesPersistedSemanticsAndRunsJudgeBatchesConcurrently(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tracker.Count("rerank_judge.md") != 2 {
-		t.Fatalf("judge calls = %d, want 2", tracker.Count("rerank_judge.md"))
+	if tracker.Count("rerank_relevance.md") != 2 {
+		t.Fatalf("relevance judge calls = %d, want 2", tracker.Count("rerank_relevance.md"))
+	}
+	if tracker.Count("rerank_classify.md") != 2 {
+		t.Fatalf("classify judge calls = %d, want 2", tracker.Count("rerank_classify.md"))
 	}
 	if tracker.MaxConcurrent() < 2 {
 		t.Fatalf("max concurrency = %d, want >= 2", tracker.MaxConcurrent())
@@ -599,11 +571,15 @@ func TestRerankConsumesSemanticsAfterShadowReparentSwap(t *testing.T) {
 	if len(kept) != 1 || kept[0].sourcePaths[0] != "direct" {
 		t.Fatalf("kept candidates = %+v, want one direct result", kept)
 	}
-	if tracker.Count("rerank_judge.md") != 1 {
-		t.Fatalf("judge calls = %d, want 1", tracker.Count("rerank_judge.md"))
+	if tracker.Count("rerank_relevance.md") != 1 {
+		t.Fatalf("relevance judge calls = %d, want 1", tracker.Count("rerank_relevance.md"))
 	}
-	if len(tracker.payloads) != 1 || !strings.Contains(tracker.payloads[0], "Hotel limit is 500") {
-		t.Fatalf("judge payloads = %v, want reparented semantic facts", tracker.payloads)
+	if tracker.Count("rerank_classify.md") != 1 {
+		t.Fatalf("classify judge calls = %d, want 1", tracker.Count("rerank_classify.md"))
+	}
+	payloads := tracker.Payloads()
+	if len(payloads) != 1 || !strings.Contains(payloads[0], "Hotel limit is 500") {
+		t.Fatalf("classify judge payloads = %v, want reparented semantic facts", payloads)
 	}
 }
 
@@ -669,8 +645,9 @@ func TestRerankRejectsMissingSemanticsListsAllUnitIDs(t *testing.T) {
 	_, _, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, reverseCandidates(candidates))
 	assertRerankIntegrityError(t, err,
 		"retrieval: rerank semantics integrity: missing unit_ids: u1, u2")
-	if tracker.Count("rerank_judge.md") != 0 {
-		t.Fatalf("judge calls = %d, want 0", tracker.Count("rerank_judge.md"))
+	if tracker.Count("rerank_relevance.md") != 0 || tracker.Count("rerank_classify.md") != 0 {
+		t.Fatalf("judge calls = relevance:%d classify:%d, want 0/0",
+			tracker.Count("rerank_relevance.md"), tracker.Count("rerank_classify.md"))
 	}
 }
 
@@ -690,8 +667,8 @@ func TestRerankUsesStaleSemanticsWithoutRejecting(t *testing.T) {
 	if _, _, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, reverseCandidates(candidates)); err != nil {
 		t.Fatalf("rerank returned error for stale (not missing) semantics: %v", err)
 	}
-	if tracker.Count("rerank_judge.md") == 0 {
-		t.Fatal("judge calls = 0, want at least 1 — stale semantics should still be judged")
+	if tracker.Count("rerank_relevance.md") == 0 || tracker.Count("rerank_classify.md") == 0 {
+		t.Fatal("judge calls = 0, want at least 1 of each — stale semantics should still be judged")
 	}
 }
 
@@ -751,13 +728,28 @@ func equalInts(left, right []int) bool {
 	return true
 }
 
+// rerankJudgeTrackingLLM fakes both steps of the rerank judge
+// (rerank_relevance.md then rerank_classify.md): every candidate is judged
+// relevant, then direct — mirroring the old single-call "everyone is direct"
+// fake behavior these tests were written against, just split across two
+// prompt files. Per-prompt-file call/batch/payload tracking lets tests
+// assert on either step; most of these tests care about the batching
+// mechanism itself (shared by both steps via runRerankJudgeBatches), so they
+// assert against the classify step, which runs last and (in these fixtures,
+// where nothing is ever judged irrelevant) sees the same candidate set and
+// batch split as the relevance step.
 type rerankJudgeTrackingLLM struct {
 	mu            sync.Mutex
 	calls         map[string]int
 	inFlight      int
 	maxConcurrent int
-	batchSizes    []int
-	payloads      []string
+	batches       []judgeBatchRecord
+}
+
+type judgeBatchRecord struct {
+	promptFile string
+	batchSize  int
+	payload    string
 }
 
 func (f *rerankJudgeTrackingLLM) Complete(_ context.Context, promptFile string, vars map[string]string, model string) (string, error) {
@@ -775,7 +767,7 @@ func (f *rerankJudgeTrackingLLM) CompleteJSON(ctx context.Context, promptFile st
 	}
 	f.calls[promptFile]++
 	f.mu.Unlock()
-	if promptFile != "rerank_judge.md" {
+	if promptFile != "rerank_relevance.md" && promptFile != "rerank_classify.md" {
 		return nil, fmt.Errorf("unexpected prompt: %s", promptFile)
 	}
 
@@ -783,7 +775,7 @@ func (f *rerankJudgeTrackingLLM) CompleteJSON(ctx context.Context, promptFile st
 	if err := json.Unmarshal([]byte(vars["candidates"]), &candidates); err != nil {
 		return nil, fmt.Errorf("decode judge candidates: %w", err)
 	}
-	f.beginJudge(len(candidates), vars["candidates"])
+	f.beginJudge(promptFile, len(candidates), vars["candidates"])
 	defer f.endJudge()
 	select {
 	case <-ctx.Done():
@@ -794,18 +786,20 @@ func (f *rerankJudgeTrackingLLM) CompleteJSON(ctx context.Context, promptFile st
 	for i := range candidates {
 		ids[i] = candidates[i].CandidateID
 	}
-	return []byte(rerankJudgeJSON(ids)), nil
+	if promptFile == "rerank_relevance.md" {
+		return []byte(rerankRelevanceJSON(ids)), nil
+	}
+	return []byte(rerankClassifyJSON(ids)), nil
 }
 
-func (f *rerankJudgeTrackingLLM) beginJudge(batchSize int, payload string) {
+func (f *rerankJudgeTrackingLLM) beginJudge(promptFile string, batchSize int, payload string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inFlight++
 	if f.inFlight > f.maxConcurrent {
 		f.maxConcurrent = f.inFlight
 	}
-	f.batchSizes = append(f.batchSizes, batchSize)
-	f.payloads = append(f.payloads, payload)
+	f.batches = append(f.batches, judgeBatchRecord{promptFile: promptFile, batchSize: batchSize, payload: payload})
 }
 
 func (f *rerankJudgeTrackingLLM) endJudge() {
@@ -826,21 +820,50 @@ func (f *rerankJudgeTrackingLLM) MaxConcurrent() int {
 	return f.maxConcurrent
 }
 
+// BatchSizes/Payloads report the classify step (rerank_classify.md) — see
+// the type doc comment.
 func (f *rerankJudgeTrackingLLM) BatchSizes() []int {
+	return f.batchSizesFor("rerank_classify.md")
+}
+
+func (f *rerankJudgeTrackingLLM) Payloads() []string {
+	return f.payloadsFor("rerank_classify.md")
+}
+
+func (f *rerankJudgeTrackingLLM) batchSizesFor(promptFile string) []int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	got := append([]int(nil), f.batchSizes...)
+	var got []int
+	for _, b := range f.batches {
+		if b.promptFile == promptFile {
+			got = append(got, b.batchSize)
+		}
+	}
 	sort.Slice(got, func(i, j int) bool { return got[i] > got[j] })
 	return got
 }
 
-func (f *rerankJudgeTrackingLLM) Payloads() []string {
+func (f *rerankJudgeTrackingLLM) payloadsFor(promptFile string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]string(nil), f.payloads...)
+	var got []string
+	for _, b := range f.batches {
+		if b.promptFile == promptFile {
+			got = append(got, b.payload)
+		}
+	}
+	return got
 }
 
-func rerankJudgeJSON(ids []string) string {
+func rerankRelevanceJSON(ids []string) string {
+	results := make([]string, 0, len(ids))
+	for _, id := range ids {
+		results = append(results, fmt.Sprintf(`{"candidate_id": %q, "relevant": true, "analysis": "matches"}`, id))
+	}
+	return fmt.Sprintf(`{"results": [%s]}`, strings.Join(results, ","))
+}
+
+func rerankClassifyJSON(ids []string) string {
 	results := make([]string, 0, len(ids))
 	for _, id := range ids {
 		results = append(results, fmt.Sprintf(`{"candidate_id": %q, "role": "direct", "analysis": "matches"}`, id))
@@ -978,7 +1001,10 @@ func TestRetrieveEndToEnd(t *testing.T) {
 		Output: `{"outline_ids": ["o2"]}`,
 	})
 	// Rerank — accept all as direct for simplicity
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`,
+	})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{
 		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据说明线性方程定义，可直接回答"}]}`,
 	})
 
@@ -1051,8 +1077,8 @@ func TestRetrieveEndToEnd_JudgeFilteredGapReason(t *testing.T) {
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{
 		Output: `{"outline_ids": ["o2"]}`,
 	})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "c1", "role": "irrelevant", "analysis": "证据主题与问题不匹配"}]}`,
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "relevant": false, "analysis": "证据主题与问题不匹配"}]}`,
 	})
 
 	es, err := svc.Retrieve(context.Background(), "linear equations")

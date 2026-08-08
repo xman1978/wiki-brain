@@ -48,7 +48,7 @@ func TestRetrieve_FastPath_Hit(t *testing.T) {
 	qTerms := text.Terms(text.Normalize(question))
 	seedVerifiedLink(t, activationSvc, qTerms, "p1")
 
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "kpn neighbor"}, {"candidate_id": "c2", "role": "supporting", "analysis": "kpn neighbor"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "kpn neighbor"}, {"candidate_id": "c2", "relevant": true, "analysis": "kpn neighbor"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -68,13 +68,18 @@ func TestRetrieve_FastPath_Hit(t *testing.T) {
 	}
 }
 
-func TestRetrieve_FastPath_KPNExpansion(t *testing.T) {
+// TestRetrieve_FastPath_KPNExpansion_SkipsClassify confirms
+// judgeKPNExpansion's optimization: a KPN neighbor's role is always coerced
+// to "supporting" regardless of what classify would say, so it should only
+// ever go through rerank_relevance.md — rerank_classify.md must never be
+// called for it.
+func TestRetrieve_FastPath_KPNExpansion_SkipsClassify(t *testing.T) {
 	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
 	question := "什么是线性方程"
 	qTerms := text.Terms(text.Normalize(question))
 	seedVerifiedLink(t, activationSvc, qTerms, "p1")
 
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "kpn neighbor"}, {"candidate_id": "c2", "role": "supporting", "analysis": "kpn neighbor"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "kpn neighbor"}, {"candidate_id": "c2", "relevant": true, "analysis": "kpn neighbor"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -88,36 +93,9 @@ func TestRetrieve_FastPath_KPNExpansion(t *testing.T) {
 	if !supportingUnits["u2"] || !supportingUnits["u3"] {
 		t.Errorf("expected u2 and u3 as KPN supporting evidence, got %+v", es.Supporting)
 	}
-}
-
-// TestRetrieve_FastPath_KPNExpansion_TwoStepSkipsClassify confirms
-// judgeKPNExpansion's optimization under config.Retrieval.RerankTwoStep: a
-// KPN neighbor's role is always coerced to "supporting" regardless of what
-// classify would say, so it should only ever go through rerank_relevance.md
-// — rerank_classify.md must never be called for it.
-func TestRetrieve_FastPath_KPNExpansion_TwoStepSkipsClassify(t *testing.T) {
-	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
-	svc.cfg.Retrieval.RerankTwoStep = true
-	question := "什么是线性方程"
-	qTerms := text.Terms(text.Normalize(question))
-	seedVerifiedLink(t, activationSvc, qTerms, "p1")
-
-	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "kpn neighbor"}, {"candidate_id": "c2", "relevant": true, "analysis": "kpn neighbor"}]}`})
-
-	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	supportingUnits := make(map[string]bool)
-	for _, e := range es.Supporting {
-		supportingUnits[e.UnitID] = true
-	}
-	if !supportingUnits["u2"] || !supportingUnits["u3"] {
-		t.Errorf("expected u2 and u3 as KPN supporting evidence, got %+v", es.Supporting)
-	}
 	for _, c := range fake.Calls() {
-		if c.PromptFile == "rerank_classify.md" || c.PromptFile == "rerank_judge.md" {
-			t.Errorf("KPN expansion under RerankTwoStep must only call rerank_relevance.md, saw %q", c.PromptFile)
+		if c.PromptFile == "rerank_classify.md" {
+			t.Errorf("KPN expansion must only call rerank_relevance.md, saw %q", c.PromptFile)
 		}
 	}
 }
@@ -136,7 +114,8 @@ func TestRetrieve_FastPath_MultipleUnits_FallsBackToSlowPath(t *testing.T) {
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -166,7 +145,7 @@ func TestRetrieve_FastPath_MultipleLinksSameUnit_TakesFastPath(t *testing.T) {
 	seedVerifiedLink(t, activationSvc, qTerms, "p1")
 	seedVerifiedLink(t, activationSvc, qTerms, "p1b")
 
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "kpn neighbor"}, {"candidate_id": "c2", "role": "supporting", "analysis": "kpn neighbor"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "kpn neighbor"}, {"candidate_id": "c2", "relevant": true, "analysis": "kpn neighbor"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -194,7 +173,8 @@ func TestRetrieve_FastPathDisabled_StillRecordsHitsButUsesSlowPath(t *testing.T)
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -218,7 +198,8 @@ func TestRetrieve_ForceFull_SkipsFastPath(t *testing.T) {
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question, ForceFull: true}, nil)
 	if err != nil {
@@ -238,7 +219,8 @@ func TestRetrieve_NoMatch_FallsBackToSlowPathWithEmptyHits(t *testing.T) {
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: "linear equations"}, nil)
 	if err != nil {
@@ -262,7 +244,8 @@ func TestRetrieveSlowPathWithProgress_BypassesFastPath(t *testing.T) {
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
 	es, err := svc.RetrieveSlowPathWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -282,7 +265,7 @@ func TestRetrieve_FastPathVerify_Sufficient_KeepsFastPath(t *testing.T) {
 	seedVerifiedLink(t, activationSvc, qTerms, "p1")
 
 	fake.SetResponse("fast_verify.md", llm.FakeResponse{Output: `{"sufficient": true, "reason": "证据已给出完整定义"}`})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "kpn neighbor"}, {"candidate_id": "c2", "role": "supporting", "analysis": "kpn neighbor"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "kpn neighbor"}, {"candidate_id": "c2", "relevant": true, "analysis": "kpn neighbor"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -305,7 +288,8 @@ func TestRetrieve_FastPathVerify_Insufficient_FallsBackToSlowPath(t *testing.T) 
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -338,7 +322,8 @@ func TestRetrieve_FastPathVerify_MalformedResponse_FallsBackToSlowPath(t *testin
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -397,7 +382,8 @@ func TestRetrieve_CandidateMatch_RecordsHitsButNotFastPath(t *testing.T) {
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "matches"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "matches"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -441,7 +427,7 @@ func TestRetrieve_NormalizeTupleBeforeMatch_RescuesSubjectJitter(t *testing.T) {
 		"audience": "",
 		"constraint": "达梦"
 	}`})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "kpn neighbor"}, {"candidate_id": "c2", "role": "supporting", "analysis": "kpn neighbor"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "kpn neighbor"}, {"candidate_id": "c2", "relevant": true, "analysis": "kpn neighbor"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{
 		Question:       "达梦报语句句柄个数超过上限怎么解决？",
@@ -500,7 +486,8 @@ func TestRetrieve_NormalizeTuple_RejectsHardSetWrongGroup(t *testing.T) {
 	}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "x"}]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "x"}]}`})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "x"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{
 		Question:       "达梦报语句句柄个数超过上限怎么解决？",

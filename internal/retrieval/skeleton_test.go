@@ -20,12 +20,16 @@ func TestSkeletonInjection_FullBypassSkipsDomainAndSourcePrefilter(t *testing.T)
 	svc.cfg.Retrieval.SkeletonInjectionEnabled = true
 	svc.cfg.Retrieval.RerankTopN = 2 // skeleton below will supply exactly 2 points
 
-	// First call judges the two skeleton candidates (c1/c2); the KPN expansion
-	// step then re-judges p1's remaining KPN neighbor (not already among the
-	// skeleton candidates) as its own single-candidate batch (c1).
-	fake.SetResponseSequence("rerank_judge.md", []llm.FakeResponse{
-		{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "ok"}, {"candidate_id": "c2", "role": "supporting", "analysis": "ok"}]}`},
-		{Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "kpn neighbor"}]}`},
+	// Relevance step judges the two skeleton candidates (c1/c2), then the
+	// classify step assigns their roles; the KPN expansion step then
+	// re-judges (relevance-only) p1's remaining KPN neighbor (not already
+	// among the skeleton candidates) as its own single-candidate batch (c1).
+	fake.SetResponseSequence("rerank_relevance.md", []llm.FakeResponse{
+		{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "ok"}, {"candidate_id": "c2", "relevant": true, "analysis": "ok"}]}`},
+		{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "kpn neighbor"}]}`},
+	})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "ok"}, {"candidate_id": "c2", "role": "supporting", "analysis": "ok"}]}`,
 	})
 
 	skeletonMembers := []SkeletonMemberInfo{
@@ -46,12 +50,12 @@ func TestSkeletonInjection_FullBypassSkipsDomainAndSourcePrefilter(t *testing.T)
 
 	sawRerank := false
 	for _, c := range fake.Calls() {
-		if c.PromptFile == "rerank_judge.md" {
+		if c.PromptFile == "rerank_relevance.md" {
 			sawRerank = true
 		}
 	}
 	if !sawRerank {
-		t.Error("expected rerank_judge.md to be called (candidates went straight to Rerank)")
+		t.Error("expected rerank_relevance.md to be called (candidates went straight to Rerank)")
 	}
 
 	if es.SkeletonPageID != "topic-page-1" {
@@ -73,7 +77,10 @@ func TestSkeletonInjection_BelowThresholdKeepsPrefilter(t *testing.T) {
 
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "ok"}]}`,
+	})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{
 		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "ok"}]}`,
 	})
 
@@ -113,7 +120,10 @@ func TestSkeletonInjection_GateOffStillTagsObservability(t *testing.T) {
 
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
-	fake.SetResponse("rerank_judge.md", llm.FakeResponse{
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "ok"}]}`,
+	})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{
 		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "ok"}]}`,
 	})
 

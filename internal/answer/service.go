@@ -336,8 +336,8 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 					`{"phase":"verify","status":"error","duration_ms":%d}`, verifyMs)}
 			} else {
 				outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
-					`{"phase":"verify","status":"done","duration_ms":%d,"sufficient":%v,"reason":%q}`,
-					verifyMs, verifyResult.sufficient, verifyResult.reason)}
+					`{"phase":"verify","status":"done","duration_ms":%d,"sufficient":%v,"reason":%q,"direct_count":%d,"supporting_count":%d}`,
+					verifyMs, verifyResult.sufficient, verifyResult.reason, len(es.DirectEvidence), len(es.Supporting))}
 			}
 		} else {
 			outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: `{"phase":"verify","status":"skipped"}`}

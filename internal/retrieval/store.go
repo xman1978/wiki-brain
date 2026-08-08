@@ -447,8 +447,9 @@ func (s *Store) GetUnitRerankSemantics(unitIDs []string) (map[string]rerank.Sema
 	return semantics, nil
 }
 
-// PointFact is one candidate's knowledge point, as fed to rerank_judge.md in
-// place of the retired unit_rerank_semantics.key_facts (see
+// PointFact is one candidate's knowledge point, as fed to the rerank judge
+// (rerank_relevance.md / rerank_classify.md) in place of the retired
+// unit_rerank_semantics.key_facts (see
 // docs/impl/v1/semantics-curation.md): KP is the same "fact extracted from
 // this KU" data that center/key_facts used to approximate independently, and
 // is already produced at unit-extraction time for every KU, so there is

@@ -152,25 +152,6 @@ type RetrievalConfig struct {
 	// (docs/impl/v1/wiki.md 步骤 4; <=0 defaults to 3, 1 reproduces the
 	// original top-1-only behavior).
 	WikiMaxCandidates int `yaml:"wiki_max_candidates"`
-	// RerankJudgeIncludeAnalysis toggles whether the rerank judge LLM call
-	// is asked to also produce a per-candidate `analysis` explanation
-	// (used only for debug logging, not decision logic — see
-	// internal/retrieval/service.go judgeExtractedEvidence). A *bool
-	// (rather than plain bool) so an absent key in config.yml is
-	// distinguishable from an explicit false: nil means "unset" and keeps
-	// the historical behavior (include analysis), matching how
-	// rerankJudgeIncludeAnalysis() resolves it. Set to false to A/B test
-	// whether dropping the analysis field speeds up rerank latency.
-	RerankJudgeIncludeAnalysis *bool `yaml:"rerank_judge_include_analysis"`
-	// RerankTwoStep gates an experimental split of the single rerank_judge
-	// call (relevance + direct/supporting classification done together) into
-	// two sequential calls: rerank_relevance.md (relevant/irrelevant only,
-	// same object/scenario hard gate) then rerank_classify.md (direct/
-	// supporting, only over candidates already confirmed relevant). Default
-	// false — this is a side path being validated against the combined
-	// prompt before promotion, not yet the default (2026-08-08 决策: 先旁路
-	// 验证效果，确认稳定后再转正，替换 rerank_judge.md 单次调用).
-	RerankTwoStep bool `yaml:"rerank_two_step"`
 	// SkeletonInjectionEnabled gates topic-page skeleton injection into the
 	// slow path (docs/impl/v1/wiki.md 步骤 8「检索接入」, docs/impl/v1/wiki.md
 	// 两层架构扩展): default false — injection stakes recall quality on how
