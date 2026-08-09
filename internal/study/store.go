@@ -651,6 +651,23 @@ func (s *Store) QueryTraceSummary(periodDays int) (*TraceSummary, error) {
 		summary.KPNCitationRate = float64(summary.KPNCitedCount) / float64(summary.CitedCount)
 	}
 
+	// path_type=fast/wiki traces always carry outline_cited_count=cited_rank_sum=0
+	// (recallCitationStats only populates them for path_type=full), so summing
+	// without a path_type filter here keeps this denominator-compatible with
+	// summary.CitedCount above, which is also summed across all path types.
+	err = s.db.QueryRow(`
+		SELECT COALESCE(SUM(outline_cited_count), 0), COALESCE(SUM(cited_rank_sum), 0)
+		FROM traces
+		WHERE created_at >= datetime('now', '-' || ? || ' days')`, periodDays).
+		Scan(&summary.OutlineCitedCount, &summary.CitedRankSum)
+	if err != nil {
+		return nil, fmt.Errorf("study store: outline recall citation stats: %w", err)
+	}
+	if summary.CitedCount > 0 {
+		summary.OutlineCitationRate = float64(summary.OutlineCitedCount) / float64(summary.CitedCount)
+		summary.CitedAvgRank = float64(summary.CitedRankSum) / float64(summary.CitedCount)
+	}
+
 	var fastCount int
 	err = s.db.QueryRow(`
 		SELECT COUNT(*) FROM traces

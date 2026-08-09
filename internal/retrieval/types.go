@@ -72,7 +72,7 @@ type EvidenceSet struct {
 	// resolved_member_page_ids / resolved_outside_count for the
 	// topic_decompose_signal learning event without a wiki-package
 	// dependency.
-	SkeletonPageID string               `json:"skeleton_page_id,omitempty"`
+	SkeletonPageID  string               `json:"skeleton_page_id,omitempty"`
 	SkeletonMembers []SkeletonMemberInfo `json:"-"`
 }
 
@@ -123,6 +123,11 @@ type Evidence struct {
 	// 供 Trace 计算 KPN 引用采纳率（study.md summary.kpn_citation_rate）
 	Mined bool `json:"mined"`
 	// 该证据是否为挖掘出的片段，false=整段回退（证据挖掘未实现前恒为 false，见 docs/impl/v1/evidence.md）
+	// RecallPaths/MergedRank 记录该证据来源候选在召回阶段的信号，供 Trace 统计
+	// outline 召回命中率与平均排名（migration 046），用于判断是否该调整
+	// rrfMerge 排序权重或 rerank_top_n，而不是凭直觉调参。
+	RecallPaths []string `json:"recall_paths,omitempty"`
+	MergedRank  int      `json:"merged_rank"`
 }
 
 const (
@@ -164,13 +169,15 @@ type SourceRef struct {
 }
 
 type candidate struct {
-	candidateID string
-	unitID      string
-	pointID     string
-	sourceID    string
-	lineStart   int
-	lineEnd     int
-	score       float64
-	sourcePaths []string // "outline", "fts"
-	origin      string   // "" (rerank，默认) / OriginKPNExpansion，见 buildEvidence
+	candidateID   string
+	unitID        string
+	pointID       string
+	sourceID      string
+	lineStart     int
+	lineEnd       int
+	score         float64
+	sourcePaths   []string // 角色标记，如 "direct"/"supporting"/"skeleton"；splitKeptFiltered 等阶段会覆盖
+	recallOrigins []string // rrfMerge 产出的真实召回路径，如 "outline"/"fts"；一旦写入后续阶段不再覆盖，供 Evidence.RecallPaths 使用
+	origin        string   // "" (rerank，默认) / OriginKPNExpansion，见 buildEvidence
+	mergedRank    int      // 该候选在 rrfMerge 最终排序里的位置（0-based，topN 截断前）
 }

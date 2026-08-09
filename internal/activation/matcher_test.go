@@ -49,6 +49,54 @@ func TestMatcher_ExactQuadrupleReproduced_ScoresOne(t *testing.T) {
 	}
 }
 
+// TestMatcher_KnownQuestionTermsShortcut_BypassesFourTupleGate reproduces the
+// 2026-08-09 fix: a literal question that previously activated this link
+// (recorded via AppendObservedCondition into known_question_terms) must match
+// again even when this round's session-parser four-tuple extraction jitters
+// to something that would fail MatchConditionGroups on its own — the exact
+// scenario the ActivationLink detail page's fragmented observed_conditions
+// groups (#1/#2/#3 for what's really one question) came from.
+func TestMatcher_KnownQuestionTermsShortcut_BypassesFourTupleGate(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	matcher := NewMatcher(store)
+	svc := NewService(store, matcher)
+	seedKPFull(t, db, "kp1")
+
+	cond := LinkCondition{SubjectTerms: "住宿 费用", IntentTerms: []string{"标准"}}
+	l, err := svc.CreateLink("t1", cond, "kp1", nil)
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	verifyLink(t, svc, l)
+
+	question := "实施万相公文可以拿到多少奖金"
+	qq := text.Terms(text.Normalize(question))
+	// Record this literal question against a four-tuple that will NOT match
+	// the query below — mirrors a slow-path enrichment call whose extracted
+	// intent doesn't match what the next ask extracts.
+	add := NormalizeObservedCondition("住宿 费用", "标准", "", "", qq, time.Now().UTC())
+	if err := svc.AppendObservedCondition(l.LinkID, add, 50); err != nil {
+		t.Fatalf("append observed condition: %v", err)
+	}
+
+	query := session.ExpandedQuery{
+		Subject:          "完全不同的主体",
+		Intent:           "完全不同的意图",
+		ExpandedQuestion: question,
+	}
+	matches, err := matcher.Match(query, MatchConfig{})
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected known-question shortcut to match despite four-tuple mismatch, got %d: %+v", len(matches), matches)
+	}
+	if matches[0].Score != 1.0 {
+		t.Errorf("score = %f, want 1.0", matches[0].Score)
+	}
+}
+
 func TestMatcher_ConstraintMismatch_ExcludedDespiteSubjectIntentMatch(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)

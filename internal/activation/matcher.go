@@ -98,6 +98,19 @@ func (m *Matcher) Match(query session.ExpandedQuery, cfg MatchConfig) ([]LinkMat
 
 	var results []LinkMatch
 	for _, link := range links {
+		// Question-level shortcut: if this exact literal question has
+		// activated this link before (any four-tuple, any observed
+		// condition group — migration 047 known_question_terms), match
+		// directly. Checked before the four-tuple gate so intent/audience/
+		// constraint extraction jitter on a repeat ask of the same question
+		// can never miss a link it previously matched, and never spawns a
+		// redundant observed_conditions group for what's really the same
+		// question (2026-08-09 决策，见对话记录).
+		if qq != "" && containsTermString(link.KnownQuestionTerms, qq) {
+			results = append(results, LinkMatch{Link: link, Score: 1.0})
+			continue
+		}
+
 		conds := link.ObservedConditions
 		if len(conds) == 0 {
 			if HasNonEmptyGate(conds) || hasNonEmpty(link.Audience) || hasNonEmpty(link.ConstraintTerms) {
@@ -128,6 +141,19 @@ func (m *Matcher) Match(query session.ExpandedQuery, cfg MatchConfig) ([]LinkMat
 		results = results[:cfg.MatchTop]
 	}
 	return results, nil
+}
+
+// containsTermString reports whether terms is present in the (small,
+// already-deduped) set. Linear scan is fine — known_question_terms is
+// capped at maxKnownQuestionTerms per link and this only runs per-link
+// per-query, not against the whole corpus.
+func containsTermString(set []string, terms string) bool {
+	for _, s := range set {
+		if s == terms {
+			return true
+		}
+	}
+	return false
 }
 
 // BuildQueryConditionTerms normalizes a raw subject/intent/audience/constraint

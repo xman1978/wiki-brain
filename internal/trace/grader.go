@@ -12,10 +12,12 @@ const (
 )
 
 type gradeResult struct {
-	Quality        string
-	DirectPointIDs []string
-	KPNCitedCount  int
-	CitedCount     int
+	Quality           string
+	DirectPointIDs    []string
+	KPNCitedCount     int
+	CitedCount        int
+	OutlineCitedCount int
+	CitedRankSum      int
 }
 
 func gradeQuality(r *answer.AnswerResult) gradeResult {
@@ -32,21 +34,24 @@ func gradeQuality(r *answer.AnswerResult) gradeResult {
 
 	kpnCited, cited := kpnCitationCounts(r.EvidenceSet, r.Citations)
 	directPointIDs := directCitedPointIDs(r.EvidenceSet, r.Citations)
+	outlineCited, rankSum := recallCitationStats(r.EvidenceSet, r.Citations)
 
 	if len(directPointIDs) > 0 {
 		return gradeResult{
-			Quality:        QualityConfident,
-			DirectPointIDs: directPointIDs,
-			KPNCitedCount:  kpnCited,
-			CitedCount:     cited,
+			Quality:           QualityConfident,
+			DirectPointIDs:    directPointIDs,
+			KPNCitedCount:     kpnCited,
+			CitedCount:        cited,
+			OutlineCitedCount: outlineCited,
+			CitedRankSum:      rankSum,
 		}
 	}
 
 	if len(r.EvidenceSet.Supporting) > 0 {
-		return gradeResult{Quality: QualityPartial, KPNCitedCount: kpnCited, CitedCount: cited}
+		return gradeResult{Quality: QualityPartial, KPNCitedCount: kpnCited, CitedCount: cited, OutlineCitedCount: outlineCited, CitedRankSum: rankSum}
 	}
 
-	return gradeResult{Quality: QualityGap, KPNCitedCount: kpnCited, CitedCount: cited}
+	return gradeResult{Quality: QualityGap, KPNCitedCount: kpnCited, CitedCount: cited, OutlineCitedCount: outlineCited, CitedRankSum: rankSum}
 }
 
 // kpnCitationCounts reports, among the fact_ids Answer actually cited, how many
@@ -79,6 +84,53 @@ func kpnCitationCounts(es *retrieval.EvidenceSet, citations []string) (kpnCited,
 		}
 	}
 	return kpnCited, cited
+}
+
+// recallCitationStats reports, among the fact_ids Answer actually cited on
+// a full-path (rrfMerge-recalled) trace, how many originated from outline
+// (目录结构) recall and the sum of their rank in the RRF-merged list
+// (0-based, pre rerank_top_n truncation). Paired with the existing
+// cited_count column this gives avg rank = cited_rank_sum / cited_count —
+// data to check whether outline recall really does rank truer hits higher
+// than FTS, and whether rerank_top_n can be tightened without losing them
+// (2026-08-09 决策，见 chat). Fast-path evidence bypasses rrfMerge, so its
+// RecallPaths/MergedRank are always zero-value — only path_type=full trace
+// carries meaningful signal here.
+func recallCitationStats(es *retrieval.EvidenceSet, citations []string) (outlineCited, rankSum int) {
+	if es.PathType != retrieval.PathTypeFull {
+		return 0, 0
+	}
+	type recallInfo struct {
+		paths []string
+		rank  int
+	}
+	byFactID := make(map[string]recallInfo, len(es.DirectEvidence)+len(es.Supporting))
+	for _, e := range es.DirectEvidence {
+		byFactID[e.FactID] = recallInfo{paths: e.RecallPaths, rank: e.MergedRank}
+	}
+	for _, e := range es.Supporting {
+		byFactID[e.FactID] = recallInfo{paths: e.RecallPaths, rank: e.MergedRank}
+	}
+
+	seen := make(map[string]bool, len(citations))
+	for _, fid := range citations {
+		if seen[fid] {
+			continue
+		}
+		info, ok := byFactID[fid]
+		if !ok {
+			continue
+		}
+		seen[fid] = true
+		rankSum += info.rank
+		for _, p := range info.paths {
+			if p == "outline" {
+				outlineCited++
+				break
+			}
+		}
+	}
+	return outlineCited, rankSum
 }
 
 func directCitedPointIDs(es *retrieval.EvidenceSet, citations []string) []string {

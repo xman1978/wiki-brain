@@ -88,7 +88,7 @@ func main() {
 		}
 		sources = []source.Source{*s}
 	} else {
-		sources, err = sourceStore.List("completed", "", 1000, 0)
+		sources, err = sourceStore.List("completed", "", "", 1000, 0)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "列出 sources 失败: %v\n", err)
 			os.Exit(1)

@@ -100,6 +100,13 @@ type ActivationLink struct {
 	Audience            []string
 	ConstraintTerms     []string
 	ObservedConditions  []ObservedCondition
+	// KnownQuestionTerms accumulates every literal question's normalized
+	// term set that has ever matched this link (via any observed condition
+	// group), independent of which four-tuple it was extracted as that time.
+	// Match() checks this before requiring four-tuple equality, so the same
+	// literal question always activates the link even when intent/audience/
+	// constraint extraction jitters between asks (migration 047).
+	KnownQuestionTerms  []string
 	Scene               string
 	Goal                string
 	PointID             string

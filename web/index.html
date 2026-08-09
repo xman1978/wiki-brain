@@ -460,8 +460,8 @@
     .study-card { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:24px; margin-bottom:16px; }
     .study-card h2 { font-size:16px; font-weight:700; margin-bottom:18px; }
     .study-summary-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
-    .summary-stat { text-align:center; padding:16px 8px; border-radius:var(--radius-sm); background:var(--bg-alt); }
-    .summary-stat .ss-val { font-size:28px; font-weight:700; }
+    .summary-stat { text-align:center; padding:16px 8px; border-radius:var(--radius-sm); background:var(--bg-alt); container-type:inline-size; }
+    .summary-stat .ss-val { font-size:clamp(14px, 16cqw, 28px); font-weight:700; white-space:nowrap; }
     .summary-stat .ss-label { font-size:12px; color:var(--text-3); margin-top:4px; }
     .summary-stat.confident .ss-val { color:var(--green); }
     .summary-stat.partial   .ss-val { color:var(--yellow); }
@@ -3474,6 +3474,31 @@ async function loadStudyReport() {
   } catch(e) { body.innerHTML = '<div style="color:var(--red);padding:20px">请求失败：' + esc(e.message) + '</div>'; }
 }
 
+// recallSuggestion turns study.summary's outline_citation_rate/cited_avg_rank
+// (traces.outline_cited_count / cited_rank_sum, migration 046) into a plain-
+// language read on whether outline recall is really outranking FTS and
+// whether retrieval.rerank_top_n (default 20) has room to shrink — a data
+// check before hand-tuning those knobs, not an automatic adjustment.
+function recallSuggestion(s) {
+  if (!s.cited_count) return '暂无数据：还没有可统计的引用证据，需要更多真实问答积累后才能给出建议。';
+  var rate = s.outline_citation_rate || 0;
+  var avgRank = s.cited_avg_rank || 0;
+  var msgs = [];
+  if (rate >= 0.6) {
+    msgs.push('目录结果检索命中率较高（' + (rate*100).toFixed(0) + '%），可以考虑在合并排序（rrfMerge）中提高目录召回路径的权重。');
+  } else if (rate <= 0.2) {
+    msgs.push('目录结果检索命中率较低（' + (rate*100).toFixed(0) + '%），目前主要靠全文检索找到有效证据，暂不建议给目录召回加权。');
+  }
+  if (avgRank <= 5) {
+    msgs.push('命中证据平均排第 ' + (avgRank+1).toFixed(1) + ' 名，排名普遍靠前，rerank_top_n（当前默认 20）可能有下调空间，可尝试调小以减少候选数、降低 rerank 判断耗时。');
+  } else if (avgRank >= 12) {
+    msgs.push('命中证据平均排第 ' + (avgRank+1).toFixed(1) + ' 名，排名偏靠后，说明当前 rerank_top_n 阈值仍是必要的，不建议下调，否则可能漏掉有效证据。');
+  } else {
+    msgs.push('命中证据平均排第 ' + (avgRank+1).toFixed(1) + ' 名，处于中间位置，暂无需调整 rerank_top_n。');
+  }
+  return msgs.join(' ');
+}
+
 function renderStudyReport(report, container) {
   S.studyReport = report;
   var s = report.summary || {};
@@ -3502,6 +3527,12 @@ function renderStudyReport(report, container) {
         <div class="summary-stat partial"><div class="ss-val">' + (s.partial_count||0) + '</div><div class="ss-label">部分 ' + rt(s.partial_count,s.total_traces) + '</div></div>\
         <div class="summary-stat gap"><div class="ss-val">' + (s.gap_count||0) + '</div><div class="ss-label">缺口 ' + rt(s.gap_count,s.total_traces) + '</div></div>\
       </div></div>\
+    <div class="study-card"><h2 style="margin:0 0 10px">检索召回质量</h2>\
+      <div class="study-summary-grid">\
+        <div class="summary-stat"><div class="ss-val">' + (s.cited_count ? ((s.outline_citation_rate||0)*100).toFixed(0)+'%' : '-') + '</div><div class="ss-label">目录结果检索命中率</div></div>\
+        <div class="summary-stat"><div class="ss-val">' + (s.cited_count ? '第 ' + ((s.cited_avg_rank||0)+1).toFixed(1) + ' 名' : '-') + '</div><div class="ss-label">TopN 命中范围（平均排名）</div></div>\
+      </div>\
+      <div style="font-size:12px;color:var(--text-2);margin-top:12px;line-height:1.6">' + esc(recallSuggestion(s)) + '</div></div>\
     ' + (lc.length ? '<div class="study-card"><h2>ActivationLink 候选 (' + lc.length + ')</h2><div class="table-wrap"><table>\
       <thead><tr><th>问题主题</th><th>所属概念</th><th>命中</th><th>置信</th><th>纯度</th><th>广度</th><th>短路径</th><th>推荐</th></tr></thead>\
       <tbody>' + lcPage.map(function(c) {
@@ -6543,6 +6574,7 @@ function appendClarifyRecord(msg) {
 }
 
 async function deleteSession(sessionId) {
+  if (!(await showConfirm('确定删除此历史会话？删除后不可恢复。'))) return;
   await api('DELETE', '/sessions/' + sessionId);
   if (S.sessionId === sessionId) {
     S.sessionId = null;

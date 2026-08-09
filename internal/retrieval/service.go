@@ -1241,6 +1241,7 @@ func (s *Service) rrfMerge(lists ...[]candidate) []candidate {
 		sort.Strings(paths)
 		m.candidate.score = m.rrfScore
 		m.candidate.sourcePaths = paths
+		m.candidate.recallOrigins = paths
 		result = append(result, m.candidate)
 	}
 
@@ -1254,6 +1255,9 @@ func (s *Service) rrfMerge(lists ...[]candidate) []candidate {
 		}
 		return result[i].unitID < result[j].unitID
 	})
+	for i := range result {
+		result[i].mergedRank = i
+	}
 
 	topN := s.cfg.Retrieval.RerankTopN
 	if topN <= 0 {
@@ -1612,6 +1616,11 @@ func (s *Service) runRerankJudgeBatches(ctx context.Context, candidates []rerank
 	if len(batches) == 0 {
 		return nil, nil
 	}
+	batchSizes := make([]int, len(batches))
+	for i, b := range batches {
+		batchSizes[i] = len(b)
+	}
+	slog.Info("retrieval: rerank judge batches", "batch_count", len(batches), "batch_sizes", batchSizes, "concurrency", s.rerankJudgeConcurrency())
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -1625,8 +1634,8 @@ func (s *Service) runRerankJudgeBatches(ctx context.Context, candidates []rerank
 	var errOnce sync.Once
 
 launchBatches:
-	for _, batch := range batches {
-		batch := batch
+	for i, batch := range batches {
+		i, batch := i, batch
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
@@ -1636,14 +1645,18 @@ launchBatches:
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
+			batchStart := time.Now()
 			batchResults, err := callBatch(ctx, batch)
+			batchMs := time.Since(batchStart).Milliseconds()
 			if err != nil {
+				slog.Info("retrieval: rerank judge batch timing", "batch_index", i, "batch_size", len(batch), "duration_ms", batchMs, "error", err)
 				errOnce.Do(func() {
 					firstErr = err
 					cancel()
 				})
 				return
 			}
+			slog.Info("retrieval: rerank judge batch timing", "batch_index", i, "batch_size", len(batch), "duration_ms", batchMs)
 			mu.Lock()
 			for cid, v := range batchResults {
 				results[cid] = v
@@ -1754,6 +1767,14 @@ func (s *Service) rerankJudgeConcurrency() int {
 	return defaultRerankJudgeConcurrency
 }
 
+// splitRerankJudgeBatches packs candidates into batches capped at maxChars
+// each, then balances candidates across those batches (LPT: largest items
+// first, each placed into the currently-smallest batch that still fits) so
+// that concurrent batches finish around the same time — the two-step judge's
+// wall-clock cost is set by the slowest batch in a round, so an uneven
+// packing (one near-full batch, one near-empty) wastes the concurrency
+// budget. Candidate order carries no judging semantics (each candidate is
+// judged independently), so reordering across batches is safe.
 func splitRerankJudgeBatches(candidates []rerankJudgeCandidate, maxChars int) [][]rerankJudgeCandidate {
 	if len(candidates) == 0 {
 		return nil
@@ -1762,29 +1783,53 @@ func splitRerankJudgeBatches(candidates []rerankJudgeCandidate, maxChars int) []
 		maxChars = defaultRerankJudgeBatchMaxChars
 	}
 
-	var batches [][]rerankJudgeCandidate
-	var current []rerankJudgeCandidate
-	currentChars := 2 // JSON array brackets.
-	for _, c := range candidates {
+	type sizedCandidate struct {
+		candidate rerankJudgeCandidate
+		chars     int
+	}
+	sized := make([]sizedCandidate, len(candidates))
+	totalChars := 0
+	for i, c := range candidates {
 		itemJSON, _ := json.Marshal(c)
-		itemChars := utf8.RuneCount(itemJSON)
-		separatorChars := 0
-		if len(current) > 0 {
-			separatorChars = 1
-		}
-		if len(current) > 0 && currentChars+separatorChars+itemChars > maxChars {
-			batches = append(batches, current)
-			current = nil
-			currentChars = 2
-			separatorChars = 0
-		}
-		current = append(current, c)
-		currentChars += separatorChars + itemChars
+		n := utf8.RuneCount(itemJSON)
+		sized[i] = sizedCandidate{candidate: c, chars: n}
+		totalChars += n
 	}
-	if len(current) > 0 {
-		batches = append(batches, current)
+	sort.SliceStable(sized, func(i, j int) bool { return sized[i].chars > sized[j].chars })
+
+	numBatches := (totalChars + maxChars - 1) / maxChars
+	if numBatches < 1 {
+		numBatches = 1
 	}
-	return batches
+	batches := make([][]rerankJudgeCandidate, numBatches)
+	batchChars := make([]int, numBatches)
+
+	for _, item := range sized {
+		best := -1
+		for b := 0; b < len(batches); b++ {
+			if len(batches[b]) > 0 && batchChars[b]+item.chars > maxChars {
+				continue
+			}
+			if best == -1 || batchChars[b] < batchChars[best] {
+				best = b
+			}
+		}
+		if best == -1 {
+			batches = append(batches, nil)
+			batchChars = append(batchChars, 0)
+			best = len(batches) - 1
+		}
+		batches[best] = append(batches[best], item.candidate)
+		batchChars[best] += item.chars
+	}
+
+	nonEmpty := make([][]rerankJudgeCandidate, 0, len(batches))
+	for _, b := range batches {
+		if len(b) > 0 {
+			nonEmpty = append(nonEmpty, b)
+		}
+	}
+	return nonEmpty
 }
 
 type rerankJudgeCandidate struct {
@@ -1977,8 +2022,10 @@ func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, inten
 	}
 
 	unitSourceIDs := make(map[string]string, len(direct)+len(supporting))
+	unitRecallInfo := make(map[string]candidate, len(direct)+len(supporting))
 	for _, c := range append(append([]candidate{}, direct...), supporting...) {
 		unitSourceIDs[c.unitID] = c.sourceID
+		unitRecallInfo[c.unitID] = c
 	}
 	unitIDs := make([]string, 0, len(unitSourceIDs))
 	for unitID := range unitSourceIDs {
@@ -2041,6 +2088,7 @@ func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, inten
 		ref := SourceRef{SourceID: item.SourceID, LineStart: item.LineStart, LineEnd: item.LineEnd}
 		refJSON, _ := json.Marshal(ref)
 		semantic := semantics[item.UnitID]
+		recall := unitRecallInfo[item.UnitID]
 		ev := Evidence{
 			FactID:       uuid.New().String(),
 			UnitID:       item.UnitID,
@@ -2055,6 +2103,8 @@ func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, inten
 			Object:       semantic.Object,
 			Scope:        semantic.Scope,
 			Mined:        item.Mined,
+			RecallPaths:  recall.recallOrigins,
+			MergedRank:   recall.mergedRank,
 		}
 		switch item.Role {
 		case evidence.RoleDirect:

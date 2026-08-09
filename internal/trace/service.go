@@ -117,6 +117,8 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 		DirectPointIDs:    directPointIDs,
 		KPNCitedCount:     grade.KPNCitedCount,
 		CitedCount:        grade.CitedCount,
+		OutlineCitedCount: grade.OutlineCitedCount,
+		CitedRankSum:      grade.CitedRankSum,
 		SkeletonPageID:    skeletonPageID,
 	}
 

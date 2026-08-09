@@ -61,7 +61,7 @@ func main() {
 	unitSvc := unit.NewService(unitStore, sourceStore, nil, idxMgr.Units, idxMgr.Points, queue.New(1), cfg)
 	sourceSvc := source.NewService(sourceStore, nil, nil, llm.StaticPurposeModels{}, idxMgr.Outlines, queue.New(1), cfg, baseDir)
 
-	sources, err := sourceStore.List("", "", 100000, 0)
+	sources, err := sourceStore.List("", "", "", 100000, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "列出 source 失败: %v\n", err)
 		os.Exit(1)

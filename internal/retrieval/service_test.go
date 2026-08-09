@@ -1096,3 +1096,56 @@ func TestRetrieveEndToEnd_JudgeFilteredGapReason(t *testing.T) {
 		t.Error("expected filtered_evidence to carry the judge-rejected candidate")
 	}
 }
+
+func TestSplitRerankJudgeBatches_BalancesLoad(t *testing.T) {
+	// Three medium-large candidates plus four small ones, none individually
+	// exceeding maxChars — the old sequential greedy packer would fill one
+	// batch near maxChars (e.g. two big items) and leave the remainder
+	// spread thin, making the concurrent round as slow as the fullest
+	// batch. LPT balancing should spread the big items across batches so
+	// both batches' char totals land close together.
+	var candidates []rerankJudgeCandidate
+	for i := 0; i < 3; i++ {
+		candidates = append(candidates, rerankJudgeCandidate{
+			CandidateID: fmt.Sprintf("big-%d", i),
+			Points:      []rerankJudgePoint{{Content: strings.Repeat("x", 800), Type: "fact"}},
+		})
+	}
+	for i := 0; i < 4; i++ {
+		candidates = append(candidates, rerankJudgeCandidate{
+			CandidateID: fmt.Sprintf("small-%d", i),
+			Points:      []rerankJudgePoint{{Content: "short", Type: "fact"}},
+		})
+	}
+
+	batches := splitRerankJudgeBatches(candidates, 2200)
+	if len(batches) < 2 {
+		t.Fatalf("expected candidates split across multiple batches, got %d", len(batches))
+	}
+
+	seen := make(map[string]bool)
+	charTotals := make([]int, len(batches))
+	for i, b := range batches {
+		for _, c := range b {
+			seen[c.CandidateID] = true
+			itemJSON, _ := json.Marshal(c)
+			charTotals[i] += utf8.RuneCount(itemJSON)
+		}
+	}
+	if len(seen) != len(candidates) {
+		t.Fatalf("expected all %d candidates preserved, got %d", len(candidates), len(seen))
+	}
+
+	minChars, maxCharsSeen := charTotals[0], charTotals[0]
+	for _, c := range charTotals {
+		if c < minChars {
+			minChars = c
+		}
+		if c > maxCharsSeen {
+			maxCharsSeen = c
+		}
+	}
+	if maxCharsSeen-minChars > maxCharsSeen/2 {
+		t.Errorf("batches not balanced: char totals %v (min=%d max=%d)", charTotals, minChars, maxCharsSeen)
+	}
+}

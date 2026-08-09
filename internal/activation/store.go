@@ -20,7 +20,7 @@ func NewStore(db *sql.DB) *Store {
 }
 
 const linkColumns = `link_id, question_terms, subject_terms, intent_terms, audience,
-	constraint_terms, observed_conditions, scene, goal, point_id, status, adopt_count, fail_count,
+	constraint_terms, observed_conditions, known_question_terms, scene, goal, point_id, status, adopt_count, fail_count,
 	last_used_at, created_from, status_changed_at, created_at, updated_at`
 
 // encodeTermSet sorts and JSON-encodes an accumulated condition set
@@ -57,9 +57,9 @@ func decodeTermSet(raw string) ([]string, error) {
 
 func scanLink(row interface{ Scan(...interface{}) error }) (*ActivationLink, error) {
 	var l ActivationLink
-	var intentRaw, audienceRaw, constraintRaw, observedRaw string
+	var intentRaw, audienceRaw, constraintRaw, observedRaw, knownQuestionRaw string
 	err := row.Scan(&l.LinkID, &l.QuestionTerms, &l.SubjectTerms, &intentRaw, &audienceRaw,
-		&constraintRaw, &observedRaw, &l.Scene, &l.Goal, &l.PointID, &l.Status, &l.AdoptCount, &l.FailCount,
+		&constraintRaw, &observedRaw, &knownQuestionRaw, &l.Scene, &l.Goal, &l.PointID, &l.Status, &l.AdoptCount, &l.FailCount,
 		&l.LastUsedAt, &l.CreatedFrom, &l.StatusChangedAt, &l.CreatedAt, &l.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -74,6 +74,9 @@ func scanLink(row interface{ Scan(...interface{}) error }) (*ActivationLink, err
 		return nil, err
 	}
 	if l.ObservedConditions, err = decodeObservedConditions(observedRaw); err != nil {
+		return nil, err
+	}
+	if l.KnownQuestionTerms, err = decodeTermSet(knownQuestionRaw); err != nil {
 		return nil, err
 	}
 	return &l, nil
@@ -214,8 +217,18 @@ func (s *Store) UpdateConditions(linkID string, cond LinkCondition) error {
 	return s.ReplaceObservedConditions(linkID, cond.EffectiveConditions())
 }
 
-// ReplaceObservedConditions writes the full observed_conditions list and
-// projects legacy fields.
+// maxKnownQuestionTerms caps activation_links.known_question_terms — a set
+// of literal question term-strings, unbounded growth risk is real for a
+// heavily-reused link, so cap generously and trim deterministically
+// (alphabetical, since the set carries no per-entry recency) rather than
+// let the column grow forever.
+const maxKnownQuestionTerms = 200
+
+// ReplaceObservedConditions writes the full observed_conditions list,
+// projects legacy fields, and folds each group's QuestionTerms into the
+// link's known_question_terms set (migration 047) — read-merge-write against
+// the current column so this never loses history accumulated by an earlier
+// call, regardless of which caller (enrichment or Study rebuild) is writing.
 func (s *Store) ReplaceObservedConditions(linkID string, conds []ObservedCondition) error {
 	if conds == nil {
 		conds = []ObservedCondition{}
@@ -237,10 +250,41 @@ func (s *Store) ReplaceObservedConditions(linkID string, conds []ObservedConditi
 	if err != nil {
 		return err
 	}
+
+	var knownRaw string
+	if err := s.db.QueryRow(`SELECT known_question_terms FROM activation_links WHERE link_id = ?`, linkID).Scan(&knownRaw); err != nil {
+		return fmt.Errorf("activation store: replace observed conditions: read known question terms: %w", err)
+	}
+	known, err := decodeTermSet(knownRaw)
+	if err != nil {
+		return err
+	}
+	knownSet := make(map[string]struct{}, len(known)+len(conds))
+	for _, q := range known {
+		knownSet[q] = struct{}{}
+	}
+	for _, c := range conds {
+		if c.QuestionTerms != "" {
+			knownSet[c.QuestionTerms] = struct{}{}
+		}
+	}
+	merged := make([]string, 0, len(knownSet))
+	for q := range knownSet {
+		merged = append(merged, q)
+	}
+	sort.Strings(merged)
+	if len(merged) > maxKnownQuestionTerms {
+		merged = merged[:maxKnownQuestionTerms]
+	}
+	knownJSON, err := encodeTermSet(merged)
+	if err != nil {
+		return err
+	}
+
 	_, err = s.db.Exec(`UPDATE activation_links
 		SET subject_terms = ?, intent_terms = ?, audience = ?, constraint_terms = ?,
-		    observed_conditions = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE link_id = ?`, subj, intentJSON, audienceJSON, constraintJSON, observedJSON, linkID)
+		    observed_conditions = ?, known_question_terms = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE link_id = ?`, subj, intentJSON, audienceJSON, constraintJSON, observedJSON, knownJSON, linkID)
 	if err != nil {
 		return fmt.Errorf("activation store: replace observed conditions: %w", err)
 	}
@@ -421,7 +465,7 @@ func (s *Store) listLinksForCurrentKP(statuses ...string) ([]ActivationLink, err
 
 func linkColumnsPrefixed(alias string) string {
 	cols := []string{"link_id", "question_terms", "subject_terms", "intent_terms", "audience",
-		"constraint_terms", "observed_conditions", "scene", "goal", "point_id", "status", "adopt_count", "fail_count",
+		"constraint_terms", "observed_conditions", "known_question_terms", "scene", "goal", "point_id", "status", "adopt_count", "fail_count",
 		"last_used_at", "created_from", "status_changed_at", "created_at", "updated_at"}
 	out := ""
 	for i, c := range cols {
@@ -501,9 +545,9 @@ func (s *Store) ListLinks(f ListLinksFilter) ([]ActivationLinkListRow, error) {
 	var results []ActivationLinkListRow
 	for rows.Next() {
 		var r ActivationLinkListRow
-		var intentRaw, audienceRaw, constraintRaw, observedRaw string
+		var intentRaw, audienceRaw, constraintRaw, observedRaw, knownQuestionRaw string
 		err := rows.Scan(&r.LinkID, &r.QuestionTerms, &r.SubjectTerms, &intentRaw, &audienceRaw,
-			&constraintRaw, &observedRaw, &r.Scene, &r.Goal, &r.PointID, &r.Status, &r.AdoptCount, &r.FailCount,
+			&constraintRaw, &observedRaw, &knownQuestionRaw, &r.Scene, &r.Goal, &r.PointID, &r.Status, &r.AdoptCount, &r.FailCount,
 			&r.LastUsedAt, &r.CreatedFrom, &r.StatusChangedAt, &r.CreatedAt, &r.UpdatedAt,
 			&r.PointSummary, &r.UnitCenter)
 		if err != nil {
@@ -519,6 +563,9 @@ func (s *Store) ListLinks(f ListLinksFilter) ([]ActivationLinkListRow, error) {
 			return nil, err
 		}
 		if r.ObservedConditions, err = decodeObservedConditions(observedRaw); err != nil {
+			return nil, err
+		}
+		if r.KnownQuestionTerms, err = decodeTermSet(knownQuestionRaw); err != nil {
 			return nil, err
 		}
 		results = append(results, r)

@@ -36,11 +36,12 @@ func (s *Store) SaveTrace(t *Trace) error {
 
 	_, err = s.db.Exec(`INSERT INTO traces (trace_id, answer_id, question, question_hash, question_terms,
 		retrieval_quality, path, path_type, activation_link_ids, subject, intent, audience, constraint_text,
-		direct_point_ids, kpn_cited_count, cited_count, has_feedback, feedback_type, feedback_content, skeleton_page_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		direct_point_ids, kpn_cited_count, cited_count, outline_cited_count, cited_rank_sum,
+		has_feedback, feedback_type, feedback_content, skeleton_page_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.TraceID, t.AnswerID, t.Question, t.QuestionHash, t.QuestionTerms,
 		t.RetrievalQuality, t.Path, t.PathType, string(linkIDsJSON), t.Subject, t.Intent, t.Audience, t.ConstraintText,
-		string(pointIDsJSON), t.KPNCitedCount, t.CitedCount, hasFeedback,
+		string(pointIDsJSON), t.KPNCitedCount, t.CitedCount, t.OutlineCitedCount, t.CitedRankSum, hasFeedback,
 		nullString(t.FeedbackType), nullString(t.FeedbackContent), nullString(t.SkeletonPageID),
 	)
 	if err != nil {
@@ -61,12 +62,13 @@ func (s *Store) GetTrace(traceID string) (*Trace, error) {
 	)
 	err := s.db.QueryRow(`SELECT trace_id, answer_id, question, question_hash, question_terms,
 		retrieval_quality, path, path_type, activation_link_ids, subject, intent, audience, constraint_text,
-		direct_point_ids, kpn_cited_count, cited_count, has_feedback, feedback_type, feedback_content,
+		direct_point_ids, kpn_cited_count, cited_count, outline_cited_count, cited_rank_sum,
+		has_feedback, feedback_type, feedback_content,
 		created_at, updated_at, skeleton_page_id
 		FROM traces WHERE trace_id = ?`, traceID).
 		Scan(&t.TraceID, &t.AnswerID, &t.Question, &t.QuestionHash, &t.QuestionTerms,
 			&t.RetrievalQuality, &t.Path, &t.PathType, &linkIDsStr, &t.Subject, &t.Intent, &t.Audience, &t.ConstraintText,
-			&pointIDsStr, &t.KPNCitedCount, &t.CitedCount, &hasFeedbackInt,
+			&pointIDsStr, &t.KPNCitedCount, &t.CitedCount, &t.OutlineCitedCount, &t.CitedRankSum, &hasFeedbackInt,
 			&feedbackType, &feedbackContent, &t.CreatedAt, &t.UpdatedAt, &skeletonPageID)
 	if err == sql.ErrNoRows {
 		return nil, nil

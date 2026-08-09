@@ -214,6 +214,15 @@ type TraceSummary struct {
 	KPNCitationRate        float64 `json:"kpn_citation_rate"`
 	// kpn_citation_rate = kpn_cited_count / cited_count（窗口内 Answer 实际引用的证据中，
 	// 来自 KPN 扩展而非 Rerank 直接产出的比例；cited_count = 0 时为 0，见 unit.md KPN 关系类型收窄的设计决策）
+	OutlineCitedCount   int     `json:"outline_cited_count"`
+	CitedRankSum        int     `json:"cited_rank_sum"`
+	OutlineCitationRate float64 `json:"outline_citation_rate"`
+	CitedAvgRank        float64 `json:"cited_avg_rank"`
+	// outline_citation_rate = outline_cited_count / cited_count（窗口内 Answer 实际引用的证据中，
+	// 来自目录结构召回的比例）；cited_avg_rank = cited_rank_sum / cited_count（被引用证据在
+	// RRF 合并列表中的平均排名，0-based，rerank_top_n 截断前）；两者都是 0 当 cited_count = 0。
+	// 用于判断 outline 召回是否确实比 FTS 排名更靠前、以及 rerank_top_n 是否有下调空间
+	// （2026-08-09 决策，见对话记录，不是凭直觉调参）
 	FastPathRate float64 `json:"fast_path_rate"`
 	// 窗口内 traces.path_type = fast 的占比，验证「学习改变检索行为」的 V1 目标
 }
