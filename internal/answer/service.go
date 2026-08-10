@@ -14,15 +14,6 @@ import (
 	"github.com/jxman78/wiki-brain/internal/retrieval"
 )
 
-var reasoningKeywords = []string{
-	"如果", "假设", "假定", "假如", "若是",
-	"多少", "计算", "算出",
-	"比较", "对比", "哪个更",
-	"为什么", "原因是什么",
-	"经历了哪些", "哪些阶段", "什么流程",
-	"应该怎么", "如何处理",
-}
-
 type Service struct {
 	store     *Store
 	llmClient llm.LLMClient
@@ -77,19 +68,15 @@ func (s *Service) generate(ctx context.Context, es *retrieval.EvidenceSet) *gene
 		return refused
 	}
 
-	path := es.Path
-	if path == "short" && needsReasoning(es.Question) {
-		path = "deep"
-		slog.Info("answer: question complexity upgraded to deep", "question", es.Question)
-	}
-
-	switch path {
+	// es.Path may already have been upgraded to "deep" by
+	// checkSlowPathSufficiency above (needs_deep from fast_verify.md).
+	switch es.Path {
 	case "short":
 		return s.handleGenerate(ctx, es, "short", "answer_short.md", "default")
 	case "deep":
 		return s.handleGenerate(ctx, es, "deep", "answer_deep.md", "reasoning")
 	default:
-		return s.handleGenerate(ctx, es, path, "answer_deep.md", "reasoning")
+		return s.handleGenerate(ctx, es, es.Path, "answer_deep.md", "reasoning")
 	}
 }
 
@@ -107,6 +94,7 @@ func (s *Service) generate(ctx context.Context, es *retrieval.EvidenceSet) *gene
 type verifyOutcome struct {
 	ran        bool
 	sufficient bool
+	needsDeep  bool
 	reason     string
 	durationMs int64
 	err        error
@@ -117,6 +105,11 @@ func (s *Service) refuseIfSlowPathInsufficient(ctx context.Context, es *retrieva
 	return refused
 }
 
+// checkSlowPathSufficiency runs the slow-path sufficiency gate and, when the
+// evidence is sufficient but fast_verify.md judged needs_deep=true, upgrades
+// es.Path to "deep" in place — evidence requiring an intermediate
+// classification/lookup before its stated rule applies is unreliable to
+// answer in a single short pass regardless of question phrasing.
 func (s *Service) checkSlowPathSufficiency(ctx context.Context, es *retrieval.EvidenceSet) (*generated, verifyOutcome) {
 	if es.PathType == retrieval.PathTypeWiki || es.PathType == retrieval.PathTypeFast {
 		return nil, verifyOutcome{}
@@ -125,13 +118,18 @@ func (s *Service) checkSlowPathSufficiency(ctx context.Context, es *retrieval.Ev
 		return nil, verifyOutcome{}
 	}
 	start := time.Now()
-	ok, reason, err := s.retSvc.VerifyEvidenceSufficient(ctx, es.Question, es)
-	outcome := verifyOutcome{ran: true, sufficient: ok, reason: reason, durationMs: time.Since(start).Milliseconds(), err: err}
+	ok, needsDeep, reason, err := s.retSvc.VerifyEvidenceSufficient(ctx, es.Question, es)
+	outcome := verifyOutcome{ran: true, sufficient: ok, needsDeep: needsDeep, reason: reason, durationMs: time.Since(start).Milliseconds(), err: err}
 	if err != nil {
 		slog.Warn("answer: slow path verify error, proceeding with generation", "error", err)
 		return nil, outcome
 	}
 	if ok {
+		if needsDeep && es.Path == "short" {
+			slog.Info("answer: slow path verify judged needs_deep, upgrading to deep",
+				"question", es.Question, "reason", reason)
+			es.Path = "deep"
+		}
 		return nil, outcome
 	}
 	slog.Info("answer: slow path verify judged evidence insufficient, refusing",
@@ -336,8 +334,8 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 					`{"phase":"verify","status":"error","duration_ms":%d}`, verifyMs)}
 			} else {
 				outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
-					`{"phase":"verify","status":"done","duration_ms":%d,"sufficient":%v,"reason":%q,"direct_count":%d,"supporting_count":%d}`,
-					verifyMs, verifyResult.sufficient, verifyResult.reason, len(es.DirectEvidence), len(es.Supporting))}
+					`{"phase":"verify","status":"done","duration_ms":%d,"sufficient":%v,"needs_deep":%v,"reason":%q,"direct_count":%d,"supporting_count":%d}`,
+					verifyMs, verifyResult.sufficient, verifyResult.needsDeep, verifyResult.reason, len(es.DirectEvidence), len(es.Supporting))}
 			}
 		} else {
 			outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: `{"phase":"verify","status":"skipped"}`}
@@ -354,11 +352,9 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 			return
 		}
 
+		// es.Path may already have been upgraded to "deep" by
+		// checkSlowPathSufficiency above (needs_deep from fast_verify.md).
 		path := es.Path
-		if path == "short" && needsReasoning(es.Question) {
-			path = "deep"
-			slog.Debug("answer: stream complexity upgraded to deep", "question", es.Question)
-		}
 
 		promptFile := "answer_short.md"
 		model := "default"
@@ -587,15 +583,6 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
-}
-
-func needsReasoning(question string) bool {
-	for _, kw := range reasoningKeywords {
-		if strings.Contains(question, kw) {
-			return true
-		}
-	}
-	return false
 }
 
 func buildPromptVars(es *retrieval.EvidenceSet) map[string]string {

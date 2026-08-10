@@ -50,7 +50,6 @@ func TestPublishGenerationRejectsInvalidSemanticsBeforeWriting(t *testing.T) {
 		{name: "empty source theme", mutate: func(s *rerank.Semantics) { s.SourceTheme = " " }, want: "source_theme"},
 		{name: "empty content theme", mutate: func(s *rerank.Semantics) { s.ContentTheme = "" }, want: "content_theme"},
 		{name: "empty intent", mutate: func(s *rerank.Semantics) { s.Intent = "" }, want: "intent"},
-		{name: "empty object", mutate: func(s *rerank.Semantics) { s.Object = "" }, want: "object"},
 		{name: "empty scope", mutate: func(s *rerank.Semantics) { s.Scope = "" }, want: "scope"},
 	}
 
@@ -79,6 +78,35 @@ func TestPublishGenerationRejectsInvalidSemanticsBeforeWriting(t *testing.T) {
 				t.Fatalf("rows after rejected publication: units=%d semantics=%d, want 0/0", units, semantics)
 			}
 		})
+	}
+}
+
+// TestPublishGenerationAcceptsEmptyObject covers unit_semantics_extract.md's
+// v14 instruction to leave object blank when the unit's text never states
+// who/what a rule applies to, rather than fabricate a value — unlike the
+// other semantic fields, an empty object must not be rejected.
+func TestPublishGenerationAcceptsEmptyObject(t *testing.T) {
+	store := setupTestStore(t)
+	semantic := rerank.Semantics{
+		UnitID:        "u1",
+		SourceTheme:   "policy",
+		ContentTheme:  "limits",
+		Intent:        "explain",
+		Object:        "",
+		Scope:         "travel",
+		PromptVersion: rerank.ExtractPromptVersion,
+	}
+	pool := []unitCandidate{{
+		id: "u1", llm: llmUnit{Center: "Policy limits"},
+		lineStart: 1, lineEnd: 1, promptVersion: promptVersionSplitExtract,
+	}}
+
+	_, inserted, _, err := store.PublishGeneration("src-1", pool, map[string]rerank.Semantics{"u1": semantic})
+	if err != nil {
+		t.Fatalf("PublishGeneration: %v", err)
+	}
+	if len(inserted) != 1 || inserted[0].UnitID != "u1" {
+		t.Fatalf("inserted = %+v, want only u1", inserted)
 	}
 }
 

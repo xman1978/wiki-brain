@@ -246,6 +246,9 @@ func validateSemantic(unitID string, semantic rerank.Semantics) error {
 		return fmt.Errorf("semantic prompt_version for unit %s = %q, want %q",
 			unitID, semantic.PromptVersion, rerank.ExtractPromptVersion)
 	}
+	// object is allowed to be empty (unit_semantics_extract.md v14): when the
+	// unit's text never states who a rule applies to, the model is instructed
+	// to leave it blank rather than fabricate a value or repeat content_theme.
 	for _, field := range []struct {
 		name  string
 		value string
@@ -253,7 +256,6 @@ func validateSemantic(unitID string, semantic rerank.Semantics) error {
 		{name: "source_theme", value: semantic.SourceTheme},
 		{name: "content_theme", value: semantic.ContentTheme},
 		{name: "intent", value: semantic.Intent},
-		{name: "object", value: semantic.Object},
 		{name: "scope", value: semantic.Scope},
 	} {
 		if strings.TrimSpace(field.value) == "" {
@@ -1228,6 +1230,36 @@ func (s *Store) GetRerankSemanticsByUnitID(unitID string) (*RerankSemanticsRow, 
 	}
 	row.ManuallyEdited = manuallyEdited != 0
 	return row, nil
+}
+
+// UpsertRerankSemanticsFromExtraction overwrites a unit's semantics row with
+// a fresh LLM extraction (unlike UpsertManualRerankSemantics, this always
+// stamps the given promptVersion and never sets manually_edited). The
+// `WHERE manually_edited = 0` guard on the conflict clause makes this a
+// no-op for rows a human has since hand-corrected, so a backfill re-run
+// (e.g. after a semantics-extraction prompt change) can be pointed at every
+// current unit without needing the caller to pre-filter manually_edited
+// units itself — though Service.RegenerateRerankSemantics does that anyway,
+// to avoid paying for an extraction call whose result would be discarded.
+func (s *Store) UpsertRerankSemanticsFromExtraction(unitID string, sem rerank.Semantics, promptVersion string) error {
+	_, err := s.db.Exec(`INSERT INTO unit_rerank_semantics
+		(unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(unit_id) DO UPDATE SET
+			source_theme = excluded.source_theme,
+			content_theme = excluded.content_theme,
+			intent = excluded.intent,
+			object = excluded.object,
+			scope = excluded.scope,
+			prompt_version = excluded.prompt_version,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE manually_edited = 0`,
+		unitID, sem.SourceTheme, sem.ContentTheme, sem.Intent,
+		sem.Object, sem.Scope, promptVersion)
+	if err != nil {
+		return fmt.Errorf("unit store: upsert rerank semantics from extraction: %w", err)
+	}
+	return nil
 }
 
 // UpsertManualRerankSemantics writes a human-curated semantics row

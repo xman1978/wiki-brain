@@ -381,7 +381,7 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 	}
 
 	if s.cfg.Retrieval.FastPathVerify {
-		sufficient, _, err := s.VerifyEvidenceSufficient(ctx, workQC.Question, es)
+		sufficient, needsDeep, _, err := s.VerifyEvidenceSufficient(ctx, workQC.Question, es)
 		if err != nil {
 			slog.Warn("retrieval: fast path verify failed, falling back to slow path", "error", err)
 			return nil, activationHits, false
@@ -389,6 +389,16 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 		if !sufficient {
 			slog.Info("retrieval: fast path verify judged evidence insufficient, falling back to slow path", "link_ids", linkIDs)
 			return nil, activationHits, false
+		}
+		if needsDeep {
+			// Question complexity doesn't depend on which retrieval path
+			// found the evidence — fast path only means "found cheaply via
+			// activation links", not "answer with a single shallow pass".
+			// Keep the fast-path evidence and just answer it with the deep
+			// prompt instead of discarding a good activation hit and paying
+			// for a full slow-path re-retrieval.
+			es.Path = "deep"
+			slog.Info("retrieval: fast path verify judged needs_deep, answering deep on fast-path evidence", "link_ids", linkIDs)
 		}
 	}
 
@@ -413,7 +423,12 @@ func (s *Service) SlowPathVerifyEnabled() bool {
 // sufficient=false) is reported to the caller — fast path treats that as
 // failure and falls back; slow path refuses on sufficient=false and
 // proceeds on call/parse errors.
-func (s *Service) VerifyEvidenceSufficient(ctx context.Context, question string, es *EvidenceSet) (bool, string, error) {
+//
+// The same call also returns needsDeep: sufficient=true evidence can still
+// require resolving an intermediate fact from the evidence (a
+// classification/lookup) before the stated rule applies correctly — see
+// fast_verify.md 第三步. needsDeep is only meaningful when sufficient=true.
+func (s *Service) VerifyEvidenceSufficient(ctx context.Context, question string, es *EvidenceSet) (sufficient bool, needsDeep bool, reason string, err error) {
 	// Object/scope/theme are included alongside content (not just
 	// SourceTitle+Content) so this independently-framed second pass can
 	// cross-check the direct evidence's stated object/scenario against the
@@ -440,20 +455,24 @@ func (s *Service) VerifyEvidenceSufficient(ctx context.Context, question string,
 		"has_direct": fmt.Sprintf("%v", len(es.DirectEvidence) > 0),
 	}, "classification")
 	if err != nil {
-		return false, "", fmt.Errorf("retrieval: evidence verify call: %w", err)
+		return false, false, "", fmt.Errorf("retrieval: evidence verify call: %w", err)
 	}
 
 	var result struct {
 		Sufficient bool   `json:"sufficient"`
+		NeedsDeep  bool   `json:"needs_deep"`
 		Reason     string `json:"reason"`
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
-		return false, "", fmt.Errorf("retrieval: parse evidence verify response: %w", err)
+		return false, false, "", fmt.Errorf("retrieval: parse evidence verify response: %w", err)
 	}
 	if !result.Sufficient {
 		slog.Info("retrieval: evidence verify judged insufficient", "reason", result.Reason)
+		result.NeedsDeep = false
+	} else if result.NeedsDeep {
+		slog.Info("retrieval: evidence verify judged needs_deep", "reason", result.Reason)
 	}
-	return result.Sufficient, result.Reason, nil
+	return result.Sufficient, result.NeedsDeep, result.Reason, nil
 }
 
 func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progress ProgressFunc) (*EvidenceSet, error) {
@@ -1680,7 +1699,11 @@ func (s *Service) judgeRelevanceExtractedEvidence(ctx context.Context, qc QueryC
 		return nil, fmt.Errorf("retrieval: rerank relevance payload: %w", err)
 	}
 	slog.Debug("retrieval: rerank relevance payload", "payload", string(payload))
-	resp, err := s.llmClient.CompleteJSON(ctx, "rerank_relevance.md", map[string]string{
+	promptFile := "rerank_relevance.md"
+	if s.cfg != nil && s.cfg.Retrieval.RerankRelevanceConcise {
+		promptFile = "rerank_relevance_concise.md"
+	}
+	resp, err := s.llmClient.CompleteJSON(ctx, promptFile, map[string]string{
 		"question":   qc.Question,
 		"subject":    subject,
 		"intent":     intent,

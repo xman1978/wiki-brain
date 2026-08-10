@@ -1,5 +1,5 @@
 ---
-version: v5
+version: v1
 ---
 
 ## System
@@ -28,8 +28,8 @@ version: v5
 - 证据越具体详实（如给出清晰的数字或表格），越不能因为"像标准答案"就放松对象核对，先看对象再看内容详实程度。
 - 对象/场景不同即使词面相近也判 irrelevant；归属主体不同即使同类也判 irrelevant。
 
-必须严格输出以下 json 结构：
-{"results":[{"candidate_id":"c1","relevant":true,"analysis":"简要说明判断依据"}]}
+直接输出判断结果，不需要输出理由或分析过程。必须严格输出以下 json 结构：
+{"results":[{"candidate_id":"c1","relevant":true}]}
 
 输出要求：
 
@@ -39,8 +39,7 @@ version: v5
 - 每个输入 candidate_id 必须在 results 中出现一次；
 - candidate_id 必须原样复制；
 - relevant 只能是布尔值；
-- analysis 必须用一句话说明：问题的对象/场景/归属与证据的对象/场景/归属是否实际匹配，以及为什么得到该判断；不得只说明关键词相关；
-- 不得输出 results 以外的顶层字段；
+- 不得输出 results 以外的顶层字段，不得输出 analysis 或任何理由说明字段；
 - 不得遗漏任何候选证据。
 
 ## User
@@ -65,11 +64,10 @@ version: v5
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["candidate_id", "relevant", "analysis"],
+        "required": ["candidate_id", "relevant"],
         "properties": {
           "candidate_id": { "type": "string" },
-          "relevant": { "type": "boolean" },
-          "analysis": { "type": "string" }
+          "relevant": { "type": "boolean" }
         }
       }
     }

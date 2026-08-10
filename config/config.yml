@@ -101,6 +101,7 @@ retrieval:
   wiki_min_score:         2.0    # Wiki 直答的 Bleve 最低分（Wiki 模块未实现前不生效）
   wiki_max_candidates:    3      # 直答候选序列长度上限（词法+概念入口合并去重后依次尝试，首个 sufficient=true 即停；设 1 退化为原 top-1 行为）
   skeleton_injection_enabled: false  # 主题页骨架注入灰度开关，默认关闭，观测 resolved_outside_count 后再打开
+  rerank_relevance_concise: false    # true 时证据过滤阶段用 rerank_relevance_concise.md（不输出 analysis，响应更短，但排查判断依据不便）
 
 # Evidence 模块
 evidence:

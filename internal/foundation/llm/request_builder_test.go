@@ -20,9 +20,24 @@ func TestMarshalChatRequest_DashScopeThinking(t *testing.T) {
 	}
 }
 
-func TestMarshalChatRequest_ThinkingOffOmits(t *testing.T) {
+func TestMarshalChatRequest_DashScopeThinkingOff(t *testing.T) {
 	mc := ModelParams{Model: "qwen", EnableThink: false}
 	body, err := marshalChatRequest(PlatformDashScope, mc, []chatMessage{{Role: "user", Content: "hi"}}, false, false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["enable_thinking"] != false {
+		t.Fatalf("expected enable_thinking false, got %v", m["enable_thinking"])
+	}
+}
+
+func TestMarshalChatRequest_ThinkingOffOmits(t *testing.T) {
+	mc := ModelParams{Model: "m", EnableThink: false}
+	body, err := marshalChatRequest(PlatformOpenAICompatible, mc, []chatMessage{{Role: "user", Content: "hi"}}, false, false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

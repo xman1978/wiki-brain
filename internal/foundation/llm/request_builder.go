@@ -11,11 +11,15 @@ import (
 //
 // DeepSeek / Doubao default thinking on; enable_think=false must send
 // thinking.type=disabled rather than omitting the field.
+// DashScope (Qwen hybrid) likewise defaults thinking on for many models;
+// enable_think=false must send enable_thinking=false rather than omitting.
 func applyPlatformThinking(platform Platform, enableThink bool, reqBody map[string]any) {
 	if !enableThink {
 		switch platform {
 		case PlatformDoubao, PlatformDeepSeek:
 			reqBody["thinking"] = map[string]any{"type": "disabled"}
+		case PlatformDashScope:
+			reqBody["enable_thinking"] = false
 		}
 		return
 	}

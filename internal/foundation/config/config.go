@@ -159,6 +159,11 @@ type RetrievalConfig struct {
 	// boundary silently degrades recall instead of failing loud. Turn on
 	// after observing resolved_outside_count (docs/impl/v1/study.md 步骤 7).
 	SkeletonInjectionEnabled bool `yaml:"skeleton_injection_enabled"`
+	// RerankRelevanceConcise 控制证据过滤阶段（rerank_relevance）要不要求模型
+	// 输出 analysis 分析字段。false（默认，含零值）用 rerank_relevance.md，
+	// 输出结果附一句话依据，便于调试排查；true 用 rerank_relevance_concise.md，
+	// 只输出 candidate_id/relevant，省去分析文本以缩短响应耗时。
+	RerankRelevanceConcise bool `yaml:"rerank_relevance_concise"`
 }
 
 // EvidenceConfig — docs/impl/v1/evidence.md 配置项.

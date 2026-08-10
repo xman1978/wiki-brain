@@ -246,58 +246,6 @@ func TestAnswer_ForceDeep(t *testing.T) {
 	}
 }
 
-func TestAnswer_ComplexityUpgrade(t *testing.T) {
-	svc, fake, _ := setupTestService(t)
-
-	fake.SetResponse("answer_deep.md", llm.FakeResponse{
-		Output: `{"content":"推理结果","citations":["f1"]}`,
-	})
-
-	es := &retrieval.EvidenceSet{
-		Question: "如果成本超支20%，考核结果是什么？",
-		Path:     "short",
-		DirectEvidence: []retrieval.Evidence{
-			{FactID: "f1", Content: "考核规则", UnitID: "u1", PointID: "p1", SourceRef: json.RawMessage(`{}`)},
-		},
-		Supporting: []retrieval.Evidence{},
-	}
-
-	result := svc.Answer(context.Background(), es)
-
-	if result.Path != "deep" {
-		t.Errorf("reasoning question should be upgraded to deep, got %s", result.Path)
-	}
-
-	calls := fake.Calls()
-	if len(calls) != 1 || calls[0].PromptFile != "answer_deep.md" {
-		t.Errorf("should use answer_deep.md, got calls: %v", calls)
-	}
-	if calls[0].Model != "reasoning" {
-		t.Errorf("deep path should use reasoning model, got %s", calls[0].Model)
-	}
-}
-
-func TestAnswer_NeedsReasoning(t *testing.T) {
-	cases := []struct {
-		question string
-		expect   bool
-	}{
-		{"什么是绩效管理？", false},
-		{"培训积分由哪几部分组成？", false},
-		{"如果成本超支20%，结果是什么？", true},
-		{"住宿费最高能报销多少？", true},
-		{"经历了哪些阶段？", true},
-		{"为什么要做绩效考核？", true},
-		{"第一问？第二问？第三问？", false},
-	}
-	for _, tc := range cases {
-		got := needsReasoning(tc.question)
-		if got != tc.expect {
-			t.Errorf("needsReasoning(%q) = %v, want %v", tc.question, got, tc.expect)
-		}
-	}
-}
-
 func TestAnswer_StreamCollectsContent(t *testing.T) {
 	svc, fake, store := setupTestService(t)
 
