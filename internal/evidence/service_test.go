@@ -324,16 +324,51 @@ func TestMine_TableDataRowFragment_WidensToWholeTable(t *testing.T) {
 		t.Fatalf("expected 1 widened fragment, got %d: %+v", len(out), out)
 	}
 	frag := out[0]
-	wantContent := "| 分类 | A 类城市 | B 类城市 | C 类城市 | D 类城市 |\n" +
+	wantContent := "住宿限额标准如下：\n" +
+		"| 分类 | A 类城市 | B 类城市 | C 类城市 | D 类城市 |\n" +
 		"| --- | --- | --- | --- | --- |\n" +
 		"| 全体员工 | 350元 | 280元 | 220元 | 200元 |"
 	if frag.Content != wantContent {
-		t.Errorf("content = %q, want header+separator+data row all included:\n%q", frag.Content, wantContent)
+		t.Errorf("content = %q, want lead-in sentence + header+separator+data row all included:\n%q", frag.Content, wantContent)
 	}
-	// content line 1 is non-table ("住宿限额标准如下："), so the table (and
-	// thus the widened fragment) starts at relative line 2 -> absolute 68.
-	if frag.LineStart != 68 || frag.LineEnd != 70 {
-		t.Errorf("line_start/line_end = %d/%d, want 68/70 (widened to the whole table, not the trailing prose line)", frag.LineStart, frag.LineEnd)
+	// the table's own lead-in sentence ("住宿限额标准如下：") is now attached
+	// too, so the widened fragment starts at relative line 1 -> absolute 67.
+	if frag.LineStart != 67 || frag.LineEnd != 70 {
+		t.Errorf("line_start/line_end = %d/%d, want 67/70 (widened to lead-in + whole table, not the trailing prose line)", frag.LineStart, frag.LineEnd)
+	}
+}
+
+func TestMine_LeadInSentenceOnly_AttachesFollowingTable(t *testing.T) {
+	fake := llm.NewFakeClient()
+	svc := NewService(fake, testConfig())
+
+	content := "一级考评者只对员工绩效进行评分，不做排序和定级。\n" +
+		"员工绩效考核结果划分为 S、A、B、C、D 五个等级：\n" +
+		"| 等级 | 对应分数 | 比例 |\n" +
+		"| --- | --- | --- |\n" +
+		"| S | 95-100 | 0-5% |\n" +
+		"| A | 90-95 | 10%-15% |\n" +
+		"原则上，绩效等级结果应遵循正态分布规律。"
+	fake.SetResponse("evidence_mine.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "fragments": ["员工绩效考核结果划分为 S、A、B、C、D 五个等级："]}]}`,
+	})
+
+	in := []EvidenceItem{
+		{UnitID: "u1", PointID: "p1", SourceID: "s1", LineStart: 111, LineEnd: 117, Content: content, Role: RoleDirect},
+	}
+	out := svc.Mine(context.Background(), "绩效考核分几个等级、S 级比例多少", "绩效考核", "查询考核等级与比例", in, false)
+
+	if len(out) != 1 {
+		t.Fatalf("expected 1 widened fragment, got %d: %+v", len(out), out)
+	}
+	frag := out[0]
+	wantContent := "员工绩效考核结果划分为 S、A、B、C、D 五个等级：\n" +
+		"| 等级 | 对应分数 | 比例 |\n" +
+		"| --- | --- | --- |\n" +
+		"| S | 95-100 | 0-5% |\n" +
+		"| A | 90-95 | 10%-15% |"
+	if frag.Content != wantContent {
+		t.Errorf("content = %q, want lead-in sentence + whole following table:\n%q", frag.Content, wantContent)
 	}
 }
 
@@ -396,7 +431,8 @@ func TestMine_PartialSQL_WidensToCommandBlock(t *testing.T) {
 	if len(out) != 1 {
 		t.Fatalf("expected 1 widened fragment, got %d: %+v", len(out), out)
 	}
-	want := "$ su - oracle\n" +
+	want := "虚拟化环境下 VKTM 占用过高。\n" +
+		"$ su - oracle\n" +
 		"$ sqlplus / as sysdba\n" +
 		"SQL> alter system set \"_high_priority_processes\"='LMS*' scope=spfile;"
 	if out[0].Content != want {
@@ -426,8 +462,10 @@ func TestMine_PartialChmod_WidensToCommandBlock(t *testing.T) {
 	if len(out) != 1 {
 		t.Fatalf("got %d items: %+v", len(out), out)
 	}
-	if out[0].Content != "chmod u+s /u01/app/oracle/product/11.2.0/db/bin/oracle" {
-		t.Errorf("single command line should stay as-is, got %q", out[0].Content)
+	want := "原因是 oracle 可执行文件缺少粘连位。\n" +
+		"chmod u+s /u01/app/oracle/product/11.2.0/db/bin/oracle"
+	if out[0].Content != want {
+		t.Errorf("content = %q, want preceding sentence + command:\n%q", out[0].Content, want)
 	}
 }
 
@@ -452,9 +490,44 @@ func TestMine_PartialFencedCode_WidensToWholeFence(t *testing.T) {
 	if len(out) != 1 {
 		t.Fatalf("got %d: %+v", len(out), out)
 	}
-	want := "```\nBUFFER=10000\nMAX_BUFFER=10000\n```"
+	want := "示例配置：\n```\nBUFFER=10000\nMAX_BUFFER=10000\n```"
 	if out[0].Content != want {
 		t.Errorf("got %q want %q", out[0].Content, want)
+	}
+}
+
+// TestMine_ConfigBlockOnly_AttachesPrecedingGuideSentence is the regression
+// test for the "Oracle RAC 两个实例必须保持一致的参数有哪些" bug: mining
+// picked only the bare parameter assignments, leaving out the guiding
+// sentence above them that says what the block actually means ("必须保持
+// 一致的参数"), so the answer step couldn't tell the config dump answered
+// the question at all.
+func TestMine_ConfigBlockOnly_AttachesPrecedingGuideSentence(t *testing.T) {
+	fake := llm.NewFakeClient()
+	svc := NewService(fake, testConfig())
+
+	content := "3. oracle RAC 实例必须保持一致的参数\n" +
+		"cluster_database_instances=2\n" +
+		"cluster_database=true\n" +
+		"compatible='11.2.0.4.0'"
+	fake.SetResponse("evidence_mine.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "fragments": ["cluster_database_instances=2\ncluster_database=true\ncompatible='11.2.0.4.0'"]}]}`,
+	})
+
+	in := []EvidenceItem{
+		{UnitID: "u1", PointID: "p1", SourceID: "s1", LineStart: 42, LineEnd: 45, Content: content, Role: RoleDirect},
+	}
+	out := svc.Mine(context.Background(), "Oracle RAC 两个实例必须保持一致的参数有哪些", "Oracle RAC", "查询一致性参数", in, false)
+
+	if len(out) != 1 {
+		t.Fatalf("expected 1 widened fragment, got %d: %+v", len(out), out)
+	}
+	want := "3. oracle RAC 实例必须保持一致的参数\n" +
+		"cluster_database_instances=2\n" +
+		"cluster_database=true\n" +
+		"compatible='11.2.0.4.0'"
+	if out[0].Content != want {
+		t.Errorf("content = %q, want guide sentence + config block:\n%q", out[0].Content, want)
 	}
 }
 

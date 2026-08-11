@@ -39,7 +39,7 @@ func BuildSegments(outlines []source.Outline, markdownLines []string, segmentMax
 	// 文档开头在第一个标题之前的正文）——否则这段内容在 Unit 提取阶段永远不会
 	// 被看到，也不会出现在 SourceCoverageReport 的缺口里（2026-07-16 QA 排查，
 	// 见 docs/impl/mvp/unit.md 覆盖率相关讨论）。
-	candidates = append(candidates, uncoveredSegments(leaves, markdownLines)...)
+	candidates = append(candidates, uncoveredSegments(leaves, outlines, markdownLines)...)
 
 	rawSegments := make([]Segment, 0, len(candidates))
 	for _, seg := range candidates {
@@ -69,7 +69,16 @@ func BuildSegments(outlines []source.Outline, markdownLines []string, segmentMax
 // parent's own range uncovered by any leaf; or plain text before the first
 // detected heading, which never becomes part of any outline node at all.
 // Without this, such ranges silently never reach Unit extraction.
-func uncoveredSegments(leaves []source.Outline, markdownLines []string) []Segment {
+//
+// The gap segment's OutlineID is resolved to the deepest outline node that
+// fully covers the gap (matchOutlineByLineRange), not left null — a null
+// outline_id makes the resulting KU invisible to outline-structure recall.
+// This is a fallback, not a substitute for closing gaps at generation time
+// (see repairSections in internal/source/semantic.go): it only gets a KU
+// attached to whichever ancestor spans the gap, not the precise leaf a
+// tighter-generated outline would have given it (2026-08-11 排查,
+// docs/impl/v1/retrieval.md).
+func uncoveredSegments(leaves []source.Outline, outlines []source.Outline, markdownLines []string) []Segment {
 	leafRanges := make([]lineRange, len(leaves))
 	for i, leaf := range leaves {
 		leafRanges[i] = lineRange{start: leaf.LineStart, end: leaf.LineEnd}
@@ -87,7 +96,12 @@ func uncoveredSegments(leaves []source.Outline, markdownLines []string) []Segmen
 		if !hasContent {
 			continue
 		}
-		segs = append(segs, Segment{Title: "未识别标题内容", LineStart: gap.start, LineEnd: gap.end})
+		segs = append(segs, Segment{
+			OutlineID: matchOutlineByLineRange(outlines, gap.start, gap.end),
+			Title:     "未识别标题内容",
+			LineStart: gap.start,
+			LineEnd:   gap.end,
+		})
 	}
 	return segs
 }
@@ -177,25 +191,41 @@ func segmentCharCount(seg Segment, lines []string) int {
 	return utf8.RuneCountInString(sliceLines(lines, seg.LineStart, seg.LineEnd))
 }
 
+// leafBoundaryKey identifies the leaf outline a segment belongs to, for the
+// merge guard in mergeSmallSegments. Segments produced from an actual leaf
+// (BuildSegments' candidates) already carry that leaf's OutlineID — merging
+// must never cross into a sibling leaf, even under the same top-level
+// ancestor, or the merged KU's outline_id ends up pointing at the shared
+// ancestor instead of either leaf (see docs/impl/v1/retrieval.md 目录结构
+// 检索 gap, 2026-08-11 排查). Gap segments (uncoveredSegments) have no leaf
+// of their own, so they fall back to the top-level-ancestor grouping that
+// was the sole guard before this fix.
+func leafBoundaryKey(seg Segment, outlines []source.Outline) string {
+	if seg.OutlineID.Valid {
+		return seg.OutlineID.String
+	}
+	return topAncestorAtLine(outlines, seg.LineStart)
+}
+
 func mergeSmallSegments(segments []Segment, outlines []source.Outline, lines []string, minChars int) []Segment {
 	if len(segments) <= 1 {
 		return segments
 	}
 
 	// Forward pass: merge small segments into next neighbor, but never across
-	// a different top-level structural ancestor (topAncestorAtLine) — a small
-	// trailing piece of one chapter must not get glued to the next, unrelated
-	// chapter just because both are short. curTop is captured once from the
-	// original (pre-merge) segment, before any absorption happens, so the
-	// whole merge run stays anchored to the section it actually started in.
+	// a different leaf outline node (leafBoundaryKey) — a small trailing piece
+	// of one leaf must not get glued to a sibling leaf just because both are
+	// short, even when they share a common ancestor. curLeaf is captured once
+	// from the original (pre-merge) segment, before any absorption happens, so
+	// the whole merge run stays anchored to the leaf it actually started in.
 	var forward []Segment
 	for i := 0; i < len(segments); i++ {
 		cur := segments[i]
-		curTop := topAncestorAtLine(outlines, cur.LineStart)
+		curLeaf := leafBoundaryKey(cur, outlines)
 		merged := false
 		for i+1 < len(segments) && segmentCharCount(cur, lines) < minChars {
 			next := segments[i+1]
-			if topAncestorAtLine(outlines, next.LineStart) != curTop {
+			if leafBoundaryKey(next, outlines) != curLeaf {
 				break
 			}
 			cur.LineEnd = next.LineEnd
@@ -212,12 +242,12 @@ func mergeSmallSegments(segments []Segment, outlines []source.Outline, lines []s
 	}
 
 	// Backward pass: if the last segment is still small, merge into previous —
-	// same top-level-ancestor guard applies.
+	// same leaf-boundary guard applies.
 	if len(forward) >= 2 {
 		last := &forward[len(forward)-1]
 		prev := &forward[len(forward)-2]
 		if segmentCharCount(*last, lines) < minChars &&
-			topAncestorAtLine(outlines, last.LineStart) == topAncestorAtLine(outlines, prev.LineStart) {
+			leafBoundaryKey(*last, outlines) == leafBoundaryKey(*prev, outlines) {
 			prev.LineEnd = last.LineEnd
 			prev.OutlineID = matchOutlineByLineRange(outlines, prev.LineStart, prev.LineEnd)
 			forward = forward[:len(forward)-1]

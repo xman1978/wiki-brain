@@ -87,10 +87,16 @@ EvidenceItem 新增（证据挖掘产出，见 evidence.md）：
 { "question": "...", "reason": "no_candidates | judge_filtered | answer_error | unspecified" }
 
 // activation_success —— 每个满足条件的 link 一条事件
+// role="direct"：point_id ∈ direct_point_ids；role="supporting"：point_id
+// 未进 direct_point_ids，但对应的 supporting evidence 实际被引用（未被
+// citation 白名单剔除）。两种角色都代表知识点被真实用上，权重差异见
+// study.md 步骤 3（role=direct 才计入晋升所需的 success_n / distinct_n，
+// role=supporting 只防降权、辅助 reverify，不能单独把候选推上 verified）。
 { "link_id": "...", "point_id": "...", "question_terms": "...",
-  "match_score": 0.83, "cited_fact_ids": ["..."] }
+  "match_score": 0.83, "cited_fact_ids": ["..."], "role": "direct | supporting" }
 
-// activation_failure —— 每个命中但未生效的 link 一条事件
+// activation_failure —— 每个命中但完全未被引用（既非 direct 也非
+// supporting）的 link 一条事件
 { "link_id": "...", "point_id": "...", "question_terms": "...",
   "match_score": 0.71, "reason": "not_cited | answer_gap | answer_error" }
 
@@ -163,10 +169,16 @@ trace 写入后、共现更新前执行。判定全部基于本次 AnswerResult�
 对 activation_hits 中的每条 (link_id, point_id)：
 
   该 point_id ∈ direct_point_ids（步骤 1 计算的"被引用的直接证据 KP"）
-    → 写入 activation_success 事件（cited_fact_ids 取 citations 中
-      绑定该 point_id 的 fact_id）；
+    → 写入 activation_success 事件，role="direct"（cited_fact_ids 取
+      citations 中绑定该 point_id 的 fact_id）；
 
-  否则 → 写入 activation_failure 事件，reason 按序判定：
+  否则，该 point_id 对应 EvidenceSet.Supporting 中实际被引用（未被
+  citation 白名单剔除）的知识点
+    → 写入 activation_success 事件，role="supporting"（cited_fact_ids
+      同上，取 Supporting 侧 citations 中绑定该 point_id 的 fact_id）；
+
+  否则（命中但完全未被引用，direct、supporting 均不含该 point_id）
+    → 写入 activation_failure 事件，reason 按序判定：
       AnswerResult.path == "error"        → answer_error
       retrieval_quality == "gap"          → answer_gap
       其余（命中但回答未引用该 KP）        → not_cited

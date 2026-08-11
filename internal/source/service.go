@@ -599,6 +599,35 @@ func (s *Service) SetSummary(sourceID, summary string) error {
 	return s.store.UpdateSummary(sourceID, summary)
 }
 
+// UpdateOutlineSummary lets a human correct/enrich a single directory
+// (source_outlines) node's summary. Scoped to sourceID to prevent
+// cross-source edits (outline_id belonging to a different source_id is
+// treated as not found). Returns the updated Outline, and reindexes only
+// this one outline doc in bleve (no full-source rebuild).
+func (s *Service) UpdateOutlineSummary(sourceID, outlineID, summary string) (*Outline, error) {
+	if _, err := s.store.GetOutlineByID(sourceID, outlineID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("outline not found")
+		}
+		return nil, err
+	}
+
+	if err := s.store.UpdateOutlineSummary(sourceID, outlineID, summary); err != nil {
+		return nil, err
+	}
+
+	updated, err := s.store.GetOutlineByID(sourceID, outlineID)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.outlineIdx != nil {
+		s.indexOutlines([]Outline{*updated})
+	}
+
+	return updated, nil
+}
+
 func (s *Service) indexOutlines(outlines []Outline) {
 	batch := s.outlineIdx.NewBatch()
 	for _, o := range outlines {

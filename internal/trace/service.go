@@ -362,7 +362,12 @@ func (s *Service) generateActivationEvents(t *Trace, r *answer.AnswerResult, gra
 	for _, pid := range grade.DirectPointIDs {
 		directSet[pid] = true
 	}
-	factsByPoint := citedFactIDsByPoint(r.EvidenceSet, r.Citations)
+	var supportingEvidence []retrieval.Evidence
+	if r.EvidenceSet != nil {
+		supportingEvidence = r.EvidenceSet.Supporting
+	}
+	factsByPoint := citedFactIDsByEvidence(directEvidenceOf(r.EvidenceSet), r.Citations)
+	supportingFactsByPoint := citedFactIDsByEvidence(supportingEvidence, r.Citations)
 
 	for _, hit := range hits {
 		if directSet[hit.PointID] {
@@ -372,8 +377,25 @@ func (s *Service) generateActivationEvents(t *Trace, r *answer.AnswerResult, gra
 				"question_terms": t.QuestionTerms,
 				"match_score":    hit.MatchScore,
 				"cited_fact_ids": nonNilStrings(factsByPoint[hit.PointID]),
+				"role":           "direct",
 			})
-			slog.Debug("trace: generating activation_success event", "trace_id", t.TraceID, "link_id", hit.LinkID)
+			slog.Debug("trace: generating activation_success event", "trace_id", t.TraceID, "link_id", hit.LinkID, "role", "direct")
+			if err := s.store.SaveLearningEvent(t.TraceID, "activation_success", string(payload)); err != nil {
+				slog.Error("trace: save activation_success event failed", "trace_id", t.TraceID, "link_id", hit.LinkID, "error", err)
+			}
+			continue
+		}
+
+		if cited := supportingFactsByPoint[hit.PointID]; len(cited) > 0 {
+			payload, _ := json.Marshal(map[string]interface{}{
+				"link_id":        hit.LinkID,
+				"point_id":       hit.PointID,
+				"question_terms": t.QuestionTerms,
+				"match_score":    hit.MatchScore,
+				"cited_fact_ids": nonNilStrings(cited),
+				"role":           "supporting",
+			})
+			slog.Debug("trace: generating activation_success event", "trace_id", t.TraceID, "link_id", hit.LinkID, "role", "supporting")
 			if err := s.store.SaveLearningEvent(t.TraceID, "activation_success", string(payload)); err != nil {
 				slog.Error("trace: save activation_success event failed", "trace_id", t.TraceID, "link_id", hit.LinkID, "error", err)
 			}
@@ -401,24 +423,31 @@ func (s *Service) generateActivationEvents(t *Trace, r *answer.AnswerResult, gra
 	}
 }
 
-// citedFactIDsByPoint maps each direct-evidence point_id to the fact_ids
-// Answer actually cited for it — the activation_success payload's
-// cited_fact_ids (docs/impl/v1/trace.md payload 结构).
-func citedFactIDsByPoint(es *retrieval.EvidenceSet, citations []string) map[string][]string {
+// citedFactIDsByEvidence maps each evidence point_id to the fact_ids Answer
+// actually cited for it — the activation_success payload's cited_fact_ids
+// (docs/impl/v1/trace.md payload 结构). Callers pass DirectEvidence for
+// role="direct" or Supporting for role="supporting" (docs/impl/v1/trace.md
+// 步骤 3: 命中且被引用即成功，角色只影响 study.md 的晋升权重，不影响是否
+// 记为成功).
+func citedFactIDsByEvidence(evidence []retrieval.Evidence, citations []string) map[string][]string {
 	result := make(map[string][]string)
-	if es == nil {
-		return result
-	}
 	citedSet := make(map[string]bool, len(citations))
 	for _, fid := range citations {
 		citedSet[fid] = true
 	}
-	for _, e := range es.DirectEvidence {
+	for _, e := range evidence {
 		if citedSet[e.FactID] {
 			result[e.PointID] = append(result[e.PointID], e.FactID)
 		}
 	}
 	return result
+}
+
+func directEvidenceOf(es *retrieval.EvidenceSet) []retrieval.Evidence {
+	if es == nil {
+		return nil
+	}
+	return es.DirectEvidence
 }
 
 func (s *Service) generateLearningEvents(t *Trace, r *answer.AnswerResult) {

@@ -345,11 +345,25 @@ type RawSignalEvent struct {
 // window (or batch, depending on which event slice was aggregated) counts
 // used for threshold judgment and stat updates.
 type linkSignal struct {
-	SuccessN       int
-	DistinctN      int
-	FailureN       int
-	EventIDs       []string
-	distinctHashes map[string]bool
+	// SuccessDirectN / SuccessSupportingN split activation_success events by
+	// payload.role (docs/impl/v1/trace.md 步骤 3). Promotion (candidate →
+	// verified) and the weaken-ratio denominator only count SuccessDirectN
+	// — repeatedly serving as supporting evidence alone doesn't prove a link
+	// can be trusted as an independent activation entry (docs/design/
+	// precompile.md "反复使用"). Reverify (weakened → verified) and the
+	// adopt_count stat count both roles: both are real, confirmed use.
+	SuccessDirectN     int
+	SuccessSupportingN int
+	DistinctN          int // distinct question hashes among role=direct successes only
+	FailureN           int
+	EventIDs           []string
+	distinctHashes     map[string]bool
+}
+
+// SuccessTotal is direct+supporting successes — used for adopt_count and
+// reverify, where any confirmed real use counts (docs/impl/v1/study.md 步骤3).
+func (l *linkSignal) SuccessTotal() int {
+	return l.SuccessDirectN + l.SuccessSupportingN
 }
 
 // LearningResultRow is a learning_results row plus, for object_type=

@@ -33,6 +33,7 @@ mux.HandleFunc("PATCH /sources/{id}/summary", h.setSourceSummary)
 	mux.HandleFunc("POST /sources/{id}/reupload", h.reuploadSource)
 	mux.HandleFunc("POST /sources/{id}/reupload/retry", h.reuploadRetry)
 	mux.HandleFunc("GET /sources/{id}/outlines", h.getOutlines)
+	mux.HandleFunc("PATCH /sources/{id}/outlines/{outline_id}", h.setOutlineSummary)
 	mux.HandleFunc("GET /sources/{id}/markdown", h.getMarkdown)
 	mux.HandleFunc("GET /sources/{id}/preview", h.getPreview)
 	mux.HandleFunc("GET /sources/{id}/progress", h.streamProgress)
@@ -483,6 +484,47 @@ func (h *Handler) retrySource(w http.ResponseWriter, r *http.Request) {
 		"status":       src.Status,
 		"units_status": src.UnitsStatus,
 	})
+}
+
+// setOutlineSummary implements PATCH /sources/:id/outlines/:outline_id,
+// letting a human edit a directory node's summary (source_outlines.summary).
+func (h *Handler) setOutlineSummary(w http.ResponseWriter, r *http.Request) {
+	sourceID := r.PathValue("id")
+	outlineID := r.PathValue("outline_id")
+
+	var body struct {
+		Summary string `json:"summary"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	updated, err := h.svc.UpdateOutlineSummary(sourceID, outlineID, body.Summary)
+	if err != nil {
+		if strings.Contains(err.Error(), "outline not found") {
+			foundation.WriteError(w, http.StatusNotFound, "outline not found")
+			return
+		}
+		slog.Error("set outline summary failed", "error", err)
+		foundation.WriteError(w, http.StatusInternalServerError, "set outline summary failed")
+		return
+	}
+
+	resp := map[string]interface{}{
+		"outline_id": updated.OutlineID,
+		"source_id":  updated.SourceID,
+		"title":      updated.Title,
+		"level":      updated.Level,
+		"node_type":  updated.NodeType,
+		"line_start": updated.LineStart,
+		"line_end":   updated.LineEnd,
+		"summary":    "",
+	}
+	if updated.Summary.Valid {
+		resp["summary"] = updated.Summary.String
+	}
+	foundation.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) getOutlines(w http.ResponseWriter, r *http.Request) {

@@ -702,6 +702,32 @@ func (s *Service) rerankAndBuildEvidenceSet(ctx context.Context, qc QueryContext
 	}
 	slog.Info("retrieval: step9 sufficiency", "path", path, "direct", len(direct), "supporting", len(supporting), "conflicts", len(conflictCandidates))
 	emit("rerank", "done", fmt.Sprintf("%d 直接 · %d 间接", len(direct), len(supporting)), time.Since(classifyStart).Milliseconds())
+
+	// Force whole-segment mining fallback for the induction question shape:
+	// no direct evidence at all, and the supporting evidence spans multiple
+	// distinct sources — i.e. several category members (docs/impl/v1's
+	// "整体/成员归纳" pattern in fast_verify.md), not just multiple
+	// fragments of the same source. evidence_mine.md's "nothing to mine"
+	// verdict for a supporting candidate is otherwise only rescued via
+	// whole-segment fallback on the caller's last-resort retry (see
+	// mineBatch's role==RoleSupporting branch) — everywhere else that
+	// verdict silently drops the candidate. For this shape, a member losing
+	// its only evidence isn't a quality tradeoff, it can flip the
+	// sufficiency verdict entirely (one fewer member covered), so it's
+	// forced here on the first attempt rather than waiting for a retry that
+	// may never come.
+	if !lastResort && len(direct) == 0 && len(supporting) > 0 {
+		distinctSources := make(map[string]bool, len(supporting))
+		for _, c := range supporting {
+			distinctSources[c.sourceID] = true
+		}
+		if len(distinctSources) >= 2 {
+			slog.Info("retrieval: forcing last-resort mining fallback for multi-source supporting-only evidence",
+				"supporting", len(supporting), "distinct_sources", len(distinctSources))
+			lastResort = true
+		}
+	}
+
 	// Step 10: Build EvidenceSet
 	es, err := s.buildEvidenceSet(ctx, question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, path, direct, supporting, conflictCandidates, progress, lastResort)
 	if err != nil {
@@ -1214,6 +1240,11 @@ func (s *Service) rrfMerge(lists ...[]candidate) []candidate {
 	}
 	merged := make(map[string]*mergedCandidate)
 
+	outlineBoost := s.cfg.Retrieval.OutlineRRFBoost
+	if outlineBoost <= 0 {
+		outlineBoost = 1.0
+	}
+
 	addRanked := func(candidates []candidate, pathName string) {
 		sorted := append([]candidate(nil), candidates...)
 		sort.Slice(sorted, func(i, j int) bool {
@@ -1224,6 +1255,9 @@ func (s *Service) rrfMerge(lists ...[]candidate) []candidate {
 		})
 		for rank, c := range sorted {
 			rrfScore := 1.0 / float64(k+rank+1)
+			if pathName == "outline" {
+				rrfScore *= outlineBoost
+			}
 			if m, ok := merged[c.unitID]; ok {
 				m.rrfScore += rrfScore
 				m.paths[pathName] = true
@@ -1569,7 +1603,7 @@ func (s *Service) judgeRerankTwoStep(ctx context.Context, qc QueryContext, candi
 
 func (s *Service) judgeRelevanceBatches(ctx context.Context, qc QueryContext, candidates []rerankJudgeCandidate) (map[string]bool, error) {
 	subject, intent, audience, constraint := judgeContextDefaults(qc)
-	raw, err := s.runRerankJudgeBatches(ctx, candidates, func(ctx context.Context, batch []rerankJudgeCandidate) (map[string]string, error) {
+	raw, err := s.runRerankJudgeBatches(ctx, candidates, "relevant", func(ctx context.Context, batch []rerankJudgeCandidate) (map[string]string, error) {
 		relevantMap, err := s.judgeRelevanceExtractedEvidence(ctx, qc, subject, intent, audience, constraint, batch)
 		if err != nil {
 			return nil, err
@@ -1596,7 +1630,7 @@ func (s *Service) judgeRelevanceBatches(ctx context.Context, qc QueryContext, ca
 
 func (s *Service) judgeClassifyBatches(ctx context.Context, qc QueryContext, candidates []rerankJudgeCandidate) (map[string]string, error) {
 	subject, intent, audience, constraint := judgeContextDefaults(qc)
-	return s.runRerankJudgeBatches(ctx, candidates, func(ctx context.Context, batch []rerankJudgeCandidate) (map[string]string, error) {
+	return s.runRerankJudgeBatches(ctx, candidates, "supporting", func(ctx context.Context, batch []rerankJudgeCandidate) (map[string]string, error) {
 		return s.judgeClassifyExtractedEvidence(ctx, qc, subject, intent, audience, constraint, batch)
 	})
 }
@@ -1626,11 +1660,40 @@ func judgeContextDefaults(qc QueryContext) (subject, intent, audience, constrain
 }
 
 // runRerankJudgeBatches shares the batch-splitting + bounded-concurrency
+// rerankJudgeCoverageRetries bounds how many times a single batch is
+// re-sent to the LLM when its response silently omits a candidate_id that
+// was in the input — observed in production: rerank_relevance.md /
+// rerank_classify.md occasionally (even at temperature 0) drop one
+// candidate_id from their "results" array entirely, and unlike an unknown
+// candidate_id (which already errors below), a *missing* one was previously
+// invisible — it just vanished from the merged map with no error, no log,
+// no retry, silently shrinking the evidence set (e.g. losing a national-DB
+// vendor's evidence out of an otherwise-stable candidate pool). This
+// mirrors the same completeness check internal/evidence/service.go's
+// validateCoverage already does for evidence_mine.md.
+const rerankJudgeCoverageRetries = 2
+
+// missingCandidateIDs returns the candidate_ids present in batch but absent
+// from results.
+func missingCandidateIDs(batch []rerankJudgeCandidate, results map[string]string) []string {
+	var missing []string
+	for _, c := range batch {
+		if _, ok := results[c.CandidateID]; !ok {
+			missing = append(missing, c.CandidateID)
+		}
+	}
+	return missing
+}
+
 // fan-out used by both rerank_relevance.md and rerank_classify.md.
 // callBatch judges one batch and returns per-candidate string values (role,
 // or "relevant"/"irrelevant" for the relevance step); callers interpret
-// them.
-func (s *Service) runRerankJudgeBatches(ctx context.Context, candidates []rerankJudgeCandidate, callBatch func(ctx context.Context, batch []rerankJudgeCandidate) (map[string]string, error)) (map[string]string, error) {
+// them. defaultForMissing is the value assigned to any candidate_id still
+// missing after rerankJudgeCoverageRetries retries — callers pick the safe
+// side for their step (e.g. "relevant" for relevance, "supporting" for
+// classify) so a dropped candidate degrades to "kept but unclassified"
+// rather than silently disappearing.
+func (s *Service) runRerankJudgeBatches(ctx context.Context, candidates []rerankJudgeCandidate, defaultForMissing string, callBatch func(ctx context.Context, batch []rerankJudgeCandidate) (map[string]string, error)) (map[string]string, error) {
 	batches := splitRerankJudgeBatches(candidates, s.rerankJudgeBatchMaxChars())
 	if len(batches) == 0 {
 		return nil, nil
@@ -1665,7 +1728,21 @@ launchBatches:
 			defer wg.Done()
 			defer func() { <-sem }()
 			batchStart := time.Now()
-			batchResults, err := callBatch(ctx, batch)
+			var batchResults map[string]string
+			var err error
+			var missing []string
+			for attempt := 0; attempt < rerankJudgeCoverageRetries; attempt++ {
+				batchResults, err = callBatch(ctx, batch)
+				if err != nil {
+					break
+				}
+				missing = missingCandidateIDs(batch, batchResults)
+				if len(missing) == 0 {
+					break
+				}
+				slog.Warn("retrieval: rerank judge batch missing candidate_id(s) in response, retrying",
+					"batch_index", i, "attempt", attempt, "missing", missing)
+			}
 			batchMs := time.Since(batchStart).Milliseconds()
 			if err != nil {
 				slog.Info("retrieval: rerank judge batch timing", "batch_index", i, "batch_size", len(batch), "duration_ms", batchMs, "error", err)
@@ -1674,6 +1751,13 @@ launchBatches:
 					cancel()
 				})
 				return
+			}
+			if len(missing) > 0 {
+				slog.Warn("retrieval: rerank judge batch still missing candidate_id(s) after retries, defaulting",
+					"batch_index", i, "missing", missing, "default", defaultForMissing)
+				for _, cid := range missing {
+					batchResults[cid] = defaultForMissing
+				}
 			}
 			slog.Info("retrieval: rerank judge batch timing", "batch_index", i, "batch_size", len(batch), "duration_ms", batchMs)
 			mu.Lock()

@@ -136,6 +136,10 @@ type RetrievalConfig struct {
 	RerankJudgeBatchMaxChars   int     `yaml:"rerank_judge_batch_max_chars"`
 	RerankJudgeConcurrency     int     `yaml:"rerank_judge_concurrency"`
 	ActivationMatchTop         int     `yaml:"activation_match_top"`
+	// OutlineRRFBoost multiplies the RRF score contributed by the outline
+	// (目录) recall path in rrfMerge, to reflect its higher observed hit rate
+	// vs. fts/fts_tuple. 1.0 or unset (<=0) means no boost (RRF unweighted).
+	OutlineRRFBoost float64 `yaml:"outline_rrf_boost"`
 	// —— V1 新增（docs/impl/v1/retrieval.md 配置项）——
 	FastPath         bool    `yaml:"fast_path"`
 	FastPathVerify   bool    `yaml:"fast_path_verify"`

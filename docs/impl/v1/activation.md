@@ -90,10 +90,14 @@ CREATE INDEX idx_subject_synonyms_status ON subject_synonyms(status);
 **合法迁移表**（唯一入口 `TransitionLink(linkID, to, reason, eventIDs)`，非法迁移返回错误）：
 
 ```text
-candidate  → verified     Study 晋升（默认需人工确认，见 study.md）
+candidate  → verified     Study 晋升（默认需人工确认，见 study.md；仅认
+                          role=direct 的 activation_success，见 study.md
+                          步骤 3「反复被当 supporting 引用不足以晋升」）
 candidate  → deprecated   人工驳回，或超过 study.candidate_idle_days 无新信号
-verified   → weakened     Study 降权（repeated_failure）
-weakened   → verified     Study 重新验证（降权后再次 repeated_success）
+verified   → weakened     Study 降权（repeated_failure；role=supporting 的
+                          activation_success 不参与稀释 failure 占比）
+weakened   → verified     Study 重新验证（降权后再次 repeated_success；
+                          direct 与 supporting 均计入，见 study.md 步骤 3）
 weakened   → deprecated   Study 淘汰（超过 study.deprecate_idle_days 无有效使用）
 deprecated → （终态，不可迁出；同条件新链接由 Study 重新创建）
 ```

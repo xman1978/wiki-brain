@@ -220,24 +220,39 @@ confirm/reject 由 Activation 模块的 `POST /subject-synonyms/:id/confirm|reje
 
 ```text
 窗口统计（event_window_days 内，含本批）：
-  success_n   = activation_success 事件数
-  distinct_n  = 这些 success 事件的不同 question_hash 数（经 trace_id JOIN traces）
+  success_direct_n     = activation_success 事件数（payload.role="direct"）
+  success_supporting_n = activation_success 事件数（payload.role="supporting"）
+  success_n            = success_direct_n（晋升判定只认 direct，见下）
+  distinct_n  = role="direct" 的 success 事件的不同 question_hash 数
+                （经 trace_id JOIN traces；role=supporting 不计入，理由同下）
   failure_n   = activation_failure 事件数
               + user_correction(含该 link_id) 事件数 × correction_weight
+              （supporting 角色的 activation_success 不产生 failure，
+              不稀释 failure_n，也不需要单独扣减）
 
 判定（按链接当前状态）：
   candidate：
     success_n ≥ promote_success_min 且 distinct_n ≥ promote_distinct_min
       → 晋升判定达标（进入步骤 5 的确认流）
+      （只用 success_direct_n / distinct_n：一条链接只被反复当 supporting
+      引用、从未真正是某次答案的直接依据，还不足以证明它本身可作为独立
+      激活入口被信赖，见 docs/design/precompile.md「反复使用」条）
   verified：
     failure_n ≥ weaken_failure_min 且
     failure_n / (success_n + failure_n) ≥ weaken_ratio_min
       → TransitionLink(verified → weakened, reason 含统计数字, event_ids)
+      （分母沿用 success_n=success_direct_n；supporting 命中不参与稀释
+      failure 占比，避免"这段时间恰好没被当作 direct 引用"被误判成失效）
   weakened：
-    success_n ≥ reverify_success_min 且窗口内 failure_n == 0
+    (success_direct_n + success_supporting_n) ≥ reverify_success_min
+      且窗口内 failure_n == 0
       → TransitionLink(weakened → verified, action=reverify)
+      （reverify 只需证明"这条路径仍然有效"，direct/supporting 都算数，
+      与"首次晋升需要 direct 主导"的门槛不同）
 
 计数更新：无论是否迁移，对每条链接 UpdateStats(成功增量, 失败增量)；
+  成功增量 = success_direct_n + success_supporting_n（adopt_count 是展示用
+  累计值，不区分角色；角色权重只影响上面的晋升/降权/reverify 判定逻辑）；
 目标 KP lifecycle != current 的链接：跳过一切强化（不晋升、不 reverify、
   不累加 adopt_count），但失败与降权判定照常——过期知识只降不升；
 处理完的事件标记 processed=1。

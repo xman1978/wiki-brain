@@ -358,6 +358,40 @@ func (s *Store) UpdateSummary(sourceID, summary string) error {
 	return nil
 }
 
+// UpdateOutlineSummary updates a single source_outlines row's summary,
+// scoped to source_id to prevent cross-source edits. Returns
+// sql.ErrNoRows when outline_id doesn't exist under that source_id.
+func (s *Store) UpdateOutlineSummary(sourceID, outlineID, summary string) error {
+	res, err := s.db.Exec(`UPDATE source_outlines SET summary = ? WHERE outline_id = ? AND source_id = ?`,
+		summary, outlineID, sourceID)
+	if err != nil {
+		return fmt.Errorf("source store: update outline summary: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("source store: update outline summary rows affected: %w", err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// GetOutlineByID fetches a single outline row, scoped to source_id.
+func (s *Store) GetOutlineByID(sourceID, outlineID string) (*Outline, error) {
+	var o Outline
+	err := s.db.QueryRow(`SELECT outline_id, source_id, parent_id, level, title, summary, line_start, line_end, node_type, position, created_at
+		FROM source_outlines WHERE outline_id = ? AND source_id = ?`, outlineID, sourceID).
+		Scan(&o.OutlineID, &o.SourceID, &o.ParentID, &o.Level, &o.Title, &o.Summary, &o.LineStart, &o.LineEnd, &o.NodeType, &o.Position, &o.CreatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, err
+		}
+		return nil, fmt.Errorf("source store: get outline by id: %w", err)
+	}
+	return &o, nil
+}
+
 func (s *Store) UpdateDomainID(sourceID string, domainID *string) error {
 	var val sql.NullString
 	if domainID != nil {

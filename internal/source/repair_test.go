@@ -126,3 +126,22 @@ func TestRepairSections_MixedLevelsNoOverlapFix(t *testing.T) {
 		t.Errorf("Ch1.LineEnd = %d, want 20", result[0].LineEnd)
 	}
 }
+
+// A gap between two sections at different levels used to be left untouched
+// entirely (the old guard skipped any cross-level adjacent pair), producing
+// a range no outline node covers. Non-nested cross-level pairs must still
+// get the gap closed like same-level ones — only true parent/child
+// containment should be left alone (see TestRepairSections_MixedLevelsNoOverlapFix).
+func TestRepairSections_ClosesGapAcrossLevels(t *testing.T) {
+	sections := []llmSection{
+		{Title: "Step1", Summary: "k", LineStart: 1, LineEnd: 10, Level: 2},
+		{Title: "Ch2", Summary: "k", LineStart: 16, LineEnd: 30, Level: 1},
+	}
+	result := repairSections(sections, 30)
+	if len(result) != 2 {
+		t.Fatalf("len = %d, want 2", len(result))
+	}
+	if result[0].LineEnd != 15 {
+		t.Errorf("Step1.LineEnd = %d, want 15 (gap L11-L15 absorbed)", result[0].LineEnd)
+	}
+}

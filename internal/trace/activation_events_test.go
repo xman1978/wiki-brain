@@ -75,6 +75,58 @@ func TestProcessTrace_FastPath_HitCited_ProducesActivationSuccess(t *testing.T) 
 	}
 }
 
+func TestProcessTrace_FastPath_HitCitedAsSupporting_ProducesActivationSuccessSupporting(t *testing.T) {
+	svc, store, db := setupService(t)
+	insertTestAnswer(t, db, "a-fast-supporting")
+	insertTestKP(t, db, "p1")
+	insertTestKP(t, db, "p2")
+
+	r := &answer.AnswerResult{
+		AnswerID:  "a-fast-supporting",
+		Question:  "住宿标准是什么",
+		Citations: []string{"f1", "f2"},
+		HasAnswer: true,
+		Path:      "short",
+		EvidenceSet: &retrieval.EvidenceSet{
+			PathType: retrieval.PathTypeFast,
+			ActivationHits: []retrieval.ActivationHit{
+				{LinkID: "link1", PointID: "p1", MatchScore: 0.9},
+				{LinkID: "link2", PointID: "p2", MatchScore: 0.8},
+			},
+			DirectEvidence: []retrieval.Evidence{{FactID: "f1", PointID: "p1"}},
+			Supporting:     []retrieval.Evidence{{FactID: "f2", PointID: "p2"}},
+		},
+	}
+	svc.ProcessTrace(r)
+
+	events, err := store.ListLearningEvents("activation_success", 0, 20)
+	if err != nil || len(events) != 2 {
+		t.Fatalf("expected 2 activation_success events, got %d (err=%v)", len(events), err)
+	}
+	byLink := make(map[string]map[string]interface{})
+	for _, ev := range events {
+		p := decodePayload(t, ev.Payload)
+		byLink[p["link_id"].(string)] = p
+	}
+	direct, ok := byLink["link1"]
+	if !ok || direct["role"] != "direct" {
+		t.Errorf("link1 payload = %+v, want role=direct", direct)
+	}
+	supporting, ok := byLink["link2"]
+	if !ok || supporting["role"] != "supporting" {
+		t.Errorf("link2 payload = %+v, want role=supporting", supporting)
+	}
+	factIDs, _ := supporting["cited_fact_ids"].([]interface{})
+	if len(factIDs) != 1 || factIDs[0] != "f2" {
+		t.Errorf("supporting cited_fact_ids = %v, want [f2]", supporting["cited_fact_ids"])
+	}
+
+	failureEvents, _ := store.ListLearningEvents("activation_failure", 0, 20)
+	if len(failureEvents) != 0 {
+		t.Errorf("expected no activation_failure, got %d", len(failureEvents))
+	}
+}
+
 func TestProcessTrace_FastPath_HitNotCited_ProducesActivationFailure_NotCited(t *testing.T) {
 	svc, store, db := setupService(t)
 	insertTestAnswer(t, db, "a-fast-2")

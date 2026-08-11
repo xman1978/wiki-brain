@@ -308,6 +308,19 @@ func (s *Service) mineCandidate(c EvidenceItem, fragments []string) (items []Evi
 
 		content := matched
 		widenedStart, widenedEnd, kind := expandToAtomicBlock(contentLines, relStart, relEnd)
+		if tStart, tEnd, ok := attachAdjacentTable(contentLines, widenedStart, widenedEnd); ok {
+			widenedStart, widenedEnd, kind = tStart, tEnd, "adjacent_table"
+		}
+		// kind == "adjacent_table" already carries its own forward-attached
+		// lead-in sentence (attachAdjacentTable); don't also reach one more
+		// line further back, or the fragment picks up an unrelated sentence
+		// from whatever precedes that lead-in.
+		if kind != "" && kind != "adjacent_table" {
+			if pStart, pEnd, ok := attachPrecedingSentence(contentLines, relStart, widenedStart, widenedEnd); ok {
+				widenedStart, widenedEnd = pStart, pEnd
+				kind += "+preceding_sentence"
+			}
+		}
 		if widenedStart != relStart || widenedEnd != relEnd {
 			content = strings.Join(contentLines[widenedStart-1:widenedEnd], "\n")
 			slog.Debug("evidence: fragment widened to cover unsplittable block",
@@ -499,6 +512,29 @@ func expandToTableBlock(contentLines []string, relStart, relEnd int) (int, int) 
 	return start, end
 }
 
+// attachAdjacentTable widens [relStart,relEnd] forward to include a markdown
+// table that starts immediately after it (allowing a single blank line in
+// between) — the common "见下表/划分为…：" lead-in pattern, where the LLM
+// mines only the introducing sentence and leaves the data-bearing table
+// behind. This is a structural, content-shape check (is the very next line
+// a table row?), not a keyword/question-wording match, so it generalizes to
+// any lead-in sentence immediately followed by a table, regardless of what
+// the sentence says or what the question asks. Only the forward direction
+// (sentence before table) is handled — that's the pattern this fixes; a
+// fragment landing inside the table already gets folded to the whole table
+// by expandToAtomicBlock.
+func attachAdjacentTable(contentLines []string, relStart, relEnd int) (int, int, bool) {
+	next := relEnd + 1
+	if next <= len(contentLines) && strings.TrimSpace(contentLines[next-1]) == "" {
+		next++
+	}
+	if next < 1 || next > len(contentLines) || !isMarkdownTableRow(contentLines[next-1]) {
+		return relStart, relEnd, false
+	}
+	_, tableEnd := expandToTableBlock(contentLines, next, next)
+	return relStart, tableEnd, true
+}
+
 // expandToCommandConfigBlock widens to a contiguous run of bare SQL / Shell /
 // parameter lines when the fragment intersects at least one such line.
 // Blank lines and non-command prose terminate the run (same spirit as table
@@ -524,6 +560,30 @@ func expandToCommandConfigBlock(contentLines []string, relStart, relEnd int) (in
 		end++
 	}
 	return start, end, true
+}
+
+// attachPrecedingSentence widens an already-detected atomic block
+// [start,end] backward by one line to include the sentence immediately
+// above it (allowing a single blank line in between) — the same
+// "见下表/包含以下参数" lead-in pattern as attachAdjacentTable, but backward:
+// a block (config assignments, commands, a table) is often introduced by a
+// sentence directly above stating what the block means, and that sentence
+// is what ties the block to a specific question. Only applies when the
+// LLM's own original match (origStart) didn't already reach that line —
+// if it did, the sentence is already part of the mined content and nothing
+// needs to be forced in.
+func attachPrecedingSentence(contentLines []string, origStart, start, end int) (int, int, bool) {
+	prev := start - 1
+	if prev >= 1 && strings.TrimSpace(contentLines[prev-1]) == "" {
+		prev--
+	}
+	if prev < 1 || strings.TrimSpace(contentLines[prev-1]) == "" {
+		return start, end, false
+	}
+	if origStart <= prev {
+		return start, end, false
+	}
+	return prev, end, true
 }
 
 func wholeSegmentFallback(batch []EvidenceItem) []EvidenceItem {

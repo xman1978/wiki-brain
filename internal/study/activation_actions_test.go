@@ -16,6 +16,14 @@ func seedActivationSuccessEvent(t *testing.T, db *sql.DB, eventID, traceID, link
 	seedLearningEvent(t, db, eventID, traceID, "activation_success", string(payload))
 }
 
+func seedActivationSuccessSupportingEvent(t *testing.T, db *sql.DB, eventID, traceID, linkID, pointID string) {
+	t.Helper()
+	payload, _ := json.Marshal(map[string]interface{}{
+		"link_id": linkID, "point_id": pointID, "question_terms": "t", "match_score": 0.9, "cited_fact_ids": []string{"f1"}, "role": "supporting",
+	})
+	seedLearningEvent(t, db, eventID, traceID, "activation_success", string(payload))
+}
+
 func seedActivationFailureEvent(t *testing.T, db *sql.DB, eventID, traceID, linkID, pointID string) {
 	t.Helper()
 	payload, _ := json.Marshal(map[string]interface{}{
@@ -480,6 +488,84 @@ func TestProcessLinkSignals_Reverify(t *testing.T) {
 	}
 	if actions.Reverified != 1 {
 		t.Fatalf("expected 1 reverify, got %d (actions=%+v)", actions.Reverified, actions)
+	}
+	updated, _ := activationSvc.GetLink(link.LinkID)
+	if updated.Status != activation.StatusVerified {
+		t.Errorf("status = %q, want verified", updated.Status)
+	}
+}
+
+func TestProcessLinkSignals_SupportingOnly_DoesNotPromoteCandidate(t *testing.T) {
+	svc, _, activationSvc, db := setupStudyWithActivation(t)
+	seedSource(t, db, "src1")
+	seedDomain(t, db, "dom1", "D")
+	seedEntry(t, db, "con1", "dom1", "C")
+	seedKU(t, db, "ku1", "src1", "con1")
+	seedKP(t, db, "kp1", "ku1", "src1", "content")
+
+	link, err := activationSvc.CreateLink("t1", activation.LinkCondition{}, "kp1", nil)
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+
+	// PromoteSuccessMin=3 in testConfig, but all events are role=supporting —
+	// docs/design/precompile.md "反复使用": supporting alone must not promote.
+	for _, trID := range []string{"tr1", "tr2", "tr3", "tr4"} {
+		seedAnswer(t, db, "ans"+trID)
+		seedTrace(t, db, trID, "ans"+trID, "q", "t1", "confident", "short", []string{"kp1"})
+		seedActivationSuccessSupportingEvent(t, db, "evt-s"+trID, trID, link.LinkID, "kp1")
+	}
+
+	var actions LearningActionsSummary
+	if err := svc.processLinkSignals(&actions); err != nil {
+		t.Fatalf("processLinkSignals: %v", err)
+	}
+	if actions.PendingPromotions != 0 {
+		t.Fatalf("expected no promotion from supporting-only signals, got %d", actions.PendingPromotions)
+	}
+	updated, _ := activationSvc.GetLink(link.LinkID)
+	if updated.Status != activation.StatusCandidate {
+		t.Errorf("status = %q, want candidate (unpromoted)", updated.Status)
+	}
+	if updated.AdoptCount != 4 {
+		t.Errorf("adopt_count = %d, want 4 (supporting successes still counted as real use)", updated.AdoptCount)
+	}
+}
+
+func TestProcessLinkSignals_SupportingOnly_ReverifiesWeakenedLink(t *testing.T) {
+	svc, _, activationSvc, db := setupStudyWithActivation(t)
+	seedSource(t, db, "src1")
+	seedDomain(t, db, "dom1", "D")
+	seedEntry(t, db, "con1", "dom1", "C")
+	seedKU(t, db, "ku1", "src1", "con1")
+	seedKP(t, db, "kp1", "ku1", "src1", "content")
+
+	link, err := activationSvc.CreateLink("t1", activation.LinkCondition{}, "kp1", nil)
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if _, err := activationSvc.TransitionLink(link.LinkID, activation.StatusVerified, "test", nil); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if _, err := activationSvc.TransitionLink(link.LinkID, activation.StatusWeakened, "test", nil); err != nil {
+		t.Fatalf("weaken: %v", err)
+	}
+
+	// ReverifySuccessMin=2: reverify counts direct+supporting together —
+	// unlike first-time promotion, proving the path still works doesn't
+	// require the direct role.
+	for _, trID := range []string{"tr1", "tr2"} {
+		seedAnswer(t, db, "ans"+trID)
+		seedTrace(t, db, trID, "ans"+trID, "q", "t1", "confident", "short", []string{"kp1"})
+		seedActivationSuccessSupportingEvent(t, db, "evt-s"+trID, trID, link.LinkID, "kp1")
+	}
+
+	var actions LearningActionsSummary
+	if err := svc.processLinkSignals(&actions); err != nil {
+		t.Fatalf("processLinkSignals: %v", err)
+	}
+	if actions.Reverified != 1 {
+		t.Fatalf("expected 1 reverify from supporting successes, got %d (actions=%+v)", actions.Reverified, actions)
 	}
 	updated, _ := activationSvc.GetLink(link.LinkID)
 	if updated.Status != activation.StatusVerified {

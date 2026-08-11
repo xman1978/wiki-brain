@@ -1176,17 +1176,25 @@ func aggregateSignals(events []RawSignalEvent, correctionWeight int) map[string]
 		case "activation_success":
 			var p struct {
 				LinkID string `json:"link_id"`
+				Role   string `json:"role"`
 			}
 			if json.Unmarshal([]byte(ev.Payload), &p) != nil || p.LinkID == "" {
 				continue
 			}
 			a := get(p.LinkID)
-			a.SuccessN++
-			a.EventIDs = append(a.EventIDs, ev.EventID)
-			if ev.QuestionHash != "" && !a.distinctHashes[ev.QuestionHash] {
-				a.distinctHashes[ev.QuestionHash] = true
-				a.DistinctN++
+			// role omitted on events predating this change is treated as
+			// "direct" — that was the only role activation_success could
+			// carry before, so this keeps historical events' weight unchanged.
+			if p.Role == "supporting" {
+				a.SuccessSupportingN++
+			} else {
+				a.SuccessDirectN++
+				if ev.QuestionHash != "" && !a.distinctHashes[ev.QuestionHash] {
+					a.distinctHashes[ev.QuestionHash] = true
+					a.DistinctN++
+				}
 			}
+			a.EventIDs = append(a.EventIDs, ev.EventID)
 		case "activation_failure":
 			var p struct {
 				LinkID string `json:"link_id"`
@@ -1261,7 +1269,7 @@ func (s *Service) processLinkSignals(actions *LearningActionsSummary) error {
 
 		// "目标 KP lifecycle != current 的链接：跳过一切强化...不累加 adopt_count，
 		// 但失败与降权判定照常" — suppress only the adopt-count increment.
-		adoptDelta := delta.SuccessN
+		adoptDelta := delta.SuccessTotal()
 		if !lifecycleCurrent {
 			adoptDelta = 0
 		}
@@ -1271,14 +1279,20 @@ func (s *Service) processLinkSignals(actions *LearningActionsSummary) error {
 
 		switch link.Status {
 		case activation.StatusCandidate:
-			if lifecycleCurrent && w.SuccessN >= s.cfg.PromoteSuccessMin && w.DistinctN >= s.cfg.PromoteDistinctMin {
+			// 只认 role=direct：反复只当 supporting 引用还不足以证明这条
+			// 链接本身可作为独立激活入口被信赖（docs/design/precompile.md
+			// "反复使用"条）。
+			if lifecycleCurrent && w.SuccessDirectN >= s.cfg.PromoteSuccessMin && w.DistinctN >= s.cfg.PromoteDistinctMin {
 				s.judgePromotion(link, w, actions)
 			}
 		case activation.StatusVerified:
-			total := w.SuccessN + w.FailureN
+			// 分母沿用 SuccessDirectN：supporting 命中不参与稀释 failure
+			// 占比，避免"这段时间恰好没被当 direct 引用"被误判成失效
+			// （docs/impl/v1/study.md 步骤 3）。
+			total := w.SuccessDirectN + w.FailureN
 			if total > 0 && w.FailureN >= s.cfg.WeakenFailureMin && float64(w.FailureN)/float64(total) >= s.cfg.WeakenRatioMin {
-				reason := fmt.Sprintf("窗口内 failure_n=%d, success_n=%d, 比值=%.2f",
-					w.FailureN, w.SuccessN, float64(w.FailureN)/float64(total))
+				reason := fmt.Sprintf("窗口内 failure_n=%d, success_direct_n=%d, 比值=%.2f",
+					w.FailureN, w.SuccessDirectN, float64(w.FailureN)/float64(total))
 				if _, err := s.activationSvc.TransitionLink(linkID, activation.StatusWeakened, reason, w.EventIDs); err != nil {
 					slog.Error("study: weaken failed", "link_id", linkID, "error", err)
 				} else {
@@ -1289,8 +1303,11 @@ func (s *Service) processLinkSignals(actions *LearningActionsSummary) error {
 				}
 			}
 		case activation.StatusWeakened:
-			if lifecycleCurrent && w.SuccessN >= s.cfg.ReverifySuccessMin && w.FailureN == 0 {
-				reason := fmt.Sprintf("窗口内 success_n=%d，无 failure", w.SuccessN)
+			// reverify 只需证明"这条路径仍然有效"，direct/supporting 都算数
+			// （与首次晋升需要 direct 主导的门槛不同）。
+			if lifecycleCurrent && w.SuccessTotal() >= s.cfg.ReverifySuccessMin && w.FailureN == 0 {
+				reason := fmt.Sprintf("窗口内 success_n=%d（direct=%d, supporting=%d），无 failure",
+					w.SuccessTotal(), w.SuccessDirectN, w.SuccessSupportingN)
 				if _, err := s.activationSvc.TransitionLink(linkID, activation.StatusVerified, reason, w.EventIDs); err != nil {
 					slog.Error("study: reverify failed", "link_id", linkID, "error", err)
 				} else {
@@ -1315,7 +1332,7 @@ func (s *Service) processLinkSignals(actions *LearningActionsSummary) error {
 // transitions immediately; otherwise it records a pending_confirm promote
 // result (without touching link status) unless one is already pending.
 func (s *Service) judgePromotion(link *activation.ActivationLink, w *linkSignal, actions *LearningActionsSummary) {
-	reason := fmt.Sprintf("窗口内 success_n=%d，%d 个不同问题", w.SuccessN, w.DistinctN)
+	reason := fmt.Sprintf("窗口内 success_direct_n=%d，%d 个不同问题", w.SuccessDirectN, w.DistinctN)
 
 	if s.cfg.AutoPromote {
 		if _, err := s.activationSvc.TransitionLink(link.LinkID, activation.StatusVerified, reason, w.EventIDs); err != nil {
@@ -1411,7 +1428,7 @@ func (s *Service) evictIdleWeakened(actions *LearningActionsSummary) error {
 	recentAgg := aggregateSignals(recent, 0)
 
 	for _, linkID := range idle {
-		if a, ok := recentAgg[linkID]; ok && a.SuccessN > 0 {
+		if a, ok := recentAgg[linkID]; ok && a.SuccessTotal() > 0 {
 			continue
 		}
 		if _, err := s.activationSvc.TransitionLink(linkID, activation.StatusDeprecated, "idle_weakened", nil); err != nil {

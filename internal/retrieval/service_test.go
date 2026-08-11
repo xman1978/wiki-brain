@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/jxman78/wiki-brain/internal/evidence"
 	"github.com/jxman78/wiki-brain/internal/foundation"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
@@ -425,6 +426,85 @@ func TestRerank_RelevanceThenClassify(t *testing.T) {
 	}
 	if !sawRelevance || !sawClassify {
 		t.Errorf("expected both rerank_relevance.md and rerank_classify.md to be called, calls=%+v", fake.Calls())
+	}
+}
+
+// TestRerank_ClassifyMissingCandidateID_RetriesAndRecovers reproduces a bug
+// observed in production: rerank_classify.md's response sometimes silently
+// omits a candidate_id from its "results" array (even at temperature 0),
+// and that candidate used to vanish from the evidence set with no error, no
+// log, no retry — it was simply absent from the merged results map. This
+// asserts the retry (runRerankJudgeBatches) re-sends the batch and recovers
+// the dropped candidate once the second response covers it.
+func TestRerank_ClassifyMissingCandidateID_RetriesAndRecovers(t *testing.T) {
+	svc, fake, _ := setupTestService(t)
+
+	candidates := []candidate{
+		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25, score: 1.0},
+		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50, score: 0.5},
+	}
+
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}, {"candidate_id": "c2", "relevant": true, "analysis": "matches"}]}`,
+	})
+	// First classify call drops c2 entirely (no error, just missing from
+	// results); second call (the retry) covers both.
+	fake.SetResponseSequence("rerank_classify.md", []llm.FakeResponse{
+		{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "answers fully"}]}`},
+		{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "answers fully"}, {"candidate_id": "c2", "role": "supporting", "analysis": "background"}]}`},
+	})
+
+	kept, _, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 2 {
+		t.Fatalf("expected both candidates recovered after retry, got %d: %+v", len(kept), kept)
+	}
+
+	classifyCalls := 0
+	for _, c := range fake.Calls() {
+		if c.PromptFile == "rerank_classify.md" {
+			classifyCalls++
+		}
+	}
+	if classifyCalls != 2 {
+		t.Errorf("expected rerank_classify.md to be retried once (2 calls total), got %d", classifyCalls)
+	}
+}
+
+// TestRerank_ClassifyMissingCandidateID_DefaultsAfterRetriesExhausted
+// covers the case where every retry attempt still omits the candidate_id:
+// rather than the candidate silently disappearing, it must default to
+// "supporting" (kept, lowest-trust tier) instead of vanishing from the
+// evidence set.
+func TestRerank_ClassifyMissingCandidateID_DefaultsAfterRetriesExhausted(t *testing.T) {
+	svc, fake, _ := setupTestService(t)
+
+	candidates := []candidate{
+		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25, score: 1.0},
+		{unitID: "u2", pointID: "p2", sourceID: "s1", lineStart: 26, lineEnd: 50, score: 0.5},
+	}
+
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}, {"candidate_id": "c2", "relevant": true, "analysis": "matches"}]}`,
+	})
+	// Every classify attempt drops c2.
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "answers fully"}]}`,
+	})
+
+	kept, _, err := svc.rerank(context.Background(), QueryContext{Question: "what is linear equation?"}, candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 2 {
+		t.Fatalf("expected c2 defaulted to supporting rather than dropped, got %d: %+v", len(kept), kept)
+	}
+	for _, c := range kept {
+		if c.unitID == "u2" && c.sourcePaths[0] != "supporting" {
+			t.Errorf("expected u2 defaulted to role=supporting, got %q", c.sourcePaths[0])
+		}
 	}
 }
 
@@ -982,6 +1062,49 @@ func TestBuildEvidenceSet(t *testing.T) {
 	}
 	if ref.SourceID != "s1" || ref.LineStart != 1 || ref.LineEnd != 25 {
 		t.Errorf("unexpected source_ref: %+v", ref)
+	}
+}
+
+// TestRerankAndBuildEvidenceSet_ForcesLastResortForMultiSourceSupportingOnly
+// reproduces a production bug: an induction-shaped question (0 direct
+// evidence, several supporting candidates from distinct sources — e.g. one
+// per national DB vendor) where evidence_mine.md judges some candidates as
+// "nothing to mine" (empty fragments). mineBatch's existing rule only
+// rescues a zero-fragment supporting candidate via whole-segment fallback
+// when the caller already flagged lastResort=true; on a normal (non-last-
+// resort) attempt it silently drops the candidate instead, which can push
+// the whole evidence set under the "覆盖面不足" bar for induction questions.
+// rerankAndBuildEvidenceSet must now force lastResort=true itself for this
+// shape so multi-source supporting-only evidence survives on the first try.
+func TestRerankAndBuildEvidenceSet_ForcesLastResortForMultiSourceSupportingOnly(t *testing.T) {
+	svc, fake, _ := setupTestService(t)
+	svc.evidenceSvc = evidence.NewService(fake, config.EvidenceConfig{Enabled: true})
+
+	candidates := []candidate{
+		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25, score: 1.0},
+		{unitID: "u2", pointID: "p2", sourceID: "s2", lineStart: 1, lineEnd: 3, score: 0.9},
+	}
+
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}, {"candidate_id": "c2", "relevant": true, "analysis": "matches"}]}`,
+	})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "role": "supporting", "analysis": "background"}, {"candidate_id": "c2", "role": "supporting", "analysis": "background"}]}`,
+	})
+	// Simulates the observed failure: evidence_mine.md finds nothing worth
+	// mining in either candidate.
+	fake.SetResponse("evidence_mine.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "fragments": []}, {"candidate_id": "c2", "fragments": []}]}`,
+	})
+
+	es, err := svc.rerankAndBuildEvidenceSet(context.Background(),
+		QueryContext{Question: "国产数据库优化都需要做统计信息处理吗"}, candidates,
+		func(string, string, string, int64) {}, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(es.Supporting) != 2 {
+		t.Fatalf("expected both multi-source supporting candidates rescued via forced last-resort fallback, got %d: %+v", len(es.Supporting), es.Supporting)
 	}
 }
 

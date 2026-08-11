@@ -1050,6 +1050,11 @@
   <div class="modal-box" id="kuSemanticsContent" style="width:680px"></div>
 </div>
 
+<!-- ── OUTLINE (目录) SUMMARY EDITOR MODAL ──── -->
+<div class="modal-overlay hidden" id="outlineEditorModal" onclick="if(event.target===this)closeOutlineEditor()">
+  <div class="modal-box" id="outlineEditorContent" style="width:520px"></div>
+</div>
+
 <script>
 // ═══════════════════════════════════════════════════════
 // STATE
@@ -1668,6 +1673,7 @@ var ICON_COPY  = '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="
 var ICON_CHECK = '<svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>';
 var ICON_RETRY = '<svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>';
 var ICON_EDIT  = '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+var ICON_FOLDER = '<svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
 var ICON_THUMB_UP   = '<svg viewBox="0 0 24 24"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2h0a3.13 3.13 0 0 1 3 3.88Z"/></svg>';
 var ICON_THUMB_DOWN = '<svg viewBox="0 0 24 24"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22h0a3.13 3.13 0 0 1-3-3.88Z"/></svg>';
 
@@ -2620,26 +2626,171 @@ function lifecycleBadgeHtml(lifecycle) {
   return '<span class="badge ' + cls + '">' + esc(lifecycle) + '</span>';
 }
 
+// 目录 node_type 徽标：structural（结构，来自文档标题层级） / semantic（语义，程序切分）。
+function outlineNodeTypeBadgeHtml(nodeType) {
+  if (nodeType === 'structural') return '<span class="badge" style="background:var(--green-lt);color:var(--green)">结构</span>';
+  if (nodeType === 'semantic') return '<span class="badge" style="background:var(--yellow-lt);color:var(--yellow)">语义</span>';
+  return '';
+}
+
+// 单条 KU 行的渲染，供分组树与"未归属目录"分组共用。
+function renderKuRow(u, citedUnitId) {
+  var highlight = citedUnitId && u.unit_id === citedUnitId
+    ? 'background:var(--accent-lt);border-radius:4px;padding:5px 6px;'
+    : 'padding:5px 0;';
+  return '<div style="display:flex;align-items:center;gap:6px;' + highlight + 'border-bottom:1px solid var(--border-lt);font-size:12px">\
+    <span style="flex:1">' + esc(u.center || '') + ' <span style="color:var(--text-3)">(L' + u.line_start + '-L' + u.line_end + ')</span></span>\
+    ' + lifecycleBadgeHtml(u.lifecycle) + '\
+    <button class="icon-btn" title="编辑知识单元语义" onclick="openKuSemantics(\'' + esc(u.unit_id) + '\')">' + ICON_EDIT + '</button>\
+  </div>';
+}
+
+// 递归渲染目录树分组：每个 outline 节点一行（展开图标+文件夹图标+标题+类型徽标+KU数量徽标+编辑按钮），
+// 下方渲染该目录直接归属（不递归子目录）的 KU 列表，再渲染子目录节点。
+function renderOutlineNode(node, unitsByOutline, sourceId, citedUnitId, depth) {
+  var indent = 14 + depth * 16;
+  var ownUnits = unitsByOutline[node.outline_id] || [];
+  var html = '<div style="margin-top:6px">\
+    <div style="display:flex;align-items:center;gap:6px;padding:4px 0 4px ' + indent + 'px;border-bottom:1px solid var(--border-lt)">\
+      <span style="color:var(--text-3);font-size:11px">▾</span>\
+      <span class="icon-btn" style="width:16px;height:16px;color:var(--text-3);pointer-events:none">' + ICON_FOLDER + '</span>\
+      <span style="flex:1;font-size:12px;font-weight:500;color:var(--text-1)">' + esc(node.title || '') + '</span>\
+      ' + outlineNodeTypeBadgeHtml(node.node_type) + '\
+      <span class="badge">' + ownUnits.length + ' KU</span>\
+      <button class="icon-btn" title="编辑目录摘要" onclick="openOutlineEditor(\'' + esc(sourceId) + '\',\'' + esc(node.outline_id) + '\')">' + ICON_EDIT + '</button>\
+    </div>\
+    <div style="padding-left:' + (indent + 20) + 'px">' +
+      (ownUnits.length
+        ? ownUnits.map(function(u) { return renderKuRow(u, citedUnitId); }).join('')
+        : '<div style="font-size:11px;color:var(--text-3);padding:4px 0">（无直接归属知识单元）</div>') +
+    '</div>';
+  if (Array.isArray(node.children) && node.children.length) {
+    html += node.children.map(function(child) {
+      return renderOutlineNode(child, unitsByOutline, sourceId, citedUnitId, depth + 1);
+    }).join('');
+  }
+  html += '</div>';
+  return html;
+}
+
 async function loadSourceUnits(sourceId, citedUnitId) {
   var el = document.getElementById('sourceKUList');
   if (!el) return;
   try {
     // 历史证据回链时带 citedUnitId：拉 all，确保 superseded KU 可见。
     var qs = citedUnitId ? '?lifecycle=all' : '?lifecycle=current';
-    var r = await api('GET', '/sources/' + sourceId + '/units' + qs);
-    var units = Array.isArray(r.data) ? r.data : [];
+    var results = await Promise.all([
+      api('GET', '/sources/' + sourceId + '/units' + qs),
+      api('GET', '/sources/' + sourceId + '/outlines')
+    ]);
+    var unitsRes = results[0], outlinesRes = results[1];
+    var units = Array.isArray(unitsRes.data) ? unitsRes.data : [];
+    var outlineTree = Array.isArray(outlinesRes.data) ? outlinesRes.data : [];
     if (!units.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text-3)">暂无知识单元</div>'; return; }
-    el.innerHTML = units.map(function(u) {
-      var highlight = citedUnitId && u.unit_id === citedUnitId
-        ? 'background:var(--accent-lt);border-radius:4px;padding:5px 6px;'
-        : 'padding:5px 0;';
-      return '<div style="display:flex;align-items:center;gap:6px;' + highlight + 'border-bottom:1px solid var(--border-lt);font-size:12px">\
-        <span style="flex:1">' + esc(u.center || '') + ' <span style="color:var(--text-3)">(L' + u.line_start + '-L' + u.line_end + ')</span></span>\
-        ' + lifecycleBadgeHtml(u.lifecycle) + '\
-        <button class="btn btn-sm" onclick="openKuSemantics(\'' + esc(u.unit_id) + '\')">编辑</button>\
-      </div>';
+
+    // 按 outline_id 归组 KU（不递归，只归属直接所属目录）；无 outline_id 的归入"未归属目录"。
+    var unitsByOutline = {};
+    var unassigned = [];
+    units.forEach(function(u) {
+      if (u.outline_id) {
+        (unitsByOutline[u.outline_id] = unitsByOutline[u.outline_id] || []).push(u);
+      } else {
+        unassigned.push(u);
+      }
+    });
+
+    var html = outlineTree.map(function(root) {
+      return renderOutlineNode(root, unitsByOutline, sourceId, citedUnitId, 0);
     }).join('');
+
+    if (unassigned.length) {
+      html += '<div style="margin-top:6px">\
+        <div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border-lt)">\
+          <span class="icon-btn" style="width:16px;height:16px;color:var(--text-3);pointer-events:none">' + ICON_FOLDER + '</span>\
+          <span style="flex:1;font-size:12px;font-weight:500;color:var(--text-2)">未归属目录</span>\
+          <span class="badge">' + unassigned.length + ' KU</span>\
+        </div>\
+        <div style="padding-left:20px">' + unassigned.map(function(u) { return renderKuRow(u, citedUnitId); }).join('') + '</div>\
+      </div>';
+    }
+
+    el.innerHTML = html || '<div style="font-size:12px;color:var(--text-3)">暂无知识单元</div>';
   } catch(e) { el.innerHTML = '<div style="font-size:12px;color:var(--red)">加载失败</div>'; }
+}
+
+// 目录属性编辑弹窗：标题/行号/类型/KU数量只读，summary 可编辑。
+var outlineEditorState = { sourceId: null, outlineId: null };
+
+async function openOutlineEditor(sourceId, outlineId) {
+  outlineEditorState = { sourceId: sourceId, outlineId: outlineId };
+  var modal = document.getElementById('outlineEditorModal');
+  var content = document.getElementById('outlineEditorContent');
+  content.innerHTML = '<h2>目录属性</h2><div style="color:var(--text-3)">加载中…</div>';
+  modal.classList.remove('hidden');
+
+  var r = await api('GET', '/sources/' + sourceId + '/outlines');
+  if (!r.ok) {
+    content.innerHTML = '<h2>目录属性</h2><div style="color:var(--red)">加载失败</div>\
+      <div class="modal-actions"><button class="btn" onclick="closeOutlineEditor()">关闭</button></div>';
+    return;
+  }
+  var node = findOutlineNode(Array.isArray(r.data) ? r.data : [], outlineId);
+  if (!node) {
+    content.innerHTML = '<h2>目录属性</h2><div style="color:var(--red)">未找到该目录</div>\
+      <div class="modal-actions"><button class="btn" onclick="closeOutlineEditor()">关闭</button></div>';
+    return;
+  }
+  content.innerHTML = '<h2>目录属性</h2>\
+    <div style="font-size:12px;margin-bottom:14px">\
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">\
+        <label style="width:90px;color:var(--text-2);flex-shrink:0">标题</label>\
+        <span style="flex:1;color:var(--text-1)">' + esc(node.title || '') + '</span>\
+      </div>\
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">\
+        <label style="width:90px;color:var(--text-2);flex-shrink:0">行号范围</label>\
+        <span style="flex:1;color:var(--text-1)">L' + node.line_start + '-L' + node.line_end + '</span>\
+      </div>\
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">\
+        <label style="width:90px;color:var(--text-2);flex-shrink:0">类型</label>\
+        <span style="flex:1">' + outlineNodeTypeBadgeHtml(node.node_type) + '</span>\
+      </div>\
+    </div>\
+    <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px">\
+      <label style="width:90px;font-size:12px;color:var(--text-2);flex-shrink:0;padding-top:5px">摘要</label>\
+      <textarea id="outlineEditorSummary" rows="5" style="flex:1;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">' + esc(node.summary || '') + '</textarea>\
+    </div>\
+    <div class="modal-actions">\
+      <button class="btn" onclick="closeOutlineEditor()">取消</button>\
+      <button class="btn btn-primary" onclick="saveOutlineEditor()">保存</button>\
+    </div>';
+}
+
+// 在目录树里递归查找指定 outline_id 的节点。
+function findOutlineNode(tree, outlineId) {
+  for (var i = 0; i < tree.length; i++) {
+    if (tree[i].outline_id === outlineId) return tree[i];
+    if (Array.isArray(tree[i].children) && tree[i].children.length) {
+      var found = findOutlineNode(tree[i].children, outlineId);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+async function saveOutlineEditor() {
+  var input = document.getElementById('outlineEditorSummary');
+  var summary = input ? input.value.trim() : '';
+  var r = await api('PATCH', '/sources/' + outlineEditorState.sourceId + '/outlines/' + outlineEditorState.outlineId, { summary: summary });
+  if (r.ok) {
+    closeOutlineEditor();
+    loadSourceUnits(outlineEditorState.sourceId);
+  } else {
+    alert('保存失败：' + ((r.data && r.data.error) || r.status));
+  }
+}
+
+function closeOutlineEditor() {
+  document.getElementById('outlineEditorModal').classList.add('hidden');
 }
 
 // 历史版本（GET /sources/:id/versions）：每次重新上传被替换掉的旧文件快照，

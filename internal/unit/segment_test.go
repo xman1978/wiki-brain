@@ -73,7 +73,11 @@ func TestBuildSegments_LargeLeafPassthrough(t *testing.T) {
 	}
 }
 
-func TestBuildSegments_MergeSmallSegments(t *testing.T) {
+// Sibling leaves never merge into each other even when all are tiny — a
+// merged KU's outline_id must resolve to one real leaf, not their shared
+// ancestor, or outline-structure recall and the source-detail KU tree both
+// lose track of it (see leafBoundaryKey doc comment, 2026-08-11 排查).
+func TestBuildSegments_SiblingLeavesStayUnmerged(t *testing.T) {
 	outlines := []source.Outline{
 		makeOutline("root", "", 1, "Root", 1, 6),
 		makeOutline("a", "root", 2, "A", 1, 2),
@@ -85,11 +89,14 @@ func TestBuildSegments_MergeSmallSegments(t *testing.T) {
 
 	segments := BuildSegments(outlines, lines, 4000, 400)
 
-	if len(segments) != 1 {
-		t.Fatalf("expected 1 merged segment, got %d", len(segments))
+	if len(segments) != 3 {
+		t.Fatalf("expected 3 segments (no cross-leaf merge), got %d", len(segments))
 	}
-	if segments[0].LineStart != 1 || segments[0].LineEnd != 6 {
-		t.Errorf("merged range = %d-%d, want 1-6", segments[0].LineStart, segments[0].LineEnd)
+	wantIDs := []string{"a", "b", "c"}
+	for i, want := range wantIDs {
+		if !segments[i].OutlineID.Valid || segments[i].OutlineID.String != want {
+			t.Errorf("segment[%d].OutlineID = %v, want %q", i, segments[i].OutlineID, want)
+		}
 	}
 }
 
@@ -108,7 +115,7 @@ func TestFindLeaves(t *testing.T) {
 	}
 }
 
-func TestBuildSegments_MergeSmallIntoLargeNeighbor(t *testing.T) {
+func TestBuildSegments_SmallLeafBetweenLargeSiblingsStaysUnmerged(t *testing.T) {
 	outlines := []source.Outline{
 		makeOutline("root", "", 1, "Root", 1, 50),
 		makeOutline("a", "root", 2, "A", 1, 20),  // 20 lines * 31 chars = 620 chars
@@ -123,20 +130,26 @@ func TestBuildSegments_MergeSmallIntoLargeNeighbor(t *testing.T) {
 
 	segments := BuildSegments(outlines, lines, 4000, 400)
 
-	// a=620 (stays), b=62 (small, merges forward into c) → b+c = 930
-	if len(segments) != 2 {
-		t.Fatalf("expected 2 segments, got %d", len(segments))
+	// b stays its own leaf-tagged segment despite being small — it must not
+	// absorb into sibling c just because both are under the same root.
+	if len(segments) != 3 {
+		t.Fatalf("expected 3 segments (no cross-leaf merge), got %d", len(segments))
 	}
-	if segments[0].LineStart != 1 || segments[0].LineEnd != 20 {
-		t.Errorf("seg[0] = %d-%d, want 1-20", segments[0].LineStart, segments[0].LineEnd)
+	if segments[0].LineStart != 1 || segments[0].LineEnd != 20 || segments[0].OutlineID.String != "a" {
+		t.Errorf("seg[0] = %d-%d outline=%v, want 1-20 outline=a", segments[0].LineStart, segments[0].LineEnd, segments[0].OutlineID)
 	}
-	if segments[1].LineStart != 21 || segments[1].LineEnd != 50 {
-		t.Errorf("seg[1] = %d-%d, want 21-50", segments[1].LineStart, segments[1].LineEnd)
+	if segments[1].LineStart != 21 || segments[1].LineEnd != 22 || segments[1].OutlineID.String != "b" {
+		t.Errorf("seg[1] = %d-%d outline=%v, want 21-22 outline=b", segments[1].LineStart, segments[1].LineEnd, segments[1].OutlineID)
+	}
+	if segments[2].LineStart != 23 || segments[2].LineEnd != 50 || segments[2].OutlineID.String != "c" {
+		t.Errorf("seg[2] = %d-%d outline=%v, want 23-50 outline=c", segments[2].LineStart, segments[2].LineEnd, segments[2].OutlineID)
 	}
 }
 
-func TestBuildSegments_MergeTrailingSmall(t *testing.T) {
-	// Last segment is small, should merge backward into previous
+func TestBuildSegments_TrailingSmallLeafStaysUnmerged(t *testing.T) {
+	// Last segment is small and a sibling leaf of the previous one — must not
+	// merge backward across the leaf boundary even though both fit under the
+	// same root.
 	outlines := []source.Outline{
 		makeOutline("root", "", 1, "Root", 1, 22),
 		makeOutline("a", "root", 2, "A", 1, 20),
@@ -150,12 +163,11 @@ func TestBuildSegments_MergeTrailingSmall(t *testing.T) {
 
 	segments := BuildSegments(outlines, lines, 4000, 400)
 
-	// a is big enough, b is small and last → merge backward into a
-	if len(segments) != 1 {
-		t.Fatalf("expected 1 segment (b merged backward into a), got %d", len(segments))
+	if len(segments) != 2 {
+		t.Fatalf("expected 2 segments (no cross-leaf merge), got %d", len(segments))
 	}
-	if segments[0].LineEnd != 22 {
-		t.Errorf("merged segment should end at 22, got %d", segments[0].LineEnd)
+	if segments[1].LineStart != 21 || segments[1].LineEnd != 22 || segments[1].OutlineID.String != "b" {
+		t.Errorf("seg[1] = %d-%d outline=%v, want 21-22 outline=b", segments[1].LineStart, segments[1].LineEnd, segments[1].OutlineID)
 	}
 }
 
@@ -256,5 +268,36 @@ func TestBuildSegments_UncoveredGapBetweenLeaves(t *testing.T) {
 	}
 	if !gapCovered {
 		t.Fatalf("expected lines 11-20 to be covered by a synthesized segment, got segments %+v", segments)
+	}
+}
+
+// When a gap between two leaves still sits inside a covering ancestor node
+// (e.g. a semantic parent whose own range spans both leaves and the space
+// between them), the synthesized gap segment must inherit that ancestor's
+// OutlineID rather than staying null — a null outline_id makes the resulting
+// KU invisible to outline-structure recall (2026-08-11 排查).
+func TestBuildSegments_UncoveredGapAttachesToCoveringAncestor(t *testing.T) {
+	outlines := []source.Outline{
+		makeOutline("root", "", 1, "Root", 1, 30),
+		makeOutline("a", "root", 2, "Section A", 1, 10),
+		makeOutline("b", "root", 2, "Section B", 21, 30),
+	}
+	lines := make([]string, 30)
+	for i := range lines {
+		lines[i] = strings.Repeat("x", 50)
+	}
+
+	segments := BuildSegments(outlines, lines, 4000, 1)
+	var gapSeg *Segment
+	for i := range segments {
+		if segments[i].LineStart <= 11 && segments[i].LineEnd >= 20 {
+			gapSeg = &segments[i]
+		}
+	}
+	if gapSeg == nil {
+		t.Fatalf("expected lines 11-20 to be covered by a synthesized segment, got segments %+v", segments)
+	}
+	if !gapSeg.OutlineID.Valid || gapSeg.OutlineID.String != "root" {
+		t.Errorf("gap segment OutlineID = %v, want valid \"root\"", gapSeg.OutlineID)
 	}
 }

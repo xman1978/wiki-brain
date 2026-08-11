@@ -702,7 +702,17 @@ func repairSections(sections []llmSection, totalLines int) []llmSection {
 		prev := &valid[i-1]
 		curr := &valid[i]
 
-		if prev.Level != curr.Level {
+		// curr nested inside prev (a child section) — leave prev's range
+		// alone, the child's own range sits within it by design. Only
+		// same-level and "curr is not prev's descendant" pairs get gap
+		// closure below; this used to require prev.Level == curr.Level,
+		// which meant any cross-level adjacent pair (parent/child boundary,
+		// or two non-nested sections at different levels) skipped closure
+		// entirely and left gaps for uncoveredSegments to swallow with no
+		// outline_id (2026-08-11 排查, docs/impl/v1/retrieval.md). Containment
+		// is the right test regardless of level: it's what actually decides
+		// whether curr's range is "inside" prev or genuinely adjacent to it.
+		if curr.LineStart >= prev.LineStart && curr.LineEnd <= prev.LineEnd {
 			continue
 		}
 
