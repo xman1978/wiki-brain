@@ -1,7 +1,7 @@
 package activation
 
 import (
-	"database/sql"
+	"context"
 	"testing"
 	"time"
 
@@ -9,20 +9,11 @@ import (
 	"github.com/jxman78/wiki-brain/internal/session"
 )
 
-func verifyLink(t *testing.T, svc *Service, l *ActivationLink) *ActivationLink {
-	t.Helper()
-	updated, err := svc.TransitionLink(l.LinkID, StatusVerified, "test", nil)
-	if err != nil {
-		t.Fatalf("promote %s: %v", l.LinkID, err)
-	}
-	return updated
-}
-
 func TestMatcher_ExactQuadrupleReproduced_ScoresOne(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp1")
 
 	cond := LinkCondition{SubjectTerms: "住宿 费用", IntentTerms: []string{"标准"}}
@@ -37,7 +28,7 @@ func TestMatcher_ExactQuadrupleReproduced_ScoresOne(t *testing.T) {
 		Intent:           "标准",
 		ExpandedQuestion: "住宿费用标准是多少",
 	}
-	matches, err := matcher.Match(query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -60,7 +51,7 @@ func TestMatcher_KnownQuestionTermsShortcut_BypassesFourTupleGate(t *testing.T) 
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp1")
 
 	cond := LinkCondition{SubjectTerms: "住宿 费用", IntentTerms: []string{"标准"}}
@@ -85,7 +76,7 @@ func TestMatcher_KnownQuestionTermsShortcut_BypassesFourTupleGate(t *testing.T) 
 		Intent:           "完全不同的意图",
 		ExpandedQuestion: question,
 	}
-	matches, err := matcher.Match(query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -101,7 +92,7 @@ func TestMatcher_ConstraintMismatch_ExcludedDespiteSubjectIntentMatch(t *testing
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp1")
 
 	constraintTerms := text.Terms(text.Normalize("产品甲"))
@@ -118,7 +109,7 @@ func TestMatcher_ConstraintMismatch_ExcludedDespiteSubjectIntentMatch(t *testing
 		Constraint:       "产品乙",
 		ExpandedQuestion: "住宿费用标准是多少",
 	}
-	matches, err := matcher.Match(query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -131,7 +122,7 @@ func TestMatcher_ConstraintMustMatchExactly(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp1")
 
 	// Compute the stored term string the same way Study would (Normalize +
@@ -153,7 +144,7 @@ func TestMatcher_ConstraintMustMatchExactly(t *testing.T) {
 		Constraint:       "产品甲 加班",
 		ExpandedQuestion: "住宿费用标准是多少",
 	}
-	matches, err := matcher.Match(query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -163,7 +154,7 @@ func TestMatcher_ConstraintMustMatchExactly(t *testing.T) {
 
 	// The exact same constraint text does match.
 	query.Constraint = "产品甲"
-	matches, err = matcher.Match(query, MatchConfig{})
+	matches, err = matcher.Match(context.Background(), query, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -176,7 +167,7 @@ func TestMatcher_AudienceGating(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp1")
 
 	cond := LinkCondition{SubjectTerms: "住宿", Audience: []string{"hr"}}
@@ -202,7 +193,7 @@ func TestMatcher_AudienceGating(t *testing.T) {
 				Audience:         tc.audience,
 				ExpandedQuestion: "住宿标准",
 			}
-			matches, err := matcher.Match(query, MatchConfig{})
+			matches, err := matcher.Match(context.Background(), query, MatchConfig{})
 			if err != nil {
 				t.Fatalf("match: %v", err)
 			}
@@ -217,7 +208,7 @@ func TestMatcher_FallbackWhenQuadrupleMissing(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp1")
 	seedKPFull(t, db, "kp2")
 
@@ -246,7 +237,7 @@ func TestMatcher_FallbackWhenQuadrupleMissing(t *testing.T) {
 	query := session.ExpandedQuery{
 		ExpandedQuestion: rawQuestion,
 	}
-	matches, err := matcher.Match(query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -258,13 +249,19 @@ func TestMatcher_FallbackWhenQuadrupleMissing(t *testing.T) {
 	}
 }
 
-func TestMatcher_IncludesCandidateExcludesWeakenedDeprecatedAndNonCurrentKP(t *testing.T) {
+// TestMatcher_IncludesCandidateAndVerified_ExcludesDeprecatedAndNonCurrentKP
+// replaces the pre-2026-08-13 weakened-state variant (weakened no longer
+// exists, docs/design/activation-convergence.md): both candidate- and
+// verified-status links for a current KP participate in Match (matchable
+// candidates aren't filtered by status), a link whose target KP has gone
+// non-current is excluded, and an explicitly-deprecated link is excluded.
+func TestMatcher_IncludesCandidateAndVerified_ExcludesDeprecatedAndNonCurrentKP(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp-cand")
-	seedKPFull(t, db, "kp-weak")
+	seedKPFull(t, db, "kp-verified")
 	seedKPFull(t, db, "kp-dep")
 	seedKPFull(t, db, "kp-stale")
 	setLifecycle(t, db, "kp-stale", "superseded")
@@ -273,61 +270,62 @@ func TestMatcher_IncludesCandidateExcludesWeakenedDeprecatedAndNonCurrentKP(t *t
 	if err != nil {
 		t.Fatalf("create candidate: %v", err)
 	}
-	weak, err := svc.CreateLink("t-weak", LinkCondition{SubjectTerms: "住宿"}, "kp-weak", nil)
+	verifiedLink, err := svc.CreateLink("t-verified", LinkCondition{SubjectTerms: "住宿"}, "kp-verified", nil)
 	if err != nil {
-		t.Fatalf("create weak link: %v", err)
+		t.Fatalf("create verified-to-be link: %v", err)
 	}
-	if _, err := svc.TransitionLink(weak.LinkID, StatusVerified, "test", nil); err != nil {
-		t.Fatalf("verify: %v", err)
-	}
-	if _, err := svc.TransitionLink(weak.LinkID, StatusWeakened, "test", nil); err != nil {
-		t.Fatalf("weaken: %v", err)
-	}
+	verifyLink(t, svc, verifiedLink)
+
 	dep, err := svc.CreateLink("t-dep", LinkCondition{SubjectTerms: "住宿"}, "kp-dep", nil)
 	if err != nil {
 		t.Fatalf("create dep link: %v", err)
 	}
-	if _, err := svc.TransitionLink(dep.LinkID, StatusDeprecated, "test", nil); err != nil {
+	if err := store.UpdateStatus(dep.LinkID, StatusDeprecated); err != nil {
 		t.Fatalf("deprecate: %v", err)
 	}
 	stale, err := svc.CreateLink("t-stale", LinkCondition{SubjectTerms: "住宿"}, "kp-stale", nil)
 	if err != nil {
 		t.Fatalf("create stale: %v", err)
 	}
-	if _, err := svc.TransitionLink(stale.LinkID, StatusVerified, "test", nil); err != nil {
-		t.Fatalf("verify stale: %v", err)
-	}
+	verifyLink(t, svc, stale)
 
 	query := session.ExpandedQuery{Subject: "住宿", ExpandedQuestion: "住宿标准"}
-	matches, err := matcher.Match(query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if len(matches) != 1 {
-		t.Fatalf("expected only candidate (current KP) to match for signal recording, got %+v", matches)
+	if len(matches) != 2 {
+		t.Fatalf("expected candidate + verified (both current KP) to match, got %+v", matches)
 	}
-	if matches[0].Link.LinkID != cand.LinkID {
-		t.Errorf("expected candidate link %s, got %s", cand.LinkID, matches[0].Link.LinkID)
+	gotIDs := map[string]bool{}
+	for _, m := range matches {
+		gotIDs[m.Link.LinkID] = true
 	}
-	if matches[0].Link.Status != StatusCandidate {
-		t.Errorf("status = %q, want candidate", matches[0].Link.Status)
+	if !gotIDs[cand.LinkID] || !gotIDs[verifiedLink.LinkID] {
+		t.Errorf("expected both candidate %s and verified %s to match, got %+v", cand.LinkID, verifiedLink.LinkID, matches)
+	}
+	if gotIDs[dep.LinkID] {
+		t.Error("deprecated link must not match")
+	}
+	if gotIDs[stale.LinkID] {
+		t.Error("link whose target KP is no longer current must not match")
 	}
 }
 
-func TestMatcher_CacheInvalidatesOnTransition(t *testing.T) {
+func TestMatcher_CacheInvalidatesOnLifecycleDeprecate(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp1")
 
-	l, err := svc.CreateLink("t1", LinkCondition{SubjectTerms: "住宿"}, "kp1", nil)
+	_, err := svc.CreateLink("t1", LinkCondition{SubjectTerms: "住宿"}, "kp1", nil)
 	if err != nil {
 		t.Fatalf("create link: %v", err)
 	}
 
 	query := session.ExpandedQuery{Subject: "住宿", ExpandedQuestion: "住宿标准"}
-	matches, err := matcher.Match(query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -335,17 +333,17 @@ func TestMatcher_CacheInvalidatesOnTransition(t *testing.T) {
 		t.Fatalf("expected candidate match after CreateLink invalidates cache, got %+v", matches)
 	}
 
-	// TransitionLink goes through Service, which calls matcher.InvalidateCache().
-	if _, err := svc.TransitionLink(l.LinkID, StatusDeprecated, "test", nil); err != nil {
-		t.Fatalf("deprecate: %v", err)
+	setLifecycle(t, db, "kp1", "superseded")
+	if err := svc.InvalidateCache(); err != nil {
+		t.Fatalf("invalidate cache: %v", err)
 	}
 
-	matches, err = matcher.Match(query, MatchConfig{})
+	matches, err = matcher.Match(context.Background(), query, MatchConfig{})
 	if err != nil {
-		t.Fatalf("match after deprecate: %v", err)
+		t.Fatalf("match after lifecycle change: %v", err)
 	}
 	if len(matches) != 0 {
-		t.Errorf("expected cache to reload and drop deprecated link, got %+v", matches)
+		t.Errorf("expected cache to reload and drop the link whose KP is no longer current, got %+v", matches)
 	}
 }
 
@@ -353,7 +351,7 @@ func TestMatcher_CacheInvalidatesOnLifecycleChange(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp1")
 
 	l, err := svc.CreateLink("t1", LinkCondition{SubjectTerms: "住宿"}, "kp1", nil)
@@ -363,7 +361,7 @@ func TestMatcher_CacheInvalidatesOnLifecycleChange(t *testing.T) {
 	verifyLink(t, svc, l)
 
 	query := session.ExpandedQuery{Subject: "住宿", ExpandedQuestion: "住宿标准"}
-	matches, err := matcher.Match(query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -376,7 +374,7 @@ func TestMatcher_CacheInvalidatesOnLifecycleChange(t *testing.T) {
 		t.Fatalf("invalidate cache: %v", err)
 	}
 
-	matches, err = matcher.Match(query, MatchConfig{})
+	matches, err = matcher.Match(context.Background(), query, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match after lifecycle change: %v", err)
 	}
@@ -391,15 +389,17 @@ func TestMatcher_CacheInvalidatesOnLifecycleChange(t *testing.T) {
 // construction a *subset* of any single phrasing's own subject terms — so a
 // query whose subject terms are a strict superset of the link's core must
 // still match.
-func TestMatcher_SubjectOverlap_QuerySupersetOfCoreMatches(t *testing.T) {
+// TestMatcher_SubjectMustMatchExactly_SupersetNoLongerMatches covers the
+// 2026-08-12 修订: subject is no longer containment/synonym-fuzzy matched —
+// a query subject that's a superset of a stored (shorter) subject must now
+// miss, same as any other exact-match dimension.
+func TestMatcher_SubjectMustMatchExactly_SupersetNoLongerMatches(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp1")
 
-	// "数据库 句柄" is the intersection core of "数据库 句柄 限制" and
-	// "数据库 句柄 管理" — shorter than either full phrasing.
 	l, err := svc.CreateLink("t1", LinkCondition{SubjectTerms: "数据库 句柄"}, "kp1", nil)
 	if err != nil {
 		t.Fatalf("create link: %v", err)
@@ -410,12 +410,12 @@ func TestMatcher_SubjectOverlap_QuerySupersetOfCoreMatches(t *testing.T) {
 		Subject:          "数据库 句柄 限制",
 		ExpandedQuestion: "数据库句柄数限制是多少",
 	}
-	matches, err := matcher.Match(query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if len(matches) != 1 {
-		t.Errorf("expected the shorter stored core to match a query subject that's a superset of it, got %+v", matches)
+	if len(matches) != 0 {
+		t.Errorf("expected a superset query subject to no longer match under exact-match subject comparison, got %+v", matches)
 	}
 }
 
@@ -427,7 +427,7 @@ func TestMatcher_SubjectOverlap_CoreWordMissingFromQuery_Excluded(t *testing.T) 
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp1")
 
 	l, err := svc.CreateLink("t1", LinkCondition{SubjectTerms: "数据库 句柄 限制"}, "kp1", nil)
@@ -440,7 +440,7 @@ func TestMatcher_SubjectOverlap_CoreWordMissingFromQuery_Excluded(t *testing.T) 
 		Subject:          "数据库 句柄",
 		ExpandedQuestion: "数据库句柄是什么",
 	}
-	matches, err := matcher.Match(query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -456,14 +456,14 @@ func TestMatcher_AudienceEitherObservedGroupMatches(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp1")
 
 	now := time.Now().UTC()
 	l, err := svc.CreateLink("t1", LinkCondition{
 		ObservedConditions: []ObservedCondition{
-			{Subject: "住宿", Intent: "", Audience: "hr", Constraint: "", FirstSeenAt: now, LastSeenAt: now, HitCount: 1},
-			{Subject: "住宿", Intent: "", Audience: text.NormalizeCompact("行政"), Constraint: "", FirstSeenAt: now, LastSeenAt: now, HitCount: 1},
+			{Subject: "住宿", Intent: "", Audience: "hr", Constraint: "", FirstSeenAt: now, LastSeenAt: now, SuccessCount: 1},
+			{Subject: "住宿", Intent: "", Audience: text.NormalizeCompact("行政"), Constraint: "", FirstSeenAt: now, LastSeenAt: now, SuccessCount: 1},
 		},
 	}, "kp1", nil)
 	if err != nil {
@@ -478,7 +478,7 @@ func TestMatcher_AudienceEitherObservedGroupMatches(t *testing.T) {
 				Audience:         audience,
 				ExpandedQuestion: "住宿标准",
 			}
-			matches, err := matcher.Match(query, MatchConfig{})
+			matches, err := matcher.Match(context.Background(), query, MatchConfig{})
 			if err != nil {
 				t.Fatalf("match: %v", err)
 			}
@@ -489,7 +489,7 @@ func TestMatcher_AudienceEitherObservedGroupMatches(t *testing.T) {
 	}
 
 	query := session.ExpandedQuery{Subject: "住宿", Audience: "财务", ExpandedQuestion: "住宿标准"}
-	matches, err := matcher.Match(query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -504,7 +504,7 @@ func TestMatcher_NoCrossProductAcrossGroups(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp1")
 
 	now := time.Now().UTC()
@@ -512,8 +512,8 @@ func TestMatcher_NoCrossProductAcrossGroups(t *testing.T) {
 	qiB := text.Terms(text.Normalize("查询标准"))
 	l, err := svc.CreateLink("t1", LinkCondition{
 		ObservedConditions: []ObservedCondition{
-			{Subject: "招待费报销", Intent: qiA, Audience: "", Constraint: "", FirstSeenAt: now, LastSeenAt: now, HitCount: 1},
-			{Subject: "差旅报销", Intent: qiB, Audience: "", Constraint: "", FirstSeenAt: now, LastSeenAt: now, HitCount: 1},
+			{Subject: "招待费报销", Intent: qiA, Audience: "", Constraint: "", FirstSeenAt: now, LastSeenAt: now, SuccessCount: 1},
+			{Subject: "差旅报销", Intent: qiB, Audience: "", Constraint: "", FirstSeenAt: now, LastSeenAt: now, SuccessCount: 1},
 		},
 	}, "kp1", nil)
 	if err != nil {
@@ -522,7 +522,7 @@ func TestMatcher_NoCrossProductAcrossGroups(t *testing.T) {
 	verifyLink(t, svc, l)
 
 	// Cross: subject of A + intent of B
-	matches, err := matcher.Match(session.ExpandedQuery{
+	matches, err := matcher.Match(context.Background(), session.ExpandedQuery{
 		Subject: "招待费报销", Intent: "查询标准", ExpandedQuestion: "x",
 	}, MatchConfig{})
 	if err != nil {
@@ -533,7 +533,7 @@ func TestMatcher_NoCrossProductAcrossGroups(t *testing.T) {
 	}
 
 	// Exact group A
-	matches, err = matcher.Match(session.ExpandedQuery{
+	matches, err = matcher.Match(context.Background(), session.ExpandedQuery{
 		Subject: "招待费报销", Intent: "查询期限", ExpandedQuestion: "x",
 	}, MatchConfig{})
 	if err != nil {
@@ -552,41 +552,6 @@ func TestMatcher_NoCrossProductAcrossGroups(t *testing.T) {
 // concept in the same slot every time. Checking the core against
 // subject+intent combined (not subject alone) catches this without loosening
 // what Study is willing to put in the core in the first place.
-func TestMatcher_SubjectCoreMatchesAcrossSubjectAndIntent(t *testing.T) {
-	db := setupTestDB(t)
-	store := NewStore(db)
-	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
-	seedKPFull(t, db, "kp1")
-
-	// "扣分" is absent from Subject but present in Intent this time — the
-	// core word is still genuinely present in the question, just in a
-	// different slot than whichever historical trace it was learned from.
-	query := session.ExpandedQuery{
-		Subject:          "培训考勤管理",
-		Intent:           "查询考勤扣分规则",
-		ExpandedQuestion: "培训考勤扣分是怎么规定的",
-	}
-	// IntentTerms includes the query's own (normalized) intent so this test
-	// isolates the core-matching fix — intent whitelist membership is a
-	// separate, unrelated gate covered by TestMatcher_ExactQuadrupleReproduced_ScoresOne.
-	l, err := svc.CreateLink("t1", LinkCondition{
-		SubjectTerms: "培训 扣分 考勤",
-		IntentTerms:  []string{text.Terms(text.Normalize(query.Intent))},
-	}, "kp1", nil)
-	if err != nil {
-		t.Fatalf("create link: %v", err)
-	}
-	verifyLink(t, svc, l)
-	matches, err := matcher.Match(query, MatchConfig{})
-	if err != nil {
-		t.Fatalf("match: %v", err)
-	}
-	if len(matches) != 1 {
-		t.Errorf("expected core word found via intent (not subject) to still match, got %+v", matches)
-	}
-}
-
 // TestMatcher_SubjectCoreSurvivesTokenizationBoundaryDrift covers the other
 // real gap: the gse segmenter doesn't always draw the same word boundary for
 // the same compound noun. A core word stored as one token ("数据库连接") must
@@ -603,88 +568,6 @@ func TestMatcher_SubjectCoreSurvivesTokenizationBoundaryDrift(t *testing.T) {
 	}
 }
 
-// seedActiveSynonym inserts a status=active subject_synonyms row directly
-// (docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md),
-// standing in for either a preset-loaded alias or a confirmed gap-mined
-// candidate — Match doesn't distinguish by source.
-func seedActiveSynonym(t *testing.T, db *sql.DB, term, canonical string) {
-	t.Helper()
-	_, err := db.Exec(`INSERT INTO subject_synonyms (synonym_id, term, canonical, source, status)
-		VALUES (?, ?, ?, 'preset', 'active')`, "syn-"+term, term, canonical)
-	if err != nil {
-		t.Fatalf("seed active synonym %q->%q: %v", term, canonical, err)
-	}
-}
-
-// TestMatcher_SubjectSynonymCanonicalizesBothSides covers the core same-KP
-// scenario the synonym dictionary exists for: a link observed one wording,
-// and a differently-worded (but registered as synonymous) question should
-// still hit it — without loosening intent/audience/constraint at all.
-func TestMatcher_SubjectSynonymCanonicalizesBothSides(t *testing.T) {
-	db := setupTestDB(t)
-	store := NewStore(db)
-	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
-	seedKPFull(t, db, "kp1")
-	seedActiveSynonym(t, db, text.Normalize("证券市场"), text.Normalize("股票市场"))
-
-	now := time.Now().UTC()
-	l, err := svc.CreateLink("t1", LinkCondition{
-		ObservedConditions: []ObservedCondition{
-			{Subject: text.Normalize("股票市场"), Intent: "", Audience: "", Constraint: "", FirstSeenAt: now, LastSeenAt: now, HitCount: 1},
-		},
-	}, "kp1", nil)
-	if err != nil {
-		t.Fatalf("create link: %v", err)
-	}
-	verifyLink(t, svc, l)
-
-	matches, err := matcher.Match(session.ExpandedQuery{
-		Subject: "证券市场", ExpandedQuestion: "证券市场怎么运作",
-	}, MatchConfig{})
-	if err != nil {
-		t.Fatalf("match: %v", err)
-	}
-	if len(matches) != 1 {
-		t.Errorf("expected synonym-registered subject wording to match, got %+v", matches)
-	}
-}
-
-// TestMatcher_SubjectSynonymDoesNotLoosenOtherDimensions ensures the
-// canonicalization is scoped to subject only: a query whose subject is
-// synonym-equivalent but whose constraint differs from every observed group
-// must still miss.
-func TestMatcher_SubjectSynonymDoesNotLoosenOtherDimensions(t *testing.T) {
-	db := setupTestDB(t)
-	store := NewStore(db)
-	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
-	seedKPFull(t, db, "kp1")
-	seedActiveSynonym(t, db, text.Normalize("证券市场"), text.Normalize("股票市场"))
-
-	now := time.Now().UTC()
-	constraintTerms := text.Terms(text.Normalize("产品甲"))
-	l, err := svc.CreateLink("t1", LinkCondition{
-		ObservedConditions: []ObservedCondition{
-			{Subject: text.Normalize("股票市场"), Intent: "", Audience: "", Constraint: constraintTerms, FirstSeenAt: now, LastSeenAt: now, HitCount: 1},
-		},
-	}, "kp1", nil)
-	if err != nil {
-		t.Fatalf("create link: %v", err)
-	}
-	verifyLink(t, svc, l)
-
-	matches, err := matcher.Match(session.ExpandedQuery{
-		Subject: "证券市场", Constraint: "产品乙", ExpandedQuestion: "证券市场怎么运作",
-	}, MatchConfig{})
-	if err != nil {
-		t.Fatalf("match: %v", err)
-	}
-	if len(matches) != 0 {
-		t.Errorf("expected constraint mismatch to still exclude despite subject synonym match, got %+v", matches)
-	}
-}
-
 // TestMatcher_SubjectOnlyMiss_DetectsCandidateWhenOtherDimensionsAgree covers
 // the diagnostic Trace's near-miss detection relies on to mine
 // subject_synonym_gap candidates: intent/audience/constraint all agree with
@@ -694,13 +577,13 @@ func TestMatcher_SubjectOnlyMiss_DetectsCandidateWhenOtherDimensionsAgree(t *tes
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp1")
 
 	now := time.Now().UTC()
 	l, err := svc.CreateLink("t1", LinkCondition{
 		ObservedConditions: []ObservedCondition{
-			{Subject: text.Normalize("招待费报销"), Intent: "", Audience: "", Constraint: "", FirstSeenAt: now, LastSeenAt: now, HitCount: 3},
+			{Subject: text.Normalize("招待费报销"), Intent: "", Audience: "", Constraint: "", FirstSeenAt: now, LastSeenAt: now, SuccessCount: 3},
 		},
 	}, "kp1", nil)
 	if err != nil {
@@ -709,7 +592,7 @@ func TestMatcher_SubjectOnlyMiss_DetectsCandidateWhenOtherDimensionsAgree(t *tes
 	verifyLink(t, svc, l)
 
 	// No synonym registered yet — Match itself should miss.
-	matches, err := matcher.Match(session.ExpandedQuery{
+	matches, err := matcher.Match(context.Background(), session.ExpandedQuery{
 		Subject: "差旅报销", ExpandedQuestion: "差旅报销怎么处理",
 	}, MatchConfig{})
 	if err != nil {
@@ -735,14 +618,14 @@ func TestMatcher_SubjectOnlyMiss_NoCandidateWhenOtherDimensionsDiffer(t *testing
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 	seedKPFull(t, db, "kp1")
 
 	now := time.Now().UTC()
 	constraintTerms := text.Terms(text.Normalize("产品甲"))
 	l, err := svc.CreateLink("t1", LinkCondition{
 		ObservedConditions: []ObservedCondition{
-			{Subject: text.Normalize("招待费报销"), Intent: "", Audience: "", Constraint: constraintTerms, FirstSeenAt: now, LastSeenAt: now, HitCount: 1},
+			{Subject: text.Normalize("招待费报销"), Intent: "", Audience: "", Constraint: constraintTerms, FirstSeenAt: now, LastSeenAt: now, SuccessCount: 1},
 		},
 	}, "kp1", nil)
 	if err != nil {

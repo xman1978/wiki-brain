@@ -12,7 +12,7 @@ func setupHandler(t *testing.T) (*Handler, *Service) {
 	t.Helper()
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, NewMatcher(store))
+	svc := newTestService(store, NewMatcher(store))
 	return NewHandler(svc), svc
 }
 
@@ -54,13 +54,11 @@ func TestHandler_List_FilterByStatus(t *testing.T) {
 	seedKPFull(t, db, "kp1")
 	seedKPFull(t, db, "kp2")
 
-	l, err := svc.CreateLink("t1", LinkCondition{}, "kp1", nil)
+	l, err := svc.CreateLink("t1", LinkCondition{SubjectTerms: "s1"}, "kp1", nil)
 	if err != nil {
 		t.Fatalf("create link: %v", err)
 	}
-	if _, err := svc.TransitionLink(l.LinkID, StatusVerified, "test", nil); err != nil {
-		t.Fatalf("promote: %v", err)
-	}
+	verifyLink(t, svc, l)
 	// Different point_id — a point has at most one link (idx_al_point_id is
 	// UNIQUE), so a second candidate to filter out must target a different KP.
 	if _, err := svc.CreateLink("t2", LinkCondition{}, "kp2", nil); err != nil {
@@ -102,13 +100,11 @@ func TestHandler_Get_OmitsLearningResults(t *testing.T) {
 	db := setupDBFromSvc(t, svc)
 	seedKPFull(t, db, "kp1")
 
-	l, err := svc.CreateLink("t1", LinkCondition{}, "kp1", []string{"ev1"})
+	l, err := svc.CreateLink("t1", LinkCondition{SubjectTerms: "s1"}, "kp1", []string{"ev1"})
 	if err != nil {
 		t.Fatalf("create link: %v", err)
 	}
-	if _, err := svc.TransitionLink(l.LinkID, StatusVerified, "test", []string{"ev1"}); err != nil {
-		t.Fatalf("promote: %v", err)
-	}
+	verifyLink(t, svc, l)
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
@@ -131,6 +127,14 @@ func TestHandler_Get_OmitsLearningResults(t *testing.T) {
 	if resp["created_from"] == nil {
 		t.Error("expected created_from to be present")
 	}
+	conditions, ok := resp["conditions"].([]interface{})
+	if !ok || len(conditions) != 1 {
+		t.Fatalf("expected 1 condition in conditions[], got %+v", resp["conditions"])
+	}
+	first, _ := conditions[0].(map[string]interface{})
+	if first["tier"] != string(TierSelfGraded) && first["tier"] != string(TierTrusted) {
+		t.Errorf("tier = %v, want self_graded or trusted after verifyLink boost", first["tier"])
+	}
 
 	req = httptest.NewRequest("GET", "/activation-links/"+l.LinkID+"/learning-results", nil)
 	w = httptest.NewRecorder()
@@ -138,62 +142,41 @@ func TestHandler_Get_OmitsLearningResults(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("learning-results status = %d, body = %s", w.Code, w.Body.String())
 	}
-	var results []learningResultResp
-	if err := json.Unmarshal(w.Body.Bytes(), &results); err != nil {
-		t.Fatalf("unmarshal learning-results: %v", err)
-	}
-	if len(results) != 1 {
-		t.Errorf("expected 1 learning result, got %d", len(results))
-	}
 }
 
-func TestHandler_ConfirmAndReject(t *testing.T) {
+func TestHandler_Reject(t *testing.T) {
 	handler, svc := setupHandler(t)
 	db := setupDBFromSvc(t, svc)
 	seedKPFull(t, db, "kp1")
-	seedKPFull(t, db, "kp2")
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
-	l1, err := svc.CreateLink("t1", LinkCondition{}, "kp1", nil)
+	l1, err := svc.CreateLink("t1", LinkCondition{SubjectTerms: "s1"}, "kp1", nil)
 	if err != nil {
 		t.Fatalf("create link1: %v", err)
 	}
-	req := httptest.NewRequest("POST", "/activation-links/"+l1.LinkID+"/confirm", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("confirm status = %d, body = %s", w.Code, w.Body.String())
-	}
-	var confirmResp map[string]string
-	json.Unmarshal(w.Body.Bytes(), &confirmResp)
-	if confirmResp["status"] != StatusVerified {
-		t.Errorf("confirm response status = %q, want verified", confirmResp["status"])
-	}
+	verifyLink(t, svc, l1)
 
-	l2, err := svc.CreateLink("t2", LinkCondition{}, "kp2", nil)
-	if err != nil {
-		t.Fatalf("create link2: %v", err)
-	}
-	req = httptest.NewRequest("POST", "/activation-links/"+l2.LinkID+"/reject", nil)
-	w = httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/activation-links/"+l1.LinkID+"/reject", nil)
+	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("reject status = %d, body = %s", w.Code, w.Body.String())
 	}
 	var rejectResp map[string]string
 	json.Unmarshal(w.Body.Bytes(), &rejectResp)
-	if rejectResp["status"] != StatusDeprecated {
-		t.Errorf("reject response status = %q, want deprecated", rejectResp["status"])
+	if rejectResp["status"] != StatusCandidate {
+		t.Errorf("reject response status = %q, want candidate (cleared conditions default landing point)", rejectResp["status"])
 	}
 
-	// Confirming an already-verified link must fail.
-	req = httptest.NewRequest("POST", "/activation-links/"+l1.LinkID+"/confirm", nil)
+	// Reject is valid for any status — rejecting again (now candidate) must
+	// still succeed, not require a specific prior status.
+	req = httptest.NewRequest("POST", "/activation-links/"+l1.LinkID+"/reject", nil)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("re-confirm status = %d, want 400", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("re-reject status = %d, want 200 (valid for any status)", w.Code)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,14 +14,33 @@ import (
 
 type Store struct {
 	db *sql.DB
+
+	mu            sync.RWMutex
+	confidenceCfg ConfidenceConfig
 }
 
 func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
+// SetConfidenceConfig wires the shared retrieval.* confidence knobs
+// (docs/impl/v1/activation.md 配置项) — used by deriveAndPersistBundleStatus.
+// Service.SetConfidenceConfig calls this alongside Matcher/BundleMatcher's
+// own setters so all three read the same values.
+func (s *Store) SetConfidenceConfig(cfg ConfidenceConfig) {
+	s.mu.Lock()
+	s.confidenceCfg = cfg
+	s.mu.Unlock()
+}
+
+func (s *Store) getConfidenceConfig() ConfidenceConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.confidenceCfg
+}
+
 const linkColumns = `link_id, question_terms, subject_terms, intent_terms, audience,
-	constraint_terms, observed_conditions, known_question_terms, scene, goal, point_id, status, adopt_count, fail_count,
+	constraint_terms, observed_conditions, scene, goal, point_id, status, adopt_count, fail_count,
 	last_used_at, created_from, status_changed_at, created_at, updated_at`
 
 // encodeTermSet sorts and JSON-encodes an accumulated condition set
@@ -57,9 +77,9 @@ func decodeTermSet(raw string) ([]string, error) {
 
 func scanLink(row interface{ Scan(...interface{}) error }) (*ActivationLink, error) {
 	var l ActivationLink
-	var intentRaw, audienceRaw, constraintRaw, observedRaw, knownQuestionRaw string
+	var intentRaw, audienceRaw, constraintRaw, observedRaw string
 	err := row.Scan(&l.LinkID, &l.QuestionTerms, &l.SubjectTerms, &intentRaw, &audienceRaw,
-		&constraintRaw, &observedRaw, &knownQuestionRaw, &l.Scene, &l.Goal, &l.PointID, &l.Status, &l.AdoptCount, &l.FailCount,
+		&constraintRaw, &observedRaw, &l.Scene, &l.Goal, &l.PointID, &l.Status, &l.AdoptCount, &l.FailCount,
 		&l.LastUsedAt, &l.CreatedFrom, &l.StatusChangedAt, &l.CreatedAt, &l.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -74,9 +94,6 @@ func scanLink(row interface{ Scan(...interface{}) error }) (*ActivationLink, err
 		return nil, err
 	}
 	if l.ObservedConditions, err = decodeObservedConditions(observedRaw); err != nil {
-		return nil, err
-	}
-	if l.KnownQuestionTerms, err = decodeTermSet(knownQuestionRaw); err != nil {
 		return nil, err
 	}
 	return &l, nil
@@ -156,6 +173,23 @@ func (s *Store) PointUnitInfo(pointID string) (pointContent, unitID, unitCenter,
 	return pointContent, unitID, unitCenter, sourceTitle, nil
 }
 
+// PointLifecycleCurrent reports whether pointID's KP is still lifecycle=current
+// (docs/impl/v1/activation.md「与旧状态机的映射」deprecated 判定的输入; a
+// package-local query mirroring study.Store.PointLifecycleCurrent — kept
+// per-package rather than shared, same precedent as other small lookups in
+// this codebase).
+func (s *Store) PointLifecycleCurrent(pointID string) (bool, error) {
+	var lifecycle string
+	err := s.db.QueryRow(`SELECT lifecycle FROM knowledge_points WHERE point_id = ?`, pointID).Scan(&lifecycle)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("activation store: point lifecycle: %w", err)
+	}
+	return lifecycle == "current", nil
+}
+
 func (s *Store) GetByID(linkID string) (*ActivationLink, error) {
 	row := s.db.QueryRow(`SELECT `+linkColumns+` FROM activation_links WHERE link_id = ?`, linkID)
 	l, err := scanLink(row)
@@ -217,18 +251,22 @@ func (s *Store) UpdateConditions(linkID string, cond LinkCondition) error {
 	return s.ReplaceObservedConditions(linkID, cond.EffectiveConditions())
 }
 
-// maxKnownQuestionTerms caps activation_links.known_question_terms — a set
-// of literal question term-strings, unbounded growth risk is real for a
-// heavily-reused link, so cap generously and trim deterministically
+// maxKnownQuestionTerms caps each ObservedCondition.KnownQuestionTerms — a
+// set of literal question term-strings, unbounded growth risk is real for a
+// heavily-reused condition, so cap generously and trim deterministically
 // (alphabetical, since the set carries no per-entry recency) rather than
-// let the column grow forever.
+// let it grow forever. (2026-08-13: moved down from a link-level column to
+// per-condition, see conditions.go mergeKnownQuestionTerms — this constant
+// is the single source of truth both places reference.)
 const maxKnownQuestionTerms = 200
 
 // ReplaceObservedConditions writes the full observed_conditions list,
-// projects legacy fields, and folds each group's QuestionTerms into the
-// link's known_question_terms set (migration 047) — read-merge-write against
-// the current column so this never loses history accumulated by an earlier
-// call, regardless of which caller (enrichment or Study rebuild) is writing.
+// projects legacy fields, and (2026-08-13) recomputes/persists the derived
+// status from the new condition set (docs/impl/v1/activation.md「置信度计算
+// 与缓存」: every write path that changes observed_conditions keeps status
+// fresh, not just RecordOutcome/RecordAuditOutcome, so Wiki's
+// status='verified' reads never go stale). known_question_terms now lives
+// per-condition (conditions.go), no table-level read-merge-write needed.
 func (s *Store) ReplaceObservedConditions(linkID string, conds []ObservedCondition) error {
 	if conds == nil {
 		conds = []ObservedCondition{}
@@ -251,44 +289,40 @@ func (s *Store) ReplaceObservedConditions(linkID string, conds []ObservedConditi
 		return err
 	}
 
-	var knownRaw string
-	if err := s.db.QueryRow(`SELECT known_question_terms FROM activation_links WHERE link_id = ?`, linkID).Scan(&knownRaw); err != nil {
-		return fmt.Errorf("activation store: replace observed conditions: read known question terms: %w", err)
-	}
-	known, err := decodeTermSet(knownRaw)
-	if err != nil {
-		return err
-	}
-	knownSet := make(map[string]struct{}, len(known)+len(conds))
-	for _, q := range known {
-		knownSet[q] = struct{}{}
-	}
-	for _, c := range conds {
-		if c.QuestionTerms != "" {
-			knownSet[c.QuestionTerms] = struct{}{}
-		}
-	}
-	merged := make([]string, 0, len(knownSet))
-	for q := range knownSet {
-		merged = append(merged, q)
-	}
-	sort.Strings(merged)
-	if len(merged) > maxKnownQuestionTerms {
-		merged = merged[:maxKnownQuestionTerms]
-	}
-	knownJSON, err := encodeTermSet(merged)
-	if err != nil {
-		return err
-	}
-
 	_, err = s.db.Exec(`UPDATE activation_links
 		SET subject_terms = ?, intent_terms = ?, audience = ?, constraint_terms = ?,
-		    observed_conditions = ?, known_question_terms = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE link_id = ?`, subj, intentJSON, audienceJSON, constraintJSON, observedJSON, knownJSON, linkID)
+		    observed_conditions = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE link_id = ?`, subj, intentJSON, audienceJSON, constraintJSON, observedJSON, linkID)
 	if err != nil {
 		return fmt.Errorf("activation store: replace observed conditions: %w", err)
 	}
-	return nil
+	return s.deriveAndPersistStatus(linkID, conds)
+}
+
+// deriveAndPersistStatus recomputes the candidate/verified derived status
+// from conds and writes it if changed — deprecated is never derived here (it
+// depends on KP lifecycle, an external fact this Store-level helper has no
+// business overriding; only the explicit UpdateStatus(..., StatusDeprecated)
+// callers, driven by lifecycle notification, set that value). Store-level
+// counterpart to Service.deriveAndPersistStatus, used by every
+// observed_conditions write path (docs/impl/v1/activation.md「置信度计算与
+// 缓存」).
+func (s *Store) deriveAndPersistStatus(linkID string, conds []ObservedCondition) error {
+	var currentStatus string
+	if err := s.db.QueryRow(`SELECT status FROM activation_links WHERE link_id = ?`, linkID).Scan(&currentStatus); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return fmt.Errorf("activation store: derive status: read current: %w", err)
+	}
+	if currentStatus == StatusDeprecated {
+		return nil
+	}
+	newStatus := deriveStatus(conds, s.getConfidenceConfig())
+	if newStatus == currentStatus {
+		return nil
+	}
+	return s.UpdateStatus(linkID, newStatus)
 }
 
 // AppendObservedCondition merges one quadruple into the link (slow-path enrichment).
@@ -302,6 +336,122 @@ func (s *Store) AppendObservedCondition(linkID string, add ObservedCondition, ma
 	}
 	merged := MergeObservedConditions(link.ObservedConditions, add, max)
 	return s.ReplaceObservedConditions(linkID, merged)
+}
+
+// RecordOutcome locates the observed condition matching (subject, intent,
+// audience, constraint) exactly and increments its success_count or
+// failure_count (docs/impl/v1/activation.md 步骤 1). questionTerms, when
+// non-empty, folds into that condition's known_question_terms (the literal-
+// question-shortcut registration entry point — success or failure both
+// register, since the shortcut answers "route to which condition", not
+// "is this condition trustworthy"). Writes through ReplaceObservedConditions
+// so legacy projection and derived status stay consistent with every other
+// write path. matched=false (no error) when no condition matches — this is
+// a Store-level primitive; RecordOutcome should only be called right after
+// Match() returned a hit against this exact condition, so a miss here is
+// unexpected but not fatal to the caller's turn.
+func (s *Store) RecordOutcome(linkID, subject, intent, audience, constraint string, success bool, questionTerms string) (bool, *ActivationLink, error) {
+	link, err := s.GetByID(linkID)
+	if err != nil {
+		return false, nil, err
+	}
+	if link == nil {
+		return false, nil, fmt.Errorf("activation store: record outcome: link not found: %s", linkID)
+	}
+	conds := append([]ObservedCondition(nil), link.ObservedConditions...)
+	idx := findConditionIndex(conds, subject, intent, audience, constraint)
+	if idx < 0 {
+		return false, link, nil
+	}
+	if success {
+		conds[idx].SuccessCount++
+	} else {
+		conds[idx].FailureCount++
+	}
+	conds[idx].LastSeenAt = time.Now().UTC()
+	if questionTerms != "" {
+		conds[idx].KnownQuestionTerms = mergeKnownQuestionTerms(conds[idx].KnownQuestionTerms, questionTerms)
+	}
+	if err := s.ReplaceObservedConditions(linkID, conds); err != nil {
+		return false, nil, err
+	}
+	adoptDelta, failDelta := 0, 0
+	if success {
+		adoptDelta = 1
+	} else {
+		failDelta = 1
+	}
+	if err := s.UpdateStats(linkID, adoptDelta, failDelta); err != nil {
+		return false, nil, err
+	}
+	updated, err := s.GetByID(linkID)
+	if err != nil {
+		return false, nil, err
+	}
+	return true, updated, nil
+}
+
+// RecordAuditOutcome locates the same way as RecordOutcome and increments
+// success_count/failure_count AND audited_success_count/audited_failure_count
+// together in the same call — the two pairs are never updated independently,
+// which is what keeps audited_* <= success/failure invariant always true
+// (docs/impl/v1/activation.md 步骤 1). agree=true means the independent slow-
+// path verification agreed with the fast-path serving; agree=false means it
+// didn't, and the slow-path result is treated as ground truth (a failure).
+func (s *Store) RecordAuditOutcome(linkID, subject, intent, audience, constraint string, agree bool) (bool, *ActivationLink, error) {
+	link, err := s.GetByID(linkID)
+	if err != nil {
+		return false, nil, err
+	}
+	if link == nil {
+		return false, nil, fmt.Errorf("activation store: record audit outcome: link not found: %s", linkID)
+	}
+	conds := append([]ObservedCondition(nil), link.ObservedConditions...)
+	idx := findConditionIndex(conds, subject, intent, audience, constraint)
+	if idx < 0 {
+		return false, link, nil
+	}
+	if agree {
+		conds[idx].SuccessCount++
+		conds[idx].AuditedSuccessCount++
+	} else {
+		conds[idx].FailureCount++
+		conds[idx].AuditedFailureCount++
+	}
+	conds[idx].LastSeenAt = time.Now().UTC()
+	if err := s.ReplaceObservedConditions(linkID, conds); err != nil {
+		return false, nil, err
+	}
+	adoptDelta, failDelta := 0, 0
+	if agree {
+		adoptDelta = 1
+	} else {
+		failDelta = 1
+	}
+	if err := s.UpdateStats(linkID, adoptDelta, failDelta); err != nil {
+		return false, nil, err
+	}
+	updated, err := s.GetByID(linkID)
+	if err != nil {
+		return false, nil, err
+	}
+	return true, updated, nil
+}
+
+// findConditionIndex is the exact-four-tuple lookup RecordOutcome/
+// RecordAuditOutcome share with MatchConditionGroups' per-condition
+// comparison semantics (docs/impl/v1/activation.md 步骤 1: "同 Match
+// ConditionGroups 的逐条件比较逻辑，复用，不重新实现" in spirit — the
+// existing MatchConditionGroups returns a bool over the whole list, not an
+// index, so this is the index-returning sibling rather than a literal call
+// site reuse).
+func findConditionIndex(conds []ObservedCondition, subject, intent, audience, constraint string) int {
+	for i, c := range conds {
+		if c.Subject == subject && c.Intent == intent && c.Audience == audience && c.Constraint == constraint {
+			return i
+		}
+	}
+	return -1
 }
 
 func (s *Store) UpdateStats(linkID string, adoptDelta, failDelta int) error {
@@ -336,19 +486,15 @@ func (s *Store) TouchLastUsed(linkIDs []string) error {
 	return nil
 }
 
-// ListVerifiedLinksForCurrentKP loads every verified link whose target KP is
-// still lifecycle=current. Prefer ListMatchableLinksForCurrentKP for Match —
-// that also includes candidates so Study can accumulate activation_success
-// before promotion.
-func (s *Store) ListVerifiedLinksForCurrentKP() ([]ActivationLink, error) {
-	return s.listLinksForCurrentKP(StatusVerified)
-}
-
-// ListMatchableLinksForCurrentKP loads verified + candidate links whose
-// target KP is lifecycle=current — the Matcher's cache source
-// (docs/impl/v1/activation.md 步骤 2 候选加载). Candidates participate in
-// Match so Trace can grade activation_success/failure; Retrieval only
-// builds the fast path from verified hits.
+// ListMatchableLinksForCurrentKP loads every link whose target KP is
+// lifecycle=current — no status filter (2026-08-13, docs/impl/v1/
+// activation.md「候选加载不再按 status 过滤」): status is itself a value
+// derived from the same per-condition data Match() is about to score, so
+// filtering candidates out by status here would be filtering by a
+// conclusion this call hasn't computed yet. deprecated links are excluded
+// implicitly — deprecated is defined purely by "target KP lifecycle !=
+// current" (see confidence.go deriveStatus), and this query's lifecycle
+// JOIN already achieves exactly that filter.
 func (s *Store) ListMatchableLinksForCurrentKP() ([]ActivationLink, error) {
 	return s.listLinksForCurrentKP(StatusVerified, StatusCandidate)
 }
@@ -465,7 +611,7 @@ func (s *Store) listLinksForCurrentKP(statuses ...string) ([]ActivationLink, err
 
 func linkColumnsPrefixed(alias string) string {
 	cols := []string{"link_id", "question_terms", "subject_terms", "intent_terms", "audience",
-		"constraint_terms", "observed_conditions", "known_question_terms", "scene", "goal", "point_id", "status", "adopt_count", "fail_count",
+		"constraint_terms", "observed_conditions", "scene", "goal", "point_id", "status", "adopt_count", "fail_count",
 		"last_used_at", "created_from", "status_changed_at", "created_at", "updated_at"}
 	out := ""
 	for i, c := range cols {
@@ -545,9 +691,9 @@ func (s *Store) ListLinks(f ListLinksFilter) ([]ActivationLinkListRow, error) {
 	var results []ActivationLinkListRow
 	for rows.Next() {
 		var r ActivationLinkListRow
-		var intentRaw, audienceRaw, constraintRaw, observedRaw, knownQuestionRaw string
+		var intentRaw, audienceRaw, constraintRaw, observedRaw string
 		err := rows.Scan(&r.LinkID, &r.QuestionTerms, &r.SubjectTerms, &intentRaw, &audienceRaw,
-			&constraintRaw, &observedRaw, &knownQuestionRaw, &r.Scene, &r.Goal, &r.PointID, &r.Status, &r.AdoptCount, &r.FailCount,
+			&constraintRaw, &observedRaw, &r.Scene, &r.Goal, &r.PointID, &r.Status, &r.AdoptCount, &r.FailCount,
 			&r.LastUsedAt, &r.CreatedFrom, &r.StatusChangedAt, &r.CreatedAt, &r.UpdatedAt,
 			&r.PointSummary, &r.UnitCenter)
 		if err != nil {
@@ -563,9 +709,6 @@ func (s *Store) ListLinks(f ListLinksFilter) ([]ActivationLinkListRow, error) {
 			return nil, err
 		}
 		if r.ObservedConditions, err = decodeObservedConditions(observedRaw); err != nil {
-			return nil, err
-		}
-		if r.KnownQuestionTerms, err = decodeTermSet(knownQuestionRaw); err != nil {
 			return nil, err
 		}
 		results = append(results, r)
@@ -593,34 +736,18 @@ func (s *Store) InsertLearningResult(lr *LearningResult) error {
 	return nil
 }
 
-// ApplyTransition atomically updates a link's status and records the
-// learning_results row that justifies it. Callers (Service.TransitionLink)
-// must have already validated the transition is legal.
-func (s *Store) ApplyTransition(linkID, to, action, reason, eventIDsJSON string) (*ActivationLink, error) {
-	tx, err := s.db.Begin()
+// ResolvePending is a generic learning_results status updater — still used
+// by Wiki's own pending_confirm rows (wiki_candidate, topic_page_candidate),
+// unrelated to the removed ActivationLink promote/weaken transition flow
+// (docs/impl/v1/wiki.md 步骤 2/8).
+func (s *Store) ResolvePending(resultID, status, confirmedBy string) error {
+	_, err := s.db.Exec(`UPDATE learning_results
+		SET status = ?, confirmed_by = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE result_id = ?`, status, confirmedBy, resultID)
 	if err != nil {
-		return nil, fmt.Errorf("activation store: apply transition: begin: %w", err)
+		return fmt.Errorf("activation store: resolve pending: %w", err)
 	}
-	defer tx.Rollback()
-
-	if _, err := tx.Exec(`UPDATE activation_links
-		SET status = ?, status_changed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-		WHERE link_id = ?`, to, linkID); err != nil {
-		return nil, fmt.Errorf("activation store: apply transition: update status: %w", err)
-	}
-
-	if _, err := tx.Exec(`INSERT INTO learning_results
-		(result_id, action, object_type, object_id, reason, event_ids, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		uuid.New().String(), action, ObjectTypeActivationLink, linkID, reason, eventIDsJSON, ResultApplied); err != nil {
-		return nil, fmt.Errorf("activation store: apply transition: insert learning result: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("activation store: apply transition: commit: %w", err)
-	}
-
-	return s.GetByID(linkID)
+	return nil
 }
 
 func (s *Store) ListLearningResultsByObject(objectType, objectID string) ([]LearningResult, error) {
@@ -643,39 +770,6 @@ func (s *Store) ListLearningResultsByObject(objectType, objectID string) ([]Lear
 		results = append(results, lr)
 	}
 	return results, rows.Err()
-}
-
-// FindPendingPromote finds the most recent pending_confirm/promote learning
-// result for a link — the row Study will have written when a candidate met
-// the promotion threshold (docs/impl/v1/activation.md 步骤 3 确认/驳回与 Study 的关系).
-func (s *Store) FindPendingPromote(linkID string) (*LearningResult, error) {
-	row := s.db.QueryRow(`SELECT result_id, action, object_type, object_id, reason, event_ids,
-		status, confirmed_by, created_at, updated_at
-		FROM learning_results
-		WHERE object_type = ? AND object_id = ? AND action = ? AND status = ?
-		ORDER BY created_at DESC LIMIT 1`,
-		ObjectTypeActivationLink, linkID, ActionPromote, ResultPendingConfirm)
-
-	var lr LearningResult
-	err := row.Scan(&lr.ResultID, &lr.Action, &lr.ObjectType, &lr.ObjectID, &lr.Reason,
-		&lr.EventIDs, &lr.Status, &lr.ConfirmedBy, &lr.CreatedAt, &lr.UpdatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("activation store: find pending promote: %w", err)
-	}
-	return &lr, nil
-}
-
-func (s *Store) ResolvePending(resultID, status, confirmedBy string) error {
-	_, err := s.db.Exec(`UPDATE learning_results
-		SET status = ?, confirmed_by = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE result_id = ?`, status, confirmedBy, resultID)
-	if err != nil {
-		return fmt.Errorf("activation store: resolve pending: %w", err)
-	}
-	return nil
 }
 
 // LinkQuestion is one original question associated with an ActivationLink

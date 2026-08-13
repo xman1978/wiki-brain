@@ -6,14 +6,36 @@
 
 ```text
 Wiki 直答层   已发布 Wiki 页面命中 → 直接基于页面回答（见 wiki.md）
-激活层        verified ActivationLink 命中 → 跳过过滤与召回，直达证据（快路径）；
-              candidate 命中只记 activation_hits，仍走慢路径（供晋升信号）
+激活层        命中的观测条件按连续置信度分档服务（tier ∈ {exploring,
+              self_graded, trusted}，见 activation.md「状态机」）：
+              self_graded/trusted → 跳过过滤与召回，直达证据（快路径）；
+              exploring → 小概率被本轮选中当一次真实试探，同样走快路径，
+              未被选中则记 activation_hits、仍走慢路径（供积累证据）
 完整链路      未命中时回落 MVP 链路：Domain → Source → Outline/FTS → RRF → Rerank（慢路径）
 ```
 
+> **2026-08-13 编注**：以上一段沿用了本文档此前的表述习惯，把激活层命中分成
+> "verified 直达证据"与"candidate 只记信号"两支。这个二元判断已经不存在——
+> `activation.md`「状态机」把信任下沉到每一条观测条件，`status` 列（verified/
+> candidate/deprecated）现在是从条件分数派生的缓存摘要，不是 Match 用来决定
+> "服务还是不服务"的真相源。取而代之的是三档服务分档（exploring/self_graded/
+> trusted），命中判定与本轮是否服务由 `activation.Match()` 一次调用内完成，
+> 详见下方「步骤 2」的改写。旧的"verified 优先、candidate 只能补充信号"这句
+> routing 表述，应理解为"self_graded/trusted 直接服务、exploring 按小概率
+> 试探服务，三档命中都会记 activation_hits"。
+
+> **熟路指针（2026-08-11，设计层面，非实现变更）**：`docs/impl/v1/activation-bundle.md`
+> 提出的 ActivationBundle（熟路）预期会在 Wiki 直答层和上面的激活层之间插入一层——
+> 命中优先级预期是 Wiki 直答 → 熟路 Match → 单链接 ActivationLink Match → 慢路径，
+> 服务的是"一个问题需要综合多个知识点才能回答"这类当前激活层覆盖不到的场景（单
+> 链接 Match 命中多个不同 unit 时会被视为歧义、回落慢路径，见下方步骤 2）。这是
+> ActivationBundle 文档「阶段 2」的范围，本文档尚未据此改动，具体接入点、命中后
+> 的候选构建方式、是否影响 LLM 调用次数预算，都还没有定案，需要单独评估后再回来
+> 修订本文档，见 activation-bundle.md 步骤 4「匹配器契约」。
+
 所有路径在 Rerank（或快路径的证据组装）之后统一经过证据挖掘（见 `evidence.md`），再进入充分性判断与 EvidenceSet 构建。
 
-目标：熟悉问题的 LLM 调用从 ≥4 次降至 2-3 次，且快路径错误命中不直接出口（命中后经证据充分性校验把关）。
+目标：熟悉问题的 LLM 调用从 ≥4 次降至 2-3 次（2026-08-12 改判：撤销 2026-08-11 把区间上沿从 3 调到 4 的修订——那次修订是为了容纳激活层 Match 第二轮模型辅助匹配可能额外触发的一次调用，该机制已整体撤销，见 activation.md 步骤 2，Match 恢复为纯程序精确匹配，快路径 LLM 调用数回到固定值，不再有"3 或 4 次"的分支），且快路径错误命中不直接出口（命中后经证据充分性校验把关）。
 
 ## 检索总流程（V1）
 
@@ -33,15 +55,30 @@ Wiki 直答层   已发布 Wiki 页面命中 → 直接基于页面回答（见 
   │    候选耗尽或为空 → 落入第 1 层，并携带 skeleton_point_ids
   │      （展开成员页面的 source_point_ids 并集）与 skeleton_page_id；
   │      同时写 topic_decompose_signal（见 wiki.md 步骤 9）
-  ├─ 第 1 层：激活层 Match（不调 LLM，四元组完全匹配，见 activation.md 步骤 2）
-  │    命中 → 快路径：
+  ├─ 第 1 层：激活层 Match（四元组精确匹配，纯程序、免费；2026-08-12
+  │    改判撤销此前"未命中且有候选组时升级为模型辅助匹配"的第二轮，
+  │    Match 全程不调 LLM，见 activation.md 步骤 2）；命中后按该条件
+  │    当前的服务分档（tier，见 activation.md「状态机」）决定本轮走向
+  │    ——2026-08-13 起 Match 输出不再是二元的"命中/未命中"，而是三种
+  │    每条命中条件各自独立的结果（见下方「步骤 2」）：
+  │      self_graded/trusted → 本轮直接服务，走快路径；
+  │      exploring → 本轮按 explore_rate_low 概率被选中当一次真实试探，
+  │        中选同样走快路径，未中选则只记 activation_hits、落入未命中
+  │        分支（等价于本轮当作未命中处理）；
+  │    快路径：
   │      链接目标 KP → 反查 KU（lifecycle=current）→ 直接构建 direct 候选
   │      → KPN 扩展补充 supporting（沿用 MVP 步骤 8）
   │      → 证据挖掘（1 次 LLM）
   │      → 快路径校验（1 次 LLM，见步骤 2a）：证据能否独立完整回答问题
   │         不通过 → 回落慢路径（步骤 7）
   │      → 充分性判断 → EvidenceSet(path_type=fast)
-  │      → Answer（1 次 LLM）                          共计 3 次 LLM 调用
+  │      → Answer（1 次 LLM）        共计 3 次 LLM 调用（Match 本身不调用
+  │                                  模型，2026-08-12 改判后不再有 4 次分支）
+  │      → 若本次命中被 Match() 判定 audit_sampled=true（self_graded/
+  │        trusted 档各自按 explore_rate_self_graded/explore_rate_trusted
+  │        概率抽样，见 activation.md「服务分档」），在快路径答案已经
+  │        返回给用户之后，异步触发一次独立核实试验（见步骤 2c）——
+  │        不阻塞、不延迟本次已经返回的回答
   └─ 未命中 → 慢路径（MVP 完整链路）：
        Domain 预过滤 → Source 过滤 → Outline/FTS 召回 → RRF → Rerank
        → KPN 扩展 → 证据挖掘 → 充分性判断 → EvidenceSet(path_type=full)
@@ -78,6 +115,9 @@ retrieval:
                                   # 首个 sufficient=true 即停；设 1 退化为原 top-1 行为）
                                   # 主题页命中不占候选位——它展开为成员概念页，
                                   # 占位的是成员（wiki.md 步骤 8）
+  # activation_match_model_enabled 已删除（2026-08-12 改判：激活层 Match
+  # 第二轮模型辅助匹配整体撤销，见 activation.md 步骤 2；对应的
+  # RetrievalConfig.ActivationMatchModelEnabled 字段已从代码移除）
 ```
 
 ## 实现步骤
@@ -87,7 +127,24 @@ retrieval:
 ```text
 EvidenceSet 新增：
   path_type            fast / full / wiki
-  activation_hits[]    [{ link_id, point_id, match_score }]
+  activation_hits[]    [{ link_id, point_id, match_score, matched_by }]
+                        matched_by: 恒为 exact（2026-08-12 改判：`model`
+                        取值随第二轮模型辅助匹配一并撤销，`MatchedByModel`
+                        常量已从代码移除，字段本身为 API/schema 稳定性保留，
+                        见 activation.md 步骤 2）
+  bundle_hits[]        [{ bundle_id, member_point_ids[], match_score,
+                        matched_by }]（2026-08-12 定案，阶段 2/熟路命中
+                        用，见 activation-bundle.md 步骤 4；独立数组，不
+                        并入 activation_hits[]——熟路是「一个 bundle_id
+                        对一组 point_id」，跟 activation_hits[] 天然的
+                        1:1 形状不同，硬塞进同一个数组要么用 link_id
+                        装 bundle_id（字段语义对不上，下游按 link_id
+                        反查 activation_links 表会查错表），要么加一个
+                        可空字段让每处消费方都得先判断来源，两种都不如
+                        分开干净；path_type 不新增取值，靠 bundle_hits[]
+                        是否非空区分命中来源是链接还是熟路，见 trace.md
+                        步骤 3 熟路指针；本字段本身仍是「阶段 2」范围，
+                        Match/候选构建的实际接入未实现，这里只定字段形状）
   gap_reason           no_candidates / judge_filtered（空字符串＝非 gap 结果；
                         产出位置见步骤 6，消费方见 study.md「knowledge_gaps 表扩展」）
   filtered_evidence[]  结构同 Evidence，role 固定为 "irrelevant"；
@@ -103,28 +160,85 @@ EvidenceItem 新增：
 
 上游 Session 合并定域+Parse 产出的 `domain_ids` 经 `QueryContext` 传入时：
 - 快路径 Match 前按 Source.domain 过滤候选 link（`domain_ids` 空则不过滤）；
-- **Match 之前**：若 `DomainResolved` 且域内 verified 条件组非空，先调
-  `session_normalize_tuple.md`，把四元组拉齐到观测组已有名字；程序校验
-  （规范化结果须能 `MatchConditionGroups` 命中词表中某一组，且不得把问句里
-  已有的非空 constraint 改成冲突值），不通过则丢弃、仍用 Session 原四元组；
+- **问题四元组归一化（2026-08-12 新增，config-gated，默认关闭）**：
+  `session_normalize_tuple.md` 那次"Match 前盲改一遍四元组再赌重新匹配"
+  的二次规范化调用仍然维持废弃（结论不变：直接精确匹配不需要先盲改）。
+  这里恢复的是一个不同的机制——`activation.TupleNormalizer`（`internal/
+  activation/tuplenorm.go`），在 `tryFastPath` 构造 `expandedQuery` 之前、
+  `activation.Match` 之前跑，只在 `cfg.Retrieval.QuestionTupleNormEnabled=
+  true` 且 Session 已解出非空 `domain_ids` 时生效：
+  1. Tier 1 精确匹配：四元组（`text.Normalize`/`Terms`/`NormalizeCompact`
+     归一化后）与 `question_tuple_norms` 表按 domain_id 查全字段相等，
+     命中即用该行落库的 canonical 四元组替换，免费；
+  2. Tier 2 本地词集 Jaccard 相似度：对该域下最近命中的候选逐字段算
+     token-Jaccard 取四字段均值，达到 `question_tuple_norm_local_sim_min`
+     即命中，免费；
+  3. Tier 2.5 向量早筛（`vector_match_enabled` 独立开关，默认关闭）：
+     goformer 本地 embedding 算余弦相似度，**只用于提前拒绝**——低于
+     `vector_match_sim_min` 直接判未命中（连 LLM 都不试），达到或高于
+     阈值仍然要进 Tier 3 交给 LLM 判断，向量分数从不单独确认命中（刻意
+     的非对称设计：宁可多问一次 LLM，也不让向量分数直接拍板"是同一个
+     问题"）；
+  4. Tier 3 LLM 批量判断（`config/prompts/tuple_norm_match.md`）：把
+     Tier 2（或 Tier 2.5 幸存）候选整批传给模型，一次调用给出匹配/
+     不匹配 + 候选下标；audience/constraint 要求比 subject/intent 更严格
+     的等价判断（不臆测不同受众/条件是一回事）；
+  5. 全部未命中：以当前四元组为新的 canonical 记录写入
+     `question_tuple_norms`（按 `domain_ids` 逐个域各插入一行）。
+  三个消费入口（`activation.Matcher`/`BundleMatcher`、`wiki.
+  matchFourTupleEntry`）本身仍是纯精确匹配，不受影响——这一层只改变
+  喂给它们的四元组，不改动三处的匹配逻辑。
+- **Match 本身（硬性过滤 + 精确匹配）不再有第二轮模型辅助匹配**
+  （2026-08-12 改判，撤销 2026-08-11 引入的两级结构，见 activation.md
+  步骤 2）；不区分"首次/非首次提问"，一律走同一套纯程序流程；
 - 慢路径 Domain 预过滤直接复用 `domain_ids`，不再调用 `question_domain_match`（空则全库）。
 
 ```text
-1. 调 activation.Match(expandedQuery) 得 LinkMatch 列表（≤ activation_match_top）；
+1. 调 activation.Match(expandedQuery) 得 LinkMatch 列表（≤ activation_match_top），
+   每个 LinkMatch 携带 { link_id, point_id, match_score, matched_by, tier,
+   mean, auditSampled }（见 activation.md 步骤 2「置信度分档判定」）；
    输入是 Session 产出的完整 ExpandedQuery（expanded_question + 四元组），
    不是用户原始输入——匹配含 audience / constraint 硬性守门与
-   subject / intent 计分，规则见 activation.md 步骤 2；
-   Match 返回 verified + candidate（均要求 KP lifecycle=current）；
+   subject / intent 精确相等，规则见 activation.md 步骤 2；
+   Match 返回全部 KP lifecycle=current 的命中条件，每条已经带有本轮是否
+   服务的判定结果（2026-08-13 起不再是"verified 直达证据 / candidate
+   只记信号"这一二元判断，见「职责」编注）：
+     tier ∈ {self_graded, trusted} 的命中 → 本轮直接服务；
+     tier == exploring 的命中 → Match() 内部已按 explore_rate_low 掷过
+       一次 Bernoulli，中选的才会出现在返回列表里（未中选的条件本身
+       "未产出该条件的 LinkMatch"，等价于未命中，不会混入下面的逻辑，
+       见 activation.md 步骤 2「置信度分档判定」）；
    为空 → 慢路径；fast_path=false → 记录命中日志后仍走慢路径
    （activation_hits 照常写入 EvidenceSet，供灰度期观察命中质量）；
-   全部命中均为 candidate → 记录 activation_hits 后回落慢路径
-   （candidate 只记信号、不直答；2026-07-22）；
-   其中 verified 命中反查后对应 **多个不同 unit** → 视为歧义，回落慢路径
+   命中反查后对应 **多个不同 unit** → 视为歧义，回落慢路径
    （命中分数恒为 1.0，没有排序依据；跨 KU 打包进快路径 direct 等于免检。
-   同 unit 上多条 verified / 多个 point 不视为歧义——证据仍是同一 KU 正文，
-   可走快路径；2026-08 修订，见 plan-parser-vocab-and-unit-ambiguity.md）；
+   同 unit 上多条本轮服务的命中 / 多个 point 不视为歧义——证据仍是同一 KU
+   正文，可走快路径；2026-08 修订，见 plan-parser-vocab-and-unit-ambiguity.md）；
    跨 unit 歧义时 TouchLastUsed 不触发，但 activation_hits 仍照常写入
-   （含 candidate），Trace 按普通快路径未命中一样评分；
+   （含 tier=exploring 未中选、仅记信号的命中），Trace 按普通快路径未命中
+   一样评分；
+   （2026-08-12 实现，取代上面"熟路指针"的待定案状态：跨 unit 歧义时不再
+   直接回落慢路径，先consult ActivationBundle——`resolveBundleForAmbiguousHits`
+   调 `activation.MatchBundles` 用同一个 `expandedQuery`/`matchCfg`：
+   (a) 命中一个及以上 verified Bundle → 用其（合并后的）核心成员点集，
+   跳过单 unit 限制，直接进入候选构建/证据充分性判断；命中多个 verified
+   Bundle 时先用 `retrieval.Store.GetKPNConflicts` 做核心成员两两冲突判定
+   （复用慢路径既有的 KPN `contradicts` 判定原语），任意一对冲突就仍判定
+   为歧义、回落慢路径，不冲突则取并集合并使用，**不**因此新建 Bundle；
+   (b) 没有 verified Bundle 覆盖 → 从这次观测实时新建/加强一条 candidate
+   Bundle（`formCandidateBundle`，核心成员=本次命中点集，去重复用已有相同
+   成员集合的 Bundle 而非重复创建），仍回落慢路径，只是多了这个副作用，
+   为将来同样的歧义提供可匹配的 Bundle 素材。这是 Bundle 消费侧的部分实现
+   ——只覆盖了"多链接歧义时查/建 Bundle"这一入口，`bundle_hits[]`
+   独立字段、Trace 的 `bundle_success`/`bundle_failure`、Bundle 自己的
+   `adopt_count`/`known_question_terms`/`auto_promote` 仍未实现，见
+   activation-bundle.md 对应记录。**2026-08-13 编注（创建门槛，见
+   `docs/design/activation-convergence.md` 第 11 节）**：`formCandidateBundle`
+   这里第一次遇到就直接创建，不额外加 Beta 均值/宽度门槛（对照 Link/
+   离线聚类新增的 create_confidence_min/create_width_max，见 study.md
+   步骤 1）——这条路径本身的触发条件（两条独立的、已各自服务过/自证过
+   的链接同时命中、却分属不同知识单元）已经是一个足够高的准入门槛，
+   能走到这一步不是噪声，再叠加一层次数/比例检查是画蛇添足）；
 
 2. 取命中链接的 point_id → 反查所属 KU：
      SELECT ... FROM knowledge_points p JOIN knowledge_units u ...
@@ -141,7 +255,8 @@ EvidenceItem 新增：
 4. KPN 扩展沿用 MVP 步骤 8（对 direct KU 查邻居 KP，role=supporting，
    邻居 KP 及其 KU 均要求 lifecycle=current）；
 
-5. 异步 TouchLastUsed(本次用于快路径的 verified link_ids)，不阻塞请求。
+5. 异步 TouchLastUsed(本次用于快路径的 link_ids，含 self_graded/trusted 直接
+   服务与 exploring 中选试探两类)，不阻塞请求。
 ```
 
 ### 步骤 2a：快路径校验（fast_path_verify）
@@ -181,6 +296,50 @@ fast_path_verify=false 时跳过本步骤，直接进入充分性判断（行为
 动机：慢路径 Rerank 常把「近邻相关」材料标成 direct（问 OA 填单召回易快报流程、问升级召回部署步骤）。答题模型在小参数下容易把近邻概念改写成所问概念的操作答案；充分性闸门输出的是结构化 `sufficient` 布尔，比依赖答题 Prompt 自守门更稳。
 
 `slow_path_verify=false` 时跳过，行为与改前一致（灰度/对照用）。
+
+### 步骤 2c：独立核实试验编排（audit-trial sampling，2026-08-13 新增）
+
+`activation.md`「服务分档」把每条 self_graded/trusted 命中额外掷一次
+`Bernoulli(explore_rate_self_graded)`/`Bernoulli(explore_rate_trusted)`，
+决定 `LinkMatch.auditSampled` 是否为真——本步骤是这个标志位在 Retrieval
+侧的消费方，也是 `docs/design/activation-convergence.md` 第 4 节「打破
+自证循环」要求的具体落点：只让快路径自己验证自己，置信度再连续也可能
+稳定收敛到一个错误结论上，需要偶尔拿一个独立跑出来的慢路径结果做对比。
+
+```text
+触发时机：步骤 2 之后、答案已经通过步骤 2a 校验并返回给用户之后
+  （不阻塞、不延迟本次已经返回的回答——这是"审计"而非"校验"，校验
+  失败会拦答案，审计失败只影响这条观测条件未来的置信度，不影响
+  已经发出的这次回答，见 trace.md 步骤 3b）；
+
+触发对象：本次 activation_hits 中 auditSampled=true 的每个
+  (link_id, point_id) ——通常只是本次命中里的一小部分（低概率抽样），
+  不是全部命中都会触发；
+
+编排方式：Retrieval 另起一个不阻塞当前 HTTP 响应的后台任务（与
+  TouchLastUsed 的异步落库不同，这里的后台任务要跑一次完整的慢路径
+  检索，成本是一次全量慢路径调用，见下方「LLM 调用预算对照」），
+  输入是同一个 expandedQuery，强制忽略激活层、直接从 Domain 预过滤
+  开始走 MVP 完整链路，得到一份独立的 direct_point_ids；
+
+比对与回写：后台任务完成后，把 (link_id, point_id, 独立慢路径的
+  direct_point_ids) 交给 Trace（不是本模块自己写 learning_events 或
+  调用 RecordAuditOutcome）——比对规则、事件类型
+  （activation_audit_success / activation_audit_failure）、
+  RecordAuditOutcome 的调用时机与失败处理，均由 trace.md 步骤 3b
+  统一定义，Retrieval 只负责"触发"和"提供独立慢路径结果"这两件事，
+  不重复实现比对逻辑；
+
+失败处理：后台慢路径检索本身失败（超时、异常）→ 记录 warn 日志，
+  不产生 activation_audit_* 事件（宁可少一次审计样本，也不能把一次
+  基础设施故障误记成"独立核实认为这条条件不可信"）；
+
+与 fast_path_verify（步骤 2a）的关系：两者都可能对同一次命中触发，
+  互不影响——步骤 2a 是"这次证据够不够回答这个问题"的同步闸门，本步骤
+  是"这条长期被信任的条件，独立重新走一遍会不会得到同样的结论"的异步
+  抽查，回答的是两个不同的问题，共用同一个 expandedQuery 不代表可以
+  合并成一次调用。
+```
 
 ### 步骤 3：证据挖掘接入
 
@@ -275,32 +434,74 @@ POST /answer（既有，见 answer 模块）
 ```text
 慢路径（MVP + 挖掘）：domain(1) + source(1) + outline(0~N) + rerank(1)
                       + mining(1) + answer(1)               ≈ 5~6 次
-快路径：              mining(1) + verify(1) + answer(1)      = 3 次
+快路径：              match(0) + mining(1) + verify(1)
+                      + answer(1)                            = 3 次
+                      （2026-08-12 改判撤销激活层 Match 第二轮模型辅助
+                      匹配，Match 不再消耗调用预算，固定值取代此前
+                      "3~4 次，多数 3 次"的区间口径）
+                      问题四元组归一化（同日新增，默认关闭）额外只在
+                      Tier 1/2 都未命中时才付一次 Tier 3 LLM 调用：多数
+                      重复问答仍是 0 次额外调用（Tier 1 命中）或 3 次，
+                      Tier 1/2 双未命中时 +1 次 → 4 次。
 Wiki 直答：           answer(1~wiki_max_candidates)          典型 1 次，最坏 3 次
                       （sufficient=false 换下一候选页重试，见 wiki.md 步骤 4）
+独立核实试验（2026-08-13 新增，见步骤 2c）：
+                      不改变已发出回答的调用预算——审计是后台、异步的，
+                      不阻塞当前请求，因此上面「快路径 = 3 次」这个数字
+                      对用户实际等到的这次请求仍然成立；但它在服务器
+                      总体调用量上是真实的额外开销，按抽样比例摊到
+                      "被命中的快路径流量"这个分母上：
+                        +1 次完整慢路径调用（domain(1)+source(1)+
+                        outline(0~N)+rerank(1)+mining(1) ≈ 4~5 次，
+                        不含 answer——审计只需要 direct_point_ids 做
+                        比对，不需要真的生成一段回答文本）
+                        × explore_rate_self_graded（self_graded 档命中）
+                        或 explore_rate_trusted（trusted 档命中，通常
+                        更低，是定期复查而非持续验证）
+                      配置默认值下（explore_rate_self_graded=0.10、
+                      explore_rate_trusted=0.03，见 activation.md「配置
+                      项」）：多数快路径流量不触发审计，触发的那一小部分
+                      各自额外产生约 4~5 次调用，不产生 answer 调用。
 ```
 
 ## 依赖
 
 ```text
-Activation：Match 匹配器、TouchLastUsed
+Activation：Match 匹配器（2026-08-12 改判后恢复为纯程序、不调用模型，
+            2026-08-13 起返回值扩展为每条命中带 tier/mean/auditSampled，
+            见 activation.md 步骤 2）、TouchLastUsed
 Evidence：  Mine 接口（见 evidence.md）
 Lifecycle： Bleve lifecycle 字段与 SQL 过滤条件
 Wiki：      wiki index 查询与直答路径（见 wiki.md；未实现时第 0 层跳过）
 Session / Answer / Trace：契约扩展见各自文档，链路顺序不变
+Trace：      独立核实试验的比对与回写方（2026-08-13 新增，见步骤 2c）——
+            本模块只触发后台慢路径检索、把独立结果交给 Trace，比对规则、
+            activation_audit_success/failure 事件产生、
+            activation.RecordAuditOutcome 调用均由 trace.md 步骤 3b 负责
 Study：      gap_reason / filtered_evidence 消费方，见 study.md「knowledge_gaps 表扩展」
 ```
 
 ## 完成标准
 
 ```text
-verified 链接存在时同类问题走快路径，LLM 调用 ≤ 3 次（日志可验证）；
+tier ∈ {self_graded, trusted} 的命中存在时同类问题走快路径，LLM 调用 ≤ 3 次
+  （日志可验证；2026-08-12 改判撤销第二轮模型辅助匹配后固定为 ≤ 3 次，
+  不再有 4 次分支，见 activation.md 步骤 2）；tier=exploring 的命中按
+  explore_rate_low 概率同样走快路径，未中选的按未命中处理（测试用例：
+  固定随机源下分别断言中选/未中选两条分支）；
 四元组任一维度不等时不走快路径（行为与无链接一致）；
 无链接命中时行为与 MVP 慢路径一致（加 lifecycle 过滤与挖掘）；
 fast_path=false 时全部走慢路径但 activation_hits 照常记录；
 命中反查后对应多个不同 unit 时不走快路径、回落慢路径，activation_hits 仍记录
   全部命中链接，且不触发 TouchLastUsed；同 unit 多 link 可走快路径；
 force_full=true 强制慢路径生效；
+audit_sampled=true 的命中在快路径答案返回给用户之后，异步触发一次独立
+  慢路径检索，不阻塞、不延迟本次请求（测试用例：mock 后台任务，断言主
+  请求的响应时间不受影响）；比对结果正确交给 Trace 产生
+  activation_audit_success/failure 并调用 RecordAuditOutcome（见
+  trace.md 完成标准，本文档只验证"触发了、且不阻塞"这一半）；
+  后台慢路径检索本身失败时记 warn、不产生审计事件；
+audit_sampled=false 的命中不触发步骤 2c；
 fast_path_verify=true 时校验不通过自动回落慢路径且只回落一次，
   trace 记录 path_type=full、activation_hits 保留（产生 activation_failure）；
 fast_path_verify=false 时跳过校验，行为同旧版快路径；

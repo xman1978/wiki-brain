@@ -2,6 +2,7 @@ package trace
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sort"
 	"time"
@@ -12,10 +13,12 @@ import (
 )
 
 type Service struct {
-	store                   *Store
-	conceptNullRatioMin     float64
-	enricher                ObservedConditionEnricher
-	observedConditionsMax   int
+	store                 *Store
+	conceptNullRatioMin   float64
+	enricher              ObservedConditionEnricher
+	observedConditionsMax int
+	correctionWeight      int
+	synthesisWriter       SynthesisOutcomeWriter
 }
 
 // ObservedConditionEnricher is implemented by activation.Service — optional so
@@ -27,6 +30,13 @@ type ObservedConditionEnricher interface {
 	// it reports whether pointID's existing link has an observed group whose
 	// intent/audience/constraint match but whose subject doesn't.
 	FindSynonymGapCandidate(pointID, subject, intent, audience, constraint string) (linkID, observedSubject string, ok bool, err error)
+	// RecordOutcome/RecordAuditOutcome (2026-08-13, docs/impl/v1/trace.md 步骤
+	// 3/3b/4) update the matched observed condition's success_count/
+	// failure_count (and, for the audit variant, audited_success_count/
+	// audited_failure_count) — the continuous-confidence replacement for the
+	// old discrete promote/weaken state machine (docs/design/activation-convergence.md).
+	RecordOutcome(linkID, subject, intent, audience, constraint string, success bool, questionTerms string) error
+	RecordAuditOutcome(linkID, subject, intent, audience, constraint string, agree bool) error
 }
 
 // conceptNullRatioMin is docs/impl/v1/concept-evolution.md's
@@ -41,6 +51,14 @@ func NewService(store *Store, conceptNullRatioMin float64) *Service {
 func (s *Service) SetObservedConditionEnricher(e ObservedConditionEnricher, max int) {
 	s.enricher = e
 	s.observedConditionsMax = max
+}
+
+// SetCorrectionWeight configures how many times a single negative/correction
+// feedback calls RecordOutcome(success=false) per linked ActivationLink
+// (docs/impl/v1/trace.md 步骤 4) — the direct replacement for Study's removed
+// window-based weakening, sourced from StudyConfig.CorrectionWeight.
+func (s *Service) SetCorrectionWeight(n int) {
+	s.correctionWeight = n
 }
 
 func (s *Service) ProcessTrace(r *answer.AnswerResult) {
@@ -194,7 +212,7 @@ func (s *Service) detectSubjectSynonymGaps(t *Trace) {
 			"question_terms":   t.QuestionTerms,
 		})
 		slog.Debug("trace: generating subject_synonym_gap event", "trace_id", t.TraceID, "point_id", pid, "link_id", linkID)
-		if err := s.store.SaveLearningEvent(t.TraceID, "subject_synonym_gap", string(payload)); err != nil {
+		if _, err := s.store.SaveLearningEvent(t.TraceID, "subject_synonym_gap", string(payload)); err != nil {
 			slog.Error("trace: save subject_synonym_gap event failed", "trace_id", t.TraceID, "error", err)
 		}
 	}
@@ -345,13 +363,13 @@ func (s *Service) generateActivationEvents(t *Trace, r *answer.AnswerResult, gra
 			}
 
 			payload, _ := json.Marshal(map[string]interface{}{
-				"question_terms":     t.QuestionTerms,
-				"direct_point_ids":   directPointIDs,
-				"gap_level":          gapLevel,
+				"question_terms":   t.QuestionTerms,
+				"direct_point_ids": directPointIDs,
+				"gap_level":        gapLevel,
 				"null_entry_ratio": nullRatio,
 			})
 			slog.Debug("trace: generating activation_gap event", "trace_id", t.TraceID, "gap_level", gapLevel, "null_entry_ratio", nullRatio)
-			if err := s.store.SaveLearningEvent(t.TraceID, "activation_gap", string(payload)); err != nil {
+			if _, err := s.store.SaveLearningEvent(t.TraceID, "activation_gap", string(payload)); err != nil {
 				slog.Error("trace: save activation_gap event failed", "trace_id", t.TraceID, "error", err)
 			}
 		}
@@ -380,9 +398,10 @@ func (s *Service) generateActivationEvents(t *Trace, r *answer.AnswerResult, gra
 				"role":           "direct",
 			})
 			slog.Debug("trace: generating activation_success event", "trace_id", t.TraceID, "link_id", hit.LinkID, "role", "direct")
-			if err := s.store.SaveLearningEvent(t.TraceID, "activation_success", string(payload)); err != nil {
+			if _, err := s.store.SaveLearningEvent(t.TraceID, "activation_success", string(payload)); err != nil {
 				slog.Error("trace: save activation_success event failed", "trace_id", t.TraceID, "link_id", hit.LinkID, "error", err)
 			}
+			s.recordHitOutcome(t, hit, true)
 			continue
 		}
 
@@ -396,9 +415,10 @@ func (s *Service) generateActivationEvents(t *Trace, r *answer.AnswerResult, gra
 				"role":           "supporting",
 			})
 			slog.Debug("trace: generating activation_success event", "trace_id", t.TraceID, "link_id", hit.LinkID, "role", "supporting")
-			if err := s.store.SaveLearningEvent(t.TraceID, "activation_success", string(payload)); err != nil {
+			if _, err := s.store.SaveLearningEvent(t.TraceID, "activation_success", string(payload)); err != nil {
 				slog.Error("trace: save activation_success event failed", "trace_id", t.TraceID, "link_id", hit.LinkID, "error", err)
 			}
+			s.recordHitOutcome(t, hit, true)
 			continue
 		}
 
@@ -417,9 +437,26 @@ func (s *Service) generateActivationEvents(t *Trace, r *answer.AnswerResult, gra
 			"reason":         reason,
 		})
 		slog.Debug("trace: generating activation_failure event", "trace_id", t.TraceID, "link_id", hit.LinkID, "reason", reason)
-		if err := s.store.SaveLearningEvent(t.TraceID, "activation_failure", string(payload)); err != nil {
+		if _, err := s.store.SaveLearningEvent(t.TraceID, "activation_failure", string(payload)); err != nil {
 			slog.Error("trace: save activation_failure event failed", "trace_id", t.TraceID, "link_id", hit.LinkID, "error", err)
 		}
+		s.recordHitOutcome(t, hit, false)
+	}
+}
+
+// recordHitOutcome calls activation.RecordOutcome using the hit's own stored
+// quadruple (not the query's — see activation.md「owning condition 的可判定性」
+// and trace.md 步骤 3), for both role=direct and role=supporting outcomes with
+// success=true — role no longer carries statistical weight, it's recorded in
+// the event payload purely for display (docs/impl/v1/trace.md 步骤 3 payload
+// 注释). A missing enricher (activation-less test setups) or a lookup failure
+// is non-fatal — it must not interrupt the rest of trace_write.
+func (s *Service) recordHitOutcome(t *Trace, hit retrieval.ActivationHit, success bool) {
+	if s.enricher == nil {
+		return
+	}
+	if err := s.enricher.RecordOutcome(hit.LinkID, hit.Subject, hit.Intent, hit.Audience, hit.Constraint, success, t.QuestionTerms); err != nil {
+		slog.Error("trace: record outcome failed", "trace_id", t.TraceID, "link_id", hit.LinkID, "error", err)
 	}
 }
 
@@ -455,7 +492,7 @@ func (s *Service) generateLearningEvents(t *Trace, r *answer.AnswerResult) {
 		reason := gapReason(r)
 		slog.Debug("trace: generating knowledge_gap event", "trace_id", t.TraceID, "question", t.Question, "reason", reason)
 		payload, _ := json.Marshal(map[string]string{"question": t.Question, "reason": reason})
-		if err := s.store.SaveLearningEvent(t.TraceID, "knowledge_gap", string(payload)); err != nil {
+		if _, err := s.store.SaveLearningEvent(t.TraceID, "knowledge_gap", string(payload)); err != nil {
 			slog.Error("trace: save knowledge_gap event failed", "trace_id", t.TraceID, "error", err)
 		}
 	} else {
@@ -535,7 +572,7 @@ func (s *Service) generateTopicDecomposeSignal(t *Trace, r *answer.AnswerResult)
 		slog.Error("trace: marshal topic_decompose_signal payload failed", "trace_id", t.TraceID, "error", err)
 		return
 	}
-	if err := s.store.SaveLearningEvent(t.TraceID, "topic_decompose_signal", string(data)); err != nil {
+	if _, err := s.store.SaveLearningEvent(t.TraceID, "topic_decompose_signal", string(data)); err != nil {
 		slog.Error("trace: save topic_decompose_signal event failed", "trace_id", t.TraceID, "error", err)
 	}
 }
@@ -575,8 +612,163 @@ func (s *Service) SubmitFeedback(t *Trace, req FeedbackRequest) error {
 			fields["link_ids"] = t.ActivationLinkIDs
 		}
 		payload, _ := json.Marshal(fields)
-		if err := s.store.SaveLearningEvent(t.TraceID, "user_correction", string(payload)); err != nil {
+		if _, err := s.store.SaveLearningEvent(t.TraceID, "user_correction", string(payload)); err != nil {
 			slog.Error("trace: save user_correction event failed", "trace_id", t.TraceID, "error", err)
+		}
+
+		// correction_weight-weighted negative signal — the direct replacement
+		// for Study's removed window-based weakening (docs/impl/v1/trace.md
+		// 步骤 4). Uses the trace's own stored query quadruple, not a
+		// re-derived Match() owning condition — a known, accepted
+		// approximation for this low-frequency, human-triggered path.
+		if s.enricher != nil && len(t.ActivationLinkIDs) > 0 {
+			for _, linkID := range t.ActivationLinkIDs {
+				for i := 0; i < s.correctionWeight; i++ {
+					if err := s.enricher.RecordOutcome(linkID, t.Subject, t.Intent, t.Audience, t.ConstraintText, false, ""); err != nil {
+						slog.Error("trace: record correction outcome failed", "trace_id", t.TraceID, "link_id", linkID, "error", err)
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// WriteAuditOutcome is the exported entry point Retrieval's background
+// audit-trial orchestration (docs/impl/v1/retrieval.md 步骤 2c, 阶段 4) calls
+// through the retrieval.AuditOutcomeWriter interface. Retrieval's trigger
+// point (inside tryFastPath, after the fast-path answer has already been
+// handed back to the caller) has no real trace_id to attach the resulting
+// activation_audit_success/failure learning_event to — a trace only gets
+// created later, downstream, once Answer finishes generating and calls
+// ProcessTrace. Rather than changing that ordering (which would delay the
+// user-facing response on an audit trial, defeating the point), this creates
+// a minimal, inert placeholder answers/traces row pair
+// (Store.SaveAuditPlaceholder) purely to satisfy learning_events.trace_id's
+// FK, then delegates to the existing (Phase 2) writeAuditOutcome unchanged.
+// matchScore is recorded as 0 since the interface (by design, mirroring
+// unit.ActivationNotifier/activation.WikiNotifier's cross-package
+// notification shape) doesn't carry it — the hit's own match_score isn't
+// needed to compute agreement, only its point_id/four-tuple are.
+func (s *Service) WriteAuditOutcome(linkID, pointID, subject, intent, audience, constraint string, agree bool, slowPathDirectPointIDs []string) error {
+	traceID, err := s.store.SaveAuditPlaceholder(pointID, subject, intent, audience, constraint)
+	if err != nil {
+		slog.Error("trace: create audit placeholder trace failed", "link_id", linkID, "point_id", pointID, "error", err)
+		return err
+	}
+	return s.writeAuditOutcome(traceID, linkID, pointID, subject, intent, audience, constraint, 0, agree, slowPathDirectPointIDs)
+}
+
+// writeAuditOutcome records the result of an independent verification trial
+// (fast-path vs. slow-path comparison, docs/impl/v1/trace.md 步骤 3b) as an
+// activation_audit_success / activation_audit_failure learning_event, then
+// calls activation.RecordAuditOutcome so the audited condition's
+// audited_success_count/audited_failure_count (and the underlying
+// success_count/failure_count) advance together. Called from
+// WriteAuditOutcome (阶段 4, Retrieval's background audit-trial orchestration).
+func (s *Service) writeAuditOutcome(traceID, linkID, pointID, subject, intent, audience, constraint string, matchScore float64, agree bool, slowPathDirectPointIDs []string) error {
+	eventType := "activation_audit_success"
+	fields := map[string]interface{}{
+		"link_id":                    linkID,
+		"point_id":                   pointID,
+		"subject":                    subject,
+		"intent":                     intent,
+		"audience":                   audience,
+		"constraint":                 constraint,
+		"match_score":                matchScore,
+		"audited_trace_id":           traceID,
+		"slow_path_direct_point_ids": nonNilStrings(slowPathDirectPointIDs),
+		"agree":                      agree,
+	}
+	if !agree {
+		eventType = "activation_audit_failure"
+		fields["reason"] = "point_not_in_slow_path"
+	}
+
+	payload, err := json.Marshal(fields)
+	if err != nil {
+		return fmt.Errorf("trace: marshal %s payload: %w", eventType, err)
+	}
+
+	if _, err := s.store.SaveLearningEvent(traceID, eventType, string(payload)); err != nil {
+		slog.Error("trace: save audit outcome event failed", "trace_id", traceID, "link_id", linkID, "event_type", eventType, "error", err)
+		return err
+	}
+
+	if s.enricher != nil {
+		if err := s.enricher.RecordAuditOutcome(linkID, subject, intent, audience, constraint, agree); err != nil {
+			slog.Error("trace: record audit outcome failed", "trace_id", traceID, "link_id", linkID, "error", err)
+		}
+	}
+
+	return nil
+}
+
+// SynthesisOutcomeWriter is implemented by *wiki.Service — mirrors
+// ObservedConditionEnricher's cross-package shape (interface defined here in
+// the consumer package, wiki satisfies it structurally, main.go wires the
+// two with a setter) — the consumption-side hand-off for Wiki's synthesis-
+// satisfaction axis (docs/impl/v1/wiki.md 步骤 4a).
+type SynthesisOutcomeWriter interface {
+	RecordSynthesisOutcome(pageID string, agree bool) error
+}
+
+// SetSynthesisOutcomeWriter wires the synthesis-outcome hand-off target
+// (usually *wiki.Service). Unset means WriteSynthesisOutcome still writes
+// its learning_event but skips updating wiki_pages' counters — nil-safe,
+// mirrors SetObservedConditionEnricher's optionality.
+func (s *Service) SetSynthesisOutcomeWriter(w SynthesisOutcomeWriter) {
+	s.synthesisWriter = w
+}
+
+// WriteSynthesisOutcome is the entry point Retrieval's background synthesis-
+// audit-trial orchestration (docs/impl/v1/wiki.md 步骤 4a, reusing
+// retrieval.md 步骤 2c's exact orchestration shape) calls after a Wiki
+// direct answer has already been served and independently re-verified via a
+// forced slow-path retrieval. Audit-only by design — there is no
+// self-graded tier for the synthesis axis (wiki.md 步骤 4a「未中选」) — so
+// every call here both writes a wiki_synthesis_audit_success/failure
+// learning_event and, via SynthesisOutcomeWriter, advances the page's
+// synthesis_{success,failure}_count and synthesis_audited_{success,failure}_count
+// together (never independently, unlike ActivationLink/Bundle's
+// RecordAuditOutcome).
+//
+// No real trace_id exists for this background trial either (same reasoning
+// as WriteAuditOutcome) — reuses the same SaveAuditPlaceholder mechanism to
+// satisfy learning_events.trace_id's FK.
+func (s *Service) WriteSynthesisOutcome(pageID, auditedTraceQuestion string, slowPathDirectPointIDs []string, agree bool) error {
+	traceID, err := s.store.SaveAuditPlaceholder(auditedTraceQuestion, "", "", "", "")
+	if err != nil {
+		slog.Error("trace: create synthesis audit placeholder trace failed", "page_id", pageID, "error", err)
+		return err
+	}
+
+	eventType := "wiki_synthesis_audit_success"
+	fields := map[string]interface{}{
+		"page_id":                    pageID,
+		"audited_trace_id":           traceID,
+		"slow_path_direct_point_ids": nonNilStrings(slowPathDirectPointIDs),
+		"agree":                      agree,
+	}
+	if !agree {
+		eventType = "wiki_synthesis_audit_failure"
+		fields["reason"] = "point_not_in_page_scope"
+	}
+
+	payload, err := json.Marshal(fields)
+	if err != nil {
+		return fmt.Errorf("trace: marshal %s payload: %w", eventType, err)
+	}
+
+	if _, err := s.store.SaveLearningEvent(traceID, eventType, string(payload)); err != nil {
+		slog.Error("trace: save synthesis outcome event failed", "trace_id", traceID, "page_id", pageID, "event_type", eventType, "error", err)
+		return err
+	}
+
+	if s.synthesisWriter != nil {
+		if err := s.synthesisWriter.RecordSynthesisOutcome(pageID, agree); err != nil {
+			slog.Error("trace: record synthesis outcome failed", "trace_id", traceID, "page_id", pageID, "error", err)
 		}
 	}
 

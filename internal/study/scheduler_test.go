@@ -8,7 +8,7 @@ import (
 func TestScheduler_StopBeforeFirstRun(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
+	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
 
 	scheduler := NewScheduler(svc, 1*time.Hour)
 	scheduler.Start()
@@ -20,7 +20,7 @@ func TestScheduler_StopBeforeFirstRun(t *testing.T) {
 func TestScheduler_ExecuteOnce(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
+	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
 
 	scheduler := NewScheduler(svc, 1*time.Hour)
 

@@ -100,6 +100,21 @@ type ActivationHit struct {
 	LinkID     string  `json:"link_id"`
 	PointID    string  `json:"point_id"`
 	MatchScore float64 `json:"match_score"`
+	// MatchedBy is "exact" or "model" (docs/impl/v1/activation.md 步骤 2,
+	// 2026-08-12) — which round of Match() produced this hit.
+	MatchedBy string `json:"matched_by,omitempty"`
+	// Tier/AuditSampled/Subject/Intent/Audience/Constraint (2026-08-13,
+	// docs/impl/v1/activation.md「置信度分档判定」) mirror activation.LinkMatch's
+	// new fields — the matched condition's own tier verdict and its own
+	// stored quadruple (not the query's), populated from LinkMatch at hit
+	// build time so Trace can call RecordOutcome/RecordAuditOutcome against
+	// the exact condition Match() scored, without re-deriving it.
+	Tier         string `json:"tier,omitempty"`
+	AuditSampled bool   `json:"audit_sampled,omitempty"`
+	Subject      string `json:"subject,omitempty"`
+	Intent       string `json:"intent,omitempty"`
+	Audience     string `json:"audience,omitempty"`
+	Constraint   string `json:"constraint,omitempty"`
 }
 
 type Evidence struct {

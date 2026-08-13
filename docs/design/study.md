@@ -44,35 +44,39 @@ Learning Event 由 Trace 记录，详见 `trace.md`。没有 Learning Event 支�
 ```text
 activation_success
   ActivationLink 命中，且其知识被实际采用、支撑了有效回答
-  -> 累积正向证据，观察是否应在相似 scene / goal 下强化或晋升
+  -> 累积正向证据，持续抬高这条使用条件自己的置信度
 
 activation_failure
   ActivationLink 命中，但未能支撑有效回答，或命中知识未被采用
-  -> 标记路径风险；多次在相似条件下重复出现才推动降权或淘汰
+  -> 标记路径风险；多次在相似条件下重复出现，持续下修这条
+     使用条件的置信度
 
 activation_gap
   没有合适 ActivationLink，但补充查找找到了被采用的有效知识
-  -> 暴露应形成候选链接的缺口；Study 可据此创建 candidate ActivationLink
+  -> 暴露当前认知结构缺口；Study 可据此新增一条 ActivationLink
+     观测，从这条使用条件自己的置信度分布开始积累
 ```
 
 这些事件在问答中自动产生，记录召回、采用和缺口事实，不需要用户额外表态。
 
-### 累积与晋升
+### 累积与置信度收敛
 
-单次检索事件不足以改变稳定结构。Study 依赖跨事件的累积：
+单次检索事件不足以改变稳定结构。Study 依赖跨事件的累积——但这不再是"攒够次数触发一次跳变"，而是让每条使用条件自己的置信度分布持续被证据校准、逐渐收窄（机制见 `activation-convergence.md`）：
 
 ```text
 同类问题在相似 scene / goal 下多次 activation_success
-  -> repeated_success，推动 ActivationLink 强化或 candidate -> verified 晋升；
+  -> repeated_success，作为同一条置信度分布持续收窄、抬高的证据；
 
 同类问题在相似条件下多次 activation_failure
-  -> repeated_failure，推动降权、淘汰或边界收窄；
+  -> repeated_failure，作为同一条置信度分布持续下修的证据，
+     或收窄这条使用条件的边界；
 
 多次 activation_gap 且补充结果被采用
-  -> 形成并验证 candidate ActivationLink，无需 user_correction。
+  -> 新增一条 ActivationLink 观测，从这条使用条件自己的置信度
+     分布开始积累，无需 user_correction。
 ```
 
-即使没有用户反馈，上述累积也足以驱动 ActivationLink 的形成、强化、降权和淘汰。`user_correction` 在信号模糊或需要加速重新验证时尤其有价值，但应视为增强而非依赖。
+即使没有用户反馈，上述累积也足以驱动每条使用条件置信度分布的持续收敛。`user_correction` 在信号模糊或需要加速重新验证时尤其有价值，但应视为增强而非依赖。
 
 ### 与「正反馈」的关系
 
@@ -125,12 +129,11 @@ Study 根据 Learning Event 类型和累积信号，对长期记忆执行有针�
 Study 主要做：
 
 ```text
-强化有效 ActivationLink；
-降权失败 ActivationLink；
-淘汰长期无效 ActivationLink；
-根据 activation_gap 形成候选 ActivationLink；
-根据 repeated_success 提升 ActivationLink 稳定性；
-根据 repeated_failure 标记路径风险；
+持续抬高有效 ActivationLink 使用条件的置信度；
+持续下修失败 ActivationLink 使用条件的置信度；
+根据 activation_gap 新增 ActivationLink 观测；
+根据 repeated_success 收窄、抬高 ActivationLink 置信度分布；
+根据 repeated_failure 标记路径风险、下修置信度；
 根据 knowledge_conflict 标记知识冲突；
 根据 user_correction 触发知识重新验证；
 根据 entry_gap 聚类与 entry_boundary_signal 累积形成概念演化候选
@@ -150,7 +153,7 @@ Study 主要做：
 
 ```text
 材料层学习：KnowledgePoint、KnowledgeUnit、来源证据的可靠性、重新验证与缺口；
-认知层学习：Concept 边界、ActivationLink 状态与适用条件、实践路径；
+认知层学习：Concept 边界、ActivationLink 置信度与适用条件、实践路径；
 表达层学习：Wiki 重编译候选、主题稳定性、适用边界更新。
 ```
 
@@ -162,10 +165,10 @@ Study 主要做：
 被召回但未使用的知识不应自动强化；
 被实际采用并支撑有效回答的路径（activation_success）才适合累积正向证据；
 单次 Learning Event 不应直接重写长期记忆；
-多次稳定检索事件才适合推动 ActivationLink 状态迁移和 Wiki 页面演化。
+多次稳定检索事件才适合推动 ActivationLink 置信度明显移动和 Wiki 页面演化。
 ```
 
-一次 activation_success 只说明路径值得观察。一次 activation_failure 可能来自证据不足或问题理解偏差，不应立即废弃整条 ActivationLink。只有当 repeated_success、repeated_failure 等检索累积信号在多次事件中反复出现，Study 才应推动状态迁移；`user_correction` 可加速这一过程，但不是必要条件。
+一次 activation_success 只是一次观测，让对应使用条件的置信度小幅上修。一次 activation_failure 可能来自证据不足或问题理解偏差，只让对应使用条件的置信度小幅下修，不应立即废弃整条 ActivationLink。只有当 repeated_success、repeated_failure 等检索累积信号在多次事件中反复出现，置信度分布才会明显收窄或移动；`user_correction` 可加速这一过程，但不是必要条件。
 
 ## 4. Study 不做什么
 
@@ -234,12 +237,12 @@ KPN 本身不直接形成稳定激活路径。
 
 ```text
 KPN 连接 ≠ ActivationLink；
-KPN 上下文被采用 ≠ 立即晋升为 ActivationLink。
+KPN 上下文被采用 ≠ ActivationLink 已经积累出高置信度。
 ```
 
-当 activation_gap 或 repeated_success 表明某条补充路径在多次事件中稳定有效时，Study 可以形成候选 ActivationLink。
+当 activation_gap 或 repeated_success 表明某条补充路径在多次事件中稳定有效时，Study 可以新增一条 ActivationLink 观测。
 
-candidate ActivationLink 仍必须经过独立补充查找、实际采用、证据回链和反馈验证，才能晋升为 verified。Study 不应根据 KPN 扩散过程本身晋升链接。
+新增的 ActivationLink 观测仍必须经过独立补充查找、实际采用、证据回链和反馈验证持续积累证据，置信度才会收窄、越过服务门槛。Study 不应根据 KPN 扩散过程本身直接抬高链接的置信度。
 
 ### 从模式组装中沉淀关系
 
@@ -304,11 +307,11 @@ Working Model 的核心变量组合与组织方式跨事件高度相似；
 
 ActivationLink 不是「被使用过」就会自动稳定。
 
-Study 对 ActivationLink 的目标，不是生成更多链接，而是筛选、验证、降权和淘汰链接。
+Study 对 ActivationLink 的目标，不是生成更多链接，而是让每条使用条件的置信度分布持续被证据校准、收窄，筛出真正可信的那一部分。
 
 ### 有效性判断标准
 
-一条 ActivationLink 是否值得保留或晋升，应综合以下标准判断：
+一条 ActivationLink 下某条使用条件的置信度该往哪个方向移动、移动多少，应综合以下标准判断：
 
 ```text
 答案贡献度：没有该链接，答案质量是否明显下降；
@@ -319,43 +322,47 @@ Study 对 ActivationLink 的目标，不是生成更多链接，而是筛选、�
 边界清晰度：是否明确知道该链接适用和不适用的条件。
 ```
 
-只有多条标准在多次 Learning Event 中共同支持，链接才适合从 candidate 向 verified 晋升。这些标准主要可从检索事件中观察：是否反复被采用（activation_success）、是否反复命中后失败（activation_failure）、是否在相似 scene / goal 下独立重复出现——均不需要用户显式反馈。
+这些标准共同决定的不是一次"要不要晋升"的判定，而是持续喂给置信度分布的证据强度——多条标准在多次 Learning Event 中共同支持，置信度分布才会明显收窄、抬高到可以直接服务的区间。这些标准主要可从检索事件中观察：是否反复被采用（activation_success）、是否反复命中后失败（activation_failure）、是否在相似 scene / goal 下独立重复出现——均不需要用户显式反馈。
 
-### 状态模型
+### 置信度模型
+
+链接不再整体持有一个状态标签。信任的单位下沉到每一条具体的使用条件——同一条 ActivationLink 下不同的问法、不同的四元组变体，各自维护一条自己的连续置信度分布（Beta 分布：成功次数 + 1、失败次数 + 1，机制见 `activation-convergence.md` 第 3 节）：
 
 ```text
-candidate：候选链接，只能辅助探索；
-verified：已验证链接，可参与正式召回；
-weakened：被降权链接；
-conflicted：存在冲突的链接；
-deprecated：不再推荐使用的链接。
+置信度已越过服务门槛：这条使用条件可以直接参与正式召回；
+置信度还不明朗（数据太少，或好坏参半）：不直接参与正式召回，
+  但也不会被移出候选池——按一个小比例的试探名额继续接收真实流量，
+  用结果收窄这条使用条件的分布；
+置信度持续走低：分到的试探名额相应变小，但从不被强制清零或移除，
+  证据一旦转向，分数仍能被拉回来。
 ```
 
-Study 根据 Learning Event 推动链接在以上状态间迁移，而不是让链接数量持续增长。
+Study 根据 Learning Event 持续更新每条使用条件的置信度分布，而不是推动链接在几个离散状态之间跳变；链接本身退化成这些被打分证据的容器，它的"健康状况"是这些证据的聚合视图（最高置信度是多少、有几条越过了服务门槛），供人浏览监控，查询时不读它。
 
 ```text
-candidate 不能直接决定答案，只能辅助探索；
-verified 可以参与正式召回，但不能永久免审；
-weakened、conflicted、deprecated 都不应作为当前首选激活路径。
+置信度不足的使用条件不能直接决定答案，只能通过试探名额辅助探索；
+置信度已越过服务门槛的可以参与正式召回，但不能永久免检——新证据
+  持续校准这条分布，分数会随之移动；
+命中 KPN contradicts 关系覆盖的知识点时，不论置信度高低，
+  都不应作为当前首选依据——冲突判定是独立于置信度的硬性二元门槛，
+  不因为置信度高就被绕开（见 activation-convergence.md 第 6 节）。
 ```
 
 ### 学习动作形态
 
 Study 将 Learning Event 转化为长期记忆调整时，常见动作包括：
 
-**强化**：反复有效的 ActivationLink 在特定场景、目标、推理形式和注意焦点下变得更易被采用。
+**置信度上修**：反复有效的使用条件，其置信度分布持续被正向证据推高、收窄，在特定场景、目标、推理形式和注意焦点下变得更容易越过服务门槛、被直接采用。
 
-**修正**：收窄链接或 Concept 的适用条件，或拆成更精确的激活路径。
+**修正**：收窄链接或 Concept 的适用条件，或拆成更精确的激活路径——这类结构性调整独立于置信度打分，回答的是"这条使用条件描述的范围对不对"，而不是"这条使用条件可信不可信"。
 
-**降权**：在特定维度或整体上降低无效、误导或边界过宽的链接权重。
+**置信度下修**：在特定维度或整体上，用失败、误导或边界过宽暴露出的证据，持续降低对应使用条件的置信度。
 
-**淘汰**：长期无效、无证据支撑或存在更优替代路径的链接转为 deprecated。
-
-**补充**：knowledge_gap 形成新的学习目标或候选结构。
+**补充**：knowledge_gap 形成新的学习目标；activation_gap 新增 ActivationLink 观测，从零开始积累置信度。
 
 **重组**：Concept 拆分、合并，候选领域或概念晋升，激活路径按场景重组。概念层面的候选形成、人工确认与迁移语义见 `concept-evolution.md`。
 
-候选 ActivationLink 是待验证的学习假设，不得参与正式召回。它应带上从 Learning Event 中观察到的场景、目标、推理形式、注意焦点和适用边界，而不是粗糙的「概念到知识点」连接。
+新增的 ActivationLink 观测是置信度还很宽的假设，不直接参与正式召回，但也不会被排除在候选池之外——它应带上从 Learning Event 中观察到的场景、目标、推理形式、注意焦点和适用边界，而不是粗糙的「概念到知识点」连接，随后续证据积累让自己的置信度分布收窄。
 
 ## 9. Learning Reason
 
@@ -368,10 +375,9 @@ Learning Reason 的依据来自 Learning Event，而不是完整思维过程。
 Learning Reason 用于说明：
 
 ```text
-为什么强化某个 ActivationLink；
-为什么降权某个 ActivationLink；
-为什么淘汰某个 ActivationLink；
-为什么形成候选 ActivationLink；
+为什么某个 ActivationLink 使用条件的置信度上修；
+为什么某个 ActivationLink 使用条件的置信度下修；
+为什么新增一条 ActivationLink 观测；
 为什么形成或强化候选实践路径；
 为什么标记知识冲突；
 为什么触发知识重新验证；
@@ -384,7 +390,7 @@ Learning Reason 应能关联：
 ```text
 触发来源：检索事件累积（activation_success / activation_failure / activation_gap、repeated_success / repeated_failure）、回答失败、证据冲突、外部材料变化；用户反馈可作为加速信号；
 影响对象：ActivationLink、Concept、KnowledgePoint、KnowledgeUnit、Wiki 页面；
-学习动作：强化、降权、淘汰、标记冲突、标记缺口、触发重编译等；
+学习动作：置信度上修、置信度下修、标记冲突、标记缺口、触发重编译等；
 依据：来自哪些 Learning Event、哪些证据、哪些反馈；
 边界：该学习结论适用于哪些认知视角和问题场景；
 不确定性：是否还需要后续验证。
@@ -399,10 +405,9 @@ Study 的输出是长期记忆调整建议或结果，不是复盘报告。
 Study 输出可以包括：
 
 ```text
-ActivationLink 强化；
-ActivationLink 降权；
-ActivationLink 淘汰；
-候选 ActivationLink；
+ActivationLink 使用条件置信度上修；
+ActivationLink 使用条件置信度下修；
+新增 ActivationLink 观测；
 候选实践路径；
 KnowledgePoint 重新验证；
 Concept 边界调整候选；
@@ -422,17 +427,17 @@ Study 不输出「系统为什么这样回答」的叙事，不输出检索链�
 
 一次 activation_failure 可能来自问题表达、证据不足或推理错误，也可能来自知识本身错误。
 
-Study 应结合事件类型、事件可靠性、多次累积信号和 Learning Reason，再决定强化、降权还是暂缓。
+Study 应结合事件类型、事件可靠性、多次累积信号和 Learning Reason，再决定这条使用条件的置信度该如何调整，还是暂缓判断。
 
 ## 12. 总结
 
 反馈学习让知识大脑不是越存越大，而是越用越准。
 
-对 ActivationLink 而言，Study 的目标不是链接越多越好，而是让 verified 链接更少、更准、边界更清晰。
+对 ActivationLink 而言，Study 的目标不是链接越多越好，而是让高置信度的使用条件更少、更准、边界更清晰——置信度分布收窄本身就是"准"的度量，不需要再靠链接数量做代理。
 
 一句话总结：
 
 ```text
 Study 根据 Learning Event 调整长期记忆，输出 Learning Result，而不是复盘思考过程或解释每次回答。
-ActivationLink 演化主要由检索事件累积驱动，不依赖用户持续纠正。
+ActivationLink 的置信度演化主要由检索事件累积驱动，不依赖用户持续纠正。
 ```

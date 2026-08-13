@@ -15,36 +15,50 @@ import (
 // learning_results rows.
 func newTestActivationSvc(db *sql.DB) *activation.Service {
 	store := activation.NewStore(db)
-	return activation.NewService(store, activation.NewMatcher(store))
+	svc := activation.NewService(store, activation.NewMatcher(store))
+	svc.SetConfidenceConfig(testConfidenceConfig())
+	return svc
 }
 
 func testConfig() config.StudyConfig {
 	return config.StudyConfig{
-		ScheduleInterval:      "1h",
-		CandidateConfidentMin: 5,
-		CandidateRatioMin:     0.6,
-		WikiKPMin:             4,
-		GapHitThreshold:       3,
-		ScanBatchSize:         200,
-		ReportPeriodDays:      30,
-		ReportMaxKeep:         10,
-		AutoPromote:           false,
-		PromoteSuccessMin:     3,
-		PromoteDistinctMin:    2,
-		WeakenFailureMin:      3,
-		WeakenRatioMin:        0.5,
-		ReverifySuccessMin:    2,
-		EventWindowDays:       30,
-		CandidateIdleDays:     30,
-		DeprecateIdleDays:     60,
-		CorrectionWeight:      2,
+		ScheduleInterval:    "1h",
+		CreateConfidenceMin: 0.55,
+		CreateWidthMax:      0.03,
+		WikiKPMin:           4,
+		GapHitThreshold:     3,
+		ScanBatchSize:       200,
+		ReportPeriodDays:    30,
+		ReportMaxKeep:       10,
+		EventWindowDays:     30,
+		CorrectionWeight:    2,
+		PruneMeanMax:        0.3,
+		PruneWidthMax:       0.02,
+		PruneSampleMin:      8,
+		PruneIdleDays:       30,
+		PruneStaleDays:      90,
+	}
+}
+
+// testConfidenceConfig is a permissive ConfidenceConfig for tests that need
+// a link to land on verified deterministically: any success_count >= 1
+// clears mean 2/3 >= 0.5, and 0 audit_sample_min means self_graded is
+// reachable immediately (never trusted without independent verification,
+// but self_graded already counts as "verified" per deriveStatus).
+func testConfidenceConfig() activation.ConfidenceConfig {
+	return activation.ConfidenceConfig{
+		ServingConfidenceMin:  0.5,
+		AuditSampleMin:        5,
+		ExploreRateLow:        1.0,
+		ExploreRateSelfGraded: 0,
+		ExploreRateTrusted:    0,
 	}
 }
 
 func TestService_Run_Empty(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
+	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
 
 	result, err := svc.Run()
 	if err != nil {
@@ -79,7 +93,7 @@ func TestService_Run_WithData(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
 
 	// Seed prerequisite data
 	seedSource(t, db, "src1")
@@ -172,7 +186,7 @@ func TestService_GapThresholdWarning(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.GapHitThreshold = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -204,7 +218,7 @@ func TestService_RecommendationLogic(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -226,7 +240,7 @@ func TestService_RecommendationLogic(t *testing.T) {
 	seedTrace(t, db, "tr3", "a3", "q3", "t3", "confident", "long", []string{"kp1"})
 
 	// Scan candidates first
-	store.ScanCandidates(cfg.CandidateConfidentMin, cfg.CandidateRatioMin, cfg.ScanBatchSize)
+	store.ScanCandidates(cfg.CreateConfidenceMin, cfg.CreateWidthMax, cfg.ScanBatchSize)
 
 	candidates, err := svc.buildActivationCandidates(cfg.ReportPeriodDays)
 	if err != nil {
@@ -253,7 +267,7 @@ func TestService_WikiCandidates(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.WikiKPMin = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -307,7 +321,7 @@ func TestService_WikiCandidates_ContradictsDominantNotReady(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.WikiKPMin = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -389,7 +403,7 @@ func TestService_WikiCandidates_LowCohesionSplitSignal(t *testing.T) {
 		}
 	}
 
-	svcGateOff := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
+	svcGateOff := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
 	wikisOff, _, err := svcGateOff.buildWikiCandidatesWithSplitSignals()
 	if err != nil {
 		t.Fatalf("buildWikiCandidatesWithSplitSignals (gate off): %v", err)
@@ -401,7 +415,7 @@ func TestService_WikiCandidates_LowCohesionSplitSignal(t *testing.T) {
 		t.Errorf("gate off: expected Stats.Cohesion to still report the low value (~0.5), got %.2f", wikisOff[0].Stats.Cohesion)
 	}
 
-	svcGateOn := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{Min: 0.6, WRel: 1.0, Gamma: 1.0}, 0, 0)
+	svcGateOn := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{Min: 0.6, WRel: 1.0, Gamma: 1.0}, 0, 0, 0)
 	wikisOn, splitSignals, err := svcGateOn.buildWikiCandidatesWithSplitSignals()
 	if err != nil {
 		t.Fatalf("buildWikiCandidatesWithSplitSignals (gate on): %v", err)
@@ -436,7 +450,7 @@ func TestService_FlagWikiCandidates_RecordsEventIDs(t *testing.T) {
 	cfg := testConfig()
 	cfg.WikiKPMin = 2
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{}, 0, 0)
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{}, 0, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")

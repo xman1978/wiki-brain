@@ -609,6 +609,15 @@ type pageDetailResp struct {
 	UncoveredPoints []UncoveredPoint `json:"uncovered_points"`
 	Revisions       []revisionMeta   `json:"revisions"`
 	ClaimChecks     []claimCheckResp `json:"claim_checks"`
+
+	// 综合满意度（2026-08-13，docs/impl/v1/wiki.md 步骤 4a / page.md 步骤 3）：
+	// 只读展示字段，mean(page) 只在 SynthesisSuccessCount+SynthesisFailureCount > 0
+	// 时才有意义，前端据此决定是否显示"暂无独立核实数据"。
+	SynthesisSuccessCount        int     `json:"synthesis_success_count"`
+	SynthesisFailureCount        int     `json:"synthesis_failure_count"`
+	SynthesisAuditedSuccessCount int     `json:"synthesis_audited_success_count"`
+	SynthesisAuditedFailureCount int     `json:"synthesis_audited_failure_count"`
+	SynthesisMean                float64 `json:"synthesis_mean"`
 }
 
 type revisionMeta struct {
@@ -709,6 +718,12 @@ func (h *Handler) getPage(w http.ResponseWriter, r *http.Request) {
 		UncoveredPoints: uncoveredPoints,
 		Revisions:       revMeta,
 		ClaimChecks:     claimChecks,
+
+		SynthesisSuccessCount:        page.SynthesisSuccessCount,
+		SynthesisFailureCount:        page.SynthesisFailureCount,
+		SynthesisAuditedSuccessCount: page.SynthesisAuditedSuccessCount,
+		SynthesisAuditedFailureCount: page.SynthesisAuditedFailureCount,
+		SynthesisMean:                page.SynthesisMean(),
 	}
 	foundation.WriteJSON(w, http.StatusOK, resp)
 }

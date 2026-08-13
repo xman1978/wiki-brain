@@ -134,7 +134,7 @@ KP 集合已稳定：新事件不再大幅扩大集合。
 
 ### 新增
 
-确认后创建概念，归属指定 Domain。候选期间累积的观察（哪些知识点、哪些场景）转为该概念下的 candidate ActivationLink，进入正常的链接验证流程——新增概念不直接带来 verified 路径。
+确认后创建概念，归属指定 Domain。候选期间累积的观察（哪些知识点、哪些场景）转为该概念下新的 ActivationLink 观测条件，进入正常的置信度积累流程（见 `activation-convergence.md`）——新增概念不直接带来置信度已经越过服务门槛的路径。
 
 ### 合并
 
@@ -143,8 +143,10 @@ KP 集合已稳定：新事件不再大幅扩大集合。
 ```text
 ActivationLink 迁移：两概念下的链接改挂目标概念，
   场景 / 目标守门条件不变；
-  同一 KnowledgePoint 同条件的重复链接去重，保留状态更高者
-  （verified > candidate；weakened / deprecated 不因合并复活）；
+  同一 KnowledgePoint 同条件的重复链接去重时，把两条链接各自积累的
+  证据合并进同一条置信度分布，而不是比较一个状态标签的高低来保留
+  其中一条、丢弃另一条的历史——重复观测本来就该被当作同一件事的
+  更多证据，合并不应让已经收窄的分布重新变宽（见 `activation-convergence.md`）；
 KPP 挂载迁移到目标概念；
 相关 Wiki 页面标记 needs_recompile，不自动重编译；
 被合并概念不删除，标记 merged_into 指向目标概念。

@@ -141,8 +141,8 @@ type RetrievalConfig struct {
 	// vs. fts/fts_tuple. 1.0 or unset (<=0) means no boost (RRF unweighted).
 	OutlineRRFBoost float64 `yaml:"outline_rrf_boost"`
 	// —— V1 新增（docs/impl/v1/retrieval.md 配置项）——
-	FastPath         bool    `yaml:"fast_path"`
-	FastPathVerify   bool    `yaml:"fast_path_verify"`
+	FastPath       bool `yaml:"fast_path"`
+	FastPathVerify bool `yaml:"fast_path_verify"`
 	// SlowPathVerify gates a sufficiency check on PathType=full evidence
 	// before Answer generates (docs/impl/v1/retrieval.md 步骤 2b). When
 	// sufficient=false the answer layer refuses with the no-evidence
@@ -168,6 +168,35 @@ type RetrievalConfig struct {
 	// 输出结果附一句话依据，便于调试排查；true 用 rerank_relevance_concise.md，
 	// 只输出 candidate_id/relevant，省去分析文本以缩短响应耗时。
 	RerankRelevanceConcise bool `yaml:"rerank_relevance_concise"`
+
+	// —— 问题四元组归一化（2026-08-12 新增，docs/impl/v1/retrieval.md 步骤 2）——
+	// 默认关闭：新机制，先不改变现有行为，观测后再打开。
+	QuestionTupleNormEnabled bool `yaml:"question_tuple_norm_enabled"`
+	// QuestionTupleNormLocalSimMin 是 Tier 2（本地词集 Jaccard 相似度）的命中
+	// 阈值，0-1。
+	QuestionTupleNormLocalSimMin float64 `yaml:"question_tuple_norm_local_sim_min"`
+	// QuestionTupleNormIdleDays：question_tuple_norms 行 last_hit_at 超过此
+	// 天数未再命中，由 Study 周期清理（study.md 步骤 4 同款 idle 清理）。
+	QuestionTupleNormIdleDays int `yaml:"question_tuple_norm_idle_days"`
+	// VectorMatchEnabled 单独开关，只在 QuestionTupleNormEnabled=true 时才
+	// 生效，控制 Tier 2.5（向量相似度早筛）。默认关闭。
+	VectorMatchEnabled bool `yaml:"vector_match_enabled"`
+	// VectorModelDir 是 goformer 加载 embedding 模型权重的目录（HuggingFace
+	// safetensors 格式），为空则不启用向量匹配。
+	VectorModelDir string `yaml:"vector_model_dir"`
+	// VectorMatchSimMin：Tier 2.5 的拒绝阈值——余弦相似度低于此值时直接判定
+	// "不是同一个问题"、跳过 LLM 判断（Tier 3），按未命中处理；达到或高于此
+	// 阈值只表示"不能排除"，仍然要进入 Tier 3 交给 LLM 做最终判断，向量分数
+	// 本身从不单独确认命中（刻意的非对称设计，只拒绝、不确认）。
+	VectorMatchSimMin float64 `yaml:"vector_match_sim_min"`
+
+	// —— ActivationLink/Bundle 连续置信度（2026-08-13 新增，
+	// docs/impl/v1/activation.md 配置项）——
+	ServingConfidenceMin  float64 `yaml:"serving_confidence_min"`
+	AuditSampleMin        int     `yaml:"audit_sample_min"`
+	ExploreRateLow        float64 `yaml:"explore_rate_low"`
+	ExploreRateSelfGraded float64 `yaml:"explore_rate_self_graded"`
+	ExploreRateTrusted    float64 `yaml:"explore_rate_trusted"`
 }
 
 // EvidenceConfig — docs/impl/v1/evidence.md 配置项.
@@ -292,28 +321,48 @@ type WikiConfig struct {
 	// along per aspect into the analyze stage, and how many populate
 	// PageAspect.QuestionTypes (<=0 defaults to 5).
 	AspectQuestionsMax int `yaml:"aspect_questions_max"`
+
+	// —— 综合满意度轴（synthesis satisfaction，docs/impl/v1/wiki.md 步骤
+	// 4a，2026-08-13 新增）——
+	// SynthesisAuditRate is the per-served-direct-answer sampling rate for
+	// the independent-verification trial that updates wiki_pages'
+	// synthesis_{success,failure,audited_success,audited_failure}_count
+	// columns — audit-only by design (no self-graded tier, unlike
+	// ActivationLink/Bundle): a served answer that isn't sampled produces no
+	// synthesis event at all, see wiki.md 步骤 4a「未中选」.
+	SynthesisAuditRate float64 `yaml:"synthesis_audit_rate"`
 }
 
 type StudyConfig struct {
-	ScheduleInterval      string  `yaml:"schedule_interval"`
-	CandidateConfidentMin int     `yaml:"candidate_confident_min"`
-	CandidateRatioMin     float64 `yaml:"candidate_ratio_min"`
-	WikiKPMin             int     `yaml:"wiki_kp_min"`
-	GapHitThreshold       int     `yaml:"gap_hit_threshold"`
-	ScanBatchSize         int     `yaml:"scan_batch_size"`
-	ReportPeriodDays      int     `yaml:"report_period_days"`
-	ReportMaxKeep         int     `yaml:"report_max_keep"`
+	ScheduleInterval string `yaml:"schedule_interval"`
+	// candidate_confident_min/candidate_ratio_min 已删除（2026-08-13，随
+	// docs/design/activation-convergence.md 第 11 节一并替换——创建门槛换成
+	// 与「收敛剪枝」同一套 Beta 均值/宽度公式，见 CreateConfidenceMin/
+	// CreateWidthMax，docs/impl/v1/study.md 步骤 1）
+	CreateConfidenceMin float64 `yaml:"create_confidence_min"`
+	CreateWidthMax      float64 `yaml:"create_width_max"`
+	WikiKPMin           int     `yaml:"wiki_kp_min"`
+	GapHitThreshold     int     `yaml:"gap_hit_threshold"`
+	ScanBatchSize       int     `yaml:"scan_batch_size"`
+	ReportPeriodDays    int     `yaml:"report_period_days"`
+	ReportMaxKeep       int     `yaml:"report_max_keep"`
 	// —— V1 新增（docs/impl/v1/study.md 配置项）——
-	AutoPromote        bool    `yaml:"auto_promote"`
-	PromoteSuccessMin  int     `yaml:"promote_success_min"`
-	PromoteDistinctMin int     `yaml:"promote_distinct_min"`
-	WeakenFailureMin   int     `yaml:"weaken_failure_min"`
-	WeakenRatioMin     float64 `yaml:"weaken_ratio_min"`
-	ReverifySuccessMin int     `yaml:"reverify_success_min"`
-	EventWindowDays    int     `yaml:"event_window_days"`
-	CandidateIdleDays  int     `yaml:"candidate_idle_days"`
-	DeprecateIdleDays  int     `yaml:"deprecate_idle_days"`
-	CorrectionWeight   int     `yaml:"correction_weight"`
+	// 2026-08-13：auto_promote/promote_*/weaken_*/reverify_*/candidate_idle_days/
+	// deprecate_idle_days 随离散状态机一起删除（docs/design/
+	// activation-convergence.md, docs/impl/v1/activation.md「移除的旧配置项」）
+	// ——不再有"晋升/降权/重新验证/闲置淘汰"这些离散判定，替代方式是
+	// retrieval.{serving_confidence_min,audit_sample_min,explore_rate_*} 五项
+	// + Match()/RecordOutcome 的连续置信度计算，见 RetrievalConfig。
+	EventWindowDays  int `yaml:"event_window_days"`
+	CorrectionWeight int `yaml:"correction_weight"`
+	// —— 收敛剪枝（2026-08-13 新增，docs/impl/v1/study.md 步骤 3）——
+	// candidate_idle_days/deprecate_idle_days 已删除（随离散状态机一起废弃
+	// ——淘汰粒度下沉到单条观测条件，见下方 prune_* 四项）。
+	PruneMeanMax   float64 `yaml:"prune_mean_max"`
+	PruneWidthMax  float64 `yaml:"prune_width_max"`
+	PruneSampleMin int     `yaml:"prune_sample_min"`
+	PruneIdleDays  int     `yaml:"prune_idle_days"`
+	PruneStaleDays int     `yaml:"prune_stale_days"`
 	// ObservedConditionsMax caps ActivationLink observed_conditions groups
 	// (docs/superpowers/specs/2026-07-22-activation-observed-conditions-design.md).
 	ObservedConditionsMax int `yaml:"observed_conditions_max"`
@@ -333,6 +382,19 @@ type StudyConfig struct {
 	EntryEventWindowDays   int     `yaml:"entry_event_window_days"`
 	// —— 问题复杂度观测量（两层架构扩展，docs/impl/v1/study.md 步骤 7）——
 	ComplexityMinQuestions int `yaml:"complexity_min_questions"`
+	// —— ActivationBundle（熟路）阶段 1（docs/impl/v1/activation-bundle.md）——
+	BundleCoreRatioMin         float64 `yaml:"bundle_core_ratio_min"`
+	BundleClusterMinQuestions  int     `yaml:"bundle_cluster_min_questions"`
+	BundleClusterMinDaysActive int     `yaml:"bundle_cluster_min_days_active"`
+	BundleCoreSizeMax          int     `yaml:"bundle_core_size_max"`
+	BundlePromoteSuccessMin    int     `yaml:"bundle_promote_success_min"`
+	BundlePromoteDistinctMin   int     `yaml:"bundle_promote_distinct_min"`
+	BundleWeakenFailureMin     int     `yaml:"bundle_weaken_failure_min"`
+	BundleWeakenRatioMin       float64 `yaml:"bundle_weaken_ratio_min"`
+	BundleReverifySuccessMin   int     `yaml:"bundle_reverify_success_min"`
+	BundleCandidateIdleDays    int     `yaml:"bundle_candidate_idle_days"`
+	BundleDeprecateIdleDays    int     `yaml:"bundle_deprecate_idle_days"`
+	BundleAutoPromote          bool    `yaml:"bundle_auto_promote"`
 }
 
 func Load(configPath string) (*Config, error) {

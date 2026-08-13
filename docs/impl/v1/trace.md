@@ -2,9 +2,11 @@
 
 ## 职责
 
-在 MVP Trace（质量分级、共现统计、gap/user_correction 事件）之上，增加激活类 Learning Event 的自动产生：每次问答记录 ActivationLink 命中与采用情况，产出 `activation_success` / `activation_failure` / `activation_gap` 事件，作为 Study 学习动作的燃料。
+在 MVP Trace（质量分级、共现统计、gap/user_correction 事件）之上，增加激活类 Learning Event 的自动产生：每次问答记录 ActivationLink 命中与采用情况，产出 `activation_success` / `activation_failure` / `activation_gap` 事件。
 
-V1 Trace 仍不调用 LLM、不阻塞回答，沿用 `trace_write` 异步队列。
+**2026-08-13 起的机制基准**：随 `docs/design/activation-convergence.md` 的连续置信度设计（见 `activation.md`「状态机」），`activation_success`/`activation_failure` 不再只是"攒给 Study 事后计数判定跳变"的燃料——本模块在产生这两类事件的同一步，直接调用 `activation.RecordOutcome` 更新对应观测条件的 `success_count`/`failure_count`（见步骤 3）；Study 的周期扫描不再读取这两类事件做计数或状态判定，它的新职责（收敛趋势报告、收敛剪枝）改为直接读 `activation_links` 当前状态，见 `study.md`。本次同时新增 `activation_audit_success` / `activation_audit_failure` 两类事件，记录 Retrieval 抽样触发的独立核实试验结果（快慢路径比对），产生时同样直接调用新增的 `activation.RecordAuditOutcome`（见步骤 3b）。事件的评级逻辑本身（哪个 point 该记 direct、哪个记 supporting、哪个记 failure）完全不变——变的只是这次评级结果现在还会去更新一次置信度计数，而不是驱动链接状态跳变（旧状态机已不存在，见 `activation.md`）。
+
+V1 Trace 仍不调用 LLM、不阻塞回答，沿用 `trace_write` 异步队列；`activation_audit_*` 事件的触发时机见步骤 3b——独立核实试验本身是 Retrieval 侧的后台慢路径比对，不阻塞已经返回给用户的快路径答案，比对完成时才产生这条事件，不在原始问答的 `trace_write` 任务窗口内同步产生。
 
 ## 数据结构
 
@@ -39,8 +41,22 @@ EvidenceSet 增加字段（Retrieval 产出，经 AnswerResult 原样传递给 T
 ```text
 EvidenceSet 新增：
   path_type          fast / full / wiki
-  activation_hits[]  [{ link_id, point_id, match_score }]
-                     激活层命中的链接及其目标 KP（full 路径为空数组）
+  activation_hits[]  [{ link_id, point_id, match_score, matched_by, tier,
+                       audit_sampled, subject, intent, audience, constraint }]
+                     激活层命中的链接及其目标 KP（full 路径为空数组）；
+                     2026-08-13 新增 tier / audit_sampled / 四元组字段
+                     （随 activation.md「状态机」的 Match() 返回值扩展一并
+                     新增，见 activation.md 步骤 2、retrieval.md 步骤 1）：
+                     tier ∈ {exploring, self_graded, trusted}（本次命中时
+                     该条件所在的服务档位）；audit_sampled 表示 Retrieval
+                     是否已为这次命中安排一次独立核实（供 Trace 步骤 3b
+                     判断是否需要在核实完成后回写 activation_audit_*）；
+                     subject/intent/audience/constraint 是这次命中所归属
+                     的观测条件四元组原文（字面问题捷径命中时可能不同于
+                     查询原始输入的四元组，见 activation.md「owning
+                     condition 的可判定性」）——Trace 步骤 3 调用
+                     activation.RecordOutcome 时定位具体条件要用这四个
+                     字段，不能用查询自己的四元组代替
   gap_reason         no_candidates / judge_filtered / ""（产出规则见
                      retrieval.md 步骤 6，Trace 只读取，用于 knowledge_gap
                      payload，见下方「learning_events 事件类型扩展」）
@@ -60,6 +76,10 @@ EvidenceItem 新增（证据挖掘产出，见 evidence.md）：
 ```text
 既有：knowledge_gap / user_correction（knowledge_gap payload 结构 V1 扩展，见下）
 新增：activation_success / activation_failure / activation_gap
+新增（2026-08-13，随连续置信度设计一并新增）：activation_audit_success /
+  activation_audit_failure——Retrieval 抽样触发的独立核实试验结果（快慢
+  路径比对），见步骤 3b；产生时直接调用 activation.RecordAuditOutcome，
+  不经 Study 中转
 新增（2026-07-24）：subject_synonym_gap（见步骤 3 近似检测；
   聚合消费方是 Study，见 study.md 步骤 2a）
 新增（两层架构）：topic_decompose_signal——主题页命中并展开成员概念页、
@@ -89,16 +109,49 @@ EvidenceItem 新增（证据挖掘产出，见 evidence.md）：
 // activation_success —— 每个满足条件的 link 一条事件
 // role="direct"：point_id ∈ direct_point_ids；role="supporting"：point_id
 // 未进 direct_point_ids，但对应的 supporting evidence 实际被引用（未被
-// citation 白名单剔除）。两种角色都代表知识点被真实用上，权重差异见
-// study.md 步骤 3（role=direct 才计入晋升所需的 success_n / distinct_n，
-// role=supporting 只防降权、辅助 reverify，不能单独把候选推上 verified）。
-{ "link_id": "...", "point_id": "...", "question_terms": "...",
-  "match_score": 0.83, "cited_fact_ids": ["..."], "role": "direct | supporting" }
+// citation 白名单剔除）。role 的判定逻辑不变（见步骤 3）；2026-08-13 起
+// role 不再产生计数上的权重差异——不像旧机制里 role=direct 才计入"晋升"
+// 判定、role=supporting 只防"降权"（那套区分是离散阈值判定的产物，见
+// study.md 旧「链接信号累积与状态判定」，已随状态机一起移除）。两种角色
+// 现在都以 success=true 同等调用 activation.RecordOutcome。这不是把
+// "背景引用和主证据同等看待"这件事简单地忽略了——旧区分要防的"仅凭零星
+// 背景引用就获得完整信任"，现在由服务分档结构本身挡住：单靠自证证据
+// （不管 role 是 direct 还是 supporting）最多把条件推到 self_graded 档，
+// 要进最高档 trusted 必须额外经受与 role 完全无关的独立核实抽样考验
+// （见 activation.md「服务分档」）。subject/intent/audience/constraint
+// 是这次命中所归属的观测条件的四元组原文（不是查询原始输入，是条件本身
+// 存储的值——字面问题捷径命中时两者可能不同，见 activation.md「owning
+// condition 的可判定性」），Trace 用它定位 RecordOutcome 要更新的具体
+// 条件，一并落盘供人工审计核对。
+{ "link_id": "...", "point_id": "...",
+  "subject": "...", "intent": "...", "audience": "...", "constraint": "...",
+  "question_terms": "...", "match_score": 0.83,
+  "cited_fact_ids": ["..."], "role": "direct | supporting" }
 
 // activation_failure —— 每个命中但完全未被引用（既非 direct 也非
-// supporting）的 link 一条事件
-{ "link_id": "...", "point_id": "...", "question_terms": "...",
-  "match_score": 0.71, "reason": "not_cited | answer_gap | answer_error" }
+// supporting）的 link 一条事件；四元组字段含义同 activation_success
+{ "link_id": "...", "point_id": "...",
+  "subject": "...", "intent": "...", "audience": "...", "constraint": "...",
+  "question_terms": "...", "match_score": 0.71,
+  "reason": "not_cited | answer_gap | answer_error" }
+
+// activation_audit_success —— 独立核实试验：快慢路径结论一致
+// （2026-08-13 新增，见步骤 3b）。audited_trace_id 指向被抽样核实的
+// 原始快路径 trace（本事件自身也挂在该 trace_id 下，此字段是让 payload
+// 自解释，不强制要求额外 JOIN）；slow_path_direct_point_ids 是独立慢
+// 路径跑出来的 direct_point_ids，供人工核对比对依据。
+{ "link_id": "...", "point_id": "...",
+  "subject": "...", "intent": "...", "audience": "...", "constraint": "...",
+  "match_score": 0.83, "audited_trace_id": "...",
+  "slow_path_direct_point_ids": ["..."], "agree": true }
+
+// activation_audit_failure —— 独立核实试验：快慢路径结论不一致，
+// 以慢路径结论为准（2026-08-13 新增，见步骤 3b）
+{ "link_id": "...", "point_id": "...",
+  "subject": "...", "intent": "...", "audience": "...", "constraint": "...",
+  "match_score": 0.83, "audited_trace_id": "...",
+  "slow_path_direct_point_ids": ["..."], "agree": false,
+  "reason": "point_not_in_slow_path | slow_path_answer_differs" }
 
 // activation_gap —— 每次问答最多一条事件
 { "question_terms": "...", "direct_point_ids": ["..."] }
@@ -163,31 +216,49 @@ subject / intent / audience / constraint_text
 
 ### 步骤 3：产生激活类事件
 
-trace 写入后、共现更新前执行。判定全部基于本次 AnswerResult，纯程序计算：
+trace 写入后、共现更新前执行。判定全部基于本次 AnswerResult，纯程序计算；**评级逻辑本身（下面这段"谁记 direct、谁记 supporting、谁记 failure"）2026-08-13 未改动**——变的是评级出来之后多做一步：
 
 ```text
-对 activation_hits 中的每条 (link_id, point_id)：
+对 activation_hits 中的每条 (link_id, point_id, subject, intent,
+audience, constraint, tier, audit_sampled)：
 
   该 point_id ∈ direct_point_ids（步骤 1 计算的"被引用的直接证据 KP"）
     → 写入 activation_success 事件，role="direct"（cited_fact_ids 取
       citations 中绑定该 point_id 的 fact_id）；
+      同步调用 activation.RecordOutcome(link_id, subject, intent,
+      audience, constraint, success=true, questionTerms=本轮
+      question_terms, eventID=刚写入事件的 event_id)；
 
   否则，该 point_id 对应 EvidenceSet.Supporting 中实际被引用（未被
   citation 白名单剔除）的知识点
     → 写入 activation_success 事件，role="supporting"（cited_fact_ids
       同上，取 Supporting 侧 citations 中绑定该 point_id 的 fact_id）；
+      同样同步调用 activation.RecordOutcome(..., success=true, ...)——
+      role 只影响写进事件 payload 的标签，不影响传给 RecordOutcome 的
+      success 取值，两种角色一视同仁记一次成功（理由见上方 payload
+      注释「role 不再产生计数上的权重差异」）；
 
   否则（命中但完全未被引用，direct、supporting 均不含该 point_id）
     → 写入 activation_failure 事件，reason 按序判定：
       AnswerResult.path == "error"        → answer_error
       retrieval_quality == "gap"          → answer_gap
       其余（命中但回答未引用该 KP）        → not_cited
+      同步调用 activation.RecordOutcome(link_id, subject, intent,
+      audience, constraint, success=false, questionTerms=本轮
+      question_terms, eventID=刚写入事件的 event_id)；
+
+  RecordOutcome 调用失败（见 activation.md 步骤 1：定位不到归属条件时
+  记 warn、不报错）不影响本次 trace_write 任务的其余步骤——学习信号
+  更新失败不应该拖累共现统计、gap 判定等其余既有逻辑正常完成；
 
 activation_gap 判定（activation_hits 为空时）：
   path_type == "full" 且 retrieval_quality == "confident"
     → 写入一条 activation_gap 事件（payload 含 question_terms 与
       direct_point_ids）——没有激活路径、但完整链路找到了被采用的知识，
-      这是 candidate 链接最直接的来源信号；
+      这是候选链接最直接的来源信号（Study 仍按既有的周期扫描消费这一
+      事件类型创建新链接，见 study.md 步骤 2——这条不受本次置信度改写
+      影响，activation_gap 回答的是"该不该开始追踪一个全新的组合"，不是
+      "更新一个已在追踪的组合"，两者是不同的问题）；
   其余情况不产生 activation_gap（partial / gap 已由既有机制覆盖）。
 
 observed_conditions enrichment（与 gap 并行，不写 learning_results）：
@@ -196,15 +267,33 @@ observed_conditions enrichment（与 gap 并行，不写 learning_results）：
     对每个 point 若已有非 deprecated ActivationLink →
     AppendObservedCondition（本轮 Session 四元组）；
     使创建/慢路径采用过的问法下次可 Match，无需等 Study。
+    **与上面 RecordOutcome 的关系（2026-08-13 明确，避免误解为重复
+    机制）**：两者都可能让某条条件的 success_count 增加，但触发条件和
+    目的不同——RecordOutcome 只在这条条件本轮被 Match() 实际用于快路径
+    时触发（"用过的路径给不给反馈"）；AppendObservedCondition/enrichment
+    在慢路径 confident 命中时触发，不要求这条问题本轮经过 Match（"发现
+    一个可能还没被追踪、或需要被追加进已有链接的四元组变体"）。慢路径
+    永远不调用 Match()，所以这里不存在"重复记一次"的问题：同一次问答
+    要么走快路径（触发 RecordOutcome，不触发 enrichment），要么走慢路径
+    （触发 enrichment，不触发 RecordOutcome，因为 activation_hits 本来
+    就是空的）。enrichment 命中已有条件时沿用既有的 MergeObservedConditions
+    行为（该条件的 success_count 递增——字段改名前是 hit_count，逻辑
+    未变）；命中的是一个全新四元组时，新条件以 success_count=1、
+    failure_count=0 起步（初始 mean=(1+1)/(1+0+2)=0.667，比全零起步的
+    0.5 略乐观——这一步观测本身就是一次 confident 慢路径确认，作为
+    起步先验合理）。
 
 subject 同义词近似检测（2026-07-24 新增，与上面 enrichment 同一触发条件，
   在 Append 之前执行；完整设计见
   docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md）：
   对该 point 已有的非 deprecated ActivationLink，逐组检查 observed_conditions：
     qi == cond.intent 且 qa == cond.audience 且 qc == cond.constraint，
-    但同义词归一化后 subject 仍不满足 coreContained
-    （即 activation.md 步骤 2 的 Match 会判定该组不命中）
-    → 视为一次"仅 subject 未过"的近似命中；
+    但同义词归一化后 subject 仍不满足 coreContained（本检测自身内联
+    做这次同义词归一化比较，2026-08-12 改判后 `Matcher.SubjectOnlyMiss`
+    不再借用 Match 的 `BuildQueryConditionTerms`——Match 本身已经不做
+    子串/coreContained 判断、也不做同义词归一化，四字段一律精确相等，
+    这里的 coreContained 判断纯粹是 Trace 侧诊断口径，不代表 Match 的
+    实际行为）→ 视为一次"仅 subject 未过"的近似命中；
   存在至少一个这样的近似组时（取 hit_count 最高的一组作代表），写入
     learning_event(type="subject_synonym_gap", payload={
       "point_id", "link_id", "query_subject"（本轮归一化 subject）,
@@ -218,6 +307,72 @@ path_type == "wiki" 的问答不产生激活类事件（Wiki 直答不经过激�
 见 wiki.md）；knowledge_gap / user_correction 事件规则不变。
 ```
 
+### 步骤 3b：产生审计核实事件（2026-08-13 新增）
+
+独立核实试验复用本模块既有的事件产生管线（learning_events 写入 + processed 标记），不新起一套队列或存储——这正是 `docs/design/activation-convergence.md` 第 4 节"打破自证循环"要求的机制，本质上只是给 Trace 新增一种"谁触发、什么时候触发、写什么 payload"的事件类型，架构上和 `activation_success`/`activation_failure` 完全对等。
+
+```text
+触发方：Retrieval（不是本模块）。见 retrieval.md 步骤 2——一次快路径
+  命中若被 Match() 判定 audit_sampled=true（见 activation.md「服务
+  分档」），Retrieval 在已经把快路径答案返回给用户之后，另起一次不
+  阻塞任何用户请求的慢路径检索，跑出一份独立的 direct_point_ids；
+
+本模块只负责：Retrieval 拿到这份独立慢路径结果后，调用 Trace 提供的
+  写入函数（与 trace_write 现有的事件写入是同一段代码路径，只是触发
+  时机不再是原始请求的 trace_write 任务窗口内，而是这次后台比对完成
+  的时刻——两者共享"写 learning_events + 标记 processed"这段实现，
+  不是两套并行代码）：
+
+  比对规则（对每个被抽样核实的 (link_id, point_id)）：
+    point_id ∈ 独立慢路径的 direct_point_ids
+      → 写入 activation_audit_success 事件，agree=true；
+        同步调用 activation.RecordAuditOutcome(link_id, subject,
+        intent, audience, constraint, agree=true, eventID=刚写入
+        事件的 event_id)；
+    point_id ∉ 独立慢路径的 direct_point_ids
+      → 写入 activation_audit_failure 事件，agree=false，
+        reason="point_not_in_slow_path"；
+        同步调用 activation.RecordAuditOutcome(..., agree=false, ...)；
+    （V1 范围裁剪：比对粒度只到"这个 point 是否也出现在独立慢路径的
+    direct_point_ids 里"，不逐字比较两份回答文本本身是否说的是同一件
+    事——那需要额外一次 LLM 判断，且"证据来源是否一致"已经是"结论是否
+    可信"的一个足够强的代理指标，见 activation-convergence.md 第 4 节
+    "两边独立算出的结果做对比"；`slow_path_answer_differs` 这个 reason
+    枚举值为将来升级到文本级比对预留，V1 不产生）；
+
+  subject/intent/audience/constraint 取自原始快路径命中时 Match()
+  返回的归属条件四元组（与被审计的 activation_success/failure 事件
+  一致，不是独立慢路径重新解析出来的——独立慢路径本身不经过 Match()，
+  没有"归属条件"这个概念，四元组身份以快路径那次的归属为准）；
+
+RecordAuditOutcome 调用失败的处理同 RecordOutcome（记 warn、不报错，
+  不阻断比对流程的其余部分）；
+
+这套事件不影响原始快路径答案——用户已经拿到答案，独立核实只影响这条
+  观测条件未来的 mean/tier，不会让已经发出的答案被追加、撤回或提示。
+```
+
+> **熟路指针（2026-08-11 新增，2026-08-12 path_type 定案）**：`docs/impl/v1/activation-bundle.md`
+> 步骤 5 给出的契约是命中熟路（ActivationBundle）后产生独立的 `bundle_success` /
+> `bundle_failure` 事件——判定逻辑与上面的 `activation_success`/`activation_failure`
+> 同构（比对的是"稳定核成员本次是否被实际引用"，而不是单个 point 是否被引用），
+> 但对象、payload、消费方（Study 对 bundle_id 的窗口统计）都是独立的一套，不复用
+> 也不覆盖上面这套事件；两者会在同一次问答里并存产生（一次命中熟路的问答，其
+> 稳定核成员各自仍可能有对应的 ActivationLink，两套事件互不排斥）。
+>
+> **命中熟路的问答不新增 path_type 取值，复用 `path_type=fast`，靠证据里是否带
+> `bundle_hits[]` 区分来源（2026-08-12 定案，2026-08-12 字段形状随 EvidenceSet
+> 一并定案）**：`path_type` 回答的是"这次命中经过了几层过滤"（Wiki 直答 / 激活层
+> / 完整链路），熟路命中在这个维度上和单链接命中没有区别——都跳过召回+rerank、
+> 都经 `fast_path_verify` 把关——真正不同的只是"证据来自一条链接还是一组"，这件
+> 事交给独立字段表达更准确，不该膨胀 path_type 本身的取值域。想单独看熟路的表现
+> （例如 fast_path_rate 拆分），按 `bundle_hits[]` 是否非空过滤即可，不需要为此
+> 新增枚举值。`bundle_hits[]` 的字段形状（`{ bundle_id, member_point_ids[],
+> match_score, matched_by }`，独立于 `activation_hits[]`，不合并）已在 retrieval.md
+> 步骤 1「EvidenceSet 契约扩展」定案，本文档的事件生成逻辑本次不改动——`bundle_success`/
+> `bundle_failure` 事件的实际产生仍是「阶段 2」范围，见 activation-bundle.md 步骤 5
+> 「Trace 信号回写契约」。
+
 同一次问答可产生多条 activation_success / activation_failure（多链接命中），事件均关联同一 trace_id。
 
 `repeated_success` / `repeated_failure` 不是事件类型：它们是 Study 扫描时对同一 link_id 事件的累积判定（见 study.md 步骤 3），Trace 不做窗口统计。
@@ -228,9 +383,21 @@ path_type == "wiki" 的问答不产生激活类事件（Wiki 直答不经过激�
 
 ```text
 type=negative 或 correction，且该 trace 的 activation_link_ids 非空：
-  user_correction 事件的 payload 增加 "link_ids": [...]，
-  供 Study 将纠正信号定向关联到具体链接（提高其累积失败权重，
-  见 study.md 步骤 3），而不是仅作用于全局。
+  user_correction 事件的 payload 增加 "link_ids": [...]；
+  2026-08-13 起，本步骤在写入 user_correction 事件的同一次处理内，对
+  每个 link_id 直接调用 study.correction_weight 次
+  activation.RecordOutcome(link_id, subject, intent, audience,
+  constraint, success=false, questionTerms="", eventID=刚写入事件的
+  event_id)——四元组取该 trace 自己存储的 subject/intent/audience/
+  constraint_text（步骤 2 写入的那份，即本次问答的查询四元组）；不再
+  经 Study 中转"提高累积失败权重"（旧机制见 study.md 已移除的「链接
+  信号累积与状态判定」）。取查询四元组而不是精确重查当时 Match() 命中
+  的归属条件，是一个已知的近似：多数情况下二者相同，只有经字面问题
+  捷径命中的极少数场景可能不同（见 activation.md「owning condition 的
+  可判定性」）；user_correction 是低频、人工触发的路径，RecordOutcome
+  定位不到条件时的既定行为（记 warn、不写入，见 activation.md 步骤 1）
+  已经能优雅处理这种不匹配，不必为这个次要路径单独新增一条精确归属的
+  存储字段。
 ```
 
 ### 步骤 5：HTTP API 扩展
@@ -241,7 +408,9 @@ GET /traces、GET /traces/:id
   列表接口增加查询参数 path_type（fast / full / wiki 过滤）。
 
 GET /learning-events
-  type 参数支持新增的三种激活事件类型（接口本身不变）。
+  type 参数支持新增的激活事件类型（activation_success / activation_failure /
+  activation_gap 三种，加上 2026-08-13 新增的 activation_audit_success /
+  activation_audit_failure 两种，共五种；接口本身不变）。
 ```
 
 ## 依赖
@@ -251,10 +420,26 @@ GET /learning-events
 Retrieval：EvidenceSet 新增 path_type / activation_hits / gap_reason /
            filtered_evidence 字段（见 retrieval.md）
 Answer：   AnswerResult 原样传递扩展后的 EvidenceSet，Answer 自身无逻辑改动
-Study：    消费新增事件类型（只读，经 learning_events.processed 标记）
-Activation：不直接写——Trace 只读 activation_links 的 observed_conditions
-            做近似检测比较（含 SynonymResolver.Canonicalize），不改写该表；
-            仍只记录 link_id 到 traces.activation_link_ids
+Study：    消费新增事件类型收窄为 activation_gap（创建候选链接，见 study.md
+           步骤 2）与 subject_synonym_gap（诊断聚合，见 study.md 步骤 2a）；
+           不再消费 activation_success / activation_failure /
+           activation_audit_success / activation_audit_failure 做计数或
+           状态判定（2026-08-13 起这三对事件在产生的同一步已经直接更新
+           完了置信度，Study 的新职责——收敛趋势报告、收敛剪枝——改为直接
+           读 activation_links 当前状态，见 study.md）
+Activation：**2026-08-13 起直接写**——步骤 3/3b/4 调用
+            activation.RecordOutcome / RecordAuditOutcome 更新观测条件的
+            success_count / failure_count / audited_*（不再是"只读做近似
+            检测比较、不改写该表"）；近似检测（subject_synonym_gap，见
+            上方「subject 同义词近似检测」）仍是只读比较，与本条新增的
+            写入调用是两件独立的事——前者读 observed_conditions 判断
+            "这条问法是不是只差 subject 没对上"，后者写 success_count/
+            failure_count，互不影响；仍只记录 link_id 到
+            traces.activation_link_ids（这部分不变）
+Retrieval：审计事件的触发方（步骤 3b）——Retrieval 完成独立核实比对后
+            调用本模块的写入函数；本模块自身不判断"要不要审计"、不跑
+            慢路径检索，只负责把 Retrieval 已经算出的比对结果落成事件
+            并调用 RecordAuditOutcome，见 retrieval.md 步骤 2
 ```
 
 ## 完成标准
@@ -263,15 +448,40 @@ Activation：不直接写——Trace 只读 activation_links 的 observed_condit
 migration 后存量 traces 行 path_type=full、activation_link_ids=[]，行为兼容；
 fast 路径问答：命中且被引用的链接产生 activation_success，
               命中未引用的产生 activation_failure（reason 正确）；
+              两者均同步调用 activation.RecordOutcome，成功/失败方向
+              正确、四元组定位正确（测试用例：断言调用后目标条件的
+              success_count/failure_count 按预期变化）；
+              role=supporting 与 role=direct 均以 success=true 调用
+              RecordOutcome（不再有权重差异，见步骤 3 payload 注释）；
 full 路径 confident 问答产生一条 activation_gap，其余组合不产生；
-wiki 路径不产生激活类事件；
+  activation_gap 不触发 RecordOutcome（该事件仍走 Study 周期扫描创建
+  候选链接的既有路径，不受本次改写影响）；
+enrichment（AppendObservedCondition）与 RecordOutcome 互斥触发（同一次
+  问答要么走快路径触发前者、要么走慢路径触发后者，不会同一次问答两者
+  都触发或都不触发对同一 point 的计数更新，除非该 point 完全没有对应
+  ActivationLink）；
+独立核实（步骤 3b）：Retrieval 判定 audit_sampled=true 的命中，比对完成
+  后正确产生 activation_audit_success（agree=true）或
+  activation_audit_failure（agree=false，reason=point_not_in_slow_path）；
+  同步调用 activation.RecordAuditOutcome，且该调用总是同时递增
+  success_count/failure_count 与对应的 audited_success_count/
+  audited_failure_count（测试用例断言两对计数同方向变化）；
+  audit_sampled=false 的命中不产生这两类事件；
+wiki 路径不产生激活类事件（含 audit 类，Wiki 直答不经过激活层，
+  audit_sampled 字段对 wiki 路径恒不适用）；
 一次问答多链接命中时事件逐条产生且 trace_id 一致；
-user_correction 对 fast 路径问答携带 link_ids；
+user_correction 对 fast 路径问答携带 link_ids，且按 study.correction_weight
+  次数调用 RecordOutcome(success=false)（测试用例：correction_weight=2
+  时，一次 correction 反馈使目标条件 failure_count 恰好 +2）；
 共现统计行为与 MVP 完全一致（片段级 citations 不改变 point_id 归集逻辑）；
 knowledge_gap payload.reason 按 Path==error → answer_error、
   GapReason 非空 → 原样取值、其余 → unspecified 的顺序正确判定；
 subject_synonym_gap：intent/audience/constraint 全同、subject 因同义词未注册
   而未过 coreContained 时产生该事件，且不影响 AppendObservedCondition 照常执行；
   query_subject 与 observed_subject 归一化后相等时不产生该事件；
-fake 队列下全部事件产生路径测试稳定运行。
+RecordOutcome/RecordAuditOutcome 调用失败（fake 环境注入定位不到条件的
+  场景）不中断 trace_write 任务的其余步骤（共现统计、gap 判定等照常完成）；
+fake 队列与 fake activation 依赖下，快路径成功/失败、独立核实一致/不
+  一致、user_correction 加权、enrichment 与 RecordOutcome 互斥触发等
+  全部事件产生路径测试稳定运行。
 ```

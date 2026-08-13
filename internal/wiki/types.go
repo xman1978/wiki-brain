@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/jxman78/wiki-brain/internal/activation"
 )
 
 // Business error sentinels — handler.go maps these to specific HTTP statuses.
@@ -83,6 +85,23 @@ type Page struct {
 	PublishedAt      sql.NullTime
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+
+	// —— 综合满意度轴（synthesis satisfaction，docs/impl/v1/wiki.md 步骤
+	// 4a，2026-08-13 新增）—— 与 activation_links 观测条件的
+	// success_count/failure_count/audited_success_count/audited_failure_count
+	// 逐字对应，落在页面粒度；audit-only，只由独立核实产生，不接受自证。
+	SynthesisSuccessCount        int
+	SynthesisFailureCount        int
+	SynthesisAuditedSuccessCount int
+	SynthesisAuditedFailureCount int
+}
+
+// SynthesisMean is mean(page) = (synthesis_success_count+1) /
+// (synthesis_success_count+synthesis_failure_count+2) — the exact same Beta
+// posterior formula as activation.ConditionMean, applied at page granularity
+// (docs/impl/v1/wiki.md 步骤 4a). A brand-new page (0/0) starts at 0.5.
+func (p Page) SynthesisMean() float64 {
+	return activation.ConditionMean(p.SynthesisSuccessCount, p.SynthesisFailureCount)
 }
 
 // PageAspect is one wiki_pages.aspects entry — the persisted, page-level

@@ -12,6 +12,8 @@
 
 方法页 / 经验页 / 问题页 / 决策页已从设计中删除（此前只是名义上的分类，从未接入过具体的编译流程，详见 `docs/design/wiki.md`「Wiki 页面类型」一节），不是推迟；视角化编译推迟到 V3；Claim 双产物与防固化要素补齐属 V2（见 docs/impl/v2/readme.md）。复杂问题的拆解与子结论聚合属深想路径 / Working Model，是 V3 能力——V1 只建结构并记录 `topic_decompose_signal`（步骤 9）。
 
+**熟路（ActivationBundle，2026-08-11 新增，设计方向，尚未进入实现步骤）**：设计依据见 `docs/design/activation-bundle.md`。ActivationLink 只回答「单个知识点管不管用」，熟路补的是「一组知识点合在一起管不管用」——这一半信号目前 Wiki 侧完全没有，步骤 3 的 qualifying 判定与步骤 8 的候选范围检索都只能各自间接猜测。熟路成熟后，预期在本文档两处起补充作用（**不改变现行任何一处的实际判据**，仅在下方对应位置留了指针）：一是步骤 8 第 1 步的四元组聚类可与熟路显影共用同一次扫描，避免同一批 traces 在两处被分别归堆出不一致的分组；二是熟路的稳定核（历史上真被同一类问题依赖过的知识点组合）可以作为候选范围材料与可靠度判定的补充证据，比单纯语义检索更准。这条尚未有独立的 V1 实现文档（不在 CLAUDE.md「实现顺序」现有列表中），落地前需要先确定 ActivationBundle 自身的存储与匹配实现（预期挂在 `activation.md` 或新增同级文档）、以及下方两处的具体阈值/口径，均需用户先确认，本次修订只做设计层面的同步引用，不预先改写 qualifying 判据或候选检索逻辑。
+
 ## 数据结构
 
 ```sql
@@ -141,7 +143,10 @@ ALTER TABLE wiki_pages ADD COLUMN member_roles     TEXT NOT NULL DEFAULT '[]';
 
 ALTER TABLE wiki_pages ADD COLUMN uncovered_points TEXT NOT NULL DEFAULT '[]';
 -- 覆盖度显式化：该页主题范围内 lifecycle=current 但尚不 qualifying
--- （无 verified ActivationLink）的 KP 清单 [{ "point_id","summary" }]。
+-- （2026-08-12 修订，取代 2026-08-11 的口径：qualifying 恢复为只看
+-- verified ActivationLink，wiki_material_confirm 人工确认关卡整体
+-- 废弃，故此处即「无 verified ActivationLink」，口径同步骤 3）的 KP 清单
+-- [{ "point_id","summary" }]。
 -- **只作字段，不进正文**——正文四节 / 五节结构与 citation 白名单校验
 -- 保持不变，避免破坏既有校验与存量页面；Page 视图单独展示（page.md）。
 -- 概念页在编译时计算，主题页取成员并集。用途：让页面呈现主题全貌，
@@ -260,10 +265,23 @@ generate 链路的两个入口，**不是两套生成逻辑**，`result_id` 是�
   调 LLM 之前就检查）。
 
   qualifying 的定义按触发来源分两档（2026-08-07 修订，取代此前"两条口径
-  统一要求 verified"的说法）：
+  统一要求 verified"的说法；2026-08-12 修订 Study 推荐一档，取代
+  2026-08-11 曾加过的 wiki_material_confirm 关卡，见下）：
     - Study 推荐（result_id 非空）：qualifying = lifecycle=current 且已有
-      verified 的 ActivationLink——不变，因为进入这条口径本身就代表 Study
-      判定过这批材料已经过真实使用验证，是"够格立传"的前提之一。
+      verified 的 ActivationLink，仅此一条，不再有第二道人工确认关卡
+      （2026-08-12 修订，取代 2026-08-11 定案：曾要求该 point_id 额外
+      存在 applied 状态的 wiki_material_confirm；该关卡整体废弃，见
+      `docs/design/wiki.md`「2026-08-12 改判」）。废弃理由：在还不知道
+      某个 KP 最终会被哪个 Wiki 主题使用的前提下，人工看着一条孤立的 KP
+      判断"值不值得沉淀"是个伪命题——脱离主题语境，人并没有比程序更多
+      的信息可用于判断；真正能做出"这批材料够不够格立传"这个判断的时机
+      是 Wiki 编译时，那时主题范围已经确定，编译时本来就有的整体判断
+      （广度/连贯/稳定，见步骤 8）自然回答了这个问题，不需要在候选阶段
+      单独再问一遍。ActivationLink 的 candidate→verified 晋升仍是默认
+      自动（`study.auto_promote` 默认 true，见 activation.md），verified
+      的含义因此重新收拢为"这条路径够格走 Retrieval 快路径，也够格作为
+      Wiki 材料"——两件事不再分开判断，`study.qualifying_confirm_success_min`/
+      `qualifying_confirm_distinct_min` 两个配置项随关卡一并废弃。
     - 人工手动触发（result_id 为空）：qualifying 只要求 lifecycle=current
       （+ 已归属该 concept），不要求 verified——口径与步骤 8「候选范围
       检索」的主题范围材料一致。理由：人工手动指定本身就是一次显式确认
@@ -293,21 +311,28 @@ readiness 的 cohesion 与 Study 侧 Stats.Cohesion 不保证数值完全一致�
   触发"（存哨兵值 "manual_trigger"），不新增列、不新增表。
 ```
 
+> **2026-08-13 编注（随 `docs/design/activation-convergence.md` 的连续置信度设计一并同步，措辞取代不重写以上历史段落）**：以上「唯一硬门槛」段落把 Study 推荐路径的 qualifying 判据写成"已有 verified 的 ActivationLink"。`activation.md`「状态机」已经把这个判定从离散的 `candidate → verified` 跳变改写为连续置信度——`status=verified` 现在是"该 KP 对应链接下至少一条观测条件的 `mean(cond)` 已经越过 `serving_confidence_min`（即该条件的服务分档 tier ∈ {self_graded, trusted}）"这一持续判断的派生/缓存结果，不再是一次单独的晋升动作。这段编注只是把 qualifying 判据的表述方式同步成"current 且置信度已达到服务门槛"，不改变判据本身——`status=verified` 这个标签依然是唯一要检查的字段（下方步骤 3「输入收集」直接读 `status=verified`，实现上不需要改成重新计算 mean，因为「状态机」一节已经保证这个派生字段在写入时实时同步），本条编注要交代的只是这个标签现在的产生方式变了，qualifying 的门槛位置、有没有第二道人工确认关卡等实质结论完全不受影响。
+
 ### 步骤 3：编译输入与 Prompt
 
 **输入收集**：
 
 ```text
-qualifying KP：该 concept 下同时满足以下条件的 KP（与 Study 候选口径一致，
-  见 docs/design/wiki.md "ActivationLink 回答'这条管不管用'，
-  Wiki 编译回答'这个主题够不够格立传'"）：
+qualifying KP（Study 推荐路径，result_id 非空；人工手动触发路径见步骤 2
+  「唯一硬门槛」，只要求 lifecycle=current，不适用本段）：该 concept 下
+  同时满足以下条件的 KP（与 Study 候选口径一致，见 docs/design/wiki.md
+  "ActivationLink 回答'这条管不管用'，Wiki 编译回答'这个主题够不够格
+  立传'"）：
     lifecycle=current（KP 与所属 KU）；
     该 KP 存在对应 ActivationLink 且 status=verified
-      （可靠性只由这一个状态判断回答——晋升本身已要求窗口内
-      success_n / distinct_n 达标，见 study.md 步骤 5；不再叠加
-      confident_count 次数门槛，那是用另一种计数方式重新验证
-      verified 已经回答过的同一件事，不是 Wiki 本质需要的信息；
-      candidate/weakened/deprecated 状态的 KP 不计入 qualifying）；
+      （2026-08-12 修订，取代 2026-08-11 定案：此前还额外要求该
+      point_id 存在 applied 状态的 wiki_material_confirm，该人工确认
+      关卡已整体废弃，见步骤 2「唯一硬门槛」段说明；verified 单独
+      即为准入判据，candidate/weakened/deprecated 状态的 KP 不计入
+      qualifying）；2026-08-13 编注：`status=verified` 的读取方式不变
+      （仍是查 `activation_links.status` 字段本身，不是现算 mean），
+      只是这个字段现在是 `activation.md`「状态机」定义的连续置信度
+      派生结果，见步骤 2 末尾编注；
   confident_count 仍会取出（MAX(lc.confident_count)），但只作素材
   排序/展示用途（见下），不再是准入条件；
 KU 正文：qualifying KP 所属 KU 按行号切片（单页输入合计 ≤
@@ -327,6 +352,10 @@ knowledge_gaps：question_terms 与该 concept 名称/KP 内容有词项重合�
   要求 verified 链接，但防御性处理）时跳过，不影响整体编译。
 ```
 
+> **熟路指针（2026-08-11 设计层面提出，非实现变更；2026-08-12 随 qualifying 口径改判更新措辞，结论不变）**：上面 qualifying 现在的可靠性判据只剩 verified ActivationLink 一道关卡（人工确认的 wiki_material_confirm 已整体废弃，见步骤 2），仍然天然受制于「同一问法需要被精确重新命中」——措辞抖动一样会让实际常用的材料迟迟攒不够 verified 这道门槛的窗口统计。`docs/design/activation-bundle.md` 提出熟路的稳定核（一组知识点在真实问答里反复一起被依赖的组合）可以作为独立于单点 verified 之外的另一条可靠性证据，但**是否放宽、放宽到什么口径**（例如替代 verified 这道门槛，还是只作为 Wiki 编译时的参考信息展示），以及具体阈值，都还没有定案，需要用户先确认；本文档在此仅记录设计意图，qualifying 的实际判据（verified ActivationLink，仅此一条）保持不变，不要在实现时自行按熟路口径放宽这道关卡。
+>
+> **2026-08-13 附注**：以上"同一问法需要被精确重新命中"这条风险描述不变——`activation.md`「状态机」的连续置信度机制仍然要求 Match 精确匹配到具体的观测条件才能给该条件记一次证据，只是判定"够不够格"的方式从离散跳变改成了连续分数，措辞抖动导致证据分散到多条互不相认的条件、每条都攒不够置信度，这个风险原样保留，不因本次改写而减轻。熟路是否能补上这块缺口，仍是「待确认」，本条编注不代为决定。
+
 **词条级 ready 判定**（概念、事实通用同一套判据，不区分 kind；Study 侧计算，决定是否写 wiki_candidate，见步骤 1；
 对应 docs/design/wiki.md 拆出的三件事：广度与连贯、稳定，
 可靠性已由上面的 qualifying KP 定义单独回答）：
@@ -340,6 +369,17 @@ knowledge_gaps：question_terms 与该 concept 名称/KP 内容有词项重合�
   contradicts_connection_count < related_connection_count（矛盾类连接
     不能反客为主——不要求零冲突，冲突本就该如实呈现在页面"待验证点"里，
     只要求这批知识以互相印证为主导面貌，而不是矛盾占主导）；
+  （**熟路指针**，2026-08-11，设计层面，非实现变更：related_connection_count
+  目前只数 KPN related 边——这是内容层面的信号（这批 KP 说的是不是一回事），
+  跟有没有人一起问过无关。`docs/design/activation-bundle.md` 的熟路稳定核
+  是另一种独立证据（这批 KP 有没有被同一类真实问题一起依赖过），预期可以
+  作为 KPN 之外的**另一条**连接来源并入这个计数——两条来源任一成立都算
+  一条"相关"，不是拿熟路替换 KPN：真实问题大多只问一个切面，entry 下的
+  KP 很少整体被同一批问题共同覆盖，如果连贯只认熟路会漏判大量内容上完全
+  自洽、只是还没被问全的概念，KPN 在这里恰恰是在补熟路覆盖不到的地方。
+  是否并入、具体怎么算一条"熟路来源的连接"，尚未定案，本次修订不改动
+  上面的判据，只记录这个接入点——同样的思路已经在下面「内聚」判定里
+  落地了一部分，可以参照）；
 
 稳定：qualifying KP 关联的激活事件覆盖 days_active ≥
   wiki.qualifying_min_days_active（衡量"这批理解经受住了时间考验"的
@@ -355,6 +395,14 @@ knowledge_gaps：question_terms 与该 concept 名称/KP 内容有词项重合�
   拆分概念（不建 entry_candidates(kind=split) 行，split 候选仍属 V3，
   详见 concept-evolution.md）；wiki.entry_cohesion_min ≤ 0 时该项恒真
   （门禁关闭，仅 Stats.Cohesion 展示，不影响 recommendation）。
+  （**熟路指针**，2026-08-11，设计层面，非实现变更：这里的边权已经在混合
+  "KPN 关系 + 共享 confident 问题共现"——后者本质上就是熟路想要形式化
+  的同一种信号（现在是临时统计的共现次数，不是复用一个沉淀下来的对象），
+  内聚判定其实已经是上面「连贯」那条熟路指针描述的模式的一个先例。
+  Bundle 落地后，这里预期可以直接复用某个 entry 范围内已显影的熟路
+  稳定核作为边权来源之一，替代现在临时统计共现的那部分计算，不用改
+  Louvain 社区检测本身的逻辑。是否替换、替换后边权系数要不要重新校准，
+  尚未定案，本次修订不改动上面的判据）；
 
 以上五项同时满足 → ready，否则 needs_more_data（其中前四项满足、仅内聚
 不满足时额外写 entry_split_signals）。
@@ -486,8 +534,9 @@ source_unit_ids 反查填入，source_link_ids = 这些 point_id 中 status=veri
 的 activation_links.link_id 集合（无对应 verified 链接的 point_id 不计入，
 查询失败降级为空数组并记录 warn，不影响编译成功）；
 uncovered_points（覆盖度显式化，两层架构扩展）= 该 concept 下
-  lifecycle=current 但不满足 qualifying 条件（无 verified ActivationLink）
-  的 KP 清单 [{ point_id, summary }]，编译与重编译时整体重算；
+  lifecycle=current 但不满足 qualifying 条件（即无 verified ActivationLink，
+  2026-08-12 修订：wiki_material_confirm 关卡已废弃，口径同步骤 3）的 KP
+  清单 [{ point_id, summary }]，编译与重编译时整体重算；
   **不进正文、不进 citation 白名单、不参与任何门槛判定**——三道闸门
   一条不动，它只是让页面能呈现主题全貌，并直接充当写作时「哪几块还
   没有材料可写」的清单（Page 视图单独展示，见 page.md）；
@@ -572,7 +621,92 @@ POST /wiki/pages/:id/publish
   放宽召回不得以削弱任何一道闸门为交换。
 ```
 
+### 步骤 4a：综合满意度轴（synthesis satisfaction，2026-08-13 新增）
+
+`docs/design/activation-convergence.md` 第 7 节把 Wiki 页面的不确定性拆成两根轴：**触发轴**（这个问题该不该落在这一页）复用页面自己的 `observed_conditions`，走与 ActivationLink 完全同一套 `activation.md` 置信度机制，上面步骤 3「输入收集」2026-08-13 编注已经交代过 qualifying 判据本身；**Wiki 独有的轴**——"这次综合改写有没有真的把问题说清楚"——材料底下引用的知识点即使全部验证有效，页面本身的组织、详略、表达角度仍可能没答到点子上，这是本步骤要补的信号。
+
+**Schema（`wiki_pages` 新增列，与 `activation_links.observed_conditions` 内每条条件的成功/失败计数同一套设计，只是落在页面粒度）**：
+
+```sql
+ALTER TABLE wiki_pages ADD COLUMN synthesis_success_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE wiki_pages ADD COLUMN synthesis_failure_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE wiki_pages ADD COLUMN synthesis_audited_success_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE wiki_pages ADD COLUMN synthesis_audited_failure_count INTEGER NOT NULL DEFAULT 0;
+-- 四列命名、含义、mean 公式与 activation_links 观测条件的
+-- success_count/failure_count/audited_success_count/audited_failure_count
+-- 逐字对应（见 activation.md「数据结构」「状态机」），选择落在 wiki_pages
+-- 表而不是新开一张表：页面是这根轴唯一的粒度（不像 ActivationLink 一条
+-- 链接下有多条独立的观测条件），不需要额外的一对多结构，四个整数列足够，
+-- 同 wiki_pages 现有 adopt_count 风格的计数列放在一起最省心。
+```
+
+```text
+mean(page) = (synthesis_success_count+1) /
+             (synthesis_success_count+synthesis_failure_count+2)
+-- 与 activation.md 的 mean(cond) 同一公式，新页面（0/0）mean=0.5，
+-- 不预设"新写的页面默认可信"或"默认不可信"。
+```
+
+**证据来源与写入时机（复用 Retrieval 的独立核实/审计抽样机制，不为 Wiki 另造一套，见 retrieval.md 步骤 2c）**：
+
+```text
+每次 Wiki 直答成功服务（path_type=wiki，某候选页面 sufficient=true 并
+  被采用，见步骤 4「直答尝试」）后，按 wiki.synthesis_audit_rate（配置，
+  建议默认低概率，同 activation.md 的 explore_rate_trusted 量级——这是
+  定期复查、不是持续验证）抽样：
+
+  中选 → 触发与 retrieval.md 步骤 2c **完全同一套编排**：在已经把 Wiki
+    直答返回给用户之后，异步另起一次不阻塞当前请求的独立慢路径检索
+    （绕开 Wiki 直答层与激活层，直接从 Domain 预过滤开始走 MVP 完整
+    链路），得到一份独立的 direct_point_ids；
+
+  比对规则（复用 trace.md 步骤 3b 的比对语言，对象换成页面而非链接）：
+    独立慢路径的 direct_point_ids 与该页面的 source_point_ids 交集非空
+      （即独立算出来的证据落在这一页覆盖的知识范围内）
+      → 写入 wiki_synthesis_audit_success 事件，agree=true；
+        synthesis_audited_success_count++ 且 synthesis_success_count++；
+    交集为空（独立慢路径认为这个问题该用的证据，这一页根本没覆盖到
+      ——不是"页面写得不够好"，是"页面回答的其实是另一批知识"，
+      同样计入 synthesis 失败：综合满意度问的正是"这次直答是否真的
+      解决了问题"，证据都对不上号，答案不可能对得上号）
+      → 写入 wiki_synthesis_audit_failure 事件，agree=false，
+        reason="point_not_in_page_scope"；
+        synthesis_audited_failure_count++ 且 synthesis_failure_count++；
+
+  未中选 → 不产生任何 synthesis 事件，本次服务不计入 synthesis 计数
+    （同 activation.md 的 exploring/self_graded/trusted 三档只对被抽中
+    的样本计数一致——本设计对 Wiki 综合满意度不单独实现"未审计也计入
+    自证成功"的自评分支：design.md 第 7 节强调 Wiki 的自证风险比
+    ActivationLink 更高——内容是提前写好的成品，不是每次现场引用证据
+    拼出来的，写完之后哪怕底下知识点都还有效，综合表达本身有没有可能
+    已经不准，页面自己回答不了这个问题；因此 synthesis_success_count/
+    synthesis_failure_count 只由独立核实产生，不接受"没被审计到、但看起
+    来直答成功了"这种自证信号单独推高，避免重蹈"自己给自己批卷"的覆辙，
+    见 activation-convergence.md 第 2 节）。
+
+事件 payload（结构与 trace.md 的 activation_audit_success/failure 对称）：
+
+// wiki_synthesis_audit_success
+{ "page_id": "...", "audited_trace_id": "...",
+  "slow_path_direct_point_ids": ["..."], "agree": true }
+
+// wiki_synthesis_audit_failure
+{ "page_id": "...", "audited_trace_id": "...",
+  "slow_path_direct_point_ids": ["..."], "agree": false,
+  "reason": "point_not_in_page_scope" }
+
+调用方与失败处理：与 retrieval.md 步骤 2c / trace.md 步骤 3b 同构——
+  Retrieval 触发独立慢路径检索并把结果交给 Trace，Trace 写事件并更新
+  wiki_pages 的四个计数列（更新方法命名建议 wiki.RecordSynthesisOutcome，
+  与 activation.RecordAuditOutcome 对称）；独立慢路径检索本身失败（超时、
+  异常）记 warn、不产生事件，不影响已经返回给用户的这次 Wiki 直答。
+```
+
+**mean(page) 的消费方式**：只进页面详情的可观测数据（见 page.md 关于置信度/分档展示的扩展）与 Study 报告，**不驱动任何自动动作**——mean(page) 低不会自动触发 `needs_recompile`（这条硬边界详见步骤 5「重编译」开头的编注）、不会自动下线页面、不会跳过 selfcheck。它回答的是"这一页最近是不是经常被独立核实认为文不对题"，是给人看的信号，不是新的自动判据。
+
 ### 步骤 5：重编译
+
+> **重编译依然 100% 人工触发（2026-08-13 明确重申，不因本次信号变精细而改变）**：本文档以下描述的两个来源都只是把页面标记为 `needs_recompile`，标记本身是自动的，但从 `needs_recompile` 到实际重新生成内容，永远需要人工调用 `POST /wiki/pages/:id/recompile` 确认——这条边界见 `CLAUDE.md`「Wiki 编译不是全自动的」，本次新增的综合满意度轴（步骤 4a）同样不改变这条边界：`mean(page)` 再低，也只是让人工在待办列表里看到"这一页最近常被独立核实认为文不对题"这个信号，不会自己触发 `needs_recompile`，更不会自己触发实际重编译。`docs/design/activation-convergence.md` 第 7 节原文同样明确"重新编译，依然是人工才能按下的按钮，这条不变"——这套设计改变的只是喂给人的信号有多准，不改变谁来按按钮。
 
 ```text
 标记（两个来源，最终都调 MarkNeedsRecompile(pageID, reason)）：
@@ -593,6 +727,22 @@ POST /wiki/pages/:id/publish
      activation → wiki 的跨模块通知走 WikiNotifier 接口（同 unit 模块已有的
      WikiNotifier 惯例），wiki 侧实现 NotifyLinkVerified(pointID)，全表扫描
      published 页面按 source_point_ids 命中；
+
+     > **2026-08-13 编注**：以上"ActivationLink 状态转为 verified（TransitionLink
+     > 唯一入口）"的措辞是离散状态机时代的表述——`TransitionLink` 已随
+     > `activation.md`「状态机」的改写移除，`verified` 现在是每条观测条件
+     > 置信度持续越过服务门槛后的实时派生结果，不再有一次单独的、可供挂钩子
+     > 的"转为 verified"事件。通知时机相应改为：`RecordOutcome`/
+     > `RecordAuditOutcome` 写入新计数后，若该链接的派生 `status` 由非
+     > verified 变为 verified（即本次调用是这条链接"新晋出现至少一条
+     > tier∈{self_graded,trusted} 条件"的那一次，需要在 activation 模块内
+     > 对比写入前后的派生 status 是否跨越这条边界），才触发
+     > `NotifyLinkVerified(pointID)`——效果与原先"监听一次跳变事件"等价
+     > （只在真正首次越过门槛时通知一次，不会每次分数微调都重复触发），
+     > 只是触发点从"状态机跳变的那次方法调用"改成"派生 status 计算结果
+     > 相比调用前发生了变化"，具体判断留给 activation.md 实现时确认（该
+     > 文档「与 Study 的分工变化」未展开这一细节，本条编注只指出触发时机
+     > 需要同步调整，不代为决定 activation 包内部的具体比对写法）。
 
 MarkNeedsRecompile：status=needs_recompile、从 wiki index 删除
   （旧结论可能失效，宁可回落慢路径也不用可疑页面直答）、记录原因日志；
@@ -709,6 +859,8 @@ lifecycle 过滤：判定只使用 lifecycle=current 的 KP 与 published 页面
 
 > 以下具体阈值与流程细节是本次修订按 `docs/design/wiki.md` 机制方向新提出的实现方案（设计文档只确立"从真实提问识别，不依赖材料侧成熟度"这一立场，未固定参数）；`internal/study/`、`internal/wiki/` 中对应的连通分量实现尚未跟进这次修订，编码前应重新核对一遍本节，不要直接照搬旧实现的变量/表结构。
 
+> **熟路指针（2026-08-11 新增，2026-08-12 随 ActivationBundle 机制定案更新描述，本节判据仍未改动）**：下面第 1 步的四元组聚类，和 `docs/impl/v1/activation-bundle.md` 步骤 2 描述的熟路显影用的是同一套归一化口径（含 subject 同义词归一化）——这一点不变。但两者不再是"同一次扫描"这么简单：熟路显影已经改为"先逐条 trace 匹配已有熟路（复用 activation.md 步骤 2 的 Match，含模型辅助匹配），未匹配上的才对残余 trace 聚类去发现全新熟路"，聚类只发生在残余池上，不是对整批窗口内 traces 聚类；本节的主题候选聚类仍然是对整批 traces 聚类（不要求 confident、不要求 direct_point_ids 非空，见下）。两者能共用的是同一个归一化+分组**函数**，不是同一次调用、同一份输入集合——之前"共用一次扫描"的表述不准确，已更正。熟路稳定的组合也预期能补进第 3-4 步的候选范围材料判断（比纯语义检索更准），这条仍未定案。**ActivationBundle 自身已有完整实现文档**（`docs/impl/v1/activation-bundle.md`，含存储、显影/巩固、Match 契约；调度顺序已定案排入 `study.md` 步骤 5b）——此前"还没有对应实现文档"的说法已过时；本节第 1-7 步的现有判据本次仍不改动，仅更新这条指针对 ActivationBundle 现状的描述。
+
 ```text
 1. 四元组聚类：窗口内（study.event_window_days）的 traces，按归一化
    四元组 (subject, intent, audience, constraint_text) 分组——归一化
@@ -741,12 +893,19 @@ lifecycle 过滤：判定只使用 lifecycle=current 的 KP 与 published 页面
    门槛会导致主题范围检索被静默滤空，此前口径已废弃），全文索引召回结果
    直接进入下一步过滤，上限 wiki.topic_candidate_kp_max（默认 50，
    超出按分数降序截取，分数仍用于排序，只是不再作为过滤门槛）；
+   （**熟路指针**，2026-08-11，设计层面：这一步目前完全依赖语义检索猜测
+   材料范围，`docs/design/activation-bundle.md` 提出的熟路稳定核——该分组
+   历史上真被同一类问题反复依赖过的知识点组合——预期可以并入这里的召回
+   结果，且这类材料已有真实使用背书、不必再靠分数排序间接判断。是否并入、
+   并入后如何与现有截断/排序共存，尚未定案，本次修订不改动上面的检索
+   与截断逻辑）；
 
 4. 从检索结果中筛出**主题范围材料 KP**（lifecycle=current，且已归属到
    词条 `entry_id IS NOT NULL`；**不**要求 ActivationLink 已 verified——
    主题范围只定位"哪些 current 知识点落在这个主题里"，以便人工/Study
-   先看到需求并组装草稿；verified 仍用于步骤 3 一阶材料 qualifying、
-   词条级 ready、步骤 7 整体可靠度，以及发布正式化，除非强制发布）；
+   先看到需求并组装草稿；verified（2026-08-12 修订：wiki_material_confirm
+   关卡已废弃，不再叠加）仍用于步骤 3 一阶材料 qualifying、词条级
+   ready、步骤 7 整体可靠度，以及发布正式化，除非强制发布）；
    一条主题范围材料 KP 都没有 → 候选标记 needs_more_data（"有需求、
    缺材料"），写入学习报告 topic_signal_underfilled 节（四元组摘要、
    distinct_question_count、days_active），作为内容采集优先级信号，
@@ -761,8 +920,9 @@ lifecycle 过滤：判定只使用 lifecycle=current 的 KP 与 published 页面
 
 6. 逐个 concept 分组（不论其 kind 是 concept 还是 fact）处理：
      该 concept 已有 published 词条页 → 直接复用为候选成员；
-     尚无 published 页面，但组内**一阶 qualifying KP**（current 且
-       verified，口径同步骤 3）满足步骤 3「词条级 ready
+     尚无 published 页面，但组内**一阶 qualifying KP**（口径同步骤 3：
+       current 且 verified，2026-08-12 修订：wiki_material_confirm 关卡
+       已废弃）满足步骤 3「词条级 ready
        判定」四项（广度/连贯/稳定/内聚）→ 一并写该 concept 的
        wiki_candidate（action=wiki_candidate，口径同步骤 1，page_type
        由该 concept 行的 kind 决定），作为本次主题候选的"待发布成员"
@@ -783,6 +943,16 @@ lifecycle 过滤：判定只使用 lifecycle=current 的 KP 与 published 页面
        覆盖占比 ≥ wiki.topic_reliability_min（默认 0.5）——衡量"这批
        材料整体上验证得有多扎实"，不重复回答"有没有需求"（已在步骤
        1-2 由真实提问回答过）；
+       （2026-08-12 修订，解除此前的待确认：wiki_material_confirm 关卡
+       整体废弃后，qualifying 本身就等于 verified，这里的 verified 覆盖率
+       与"qualifying 覆盖率"是同一件事，不再有二选一的问题——维持
+       verified 覆盖率不变，这个指标本来就只是主题层面的宽松参考，真正的
+       硬门槛在成员词条各自的一阶 qualifying 上）；
+       （**熟路指针**，2026-08-11，设计层面：这里的可靠度目前只认单点
+       verified 覆盖率；`docs/design/activation-bundle.md` 提出熟路命中率
+       可作为另一条独立的整体可靠度证据——同一批材料作为组合被反复真实
+       采用，本身就是一种验证。是否、如何叠加进这个占比计算尚未定案，
+       本次修订不改动上面的判据）；
    两项均满足 → 进入候选创建（步骤 8）；否则标记 needs_more_data，
      原因区分"关联不够"还是"整体可靠度不够"，写入 learning_result.reason；
 
@@ -901,8 +1071,11 @@ POST /wiki/topics/candidates   步骤 1，只读预览：{topic_name, topic_desc
   主题手动编译」2026-08-07 修订）+ 按 entry_id 分组，不写任何
   wiki_candidate / 不建壳页；对每个词条返回 entry_id / entry_name /
   qualifying_kp_count / already_published_page_id（若有）/ is_ready
-  （isEntryReady 只读结果，这一项仍要求 verified——它是"readiness 参考
-  信号"，不是"能不能生成"的门槛，两者口径本来就不同）/ readiness 明细；
+  （isEntryReady 只读结果，这一项仍按 Study 推荐路径的 qualifying 定义
+  计算——即 verified（2026-08-12 修订：wiki_material_confirm 关卡已
+  整体废弃，qualifying 恢复为只看 verified，与步骤 3 保持同一份定义）
+  ——它是"readiness 参考信号"，不是"能不能生成"的门槛，两者口径本来就
+  不同）/ readiness 明细；
 
 POST /wiki/compile             步骤 2a，逐词条编译（复用步骤 2 已有端点，
   未改动，效果自然生效——manual 触发口径改为不要求 verified 后，未就绪
@@ -1204,6 +1377,14 @@ wiki:
   topic_candidate_kp_max:       50   # 候选范围语义检索的知识点数上限
   topic_reliability_min:        0.5  # 二阶准入「整体可靠度」：候选范围
                                      # 全部知识点中 verified 覆盖占比下限
+
+  # 综合满意度轴（步骤 4a，2026-08-13 新增）
+  synthesis_audit_rate:         0.05 # 每次 Wiki 直答服务后，被抽中触发一次
+                                     # 独立核实试验（复用 retrieval.md 步骤 2c
+                                     # 的编排）的概率；建议默认值与
+                                     # activation.explore_rate_trusted 同量级
+                                     # （定期复查，不是持续验证），未经真实数据
+                                     # 校准，同本节其余阈值的一贯做法
 ```
 
 ## 依赖
@@ -1213,11 +1394,21 @@ wiki:
 Study：   wiki_candidate 确认流、recompile_flag（study.md 步骤 6）
 Lifecycle：SetUnitLifecycle → MarkNeedsRecompile 联动
 Retrieval / Answer：Wiki 直答层接入（retrieval.md 第 0 层；
-  answer_wiki 路径产出标准 AnswerResult，Trace 无感知差异）
-Unit / Trace：编译输入的 KP / KU / 共现 / gap / 确证问题原文（只读）
-Activation：verified 链接的 observed_conditions（编译时聚合写入
+  answer_wiki 路径产出标准 AnswerResult，Trace 无感知差异）；
+  2026-08-13 新增：综合满意度轴的独立核实试验（步骤 4a）复用 retrieval.md
+  步骤 2c 定义的同一套编排（触发方仍是 Retrieval，异步、不阻塞已发出的
+  Wiki 直答），本文档不新增一套并行的审计编排逻辑
+Unit / Trace：编译输入的 KP / KU / 共现 / gap / 确证问题原文（只读）；
+  2026-08-13 新增：Trace 负责比对独立慢路径结果与页面 source_point_ids、
+  写入 wiki_synthesis_audit_success/failure、调用
+  wiki.RecordSynthesisOutcome 更新 wiki_pages 的四个综合满意度计数列
+  （同构 trace.md 步骤 3b 对 activation_audit_* 的处理，本文档不代为
+  修改 trace.md，实际写入逻辑落在该文档）
+Activation：`status=verified` 链接的 observed_conditions（编译时聚合写入
   wiki_pages.observed_conditions，检索时四元组入口复用其
-  conditionGroupMatches 匹配逻辑，只读消费，不产生反向统计）
+  conditionGroupMatches 匹配逻辑，只读消费，不产生反向统计；`verified`
+  现在是 activation.md「状态机」定义的连续置信度派生结果，见步骤 3
+  2026-08-13 编注）
 KPN：      跨 Source 关系新增后触发页面关系重算（步骤 7b）；
   页面关系的 related / contradicts 完全派生自 knowledge_point_relations，
   不新增关系类型（KPN 仍只有 related / contradicts、bidirectional）
@@ -1313,5 +1504,31 @@ member_roles 落库且 member_page_id 全部在 contains 成员集合内；
 回流防护：把某主题页的草稿导出后以 origin='wiki_draft' 导入，
   新 KP 与 origin_page_id 页面已引用的 KP 之间不产生 KPN 关系，
   该概念的 qualifying 计数、页面关系派生与主题候选核验不因这次回流而增长；
-  同一批回流 KP 与**其他**知识之间的关系照常建立。
+  同一批回流 KP 与**其他**知识之间的关系照常建立；
+
+综合满意度轴（步骤 4a，2026-08-13 新增）：
+  migration 后存量 wiki_pages 行 synthesis_success_count=
+    synthesis_failure_count=synthesis_audited_success_count=
+    synthesis_audited_failure_count=0，mean(page)=0.5；
+  mean(page) 严格实现 (success+1)/(success+failure+2)；
+  Wiki 直答成功服务后按 synthesis_audit_rate 概率触发独立核实（fake 环境
+    下可注入固定随机源断言抽样边界），未中选不产生任何 synthesis 事件、
+    不更新四个计数列；
+  中选后异步触发的独立慢路径检索不阻塞、不延迟已经返回给用户的 Wiki
+    直答响应（测试用例：mock 后台任务，断言主请求响应时间不受影响）；
+  独立慢路径 direct_point_ids 与页面 source_point_ids 有交集 → 写
+    wiki_synthesis_audit_success，synthesis_success_count 与
+    synthesis_audited_success_count 同步 +1；无交集 → 写
+    wiki_synthesis_audit_failure（reason=point_not_in_page_scope），
+    synthesis_failure_count 与 synthesis_audited_failure_count 同步 +1
+    （测试用例断言两对计数恒同方向变化，audited_* 恒为 success_count/
+    failure_count 的子集，同 activation.md 对 RecordAuditOutcome 的
+    验收口径一致）；
+  独立慢路径检索本身失败时记 warn、不产生事件、不更新计数；
+  mean(page) 不出现在 needs_recompile 判定、发布 selfcheck、页面下线
+    的任何代码路径里（可用代码审计/测试断言：把某页面 mean(page) 人为
+    压到接近 0 后，该页面的 status、wiki index 收录状态均不受影响，
+    只有页面详情/报告接口能读到这个数值下降）；
+  fake 环境下抽样命中/未命中、比对一致/不一致、后台检索失败四类场景
+    测试稳定运行。
 ```

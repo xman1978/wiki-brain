@@ -1,6 +1,8 @@
 package activation
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -19,13 +21,57 @@ type WikiNotifier interface {
 }
 
 type Service struct {
-	store        *Store
-	matcher      *Matcher
-	wikiNotifier WikiNotifier
+	store           *Store
+	matcher         *Matcher
+	bundleMatcher   *BundleMatcher
+	wikiNotifier    WikiNotifier
+	tupleNormalizer *TupleNormalizer
+	confidenceCfg   ConfidenceConfig
 }
 
 func NewService(store *Store, matcher *Matcher) *Service {
-	return &Service{store: store, matcher: matcher}
+	return &Service{store: store, matcher: matcher, bundleMatcher: NewBundleMatcher(store)}
+}
+
+// SetTupleNormalizer wires the question-tuple-normalization orchestrator
+// (docs/impl/v1/retrieval.md 步骤 2, tuplenorm.go) — optional, nil by default
+// so Service behaves unchanged when the feature is config-gated off.
+func (s *Service) SetTupleNormalizer(n *TupleNormalizer) {
+	s.tupleNormalizer = n
+}
+
+// NormalizeTuple is Retrieval's entry point into the tuple-normalization
+// layer (docs/impl/v1/retrieval.md 步骤 2), mirroring Match's passthrough
+// shape so Retrieval only depends on this package's public surface.
+func (s *Service) NormalizeTuple(ctx context.Context, domainIDs []string, subject, intent, audience, constraint string) (string, string, string, string, error) {
+	if s.tupleNormalizer == nil {
+		return "", "", "", "", fmt.Errorf("activation: tuple normalizer not configured")
+	}
+	return s.tupleNormalizer.Normalize(ctx, domainIDs, subject, intent, audience, constraint)
+}
+
+// CleanIdleTupleNorms is Study's periodic housekeeping passthrough
+// (docs/impl/v1/study.md 步骤 4 同款 idle 清理惯例) — deletes
+// question_tuple_norms rows whose last_hit_at is older than idleDays.
+func (s *Service) CleanIdleTupleNorms(idleDays int) (int, error) {
+	return s.store.DeleteIdleOlderThan(idleDays)
+}
+
+// BundleMatcher exposes the Bundle matcher for Study's显影扫描
+// (bundle_scan.go, docs/impl/v1/activation-bundle.md 步骤 4) — Study needs
+// the richer per-match APIs (InvalidateCache after CreateBundle/
+// UpdateBundleMembers) that a thin passthrough wrapper would just duplicate.
+func (s *Service) BundleMatcher() *BundleMatcher {
+	return s.bundleMatcher
+}
+
+// MatchBundles is阶段 6 只读 API 和 Study 显影扫描共用的入口 — 阶段 1 没有
+// Retrieval 消费者，两者是仅有的调用方。
+func (s *Service) MatchBundles(ctx context.Context, query session.ExpandedQuery, cfg MatchConfig) ([]BundleMatch, error) {
+	if s.bundleMatcher == nil {
+		return nil, nil
+	}
+	return s.bundleMatcher.Match(ctx, query, cfg)
 }
 
 func (s *Service) SetWikiNotifier(n WikiNotifier) {
@@ -36,29 +82,14 @@ func (s *Service) Store() *Store {
 	return s.store
 }
 
-// LoadSynonymResolver builds a SynonymResolver warmed with the currently
-// active subject synonyms — for callers outside this package (Wiki's
-// four-tuple retrieval entry, docs/design/wiki-compilation.md "触发问法取材
-// 真实观测，检索匹配复用四元组") that need to call BuildQueryConditionTerms /
-// MatchConditionGroups themselves instead of going through Matcher.Match.
-func (s *Service) LoadSynonymResolver() (*SynonymResolver, error) {
-	synonyms, err := s.store.ListActiveSynonyms()
-	if err != nil {
-		return nil, fmt.Errorf("activation: load synonym resolver: %w", err)
-	}
-	r := NewSynonymResolver()
-	r.Load(synonyms)
-	return r, nil
-}
-
 // Match is Retrieval's entry point into the activation layer
 // (docs/impl/v1/retrieval.md 步骤 2): a thin passthrough to the Matcher so
 // Retrieval only needs one dependency on this package.
-func (s *Service) Match(query session.ExpandedQuery, cfg MatchConfig) ([]LinkMatch, error) {
+func (s *Service) Match(ctx context.Context, query session.ExpandedQuery, cfg MatchConfig) ([]LinkMatch, error) {
 	if s.matcher == nil {
 		return nil, nil
 	}
-	return s.matcher.Match(query, cfg)
+	return s.matcher.Match(ctx, query, cfg)
 }
 
 // CreateLink is idempotent on point_id: a second call for a point that
@@ -125,66 +156,200 @@ func (s *Service) AppendObservedCondition(linkID string, add ObservedCondition, 
 	if link.Status == StatusDeprecated {
 		return nil
 	}
+	oldStatus := link.Status
 	if err := s.store.AppendObservedCondition(linkID, add, max); err != nil {
 		return err
 	}
 	if s.matcher != nil {
 		s.matcher.InvalidateCache()
 	}
-	return nil
+	return s.notifyIfNewlyVerified(linkID, oldStatus)
 }
 
 // ReplaceObservedConditions is Study's full rebuild write path.
 func (s *Service) ReplaceObservedConditions(linkID string, conds []ObservedCondition) error {
+	oldStatus := ""
+	if before, err := s.store.GetByID(linkID); err == nil && before != nil {
+		oldStatus = before.Status
+	}
 	if err := s.store.ReplaceObservedConditions(linkID, conds); err != nil {
 		return err
 	}
 	if s.matcher != nil {
 		s.matcher.InvalidateCache()
 	}
+	return s.notifyIfNewlyVerified(linkID, oldStatus)
+}
+
+// notifyIfNewlyVerified fires WikiNotifier.NotifyLinkVerified exactly when a
+// write path flips a link's status to verified for the first time this call
+// (docs/impl/v1/wiki.md 步骤5 触发(d)). Store.ReplaceObservedConditions
+// already derives and persists candidate/verified transitions itself (see
+// its own doc comment), so by the time control returns here the DB row may
+// already reflect the new status — this helper compares against the status
+// captured BEFORE the write (oldStatus) rather than re-deriving, so the
+// notify still fires even though deriveAndPersistStatus's own before/after
+// comparison (called separately for the KP-lifecycle override) would see no
+// change at that point.
+func (s *Service) notifyIfNewlyVerified(linkID, oldStatus string) error {
+	if oldStatus == StatusVerified || s.wikiNotifier == nil {
+		return nil
+	}
+	link, err := s.store.GetByID(linkID)
+	if err != nil {
+		return err
+	}
+	if link == nil || link.Status != StatusVerified {
+		return nil
+	}
+	if err := s.wikiNotifier.NotifyLinkVerified(link.PointID); err != nil {
+		slog.Warn("activation: notify wiki link verified failed", "link_id", linkID, "point_id", link.PointID, "error", err)
+	}
 	return nil
 }
 
-// TransitionLink is the single entry point for status changes
-// (docs/impl/v1/activation.md 状态机 "唯一入口"). It rejects any move not in
-// legalTransitions, and on success records a learning_results row and
-// invalidates the Matcher's verified-link cache.
-func (s *Service) TransitionLink(linkID, to, reason string, eventIDs []string) (*ActivationLink, error) {
-	link, err := s.store.GetByID(linkID)
-	if err != nil {
-		return nil, err
+// SetConfidenceConfig wires the shared retrieval.* confidence knobs
+// (docs/impl/v1/activation.md 配置项) into the Matcher, BundleMatcher, and
+// Store — the three places that need it (Match's tiering, Bundle's tiering,
+// and deriveAndPersistBundleStatus). Called once from cmd/server/main.go
+// after construction.
+func (s *Service) SetConfidenceConfig(cfg ConfidenceConfig) {
+	s.confidenceCfg = cfg
+	if s.matcher != nil {
+		s.matcher.SetConfidenceConfig(cfg)
 	}
+	if s.bundleMatcher != nil {
+		s.bundleMatcher.SetConfidenceConfig(cfg)
+	}
+	if s.store != nil {
+		s.store.SetConfidenceConfig(cfg)
+	}
+}
+
+// ConfidenceConfig returns the shared retrieval.* confidence knobs wired via
+// SetConfidenceConfig — Study's convergence-report aggregation
+// (docs/impl/v1/study.md 步骤 7) needs the same tier boundaries Match() uses.
+func (s *Service) ConfidenceConfig() ConfidenceConfig {
+	return s.confidenceCfg
+}
+
+// deriveAndPersistStatus recomputes the candidate/verified derived status
+// from link's current ObservedConditions, ALSO checks the target KP's
+// lifecycle and forces deprecated regardless of what the condition-based
+// derivation says (docs/impl/v1/activation.md「与旧状态机的映射」: deprecated
+// ⟺ KP lifecycle != current, independent of confidence). Persists only on
+// change. Called from every write path that changes observed_conditions or
+// the link's serving eligibility (RecordOutcome/RecordAuditOutcome/
+// UpdateConditions/ReplaceObservedConditions/AppendObservedCondition/
+// lifecycle notification) — not just the two new entry points — so Wiki's
+// status='verified' reads never go stale.
+func (s *Service) deriveAndPersistStatus(link *ActivationLink) error {
 	if link == nil {
-		return nil, fmt.Errorf("activation: link not found: %s", linkID)
+		return nil
 	}
-
-	allowed := legalTransitions[link.Status]
-	if !allowed[to] {
-		return nil, fmt.Errorf("activation: illegal transition %s -> %s for link %s", link.Status, to, linkID)
-	}
-	action := transitionAction[link.Status][to]
-
-	eventIDsJSON, err := json.Marshal(eventIDs)
+	current, err := s.store.PointLifecycleCurrent(link.PointID)
 	if err != nil {
-		return nil, fmt.Errorf("activation: marshal event ids: %w", err)
+		return err
 	}
+	newStatus := StatusDeprecated
+	if current {
+		newStatus = deriveStatus(link.ObservedConditions, s.confidenceCfg)
+	}
+	if newStatus == link.Status {
+		return nil
+	}
+	if err := s.store.UpdateStatus(link.LinkID, newStatus); err != nil {
+		return err
+	}
+	if newStatus == StatusVerified && s.wikiNotifier != nil {
+		if err := s.wikiNotifier.NotifyLinkVerified(link.PointID); err != nil {
+			slog.Warn("activation: notify wiki link verified failed", "link_id", link.LinkID, "point_id", link.PointID, "error", err)
+		}
+	}
+	return nil
+}
 
-	updated, err := s.store.ApplyTransition(linkID, to, action, reason, string(eventIDsJSON))
+// RecordOutcome implements docs/impl/v1/activation.md 步骤 1: locates the
+// matched observed condition by exact four-tuple and increments its success/
+// failure count, folds questionTerms into its known_question_terms, keeps
+// the link's display adopt_count/fail_count in sync (replacing the old
+// UpdateStats call site — Trace now calls this directly instead of Study
+// batch-processing signal events), re-derives status, and invalidates the
+// Matcher cache. matched=false from the Store (no error) logs a warning and
+// returns nil — a missing condition here is unexpected (callers should be
+// operating on a condition Match() just returned a hit for) but must never
+// abort the caller's trace_write task over a bookkeeping miss.
+func (s *Service) RecordOutcome(linkID, subject, intent, audience, constraint string, success bool, questionTerms string) error {
+	oldStatus := ""
+	if before, err := s.store.GetByID(linkID); err == nil && before != nil {
+		oldStatus = before.Status
+	}
+	matched, link, err := s.store.RecordOutcome(linkID, subject, intent, audience, constraint, success, questionTerms)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
+	if !matched {
+		slog.Warn("activation: record outcome found no matching condition", "link_id", linkID,
+			"subject", subject, "intent", intent, "audience", audience, "constraint", constraint)
+		return nil
+	}
+	if err := s.deriveAndPersistStatus(link); err != nil {
+		return err
+	}
 	if s.matcher != nil {
 		s.matcher.InvalidateCache()
 	}
+	return s.notifyIfNewlyVerified(linkID, oldStatus)
+}
 
-	if to == StatusVerified && s.wikiNotifier != nil {
-		if err := s.wikiNotifier.NotifyLinkVerified(updated.PointID); err != nil {
-			slog.Warn("activation: notify wiki link verified failed", "link_id", linkID, "point_id", updated.PointID, "error", err)
+// RecordAuditOutcome mirrors RecordOutcome for independent-verification
+// results (docs/impl/v1/activation.md 步骤 1).
+func (s *Service) RecordAuditOutcome(linkID, subject, intent, audience, constraint string, agree bool) error {
+	oldStatus := ""
+	if before, err := s.store.GetByID(linkID); err == nil && before != nil {
+		oldStatus = before.Status
+	}
+	matched, link, err := s.store.RecordAuditOutcome(linkID, subject, intent, audience, constraint, agree)
+	if err != nil {
+		return err
+	}
+	if !matched {
+		slog.Warn("activation: record audit outcome found no matching condition", "link_id", linkID,
+			"subject", subject, "intent", intent, "audience", audience, "constraint", constraint)
+		return nil
+	}
+	if err := s.deriveAndPersistStatus(link); err != nil {
+		return err
+	}
+	if s.matcher != nil {
+		s.matcher.InvalidateCache()
+	}
+	return s.notifyIfNewlyVerified(linkID, oldStatus)
+}
+
+// NotifyPointsLifecycleChanged implements the extended unit.ActivationNotifier
+// interface (docs/impl/v1/activation.md「依赖」Lifecycle): for each pointID
+// with a non-deprecated existing link, re-derive status — deriveAndPersistStatus's
+// own lifecycle check handles both directions (KP went non-current → link
+// becomes deprecated; KP restored → link re-derives from its conditions)
+// through the same single code path.
+func (s *Service) NotifyPointsLifecycleChanged(pointIDs []string) error {
+	for _, pid := range pointIDs {
+		link, err := s.store.GetByPointID(pid)
+		if err != nil {
+			return err
+		}
+		if link == nil || link.Status == StatusDeprecated {
+			continue
+		}
+		if err := s.deriveAndPersistStatus(link); err != nil {
+			return err
 		}
 	}
-
-	return updated, nil
+	if s.matcher != nil {
+		s.matcher.InvalidateCache()
+	}
+	return nil
 }
 
 func (s *Service) UpdateStats(linkID string, adoptDelta, failDelta int) error {
@@ -255,43 +420,20 @@ func (s *Service) ListLinkQuestions(linkID string) (*LinkQuestions, error) {
 	return &LinkQuestions{Matched: matched, CreatedFrom: createdFrom}, nil
 }
 
-// Confirm implements POST /activation-links/:id/confirm: only valid for
-// candidate links. If Study left a pending_confirm learning_result for this
-// link's promotion, its supporting events carry into the new transition
-// record and the pending row itself is resolved to applied
-// (docs/impl/v1/activation.md 步骤 3 确认/驳回与 Study 的关系).
-func (s *Service) Confirm(linkID string) (*ActivationLink, error) {
-	link, err := s.store.GetByID(linkID)
-	if err != nil {
-		return nil, err
-	}
-	if link == nil {
-		return nil, fmt.Errorf("activation: link not found: %s", linkID)
-	}
-	if link.Status != StatusCandidate {
-		return nil, fmt.Errorf("activation: confirm only valid for candidate links, link %s is %s", linkID, link.Status)
-	}
-
-	eventIDs, pending, err := s.pendingPromoteEventIDs(linkID)
-	if err != nil {
-		return nil, err
-	}
-
-	updated, err := s.TransitionLink(linkID, StatusVerified, "manual_confirm", eventIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	if pending != nil {
-		if err := s.store.ResolvePending(pending.ResultID, ResultApplied, "manual"); err != nil {
-			return nil, err
-		}
-	}
-	return updated, nil
-}
-
-// Reject implements POST /activation-links/:id/reject: only valid for
-// candidate links.
+// Reject implements POST /activation-links/:id/reject (2026-08-13 大幅改写,
+// docs/impl/v1/activation.md 步骤 3): valid for ANY status — a link that's
+// already verified may still turn out, on human inspection, to rest on
+// untrustworthy evidence. Semantics changed from the old candidate→deprecated
+// transition: this now means "clear all observed evidence, start over" — the
+// link's ObservedConditions are wiped, legacy display fields re-projected
+// (empty), and status re-derived (lands on candidate for a current KP, since
+// empty conditions can never be verified; stays/becomes deprecated if the KP
+// itself is non-current — deriveAndPersistStatus's lifecycle check still
+// applies). The link is not deleted and can accumulate fresh evidence later
+// via AppendObservedCondition regardless of this rejection. Writes a
+// learning_results(action=prune_condition, reason=manual_reject) row — the
+// same action Study's automatic convergence pruning will write (阶段 3),
+// distinguished by reason/confirmed_by.
 func (s *Service) Reject(linkID string) (*ActivationLink, error) {
 	link, err := s.store.GetByID(linkID)
 	if err != nil {
@@ -300,41 +442,33 @@ func (s *Service) Reject(linkID string) (*ActivationLink, error) {
 	if link == nil {
 		return nil, fmt.Errorf("activation: link not found: %s", linkID)
 	}
-	if link.Status != StatusCandidate {
-		return nil, fmt.Errorf("activation: reject only valid for candidate links, link %s is %s", linkID, link.Status)
+
+	prunedCount := len(link.ObservedConditions)
+	if err := s.store.ReplaceObservedConditions(linkID, []ObservedCondition{}); err != nil {
+		return nil, err
+	}
+	if s.matcher != nil {
+		s.matcher.InvalidateCache()
 	}
 
-	eventIDs, pending, err := s.pendingPromoteEventIDs(linkID)
-	if err != nil {
+	lr := &LearningResult{
+		Action:      ActionPruneCondition,
+		ObjectType:  ObjectTypeActivationLink,
+		ObjectID:    linkID,
+		Reason:      "manual_reject",
+		Status:      ResultApplied,
+		ConfirmedBy: sql.NullString{String: "manual", Valid: true},
+	}
+	if err := s.store.InsertLearningResult(lr); err != nil {
 		return nil, err
 	}
 
-	updated, err := s.TransitionLink(linkID, StatusDeprecated, "manual_reject", eventIDs)
+	updated, err := s.store.GetByID(linkID)
 	if err != nil {
 		return nil, err
 	}
-
-	if pending != nil {
-		if err := s.store.ResolvePending(pending.ResultID, ResultRejected, "manual"); err != nil {
-			return nil, err
-		}
-	}
+	_ = prunedCount
 	return updated, nil
-}
-
-func (s *Service) pendingPromoteEventIDs(linkID string) ([]string, *LearningResult, error) {
-	pending, err := s.store.FindPendingPromote(linkID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if pending == nil {
-		return nil, nil, nil
-	}
-	var eventIDs []string
-	if err := json.Unmarshal([]byte(pending.EventIDs), &eventIDs); err != nil {
-		return nil, nil, fmt.Errorf("activation: unmarshal pending event ids: %w", err)
-	}
-	return eventIDs, pending, nil
 }
 
 // InvalidateCache implements the unit package's ActivationNotifier interface:
@@ -411,9 +545,14 @@ func (s *Service) ConfirmSynonym(synonymID string) (*SubjectSynonym, error) {
 	return s.store.GetSynonym(synonymID)
 }
 
-// RejectSynonym implements POST /subject-synonyms/:id/reject: only valid for
-// status=candidate rows. Rejected terms are not automatically revived — a
-// human must resubmit explicitly (docs/impl/v1/activation.md 步骤 3a).
+// RejectSynonym implements POST /subject-synonyms/:id/reject: valid for
+// status=candidate or status=active rows (2026-08-12 修订: active 起，since
+// synonym_auto_promote defaults true now, most gap_mined rows land directly
+// on active without ever passing through candidate — reject needs to be able
+// to undo an already-live mapping, not just a still-pending one). Rejected
+// terms are not automatically revived — a human must resubmit explicitly
+// (docs/impl/v1/activation.md 步骤 3a). Invalidates the Matcher cache so a
+// revoked active mapping stops matching on the very next Match.
 func (s *Service) RejectSynonym(synonymID string) (*SubjectSynonym, error) {
 	syn, err := s.store.GetSynonym(synonymID)
 	if err != nil {
@@ -422,11 +561,14 @@ func (s *Service) RejectSynonym(synonymID string) (*SubjectSynonym, error) {
 	if syn == nil {
 		return nil, fmt.Errorf("activation: synonym not found: %s", synonymID)
 	}
-	if syn.Status != SynonymStatusCandidate {
-		return nil, fmt.Errorf("activation: reject only valid for candidate synonyms, %s is %s", synonymID, syn.Status)
+	if syn.Status != SynonymStatusCandidate && syn.Status != SynonymStatusActive {
+		return nil, fmt.Errorf("activation: reject only valid for candidate/active synonyms, %s is %s", synonymID, syn.Status)
 	}
 	if err := s.store.UpdateSynonymStatus(synonymID, SynonymStatusRejected); err != nil {
 		return nil, err
+	}
+	if s.matcher != nil {
+		s.matcher.InvalidateCache()
 	}
 	return s.store.GetSynonym(synonymID)
 }

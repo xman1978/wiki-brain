@@ -74,12 +74,13 @@ func setupFallbackTestService(t *testing.T, fastPathFallback bool) (*Service, *s
 
 	question := "什么是线性方程"
 	qTerms := text.Terms(text.Normalize(question))
-	link, err := activationSvc.CreateLink(qTerms, activation.LinkCondition{}, "p1", nil)
-	if err != nil {
+	// Empty LinkCondition -> the empty-observed-conditions fallback match
+	// path, which is explicitly tier-exempt (docs/impl/v1/activation.md「回退
+	// （observed_conditions 为空）」) — no verification/confidence boosting
+	// needed post-2026-08-13, this always serves on an exact question_terms
+	// repeat regardless of the link's (candidate) status.
+	if _, err := activationSvc.CreateLink(qTerms, activation.LinkCondition{}, "p1", nil); err != nil {
 		t.Fatalf("create link: %v", err)
-	}
-	if _, err := activationSvc.TransitionLink(link.LinkID, activation.StatusVerified, "test", nil); err != nil {
-		t.Fatalf("verify link: %v", err)
 	}
 
 	retStore := retrieval.NewStore(db)

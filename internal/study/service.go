@@ -51,14 +51,21 @@ type Service struct {
 	topicClusterMinQuestions  int
 	topicClusterMinDaysActive int
 	cohesion                  CohesionConfig
-	entrySvc                *entry.Service
+	entrySvc                  *entry.Service
+	// questionTupleNormIdleDays is retrieval.question_tuple_norm_idle_days
+	// (docs/impl/v1/retrieval.md 步骤 2) — owned by RetrievalConfig but
+	// consumed here (evictIdle's question_tuple_norms cleanup), same
+	// precedent as recompileNewKPMin/topicClusterMinQuestions above: this
+	// table isn't owned by Study, but Study is this codebase's existing
+	// periodic-housekeeping owner (docs/impl/v1/study.md 步骤 4 idle 清理惯例).
+	questionTupleNormIdleDays int
 	// lastRelationScanAt is the in-process watermark for
 	// recomputePageRelations (docs/impl/v1/wiki.md 步骤 7b) — zero value on
 	// first Run scans the whole history once.
 	lastRelationScanAt time.Time
 }
 
-func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.Service, wikiSvc *wiki.Service, recompileNewKPMin, qualifyingMinDaysActive int, cohesion CohesionConfig, topicClusterMinQuestions, topicClusterMinDaysActive int) *Service {
+func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.Service, wikiSvc *wiki.Service, recompileNewKPMin, qualifyingMinDaysActive int, cohesion CohesionConfig, topicClusterMinQuestions, topicClusterMinDaysActive, questionTupleNormIdleDays int) *Service {
 	return &Service{
 		store:                     store,
 		cfg:                       cfg,
@@ -69,6 +76,7 @@ func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.
 		cohesion:                  cohesion,
 		topicClusterMinQuestions:  topicClusterMinQuestions,
 		topicClusterMinDaysActive: topicClusterMinDaysActive,
+		questionTupleNormIdleDays: questionTupleNormIdleDays,
 	}
 }
 
@@ -90,7 +98,7 @@ func (s *Service) Run() (*RunResult, error) {
 	start := time.Now()
 
 	candidatesFlagged, err := s.store.ScanCandidates(
-		s.cfg.CandidateConfidentMin, s.cfg.CandidateRatioMin, s.cfg.ScanBatchSize)
+		s.cfg.CreateConfidenceMin, s.cfg.CreateWidthMax, s.cfg.ScanBatchSize)
 	if err != nil {
 		return nil, fmt.Errorf("study: scan candidates: %w", err)
 	}
@@ -105,12 +113,16 @@ func (s *Service) Run() (*RunResult, error) {
 		slog.Error("study: aggregate subject_synonym_gap failed", "error", err)
 	}
 
-	if err := s.processLinkSignals(&actions); err != nil {
-		slog.Error("study: process link signals failed", "error", err)
-	}
-
 	if err := s.evictIdle(&actions); err != nil {
 		slog.Error("study: evict idle links failed", "error", err)
+	}
+
+	if err := s.pruneConditions(&actions); err != nil {
+		slog.Error("study: prune conditions failed", "error", err)
+	}
+
+	if err := s.scanActivationBundles(); err != nil {
+		slog.Error("study: scan activation bundles failed", "error", err)
 	}
 
 	gapEventsProcessed, err := s.aggregateGaps()
@@ -259,6 +271,11 @@ func (s *Service) generateReport(actions LearningActionsSummary, entryScan entry
 		slog.Error("study: build question_complexity report section failed", "error", err)
 	}
 
+	convergence, err := s.buildConvergenceSection()
+	if err != nil {
+		slog.Error("study: build convergence report section failed", "error", err)
+	}
+
 	report := &Report{
 		ReportID:                 reportID,
 		GeneratedAt:              time.Now().UTC(),
@@ -269,12 +286,13 @@ func (s *Service) generateReport(actions LearningActionsSummary, entryScan entry
 		KnowledgeGaps:            gaps,
 		LearningActions:          actions,
 		CrossSourceConflicts:     conflicts,
-		EntryCandidates:        conceptCandidates,
+		EntryCandidates:          conceptCandidates,
 		TopicSignalUnderfilled:   underfilledEntries,
 		WikiDraftReflow:          wikiDraftReflow,
 		TopicDecompose:           topicDecompose,
 		QuestionComplexity:       questionComplexity,
-		EntrySplitSignals:      conceptSplitSignals,
+		EntrySplitSignals:        conceptSplitSignals,
+		Convergence:              convergence,
 	}
 
 	content, err := json.Marshal(report)
@@ -345,7 +363,7 @@ func (s *Service) buildActivationCandidates(periodDays int) ([]ActivationLinkCan
 			PointID:       r.PointID,
 			PointSummary:  r.PointSummary,
 			UnitTopic:     r.UnitTopic,
-			EntryID:     r.EntryID,
+			EntryID:       r.EntryID,
 			ConceptName:   r.ConceptName,
 			Stats: ActivationLinkStats{
 				ConfidentCount:    r.ConfidentCount,
@@ -493,7 +511,7 @@ func (s *Service) buildWikiCandidatesWithSplitSignals() ([]WikiCandidate, []Entr
 				})
 			}
 			splitSignals = append(splitSignals, EntrySplitSignalEntry{
-				EntryID:   conceptID,
+				EntryID:     conceptID,
 				ConceptName: conceptName,
 				Cohesion:    cohesion,
 				AspectCount: len(communities),
@@ -504,7 +522,7 @@ func (s *Service) buildWikiCandidatesWithSplitSignals() ([]WikiCandidate, []Entr
 		}
 
 		results = append(results, WikiCandidate{
-			EntryID:          conceptID,
+			EntryID:            conceptID,
 			ConceptName:        conceptName,
 			DomainID:           domainID,
 			QualifyingPointIDs: pointIDs,
@@ -562,11 +580,11 @@ func suggestAspectName(pointIDs []string, kps []QualifyingKP) string {
 // entrySvc isn't wired.
 func (s *Service) buildEntryCandidatesSection(scan entry.ScanSummary) (EntryCandidatesSection, error) {
 	section := EntryCandidatesSection{
-		AddCreated:           scan.AddCreated,
-		AddUpdated:           scan.AddUpdated,
-		MergeCreated:         scan.MergeCreated,
-		MergeUpdated:         scan.MergeUpdated,
-		Expired:              scan.Expired,
+		AddCreated:         scan.AddCreated,
+		AddUpdated:         scan.AddUpdated,
+		MergeCreated:       scan.MergeCreated,
+		MergeUpdated:       scan.MergeUpdated,
+		Expired:            scan.Expired,
 		EntryGapEventCount: scan.EntryGapEventCount,
 	}
 	if s.entrySvc == nil {
@@ -1005,6 +1023,33 @@ func (s *Service) buildQuestionComplexitySection(windowDays int) (QuestionComple
 	return QuestionComplexitySection{Groups: out}, nil
 }
 
+// convergenceTrendMaxPoints caps how many prior reports' snapshots feed the
+// "convergence" section's trend (docs/impl/v1/study.md 步骤 7,
+// docs/design/activation-convergence.md 第 5 节) — a bounded, readable
+// window rather than the full report history.
+const convergenceTrendMaxPoints = 10
+
+// buildConvergenceSection implements docs/impl/v1/study.md 步骤 7's
+// "convergence" report item: this cycle's confidence width/tier snapshot,
+// plus a trend against recent prior reports so a reader can see whether the
+// distribution is narrowing and the exploration-budget share is shrinking
+// over time, not just a single point-in-time number.
+func (s *Service) buildConvergenceSection() (ConvergenceSection, error) {
+	if s.activationSvc == nil {
+		return ConvergenceSection{}, nil
+	}
+	current, err := s.store.ConfidenceConvergenceStats(s.activationSvc.ConfidenceConfig(), s.cfg.PruneWidthMax)
+	if err != nil {
+		return ConvergenceSection{}, err
+	}
+	trend, err := s.store.RecentConvergenceSnapshots(convergenceTrendMaxPoints)
+	if err != nil {
+		slog.Error("study: recent convergence snapshots failed", "error", err)
+		trend = nil
+	}
+	return ConvergenceSection{Current: current, Trend: trend}, nil
+}
+
 // createCandidates implements docs/impl/v1/study.md 步骤 2: two sources,
 // merged and deduped by simply checking "does a link already exist for this
 // (question_terms, point_id)" before creating — whichever source reaches a
@@ -1155,290 +1200,108 @@ func (s *Service) buildObservedConditions(pointID string) ([]activation.Observed
 	return conds, nil
 }
 
-// aggregateSignals groups a slice of activation_success / activation_failure
-// / user_correction events by the activation_link_id(s) they reference
-// (docs/impl/v1/study.md 步骤 3). Applied to the unprocessed batch it yields
-// this cycle's stat deltas; applied to the full event_window_days window it
-// yields the cumulative counts used for threshold judgment.
-func aggregateSignals(events []RawSignalEvent, correctionWeight int) map[string]*linkSignal {
-	result := make(map[string]*linkSignal)
-	get := func(id string) *linkSignal {
-		a, ok := result[id]
-		if !ok {
-			a = &linkSignal{distinctHashes: make(map[string]bool)}
-			result[id] = a
-		}
-		return a
-	}
-
-	for _, ev := range events {
-		switch ev.EventType {
-		case "activation_success":
-			var p struct {
-				LinkID string `json:"link_id"`
-				Role   string `json:"role"`
-			}
-			if json.Unmarshal([]byte(ev.Payload), &p) != nil || p.LinkID == "" {
-				continue
-			}
-			a := get(p.LinkID)
-			// role omitted on events predating this change is treated as
-			// "direct" — that was the only role activation_success could
-			// carry before, so this keeps historical events' weight unchanged.
-			if p.Role == "supporting" {
-				a.SuccessSupportingN++
-			} else {
-				a.SuccessDirectN++
-				if ev.QuestionHash != "" && !a.distinctHashes[ev.QuestionHash] {
-					a.distinctHashes[ev.QuestionHash] = true
-					a.DistinctN++
-				}
-			}
-			a.EventIDs = append(a.EventIDs, ev.EventID)
-		case "activation_failure":
-			var p struct {
-				LinkID string `json:"link_id"`
-			}
-			if json.Unmarshal([]byte(ev.Payload), &p) != nil || p.LinkID == "" {
-				continue
-			}
-			a := get(p.LinkID)
-			a.FailureN++
-			a.EventIDs = append(a.EventIDs, ev.EventID)
-		case "user_correction":
-			var p struct {
-				LinkIDs []string `json:"link_ids"`
-			}
-			if json.Unmarshal([]byte(ev.Payload), &p) != nil {
-				continue
-			}
-			for _, lid := range p.LinkIDs {
-				if lid == "" {
-					continue
-				}
-				a := get(lid)
-				a.FailureN += correctionWeight
-				a.EventIDs = append(a.EventIDs, ev.EventID)
-			}
-		}
-	}
-	return result
+// evictIdle implements docs/impl/v1/study.md 步骤 4 (2026-08-13 起收窄:
+// candidate/weakened 的离散 idle 淘汰随状态机一起移除 — 连续置信度下"该不该
+// 服务"已经由 mean(cond) 持续表达，不需要另一条基于created_at/status_changed_at
+// 的独立淘汰规则；question_tuple_norms 的 idle 清理与置信度机制无关，原样保留).
+func (s *Service) evictIdle(actions *LearningActionsSummary) error {
+	return s.evictIdleTupleNorms()
 }
 
-// processLinkSignals implements docs/impl/v1/study.md 步骤 3 (+ 步骤 5 inline
-// for the candidate branch): consume the unprocessed signal event batch,
-// judge each touched link's state against the event_window_days cumulative
-// counts, and update running stats.
-func (s *Service) processLinkSignals(actions *LearningActionsSummary) error {
-	unprocessed, err := s.store.UnprocessedSignalEvents()
+// pruneConditions implements docs/impl/v1/study.md 步骤 3「收敛剪枝」
+// (docs/design/activation-convergence.md 第 11 节): scans every
+// non-deprecated link's observed_conditions via store.PruneCandidateConditions,
+// then for each flagged link removes exactly the identified conditions and
+// persists through activation.Service.ReplaceObservedConditions — never via
+// direct SQL here — so status re-derivation (deriveAndPersistStatus) and
+// matcher cache invalidation stay on their one existing write path. Writes
+// one learning_results(action=prune_condition) audit row per pruned link,
+// not per condition — the reason string enumerates the classification
+// breakdown.
+func (s *Service) pruneConditions(actions *LearningActionsSummary) error {
+	results, err := s.store.PruneCandidateConditions(
+		s.cfg.PruneMeanMax, s.cfg.PruneWidthMax, s.cfg.PruneSampleMin, s.cfg.PruneIdleDays, s.cfg.PruneStaleDays)
 	if err != nil {
-		return err
-	}
-	if len(unprocessed) == 0 {
-		return nil
+		return fmt.Errorf("study: prune candidate conditions: %w", err)
 	}
 
-	batch := aggregateSignals(unprocessed, s.cfg.CorrectionWeight)
-
-	windowed, err := s.store.SignalEventsInWindow(s.cfg.EventWindowDays)
-	if err != nil {
-		return err
-	}
-	window := aggregateSignals(windowed, s.cfg.CorrectionWeight)
-
-	for linkID, delta := range batch {
-		w, ok := window[linkID]
-		if !ok {
-			w = &linkSignal{}
-		}
-
-		link, err := s.activationSvc.GetLink(linkID)
+	for _, r := range results {
+		link, err := s.activationSvc.Store().GetByID(r.LinkID)
 		if err != nil {
-			slog.Error("study: get link failed", "link_id", linkID, "error", err)
+			slog.Error("study: prune: load link failed", "link_id", r.LinkID, "error", err)
 			continue
 		}
 		if link == nil {
 			continue
 		}
 
-		lifecycleCurrent, err := s.store.PointLifecycleCurrent(link.PointID)
-		if err != nil {
-			slog.Error("study: point lifecycle lookup failed", "link_id", linkID, "point_id", link.PointID, "error", err)
+		toRemove := make(map[string]struct{}, len(r.Conditions))
+		convergedLow, longIdle := 0, 0
+		for _, c := range r.Conditions {
+			toRemove[c.Subject+"\x1f"+c.Intent+"\x1f"+c.Audience+"\x1f"+c.Constraint] = struct{}{}
+			switch c.Classification {
+			case "converged_low":
+				convergedLow++
+			case "long_idle":
+				longIdle++
+			}
+		}
+
+		var trimmed []activation.ObservedCondition
+		for _, c := range link.ObservedConditions {
+			key := c.Subject + "\x1f" + c.Intent + "\x1f" + c.Audience + "\x1f" + c.Constraint
+			if _, prune := toRemove[key]; prune {
+				continue
+			}
+			trimmed = append(trimmed, c)
+		}
+		if trimmed == nil {
+			trimmed = []activation.ObservedCondition{}
+		}
+
+		if err := s.activationSvc.ReplaceObservedConditions(r.LinkID, trimmed); err != nil {
+			slog.Error("study: prune: replace observed conditions failed", "link_id", r.LinkID, "error", err)
 			continue
 		}
 
-		// "目标 KP lifecycle != current 的链接：跳过一切强化...不累加 adopt_count，
-		// 但失败与降权判定照常" — suppress only the adopt-count increment.
-		adoptDelta := delta.SuccessTotal()
-		if !lifecycleCurrent {
-			adoptDelta = 0
+		reason := fmt.Sprintf("收敛剪枝：converged_low=%d, long_idle=%d，剩余观测条件 %d 条",
+			convergedLow, longIdle, len(trimmed))
+		lr := &activation.LearningResult{
+			Action:     activation.ActionPruneCondition,
+			ObjectType: activation.ObjectTypeActivationLink,
+			ObjectID:   r.LinkID,
+			Reason:     reason,
+			Status:     activation.ResultApplied,
 		}
-		if err := s.activationSvc.UpdateStats(linkID, adoptDelta, delta.FailureN); err != nil {
-			slog.Error("study: update stats failed", "link_id", linkID, "error", err)
+		if err := s.activationSvc.Store().InsertLearningResult(lr); err != nil {
+			slog.Error("study: insert prune_condition learning result failed", "link_id", r.LinkID, "error", err)
+			continue
 		}
 
-		switch link.Status {
-		case activation.StatusCandidate:
-			// 只认 role=direct：反复只当 supporting 引用还不足以证明这条
-			// 链接本身可作为独立激活入口被信赖（docs/design/precompile.md
-			// "反复使用"条）。
-			if lifecycleCurrent && w.SuccessDirectN >= s.cfg.PromoteSuccessMin && w.DistinctN >= s.cfg.PromoteDistinctMin {
-				s.judgePromotion(link, w, actions)
-			}
-		case activation.StatusVerified:
-			// 分母沿用 SuccessDirectN：supporting 命中不参与稀释 failure
-			// 占比，避免"这段时间恰好没被当 direct 引用"被误判成失效
-			// （docs/impl/v1/study.md 步骤 3）。
-			total := w.SuccessDirectN + w.FailureN
-			if total > 0 && w.FailureN >= s.cfg.WeakenFailureMin && float64(w.FailureN)/float64(total) >= s.cfg.WeakenRatioMin {
-				reason := fmt.Sprintf("窗口内 failure_n=%d, success_direct_n=%d, 比值=%.2f",
-					w.FailureN, w.SuccessDirectN, float64(w.FailureN)/float64(total))
-				if _, err := s.activationSvc.TransitionLink(linkID, activation.StatusWeakened, reason, w.EventIDs); err != nil {
-					slog.Error("study: weaken failed", "link_id", linkID, "error", err)
-				} else {
-					actions.Weakened++
-					actions.Actions = append(actions.Actions, LearningActionEntry{
-						Action: activation.ActionWeaken, ObjectID: linkID, Reason: reason, Status: activation.ResultApplied,
-					})
-				}
-			}
-		case activation.StatusWeakened:
-			// reverify 只需证明"这条路径仍然有效"，direct/supporting 都算数
-			// （与首次晋升需要 direct 主导的门槛不同）。
-			if lifecycleCurrent && w.SuccessTotal() >= s.cfg.ReverifySuccessMin && w.FailureN == 0 {
-				reason := fmt.Sprintf("窗口内 success_n=%d（direct=%d, supporting=%d），无 failure",
-					w.SuccessTotal(), w.SuccessDirectN, w.SuccessSupportingN)
-				if _, err := s.activationSvc.TransitionLink(linkID, activation.StatusVerified, reason, w.EventIDs); err != nil {
-					slog.Error("study: reverify failed", "link_id", linkID, "error", err)
-				} else {
-					actions.Reverified++
-					actions.Actions = append(actions.Actions, LearningActionEntry{
-						Action: activation.ActionReverify, ObjectID: linkID, Reason: reason, Status: activation.ResultApplied,
-					})
-				}
-			}
-		}
-	}
-
-	for _, e := range unprocessed {
-		if err := s.store.MarkEventProcessed(e.EventID); err != nil {
-			slog.Error("study: mark signal event processed failed", "event_id", e.EventID, "error", err)
-		}
-	}
-	return nil
-}
-
-// judgePromotion implements docs/impl/v1/study.md 步骤 5: auto_promote=true
-// transitions immediately; otherwise it records a pending_confirm promote
-// result (without touching link status) unless one is already pending.
-func (s *Service) judgePromotion(link *activation.ActivationLink, w *linkSignal, actions *LearningActionsSummary) {
-	reason := fmt.Sprintf("窗口内 success_direct_n=%d，%d 个不同问题", w.SuccessDirectN, w.DistinctN)
-
-	if s.cfg.AutoPromote {
-		if _, err := s.activationSvc.TransitionLink(link.LinkID, activation.StatusVerified, reason, w.EventIDs); err != nil {
-			slog.Error("study: auto-promote failed", "link_id", link.LinkID, "error", err)
-			return
-		}
-		actions.Promoted++
+		actions.PrunedConditions += len(r.Conditions)
 		actions.Actions = append(actions.Actions, LearningActionEntry{
-			Action: activation.ActionPromote, ObjectID: link.LinkID, Reason: reason, Status: activation.ResultApplied,
-		})
-		return
-	}
-
-	pending, err := s.activationSvc.Store().FindPendingPromote(link.LinkID)
-	if err != nil {
-		slog.Error("study: find pending promote failed", "link_id", link.LinkID, "error", err)
-		return
-	}
-	if pending != nil {
-		return
-	}
-
-	lr := &activation.LearningResult{
-		Action:     activation.ActionPromote,
-		ObjectType: activation.ObjectTypeActivationLink,
-		ObjectID:   link.LinkID,
-		Reason:     reason,
-		EventIDs:   marshalIDs(w.EventIDs),
-		Status:     activation.ResultPendingConfirm,
-	}
-	if err := s.activationSvc.Store().InsertLearningResult(lr); err != nil {
-		slog.Error("study: insert pending promote failed", "link_id", link.LinkID, "error", err)
-		return
-	}
-	actions.PendingPromotions++
-	actions.Actions = append(actions.Actions, LearningActionEntry{
-		Action: activation.ActionPromote, ObjectID: link.LinkID, Reason: reason, Status: activation.ResultPendingConfirm,
-	})
-}
-
-// evictIdle implements docs/impl/v1/study.md 步骤 4.
-func (s *Service) evictIdle(actions *LearningActionsSummary) error {
-	if err := s.evictIdleCandidates(actions); err != nil {
-		return err
-	}
-	return s.evictIdleWeakened(actions)
-}
-
-func (s *Service) evictIdleCandidates(actions *LearningActionsSummary) error {
-	idle, err := s.store.CandidateLinksOlderThan(s.cfg.CandidateIdleDays)
-	if err != nil {
-		return err
-	}
-	if len(idle) == 0 {
-		return nil
-	}
-
-	recent, err := s.store.SignalEventsInWindow(s.cfg.CandidateIdleDays)
-	if err != nil {
-		return err
-	}
-	touched := aggregateSignals(recent, 0)
-
-	for _, linkID := range idle {
-		if _, ok := touched[linkID]; ok {
-			continue
-		}
-		if _, err := s.activationSvc.TransitionLink(linkID, activation.StatusDeprecated, "idle_candidate", nil); err != nil {
-			slog.Error("study: evict idle candidate failed", "link_id", linkID, "error", err)
-			continue
-		}
-		actions.Deprecated++
-		actions.Actions = append(actions.Actions, LearningActionEntry{
-			Action: activation.ActionDeprecate, ObjectID: linkID, Reason: "idle_candidate", Status: activation.ResultApplied,
+			ResultID: lr.ResultID, Action: lr.Action, ObjectID: lr.ObjectID, Reason: lr.Reason, Status: lr.Status,
 		})
 	}
 	return nil
 }
 
-func (s *Service) evictIdleWeakened(actions *LearningActionsSummary) error {
-	idle, err := s.store.WeakenedLinksOlderThan(s.cfg.DeprecateIdleDays)
-	if err != nil {
-		return err
-	}
-	if len(idle) == 0 {
+// evictIdleTupleNorms cleans up question_tuple_norms rows whose last_hit_at
+// is older than questionTupleNormIdleDays (docs/impl/v1/retrieval.md 步骤 2).
+// <=0 (feature not configured / config-gated off) skips cleanup entirely —
+// mirrors DeleteIdleOlderThan's own no-op guard, kept here too so the log
+// line only fires when the feature is actually in use.
+func (s *Service) evictIdleTupleNorms() error {
+	if s.questionTupleNormIdleDays <= 0 || s.activationSvc == nil {
 		return nil
 	}
-
-	recent, err := s.store.SignalEventsInWindow(s.cfg.DeprecateIdleDays)
+	n, err := s.activationSvc.CleanIdleTupleNorms(s.questionTupleNormIdleDays)
 	if err != nil {
-		return err
+		slog.Error("study: clean idle question tuple norms failed", "error", err)
+		return nil
 	}
-	recentAgg := aggregateSignals(recent, 0)
-
-	for _, linkID := range idle {
-		if a, ok := recentAgg[linkID]; ok && a.SuccessTotal() > 0 {
-			continue
-		}
-		if _, err := s.activationSvc.TransitionLink(linkID, activation.StatusDeprecated, "idle_weakened", nil); err != nil {
-			slog.Error("study: evict idle weakened failed", "link_id", linkID, "error", err)
-			continue
-		}
-		actions.Deprecated++
-		actions.Actions = append(actions.Actions, LearningActionEntry{
-			Action: activation.ActionDeprecate, ObjectID: linkID, Reason: "idle_weakened", Status: activation.ResultApplied,
-		})
+	if n > 0 {
+		slog.Info("study: cleaned idle question tuple norms", "count", n)
 	}
 	return nil
 }

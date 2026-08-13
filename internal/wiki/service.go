@@ -1518,6 +1518,27 @@ func (s *Service) Archive(pageID string) (*Page, error) {
 	return s.store.GetPage(pageID)
 }
 
+// GetPage is a thin read-only accessor Retrieval's synthesis-audit-trial
+// orchestration (docs/impl/v1/wiki.md 步骤 4a) uses to read a served page's
+// source_point_ids for the independent-verification comparison — retrieval
+// already imports wiki (it calls TryDirectAnswer), so this avoids exposing
+// the whole *Store just for one field read.
+func (s *Service) GetPage(pageID string) (*Page, error) {
+	return s.store.GetPage(pageID)
+}
+
+// RecordSynthesisOutcome updates a page's synthesis-satisfaction axis
+// (docs/impl/v1/wiki.md 步骤 4a) — the consumption-side counterpart of
+// trace.Service's new WriteSynthesisOutcome, wired in via a small
+// trace-package-local interface (analogous to Phase 4's
+// retrieval.AuditOutcomeWriter) so trace doesn't need to import wiki.
+// Deliberately a thin pass-through: the axis is observation-only and must
+// never touch status/needs_recompile/index (docs/impl/v1/wiki.md 步骤 4a
+// 「mean(page) 的消费方式」), so there is nothing else for this method to do.
+func (s *Service) RecordSynthesisOutcome(pageID string, agree bool) error {
+	return s.store.RecordSynthesisOutcome(pageID, agree)
+}
+
 // MarkNeedsRecompile implements docs/impl/v1/wiki.md 步骤 5: pulls a page out
 // of the index immediately ("宁可回落慢路径也不用可疑页面直答") and flips it
 // to needs_recompile. A no-op for pages that are already archived (terminal)
@@ -1944,11 +1965,7 @@ func (s *Service) matchFourTupleEntry(subject, intent, audience, constraint stri
 		return nil, nil
 	}
 
-	resolver, err := s.activationSvc.LoadSynonymResolver()
-	if err != nil {
-		return nil, fmt.Errorf("wiki: load synonym resolver: %w", err)
-	}
-	queryTopic, qi, qa, qc := activation.BuildQueryConditionTerms(subject, intent, audience, constraint, resolver)
+	querySubject, qi, qa, qc := activation.BuildQueryConditionTerms(subject, intent, audience, constraint)
 
 	pages, err := s.store.ListPublishedPagesWithConditions()
 	if err != nil {
@@ -1964,7 +1981,7 @@ func (s *Service) matchFourTupleEntry(subject, intent, audience, constraint stri
 		var latest time.Time
 		hit := false
 		for _, cond := range p.Conditions {
-			if !activation.MatchConditionGroups([]activation.ObservedCondition{cond}, queryTopic, qi, qa, qc, resolver) {
+			if !activation.MatchConditionGroups([]activation.ObservedCondition{cond}, querySubject, qi, qa, qc) {
 				continue
 			}
 			hit = true

@@ -95,7 +95,10 @@ LLM 预算：2 次（analyze + compile），与现状完全一致，**不比现�
 ## 1. 阶段 A：信号归集（程序，0 LLM）—— 已实现，不变
 
 qualifying KP 的定义**不变**（wiki.md 步骤 3：KP 与所属 KU 均 lifecycle=current，
-且该 KP 存在 status=verified 的 ActivationLink）。在此之上归集五路信号，全部来自现有表：
+且该 KP 存在 status=verified 的 ActivationLink，仅此一条**，2026-08-12 修订，
+取代 2026-08-11 曾加过的 wiki_material_confirm 关卡——该人工确认关卡已整体
+废弃，见 `docs/design/wiki.md`「2026-08-12 改判」，qualifying 恢复为只看
+verified**）。在此之上归集五路信号，全部来自现有表：
 
 | 信号 | 来源 | 在本方案中的用途 |
 |---|---|---|
@@ -171,6 +174,26 @@ w(p, q) = w_rel    * [存在 KPN related(p,q) 或 contradicts(p,q)]
 **权重语义排序**：`w_cooc`（使用侧，最强）> `w_rel`（关系侧）≈ `w_intent`（使用侧条件）
 > `w_unit`（材料侧兜底）。默认值见配置项。这个排序对应系统立场：**主题边界由真实使用
 划定，材料结构只作兜底**。
+
+**熟路指针（2026-08-11，设计层面，非实现变更）**：`w_cooc` 现在是对
+`question_kp_cooccurrence` 做实时 pairwise SQL join 算出来的——"两个 KP 被同一个
+confident 问题同时引用的问题数"，逐对现算，不落库、不沉淀。`docs/design/
+activation-bundle.md` 的熟路稳定核本质上是同一份原始信号（confident traces 里
+`direct_point_ids` 的共现模式）经过比例阈值、状态机筛出来的沉淀结果（2026-08-12
+修订：显影身份判断已改为"先匹配已有熟路、未匹配上才分组发现新熟路"，不再单纯
+靠归一化四元组分组，见 activation-bundle.md 步骤 2，但这处细节不影响本指针的
+结论——沉淀结果依然比 pairwise 共现数更强），而且比 pairwise 共现数更强——一个
+KP 出现在某条稳定核里，说的是"这一组 KP 作为整体被反复依赖过"，不只是两两之间
+偶然同时出现过。Bundle 落地后，
+这里预期有两处可以变化：(1) `w_cooc` 的计算可以直接复用某个 concept 范围内已
+显影的熟路稳定核作为共现来源，不必每次重新做 pairwise join（性能 + 一致性，
+同一份"共现"定义在内聚判定和熟路显影两处不再各自实现一遍）；(2) 稳定核本身
+可以作为一种比 pairwise 边权更强的证据——同属一条稳定核的 KP 之间，边权可以
+不止是"共现次数"，而是"确实作为整体被验证过"。是否替换、替换后 `aspect_w_cooc`
+/`aspect_cooc_sat` 要不要重新校准，尚未定案，本次修订不改动上面的公式，只记录
+这个接入点。呼应 `wiki.md` 步骤 3「内聚」判定处同一枚熟路指针——那里描述的是
+现象（Study 侧内聚判定的边权来源），这里是这枚指针在本方案里对应的具体落点
+（`internal/wiki/aspect.go` 的 `BuildAspectEdges`）。
 
 ### 2.2 社区检测（替换连通分量）
 
@@ -657,7 +680,9 @@ analyze 产出结构化 outline（撤回，恢复扁平 claims[]/tensions[]，�
 **不冲突、明确保持不变的**（实现时不得"顺手"改动）：
 
 ```text
-qualifying KP 定义（lifecycle=current + verified ActivationLink，不叠加次数门槛）；
+qualifying KP 定义（lifecycle=current + verified ActivationLink，不叠加次数门槛；
+2026-08-11 曾加过的 wiki_material_confirm 关卡已于 2026-08-12 整体废弃，
+见阶段 A 说明）；
 citation 白名单校验（范围仍是「全部 qualifying KP」，不按切面/节收窄）；
 KPN 只有 related / contradicts，direction 恒 bidirectional；
 lifecycle 只有 current / superseded / deprecated；

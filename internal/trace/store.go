@@ -50,6 +50,38 @@ func (s *Store) SaveTrace(t *Trace) error {
 	return nil
 }
 
+// SaveAuditPlaceholder inserts a minimal answers+traces row pair to satisfy
+// learning_events.trace_id's NOT NULL REFERENCES traces(trace_id) FK
+// (foreign_keys=ON) for an independent-verification audit trial
+// (docs/impl/v1/retrieval.md 步骤 2c / docs/impl/v1/trace.md 步骤 3b). An audit
+// trial runs in the background, detached from any specific user-facing
+// answer/trace — there's no real trace_id available at the point Retrieval
+// triggers it — so this creates a real, minimal, otherwise-inert row pair
+// (empty content/path/etc.) purely to hold the FK, tagged path_type="audit"
+// so it's identifiable/filterable if ever inspected directly. Returns the new
+// trace_id.
+func (s *Store) SaveAuditPlaceholder(question, subject, intent, audience, constraint string) (string, error) {
+	answerID := uuid.New().String()
+	_, err := s.db.Exec(`INSERT INTO answers (answer_id, question, content, has_answer, path, prompt_version, model_name)
+		VALUES (?, ?, '', 0, 'audit', 'audit', 'audit')`, answerID, question)
+	if err != nil {
+		return "", fmt.Errorf("trace store: insert audit placeholder answer: %w", err)
+	}
+
+	traceID := uuid.New().String()
+	_, err = s.db.Exec(`INSERT INTO traces (trace_id, answer_id, question, question_hash, question_terms,
+		retrieval_quality, path, path_type, activation_link_ids, subject, intent, audience, constraint_text,
+		direct_point_ids, kpn_cited_count, cited_count, outline_cited_count, cited_rank_sum,
+		has_feedback, feedback_type, feedback_content, skeleton_page_id)
+		VALUES (?, ?, ?, '', '', 'unknown', 'audit', 'audit', '[]', ?, ?, ?, ?, '[]', 0, 0, 0, 0, 0, NULL, NULL, NULL)`,
+		traceID, answerID, question, subject, intent, audience, constraint,
+	)
+	if err != nil {
+		return "", fmt.Errorf("trace store: insert audit placeholder trace: %w", err)
+	}
+	return traceID, nil
+}
+
 func (s *Store) GetTrace(traceID string) (*Trace, error) {
 	var (
 		t               Trace
@@ -190,14 +222,14 @@ func (s *Store) UpdateCooccurrence(questionHash, questionTerms string, pointIDs 
 	return tx.Commit()
 }
 
-func (s *Store) SaveLearningEvent(traceID, eventType, payload string) error {
+func (s *Store) SaveLearningEvent(traceID, eventType, payload string) (string, error) {
 	eventID := uuid.New().String()
 	_, err := s.db.Exec(`INSERT INTO learning_events (event_id, trace_id, event_type, payload) VALUES (?, ?, ?, ?)`,
 		eventID, traceID, eventType, payload)
 	if err != nil {
-		return fmt.Errorf("trace store: insert learning_event: %w", err)
+		return "", fmt.Errorf("trace store: insert learning_event: %w", err)
 	}
-	return nil
+	return eventID, nil
 }
 
 // EntryNullRatio computes, for a set of KnowledgePoint IDs, the share

@@ -227,7 +227,7 @@ func TestStore_LearningEvents(t *testing.T) {
 		DirectPointIDs:   []string{},
 	})
 
-	if err := store.SaveLearningEvent("t-le", "knowledge_gap", `{"question":"q"}`); err != nil {
+	if _, err := store.SaveLearningEvent("t-le", "knowledge_gap", `{"question":"q"}`); err != nil {
 		t.Fatalf("SaveLearningEvent: %v", err)
 	}
 

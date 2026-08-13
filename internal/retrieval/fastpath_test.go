@@ -2,6 +2,7 @@ package retrieval
 
 import (
 	"context"
+	"sort"
 	"testing"
 	"time"
 
@@ -19,27 +20,30 @@ func setupTestServiceWithActivation(t *testing.T) (*Service, *llm.FakeClient, *S
 	t.Helper()
 	svc, fake, store := setupTestService(t)
 	activationStore := activation.NewStore(store.db)
-	activationSvc := activation.NewService(activationStore, activation.NewMatcher(activationStore))
+	matcher := activation.NewMatcher(activationStore)
+	activationSvc := activation.NewService(activationStore, matcher)
 	svc.activationSvc = activationSvc
 	svc.cfg.Retrieval.FastPath = true
 	svc.cfg.Retrieval.FastPathFallback = true
 	return svc, fake, store, activationSvc
 }
 
-// seedVerifiedLink creates and immediately verifies an ActivationLink with no
-// four-tuple condition, so the matcher's fallback path (question_terms
-// overlap) is what matches it.
+// seedVerifiedLink creates an ActivationLink with no four-tuple condition, so
+// the matcher's empty-observed-conditions fallback path (question_terms
+// overlap) is what matches it — that branch is explicitly tier-exempt
+// (docs/impl/v1/activation.md「回退（observed_conditions 为空）」: "命中后
+// 直接判定 score=1.0，不经过置信度分档"), and classifyActivationMatches no
+// longer filters by status=verified (2026-08-13, Match() itself already
+// decided per-condition whether this round should serve), so this link
+// participates in the fast path regardless of its (candidate) status —
+// no TransitionLink call needed post-2026-08-13.
 func seedVerifiedLink(t *testing.T, activationSvc *activation.Service, questionTerms, pointID string) *activation.ActivationLink {
 	t.Helper()
 	link, err := activationSvc.CreateLink(questionTerms, activation.LinkCondition{}, pointID, nil)
 	if err != nil {
 		t.Fatalf("create link: %v", err)
 	}
-	updated, err := activationSvc.TransitionLink(link.LinkID, activation.StatusVerified, "test", nil)
-	if err != nil {
-		t.Fatalf("verify link: %v", err)
-	}
-	return updated
+	return link
 }
 
 func TestRetrieve_FastPath_Hit(t *testing.T) {
@@ -363,15 +367,22 @@ func TestRetrieve_FastPath_NoCurrentKP_FallsBackToSlowPath(t *testing.T) {
 	}
 }
 
-// TestRetrieve_CandidateMatch_RecordsHitsButNotFastPath: candidate links
-// participate in Match so Trace can grade activation_success/failure, but
-// must never take the fast path (only verified links answer directly).
-func TestRetrieve_CandidateMatch_RecordsHitsButNotFastPath(t *testing.T) {
+// TestRetrieve_ExploringTierCondition_RecordsHitButFallsBackToFull covers
+// the 2026-08-13 replacement for the old "candidate must not take fast path"
+// invariant (docs/design/activation-convergence.md): status is no longer
+// what gates the fast path — Match()'s own per-condition tiering is. A
+// condition whose confidence is still low (exploring tier) and isn't
+// sampled in this round (explore_rate_low=0) records an ActivationHit (for
+// Trace) but doesn't serve — same externally-observable "candidate not
+// served" behavior as before, driven by a different, continuous mechanism.
+func TestRetrieve_ExploringTierCondition_RecordsHitButFallsBackToFull(t *testing.T) {
 	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
+	activationSvc.SetConfidenceConfig(activation.ConfidenceConfig{
+		ServingConfidenceMin: 0.9, AuditSampleMin: 5, ExploreRateLow: 0,
+	})
 
 	question := "什么是线性方程"
-	qTerms := text.Terms(text.Normalize(question))
-	link, err := activationSvc.CreateLink(qTerms, activation.LinkCondition{}, "p1", nil)
+	link, err := activationSvc.CreateLink("t1", activation.LinkCondition{SubjectTerms: "线性方程"}, "p1", nil)
 	if err != nil {
 		t.Fatalf("create candidate: %v", err)
 	}
@@ -385,26 +396,24 @@ func TestRetrieve_CandidateMatch_RecordsHitsButNotFastPath(t *testing.T) {
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "matches"}]}`})
 
-	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
+	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question, Subject: "线性方程"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if es.PathType != PathTypeFull {
-		t.Fatalf("path_type = %q, want full (candidate must not take fast path)", es.PathType)
+		t.Fatalf("path_type = %q, want full (exploring-tier condition not sampled in must not take fast path)", es.PathType)
 	}
-	if len(es.ActivationHits) != 1 {
-		t.Fatalf("expected 1 activation hit from candidate match, got %+v", es.ActivationHits)
+	if len(es.ActivationHits) != 0 {
+		t.Fatalf("expected 0 activation hits — exploring tier not sampled means Match() produces no hit at all this round, got %+v", es.ActivationHits)
 	}
-	if es.ActivationHits[0].LinkID != link.LinkID || es.ActivationHits[0].PointID != "p1" {
-		t.Errorf("unexpected hit: %+v", es.ActivationHits[0])
-	}
+	_ = link
 }
 
-// TestRetrieve_NormalizeTupleBeforeMatch_RescuesSubjectJitter: jittered subject
-// would miss Match on tuple0; session_normalize_tuple aligns to an observed
-// group before Match so the verified link still takes the fast path — even on
-// a first-turn session (FollowUp=false).
-func TestRetrieve_NormalizeTupleBeforeMatch_RescuesSubjectJitter(t *testing.T) {
+// TestRetrieve_SubjectJitter_MissesFastPath_FallsBackToFull: 2026-08-12 修订
+// — subject 不再做同义词/包含模糊匹配，round 2 模型辅助判断整体移除，一次
+// 抖动的 subject 措辞不再能命中 Match，只能走慢路径。替换了原先验证 round 2
+// 能救回这种抖动的 TestRetrieve_ModelAssistedMatch_RescuesSubjectJitter。
+func TestRetrieve_SubjectJitter_MissesFastPath_FallsBackToFull(t *testing.T) {
 	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
 
 	now := time.Now().UTC()
@@ -417,21 +426,16 @@ func TestRetrieve_NormalizeTupleBeforeMatch_RescuesSubjectJitter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create link: %v", err)
 	}
-	if _, err := activationSvc.TransitionLink(link.LinkID, activation.StatusVerified, "test", nil); err != nil {
-		t.Fatalf("verify: %v", err)
-	}
+	_ = link
 
-	fake.SetResponse("session_normalize_tuple.md", llm.FakeResponse{Output: `{
-		"subject": "数据库连接句柄异常",
-		"intent": "查询解决方法",
-		"audience": "",
-		"constraint": "达梦"
-	}`})
-	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "kpn neighbor"}, {"candidate_id": "c2", "relevant": true, "analysis": "kpn neighbor"}]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "x"}]}`})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "x"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{
 		Question:       "达梦报语句句柄个数超过上限怎么解决？",
-		Subject:        "数据库连接句柄超限",
+		Subject:        "数据库连接句柄超限", // jittered — same intent/audience/constraint, different subject wording
 		Intent:         "查询解决方法",
 		Audience:       "",
 		Constraint:     "达梦",
@@ -442,65 +446,233 @@ func TestRetrieve_NormalizeTupleBeforeMatch_RescuesSubjectJitter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if es.PathType != PathTypeFast {
-		t.Fatalf("path_type = %q, want fast after pre-match normalize", es.PathType)
-	}
-	if es.Subject != "数据库连接句柄异常" {
-		t.Errorf("evidence subject = %q, want normalized 数据库连接句柄异常", es.Subject)
-	}
-	called := false
-	for _, c := range fake.Calls() {
-		if c.PromptFile == "session_normalize_tuple.md" {
-			called = true
-		}
-	}
-	if !called {
-		t.Fatal("expected session_normalize_tuple.md to be called before Match")
+	if es.PathType != PathTypeFull {
+		t.Fatalf("path_type = %q, want full — jittered subject no longer matches", es.PathType)
 	}
 }
 
-// TestRetrieve_NormalizeTuple_RejectsHardSetWrongGroup: normalize invents a
-// tuple that is not any observed group → discard and keep tuple0 (still miss).
-func TestRetrieve_NormalizeTuple_RejectsHardSetWrongGroup(t *testing.T) {
+// ── Bundle-driven multi-KP hit resolution (docs/impl/v1/retrieval.md 步骤 2's
+// Bundle-consultation branch, docs/impl/v1/activation-bundle.md 步骤 4b) ──────
+
+// TestRetrieve_FastPath_MultipleUnits_FormsCandidateBundle: extends the
+// baseline ambiguous-multi-unit case — no verified bundle covers p1/p2, so
+// falling back to slow path must have a side effect: a new candidate bundle
+// seeded from this observation, so future identical hits have Bundle
+// material to Match against.
+func TestRetrieve_FastPath_MultipleUnits_FormsCandidateBundle(t *testing.T) {
 	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
 
-	now := time.Now().UTC()
-	cond := activation.NormalizeObservedCondition(
-		"数据库连接句柄异常", "查询解决方法", "", "达梦", "", now,
-	)
-	link, err := activationSvc.CreateLink("句柄 异常", activation.LinkCondition{
-		ObservedConditions: []activation.ObservedCondition{cond},
-	}, "p1", nil)
+	question := "什么是线性方程"
+	qTerms := text.Terms(text.Normalize(question))
+	seedVerifiedLink(t, activationSvc, qTerms, "p1")
+	seedVerifiedLink(t, activationSvc, qTerms, "p2")
+
+	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "x"}]}`})
+
+	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
-		t.Fatalf("create link: %v", err)
+		t.Fatal(err)
 	}
-	if _, err := activationSvc.TransitionLink(link.LinkID, activation.StatusVerified, "test", nil); err != nil {
-		t.Fatalf("verify: %v", err)
+	if es.PathType != PathTypeFull {
+		t.Fatalf("path_type = %q, want full (no bundle covers the ambiguous hit yet)", es.PathType)
 	}
 
-	fake.SetResponse("session_normalize_tuple.md", llm.FakeResponse{Output: `{
-		"subject": "完全无关的主题",
-		"intent": "胡乱意图",
-		"audience": "",
-		"constraint": "神通"
-	}`})
+	bundles, err := activationSvc.Store().ListMatchableBundles()
+	if err != nil {
+		t.Fatalf("list bundles: %v", err)
+	}
+	if len(bundles) != 1 {
+		t.Fatalf("expected 1 candidate bundle formed from the ambiguous hit, got %d", len(bundles))
+	}
+	if bundles[0].Status != activation.BundleStatusCandidate {
+		t.Errorf("expected candidate status, got %s", bundles[0].Status)
+	}
+	got := append([]string(nil), bundles[0].MemberPointIDs()...)
+	sort.Strings(got)
+	if len(got) != 2 || got[0] != "p1" || got[1] != "p2" {
+		t.Errorf("expected member point ids [p1 p2], got %v", got)
+	}
+}
+
+// TestRetrieve_FastPath_RepeatedAmbiguousHit_ReinforcesExistingBundle_NoDuplicate:
+// the same ambiguous multi-unit hit occurring twice (no verified bundle in
+// between) must not create two candidate bundles — the second occurrence
+// appends an observed condition to the existing one instead.
+func TestRetrieve_FastPath_RepeatedAmbiguousHit_ReinforcesExistingBundle_NoDuplicate(t *testing.T) {
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
+
+	question := "什么是线性方程"
+	qTerms := text.Terms(text.Normalize(question))
+	seedVerifiedLink(t, activationSvc, qTerms, "p1")
+	seedVerifiedLink(t, activationSvc, qTerms, "p2")
+
+	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "x"}]}`})
+
+	for i := 0; i < 2; i++ {
+		if _, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil); err != nil {
+			t.Fatalf("retrieve #%d: %v", i+1, err)
+		}
+	}
+
+	bundles, err := activationSvc.Store().ListMatchableBundles()
+	if err != nil {
+		t.Fatalf("list bundles: %v", err)
+	}
+	if len(bundles) != 1 {
+		t.Fatalf("expected exactly 1 bundle after two identical ambiguous hits, got %d", len(bundles))
+	}
+	if len(bundles[0].ObservedConditions) != 1 {
+		t.Fatalf("expected the identical repeat to merge into the same observed condition group, got %d groups", len(bundles[0].ObservedConditions))
+	}
+	if bundles[0].ObservedConditions[0].SuccessCount != 2 {
+		t.Errorf("expected success_count=2 after two identical hits, got %d", bundles[0].ObservedConditions[0].SuccessCount)
+	}
+}
+
+// TestRetrieve_FastPath_VerifiedBundleCoversAmbiguousHit_TakesFastPath: a
+// verified bundle whose core members are exactly the ambiguous hit's points,
+// with observed_conditions matching this turn's four-tuple, lets the fast
+// path answer directly instead of falling back.
+func TestRetrieve_FastPath_VerifiedBundleCoversAmbiguousHit_TakesFastPath(t *testing.T) {
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
+
+	question := "什么是线性方程"
+	qTerms := text.Terms(text.Normalize(question))
+	seedVerifiedLink(t, activationSvc, qTerms, "p1")
+	seedVerifiedLink(t, activationSvc, qTerms, "p2")
+
+	now := time.Now().UTC()
+	cond := activation.NormalizeObservedCondition("线性方程", "定义", "", "", qTerms, now)
+	bundle := &activation.ActivationBundle{
+		RepresentativeTerms: "线性方程 定义",
+		ObservedConditions:  []activation.ObservedCondition{cond},
+		Members:             []activation.BundleMember{{PointID: "p1"}, {PointID: "p2"}},
+	}
+	if err := activationSvc.Store().CreateBundle(bundle); err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	if err := activationSvc.Store().UpdateBundleStatus(bundle.BundleID, activation.StatusVerified); err != nil {
+		t.Fatalf("verify bundle: %v", err)
+	}
+
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "x"}]}`})
+
+	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{
+		Question: question,
+		Subject:  "线性方程",
+		Intent:   "定义",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if es.PathType != PathTypeFast {
+		t.Fatalf("path_type = %q, want fast (verified bundle covers the ambiguous multi-unit hit)", es.PathType)
+	}
+}
+
+// TestRetrieve_FastPath_MultipleVerifiedBundles_NoConflict_MergesAndTakesFastPath:
+// two verified bundles matched independently, whose core members have no
+// contradicts relation between them (p1↔p2 is 'related' per seedTestData) —
+// merge into one point set, still fast path, no new bundle created.
+func TestRetrieve_FastPath_MultipleVerifiedBundles_NoConflict_MergesAndTakesFastPath(t *testing.T) {
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
+
+	question := "什么是线性方程"
+	qTerms := text.Terms(text.Normalize(question))
+	seedVerifiedLink(t, activationSvc, qTerms, "p1")
+	seedVerifiedLink(t, activationSvc, qTerms, "p2")
+
+	now := time.Now().UTC()
+	condA := activation.NormalizeObservedCondition("线性方程", "定义", "", "", qTerms, now)
+	bundleA := &activation.ActivationBundle{RepresentativeTerms: "A", ObservedConditions: []activation.ObservedCondition{condA}, Members: []activation.BundleMember{{PointID: "p1"}}}
+	if err := activationSvc.Store().CreateBundle(bundleA); err != nil {
+		t.Fatalf("create bundle A: %v", err)
+	}
+	if err := activationSvc.Store().UpdateBundleStatus(bundleA.BundleID, activation.StatusVerified); err != nil {
+		t.Fatalf("verify bundle A: %v", err)
+	}
+	bundleB := &activation.ActivationBundle{RepresentativeTerms: "B", ObservedConditions: []activation.ObservedCondition{condA}, Members: []activation.BundleMember{{PointID: "p2"}}}
+	if err := activationSvc.Store().CreateBundle(bundleB); err != nil {
+		t.Fatalf("create bundle B: %v", err)
+	}
+	if err := activationSvc.Store().UpdateBundleStatus(bundleB.BundleID, activation.StatusVerified); err != nil {
+		t.Fatalf("verify bundle B: %v", err)
+	}
+
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "x"}]}`})
+
+	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{
+		Question: question,
+		Subject:  "线性方程",
+		Intent:   "定义",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if es.PathType != PathTypeFast {
+		t.Fatalf("path_type = %q, want fast (two non-conflicting verified bundles merged)", es.PathType)
+	}
+
+	bundles, err := activationSvc.Store().ListMatchableBundles()
+	if err != nil {
+		t.Fatalf("list bundles: %v", err)
+	}
+	if len(bundles) != 2 {
+		t.Fatalf("expected still exactly the 2 pre-seeded bundles, no new one created by the merge, got %d", len(bundles))
+	}
+}
+
+// TestRetrieve_FastPath_ConflictingVerifiedBundles_FallsBackToSlowPath: two
+// verified bundles whose core members DO have a contradicts KPN relation
+// (p1↔p4 per seedTestData) must not be merged — ambiguous, slow path.
+func TestRetrieve_FastPath_ConflictingVerifiedBundles_FallsBackToSlowPath(t *testing.T) {
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
+
+	question := "什么是线性方程"
+	qTerms := text.Terms(text.Normalize(question))
+	seedVerifiedLink(t, activationSvc, qTerms, "p1")
+	seedVerifiedLink(t, activationSvc, qTerms, "p4")
+
+	now := time.Now().UTC()
+	cond := activation.NormalizeObservedCondition("线性方程", "定义", "", "", qTerms, now)
+	bundleA := &activation.ActivationBundle{RepresentativeTerms: "A", ObservedConditions: []activation.ObservedCondition{cond}, Members: []activation.BundleMember{{PointID: "p1"}}}
+	if err := activationSvc.Store().CreateBundle(bundleA); err != nil {
+		t.Fatalf("create bundle A: %v", err)
+	}
+	if err := activationSvc.Store().UpdateBundleStatus(bundleA.BundleID, activation.StatusVerified); err != nil {
+		t.Fatalf("verify bundle A: %v", err)
+	}
+	bundleB := &activation.ActivationBundle{RepresentativeTerms: "B", ObservedConditions: []activation.ObservedCondition{cond}, Members: []activation.BundleMember{{PointID: "p4"}}}
+	if err := activationSvc.Store().CreateBundle(bundleB); err != nil {
+		t.Fatalf("create bundle B: %v", err)
+	}
+	if err := activationSvc.Store().UpdateBundleStatus(bundleB.BundleID, activation.StatusVerified); err != nil {
+		t.Fatalf("verify bundle B: %v", err)
+	}
+
+	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "x"}]}`})
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "x"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{
-		Question:       "达梦报语句句柄个数超过上限怎么解决？",
-		Subject:        "数据库连接句柄超限",
-		Intent:         "查询解决方法",
-		Constraint:     "达梦",
-		DomainIDs:      []string{"d1"},
-		DomainResolved: true,
+		Question: question,
+		Subject:  "线性方程",
+		Intent:   "定义",
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if es.PathType != PathTypeFull {
-		t.Fatalf("path_type = %q, want full when normalize hard-set is rejected", es.PathType)
+		t.Fatalf("path_type = %q, want full (conflicting bundles must not merge)", es.PathType)
 	}
 }

@@ -22,7 +22,7 @@ type LinkCandidateRow struct {
 	HitCount       int
 	PointSummary   string
 	UnitTopic      string
-	EntryID      string
+	EntryID        string
 	ConceptName    string
 }
 
@@ -69,13 +69,13 @@ type Report struct {
 	KnowledgeGaps            []KnowledgeGapEntry       `json:"knowledge_gaps"`
 	LearningActions          LearningActionsSummary    `json:"learning_actions"`
 	CrossSourceConflicts     []CrossSourceConflict     `json:"cross_source_conflicts"`
-	EntryCandidates        EntryCandidatesSection  `json:"entry_candidates"`
+	EntryCandidates          EntryCandidatesSection    `json:"entry_candidates"`
 
 	// 两层架构扩展（docs/impl/v1/study.md 步骤 6「报告提示项」+ 步骤 7）
 	TopicSignalUnderfilled []TopicSignalUnderfilledEntry `json:"topic_signal_underfilled,omitempty"`
-	WikiDraftReflow        []WikiDraftReflowEntry       `json:"wiki_draft_reflow,omitempty"`
-	TopicDecompose         []TopicDecomposeEntry        `json:"topic_decompose,omitempty"`
-	QuestionComplexity     QuestionComplexitySection    `json:"question_complexity"`
+	WikiDraftReflow        []WikiDraftReflowEntry        `json:"wiki_draft_reflow,omitempty"`
+	TopicDecompose         []TopicDecomposeEntry         `json:"topic_decompose,omitempty"`
+	QuestionComplexity     QuestionComplexitySection     `json:"question_complexity"`
 
 	// EntrySplitSignals is report-only, same tier as
 	// OversizedTopicClusters (docs/impl/v1/wiki-generation.md 2.4, 附
@@ -93,16 +93,41 @@ type Report struct {
 	// split candidates remain deferred to V3 (docs/impl/v1/
 	// concept-evolution.md).
 	EntrySplitSignals []EntrySplitSignalEntry `json:"entry_split_signals,omitempty"`
+
+	// Convergence is the 收敛趋势 report section (docs/impl/v1/study.md 步骤
+	// 7, docs/design/activation-convergence.md 第 5 节): this cycle's
+	// confidence-width/tier snapshot plus a trend against recent prior
+	// reports — is the distribution narrowing, is the exploration-budget
+	// share going down.
+	Convergence ConvergenceSection `json:"convergence"`
+}
+
+// ConvergenceSection is generateReport's "convergence" report item.
+type ConvergenceSection struct {
+	Current ConvergenceStats `json:"current"`
+	// Trend compares Current against up to N previous reports' snapshots
+	// (oldest first), so a reader can see whether AvgWidth/WideCount/tier
+	// mix are moving in the intended direction over time rather than just
+	// seeing one point-in-time number.
+	Trend []ConvergenceTrendPoint `json:"trend"`
+}
+
+// ConvergenceTrendPoint is one historical report's convergence snapshot,
+// reduced to its ReportID/GeneratedAt plus the same ConvergenceStats shape.
+type ConvergenceTrendPoint struct {
+	ReportID    string           `json:"report_id"`
+	GeneratedAt time.Time        `json:"generated_at"`
+	Stats       ConvergenceStats `json:"stats"`
 }
 
 // EntrySplitSignalEntry is one concept whose qualifying KPs failed the
 // cohesion gate (docs/impl/v1/wiki-generation.md 2.4).
 type EntrySplitSignalEntry struct {
-	EntryID    string                    `json:"entry_id"`
-	ConceptName  string                    `json:"entry_name"`
-	Cohesion     float64                   `json:"cohesion"`
-	AspectCount  int                       `json:"aspect_count"`
-	Communities  []EntrySplitCommunity   `json:"communities"`
+	EntryID     string                `json:"entry_id"`
+	ConceptName string                `json:"entry_name"`
+	Cohesion    float64               `json:"cohesion"`
+	AspectCount int                   `json:"aspect_count"`
+	Communities []EntrySplitCommunity `json:"communities"`
 }
 
 // EntrySplitCommunity is one Louvain community found within a concept's
@@ -176,14 +201,14 @@ type QuestionComplexityGroup struct {
 // the currently pending candidates, audited alongside the window's
 // entry_gap signal volume.
 type EntryCandidatesSection struct {
-	AddCreated           int                     `json:"add_created"`
-	AddUpdated           int                     `json:"add_updated"`
-	MergeCreated         int                     `json:"merge_created"`
-	MergeUpdated         int                     `json:"merge_updated"`
-	Expired              int                     `json:"expired"`
-	EntryGapEventCount int                     `json:"entry_gap_event_count"`
-	PendingAdd           []entry.CandidateView `json:"pending_add"`
-	PendingMerge         []entry.CandidateView `json:"pending_merge"`
+	AddCreated         int                   `json:"add_created"`
+	AddUpdated         int                   `json:"add_updated"`
+	MergeCreated       int                   `json:"merge_created"`
+	MergeUpdated       int                   `json:"merge_updated"`
+	Expired            int                   `json:"expired"`
+	EntryGapEventCount int                   `json:"entry_gap_event_count"`
+	PendingAdd         []entry.CandidateView `json:"pending_add"`
+	PendingMerge       []entry.CandidateView `json:"pending_merge"`
 }
 
 // CrossSourceConflict is a read-only, display-only entry (docs/impl/v1/kpn.md
@@ -232,7 +257,7 @@ type ActivationLinkCandidate struct {
 	PointID        string              `json:"point_id"`
 	PointSummary   string              `json:"point_summary"`
 	UnitTopic      string              `json:"unit_topic"`
-	EntryID      string              `json:"entry_id"`
+	EntryID        string              `json:"entry_id"`
 	ConceptName    string              `json:"entry_name"`
 	Stats          ActivationLinkStats `json:"stats"`
 	Recommendation string              `json:"recommendation"`
@@ -250,7 +275,7 @@ type ActivationLinkStats struct {
 }
 
 type WikiCandidate struct {
-	EntryID          string                `json:"entry_id"`
+	EntryID            string                `json:"entry_id"`
 	ConceptName        string                `json:"entry_name"`
 	DomainID           string                `json:"domain_id"`
 	QualifyingPointIDs []string              `json:"qualifying_point_ids"`
@@ -309,16 +334,19 @@ type RunResult struct {
 // this cycle's learning actions did (docs/impl/v1/study.md 步骤 7).
 type LearningActionsSummary struct {
 	CreatedCandidates int `json:"created_candidates"`
-	Promoted          int `json:"promoted"`
-	PendingPromotions int `json:"pending_promotions"`
-	Weakened          int `json:"weakened"`
-	Reverified        int `json:"reverified"`
-	Deprecated        int `json:"deprecated"`
+	// Promoted/PendingPromotions/Weakened/Reverified/Deprecated removed
+	// (2026-08-13, docs/design/activation-convergence.md 第 9 节): no more
+	// discrete state transitions to count — replaced by PrunedConditions
+	// below (docs/impl/v1/study.md 步骤 3「收敛剪枝」).
 	// SynonymCandidatesCreated counts subject_synonyms rows created this cycle
 	// (candidate or, when synonym_auto_promote=true, active) from
 	// subject_synonym_gap aggregation (docs/impl/v1/study.md 步骤 2a).
-	SynonymCandidatesCreated int                   `json:"synonym_candidates_created"`
-	Actions                  []LearningActionEntry `json:"actions"`
+	SynonymCandidatesCreated int `json:"synonym_candidates_created"`
+	// PrunedConditions is the total number of observed_conditions entries
+	// removed this cycle across all links by pruneConditions (docs/impl/v1/
+	// study.md 步骤 3).
+	PrunedConditions int                   `json:"pruned_conditions"`
+	Actions          []LearningActionEntry `json:"actions"`
 }
 
 type LearningActionEntry struct {

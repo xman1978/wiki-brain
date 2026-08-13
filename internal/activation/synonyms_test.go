@@ -131,7 +131,7 @@ func TestService_ConfirmRejectSynonym(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	matcher := NewMatcher(store)
-	svc := NewService(store, matcher)
+	svc := newTestService(store, matcher)
 
 	syn, err := svc.CreateSynonymCandidate("", "term-a", "canon-a", nil)
 	if err != nil {
@@ -161,5 +161,41 @@ func TestService_ConfirmRejectSynonym(t *testing.T) {
 	}
 	if rejected.Status != SynonymStatusRejected {
 		t.Errorf("status = %q, want rejected", rejected.Status)
+	}
+}
+
+// TestService_RejectSynonym_ActiveRow: 2026-08-12 — reject must also accept
+// status=active, not just candidate, since synonym_auto_promote now defaults
+// true and most gap_mined rows land directly on active.
+func TestService_RejectSynonym_ActiveRow(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	matcher := NewMatcher(store)
+	svc := newTestService(store, matcher)
+
+	syn, err := svc.CreateSynonymCandidate("", "term-c", "canon-c", nil)
+	if err != nil {
+		t.Fatalf("create candidate: %v", err)
+	}
+	active, err := svc.ConfirmSynonym(syn.SynonymID)
+	if err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if active.Status != SynonymStatusActive {
+		t.Fatalf("status = %q, want active", active.Status)
+	}
+
+	rejected, err := svc.RejectSynonym(syn.SynonymID)
+	if err != nil {
+		t.Fatalf("reject active row: %v", err)
+	}
+	if rejected.Status != SynonymStatusRejected {
+		t.Errorf("status = %q, want rejected", rejected.Status)
+	}
+
+	// Rejected rows are terminal — a second reject must fail, not silently
+	// succeed (no auto-revival).
+	if _, err := svc.RejectSynonym(syn.SynonymID); err == nil {
+		t.Error("expected reject on an already-rejected row to fail")
 	}
 }

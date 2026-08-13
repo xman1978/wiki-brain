@@ -266,7 +266,7 @@ Learning Event 是问题处理后产生的学习事件。
 
 Trace 是 Learning Event 的记录形式，详见 `docs/design/trace.md`。
 
-它只记录对长期记忆有价值的事件和结果，不记录完整思考过程。例如：激活路径是否成功、是否存在认知缺口、用户是否纠正、是否发现知识冲突、是否形成候选 ActivationLink、是否需要调整 Concept 或 Wiki、是否需要重新验证某个 KnowledgePoint。
+它只记录对长期记忆有价值的事件和结果，不记录完整思考过程。例如：激活路径是否成功、是否存在认知缺口、用户是否纠正、是否发现知识冲突、是否观测到新的 ActivationLink 使用条件、是否需要调整 Concept 或 Wiki、是否需要重新验证某个 KnowledgePoint。
 
 边界说明：
 
@@ -325,7 +325,7 @@ Wiki 页面：      Claim 集合的可读投影，负责长期阅读与维护。
 对认知系统（认知路由、Working Model、推理模式）而言，各层的消费规则是：
 
 ```text
-找 / 浅想可以直接引用 verified 链接与稳定 Claim，并携带回链；
+找 / 浅想可以直接引用置信度已越过服务门槛的链接与稳定 Claim，并携带回链；
 深想的槽位以片段级证据为主要填充物，Claim 是候选之一而非唯一依据；
 高风险、高冲突、高时效问题必须回到 KnowledgePoint / KnowledgeUnit 层取证，
   不得只停留在 Claim 或页面层；
@@ -515,7 +515,7 @@ Knowledge Brain 不追求保存每次问题处理的完整思考过程。
 
 系统只在出现学习价值时记录 Learning Event。没有学习价值的问题处理，可以不生成 Trace，也不阻塞回答流程。
 
-**有效学习不依赖用户持续纠正。** 主学习燃料来自每次问答中自然产生的检索事件：`activation_success`（路径命中且知识被采用）、`activation_failure`（路径命中但未支撑有效回答）、`activation_gap`（无合适路径但补充查找找到被采用的知识）。这些事件自动产生；Study 通过跨次累积（`repeated_success` / `repeated_failure`）驱动 ActivationLink 的形成、强化、降权和淘汰。`user_correction` 是高价值补充信号，可加速边界修正，但不是演化的前提。详见 `study.md` 第 2 节与 `trace.md`。
+**有效学习不依赖用户持续纠正。** 主学习燃料来自每次问答中自然产生的检索事件：`activation_success`（路径命中且知识被采用）、`activation_failure`（路径命中但未支撑有效回答）、`activation_gap`（无合适路径但补充查找找到被采用的知识）。这些事件自动产生；Study 通过跨次累积（`repeated_success` / `repeated_failure`）持续校准每条 ActivationLink 使用条件自己的置信度，使其分布逐渐收窄（机制见 `activation-convergence.md`）。`user_correction` 是高价值补充信号，可加速边界修正，但不是演化的前提。详见 `study.md` 第 2 节与 `trace.md`。
 
 Learning Event 关注的事实信号包括：
 
@@ -536,7 +536,7 @@ Learning Event 关注的事实信号包括：
 是否出现用户纠正（user_correction）。
 ```
 
-Study 根据 Learning Event 调整长期记忆，尤其是 ActivationLink 的强化、降权、淘汰和候选形成；在结构信号足够稳定时，也可提炼候选实践路径，作为深想内可复用的快路径。详见 `study.md`。
+Study 根据 Learning Event 调整长期记忆，尤其是持续校准 ActivationLink 每条使用条件的置信度、新增观测；在结构信号足够稳定时，也可提炼候选实践路径，作为深想内可复用的快路径。详见 `study.md`。
 
 完整复盘——例如为什么一次任务失败、如何改进行动策略——属于 Agent Runtime，不属于 Knowledge Brain 的核心职责。
 
@@ -600,9 +600,9 @@ Study 根据 Learning Event 调整长期记忆，尤其是 ActivationLink 的强
 
 系统在多个层面需要质量控制：
 
-**ActivationLink 需要验证、降权和淘汰**
+**ActivationLink 需要持续被证据校准置信度**
 
-链接不是「被使用过」就会自动稳定。candidate 只能辅助探索，verified 需要持续校验，weakened、conflicted 和 deprecated 都不应作为当前首选激活路径。Study 的目标是筛选和淘汰链接，而不是让链接数量无限增长。
+链接不是「被使用过」就会自动稳定。每条使用条件各自维护一条连续的置信度分布，而不是共享链接整体的一个状态标签（机制见 `activation-convergence.md`）：置信度不足的只能辅助探索，越过服务门槛的也需要持续校验，命中 KPN contradicts 关系覆盖的知识点时不应作为当前首选依据。Study 的目标是让高置信度的使用条件更少、更准，而不是让链接数量无限增长。
 
 **认知路由需要由程序信号约束**
 

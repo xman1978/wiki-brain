@@ -101,9 +101,14 @@ func seedLearningEvent(t *testing.T, db *sql.DB, eventID, traceID, eventType, pa
 }
 
 // seedVerifiedActivationLink seeds a minimal activation_links row with
-// status=verified for pointID — the "多次验证" gate that
-// QualifyingKPsByEntryFromCandidates now requires (docs/design/
-// wiki-compilation.md "反复激活、多次验证、持续采用不是命中次数").
+// status=verified for pointID — the qualifying gate for
+// QualifyingKPsByEntryFromCandidates (docs/design/wiki-compilation.md
+// "反复激活、多次验证、持续采用不是命中次数"). 2026-08-12: this alone is
+// now sufficient for qualifying — a separate human wiki_material_confirm
+// gate was removed because, without knowing which Wiki topic a KP would
+// serve, a human can't meaningfully judge admission ahead of time; that
+// judgment now happens at Wiki compile time instead (docs/impl/v1/wiki.md
+// 步骤 3/8).
 func seedVerifiedActivationLink(t *testing.T, db *sql.DB, linkID, pointID string) {
 	t.Helper()
 	_, err := db.Exec(`INSERT INTO activation_links (link_id, question_terms, point_id, status)
@@ -135,12 +140,14 @@ func TestScanCandidates_Basic(t *testing.T) {
 	seedKP(t, db, "kp1", "ku1", "src1", "point content 1")
 	seedKP(t, db, "kp2", "ku1", "src1", "point content 2")
 
-	// kp1: confident_count=6, hit_count=8 → ratio 0.75 ≥ 0.6 ✓, confident ≥ 5 ✓
+	// kp1: confident_count=6, hit_count=8 → mean_pre=(6+1)/(8+2)=0.70 ≥ 0.55 ✓,
+	// width_pre=0.70*0.30/11≈0.019 ≤ 0.03 ✓
 	seedCooccurrence(t, db, "golang 并发", "kp1", 8, 6)
-	// kp2: confident_count=3, hit_count=5 → ratio 0.6 ✓, but confident < 5 ✗
+	// kp2: confident_count=3, hit_count=5 → mean_pre=(3+1)/(5+2)≈0.571 ≥ 0.55 ✓,
+	// but width_pre=0.571*0.429/8≈0.031 > 0.03 ✗ (sample too small to be confident)
 	seedCooccurrence(t, db, "python 异步", "kp2", 5, 3)
 
-	count, err := store.ScanCandidates(5, 0.6, 200)
+	count, err := store.ScanCandidates(0.55, 0.03, 200)
 	if err != nil {
 		t.Fatalf("ScanCandidates: %v", err)
 	}
@@ -174,13 +181,13 @@ func TestScanCandidates_Upsert(t *testing.T) {
 	seedCooccurrence(t, db, "terms1", "kp1", 10, 7)
 
 	// First scan
-	store.ScanCandidates(5, 0.6, 200)
+	store.ScanCandidates(0.55, 0.03, 200)
 
 	// Update cooccurrence
 	db.Exec(`UPDATE question_kp_cooccurrence SET confident_count = 9, hit_count = 12 WHERE point_id = 'kp1'`)
 
 	// Second scan should update
-	count, err := store.ScanCandidates(5, 0.6, 200)
+	count, err := store.ScanCandidates(0.55, 0.03, 200)
 	if err != nil {
 		t.Fatalf("ScanCandidates upsert: %v", err)
 	}
@@ -199,7 +206,7 @@ func TestScanCandidates_Empty(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 
-	count, err := store.ScanCandidates(5, 0.6, 200)
+	count, err := store.ScanCandidates(0.55, 0.03, 200)
 	if err != nil {
 		t.Fatalf("ScanCandidates empty: %v", err)
 	}

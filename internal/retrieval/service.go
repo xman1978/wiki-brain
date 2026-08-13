@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"os"
 	"sort"
 	"strings"
@@ -25,15 +26,59 @@ import (
 )
 
 type Service struct {
-	store         *Store
-	llmClient     llm.LLMClient
-	unitsIndex    bleve.Index
-	pointsIndex   bleve.Index
-	outlinesIndex bleve.Index
-	cfg           *config.Config
-	activationSvc *activation.Service
-	evidenceSvc   *evidence.Service
-	wikiSvc       *wiki.Service
+	store              *Store
+	llmClient          llm.LLMClient
+	unitsIndex         bleve.Index
+	pointsIndex        bleve.Index
+	outlinesIndex      bleve.Index
+	cfg                *config.Config
+	activationSvc      *activation.Service
+	evidenceSvc        *evidence.Service
+	wikiSvc            *wiki.Service
+	auditWriter        AuditOutcomeWriter
+	synthesisWriter    SynthesisOutcomeWriter
+	synthesisRandFloat func() float64
+}
+
+// AuditOutcomeWriter is implemented by trace.Service — mirrors the
+// cross-package notification interface shape already used elsewhere in this
+// codebase (unit.ActivationNotifier, activation.WikiNotifier): the interface
+// is defined in the consumer package (retrieval), the producer package
+// (trace) satisfies it structurally, and main.go wires the two together with
+// a setter. It's the hand-off target for the independent-verification audit
+// trial (docs/impl/v1/retrieval.md 步骤 2c) — Retrieval triggers the trial and
+// hands the independently-derived comparison inputs to Trace, which owns the
+// comparison-outcome bookkeeping (activation_audit_success/failure events +
+// activation.RecordAuditOutcome, docs/impl/v1/trace.md 步骤 3b).
+type AuditOutcomeWriter interface {
+	WriteAuditOutcome(linkID, pointID, subject, intent, audience, constraint string, agree bool, slowPathDirectPointIDs []string) error
+}
+
+// SetAuditOutcomeWriter wires the audit-trial hand-off target (usually
+// *trace.Service). Unset means audit trials never fire — nil-safe, mirrors
+// how other optional notifier fields in this codebase are called
+// defensively.
+func (s *Service) SetAuditOutcomeWriter(w AuditOutcomeWriter) {
+	s.auditWriter = w
+}
+
+// SynthesisOutcomeWriter is implemented by *trace.Service — mirrors
+// AuditOutcomeWriter's shape, the hand-off target for Wiki's
+// synthesis-satisfaction axis independent-verification trial
+// (docs/impl/v1/wiki.md 步骤 4a, reusing retrieval.md 步骤 2c's exact
+// orchestration). Retrieval triggers the trial (it already has both wikiSvc
+// and the slow-path retrieval wiki.Service can't reach without an import
+// cycle) and hands the comparison to Trace, which owns the event/counter
+// bookkeeping.
+type SynthesisOutcomeWriter interface {
+	WriteSynthesisOutcome(pageID, auditedTraceQuestion string, slowPathDirectPointIDs []string, agree bool) error
+}
+
+// SetSynthesisOutcomeWriter wires the synthesis-audit-trial hand-off target
+// (usually *trace.Service). Unset means synthesis audit trials never fire —
+// nil-safe, mirrors SetAuditOutcomeWriter.
+func (s *Service) SetSynthesisOutcomeWriter(w SynthesisOutcomeWriter) {
+	s.synthesisWriter = w
 }
 
 const (
@@ -43,15 +88,16 @@ const (
 
 func NewService(store *Store, llmClient llm.LLMClient, unitsIdx, pointsIdx, outlinesIdx bleve.Index, cfg *config.Config, activationSvc *activation.Service, evidenceSvc *evidence.Service, wikiSvc *wiki.Service) *Service {
 	return &Service{
-		store:         store,
-		llmClient:     llmClient,
-		unitsIndex:    unitsIdx,
-		pointsIndex:   pointsIdx,
-		outlinesIndex: outlinesIdx,
-		cfg:           cfg,
-		activationSvc: activationSvc,
-		evidenceSvc:   evidenceSvc,
-		wikiSvc:       wikiSvc,
+		store:              store,
+		llmClient:          llmClient,
+		unitsIndex:         unitsIdx,
+		pointsIndex:        pointsIdx,
+		outlinesIndex:      outlinesIdx,
+		cfg:                cfg,
+		activationSvc:      activationSvc,
+		evidenceSvc:        evidenceSvc,
+		wikiSvc:            wikiSvc,
+		synthesisRandFloat: rand.Float64,
 	}
 }
 
@@ -129,6 +175,13 @@ func (s *Service) tryWikiAnswer(ctx context.Context, qc QueryContext) (*Evidence
 	if !ok {
 		return nil, skeletonPageID, skeletonMembers, false
 	}
+
+	// docs/impl/v1/wiki.md 步骤 4a: after a Wiki direct answer has been
+	// successfully served, sample synthesis_audit_rate and, on a hit, launch
+	// a detached background independent-verification trial — same
+	// "async, never blocks the response" shape as launchAuditTrials (步骤 2c).
+	s.launchSynthesisAuditTrial(ctx, qc, result.PageID)
+
 	return &EvidenceSet{
 		Question:          qc.Question,
 		Subject:           qc.Subject,
@@ -283,10 +336,27 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 	matchCfg := activation.MatchConfig{
 		MatchTop: s.cfg.Retrieval.ActivationMatchTop,
 	}
-	// Align Session tuple to domain verified observed_conditions BEFORE Match
-	// (plan-parser-vocab + P3 jitter fix): reuse group names when the question
-	// clearly matches a known group; reject hard-sets that don't align.
-	workQC := s.maybeNormalizeQueryBeforeMatch(ctx, qc)
+	// 问题四元组归一化（2026-08-12 新增，config.Retrieval.QuestionTupleNormEnabled
+	// 门控，默认关闭）：session_normalize_tuple 曾经在这里做过一次盲改四元组再
+	// 赌重新匹配的二次规范化调用，已于 2026-08-12 废弃；这里恢复的是一个不同的
+	// 机制——四层递进（精确匹配 → 本地词集 Jaccard 相似度 → 向量早筛，仅拒绝不
+	// 单独确认 → LLM 批量判断），只在前两层免费的程序判断都未命中、且向量层
+	// （若启用）未提前拒绝时，才在双重未命中的情况下多付一次 LLM 调用。三个消
+	// 费入口（activation.Matcher/BundleMatcher、wiki.matchFourTupleEntry）本身
+	// 仍是纯精确匹配，不受影响——这里只改变喂给它们的四元组。详见
+	// docs/impl/v1/retrieval.md 步骤 2。
+	workQC := qc
+	if s.cfg.Retrieval.QuestionTupleNormEnabled && qc.DomainResolved && len(qc.DomainIDs) > 0 {
+		normSubject, normIntent, normAudience, normConstraint, err := s.activationSvc.NormalizeTuple(ctx, qc.DomainIDs, qc.Subject, qc.Intent, qc.Audience, qc.Constraint)
+		if err != nil {
+			slog.Warn("retrieval: question tuple normalization failed, using raw session tuple", "error", err)
+		} else {
+			workQC.Subject = normSubject
+			workQC.Intent = normIntent
+			workQC.Audience = normAudience
+			workQC.Constraint = normConstraint
+		}
+	}
 	expandedQuery := session.ExpandedQuery{
 		ExpandedQuestion: workQC.Question,
 		Subject:          workQC.Subject,
@@ -294,7 +364,7 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 		Audience:         workQC.Audience,
 		Constraint:       workQC.Constraint,
 	}
-	matches, err := s.activationSvc.Match(expandedQuery, matchCfg)
+	matches, err := s.activationSvc.Match(ctx, expandedQuery, matchCfg)
 	if err != nil {
 		slog.Warn("retrieval: activation match failed, falling back to slow path", "error", err)
 		return nil, nil, false
@@ -310,19 +380,175 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 	}
 
 	linkIDs, pointIDs := verifiedIDs(verified)
-	hits, unitOK := s.resolveSingleUnitHits(pointIDs, linkIDs, activationHits)
-	if !unitOK {
+
+	hits, unitStatus := s.resolveUnitsForPoints(pointIDs, linkIDs)
+	switch unitStatus {
+	case unitResolutionFailed:
 		return nil, activationHits, false
+	case unitResolutionAmbiguous:
+		bundleHits, bundleOK := s.resolveBundleForAmbiguousHits(ctx, workQC, expandedQuery, matchCfg, linkIDs, pointIDs)
+		if !bundleOK {
+			return nil, activationHits, false
+		}
+		hits = bundleHits
 	}
 
 	// Async, non-blocking — touch every verified link that contributed to the
-	// single-unit hit (same KU, possibly multiple points).
+	// resolved hit (same KU, or Bundle-resolved across units).
 	go func() {
 		if err := s.activationSvc.TouchLastUsed(linkIDs); err != nil {
 			slog.Warn("retrieval: touch last used failed", "error", err)
 		}
 	}()
 
+	es, resultHits, ok := s.finishFastPath(ctx, workQC, hits, linkIDs, activationHits)
+	if ok {
+		// docs/impl/v1/retrieval.md 步骤 2c: fire after the fast-path answer is
+		// fully assembled and about to be handed back — non-blocking, same
+		// "async, detached from the response path" shape as the TouchLastUsed
+		// goroutine above, just triggered from the caller's return point
+		// instead of before it since audit sampling is decided per-hit
+		// (activationHits, not just the linkIDs that resolved a KU).
+		s.launchAuditTrials(workQC, resultHits)
+	}
+	return es, resultHits, ok
+}
+
+// launchAuditTrials implements docs/impl/v1/retrieval.md 步骤 2c: for every
+// hit Match() marked AuditSampled=true, run an independent slow-path
+// retrieval in the background and hand the comparison to auditWriter. Never
+// blocks or delays the caller — each trial is its own goroutine, detached
+// from the request's context (a canceled request context would otherwise
+// abort the trial the instant the HTTP response finishes).
+func (s *Service) launchAuditTrials(qc QueryContext, hits []ActivationHit) {
+	if s.auditWriter == nil {
+		return
+	}
+	for _, h := range hits {
+		if !h.AuditSampled {
+			continue
+		}
+		hit := h
+		go s.runAuditTrial(qc, hit)
+	}
+}
+
+// runAuditTrial runs one independent-verification trial: a full forced
+// slow-path retrieval (reusing RetrieveSlowPathWithProgress as-is — no new
+// prompt, no new LLM call type, per docs/impl/v1/retrieval.md 步骤 2c's
+// "复用已有的慢路径，不新增 prompt"), then compares its independently-derived
+// DirectEvidence point_ids against the fast-path hit's point_id. Any failure
+// running the slow path itself (error, timeout) is logged and dropped —
+// "宁可少一次审计样本，也不能把一次基础设施故障误记成独立核实的否定结论" — no
+// WriteAuditOutcome call happens in that case.
+func (s *Service) runAuditTrial(qc QueryContext, hit ActivationHit) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	es, err := s.RetrieveSlowPathWithProgress(ctx, qc, nil)
+	if err != nil {
+		slog.Warn("retrieval: audit trial slow path failed, dropping sample",
+			"link_id", hit.LinkID, "point_id", hit.PointID, "error", err)
+		return
+	}
+
+	var slowPathDirectPointIDs []string
+	for _, ev := range es.DirectEvidence {
+		slowPathDirectPointIDs = append(slowPathDirectPointIDs, ev.PointID)
+	}
+	agree := false
+	for _, pid := range slowPathDirectPointIDs {
+		if pid == hit.PointID {
+			agree = true
+			break
+		}
+	}
+
+	if err := s.auditWriter.WriteAuditOutcome(hit.LinkID, hit.PointID, hit.Subject, hit.Intent, hit.Audience, hit.Constraint, agree, slowPathDirectPointIDs); err != nil {
+		slog.Warn("retrieval: write audit outcome failed", "link_id", hit.LinkID, "point_id", hit.PointID, "error", err)
+	}
+}
+
+// launchSynthesisAuditTrial implements docs/impl/v1/wiki.md 步骤 4a: after a
+// Wiki direct answer has been served, sample wiki.synthesis_audit_rate and,
+// on a hit, run the trial in a detached background goroutine — never blocks
+// or delays the caller, mirroring launchAuditTrials/runAuditTrial exactly.
+func (s *Service) launchSynthesisAuditTrial(ctx context.Context, qc QueryContext, pageID string) {
+	if s.synthesisWriter == nil || pageID == "" {
+		return
+	}
+	rate := s.cfg.Wiki.SynthesisAuditRate
+	if rate <= 0 {
+		return
+	}
+	randFloat := s.synthesisRandFloat
+	if randFloat == nil {
+		randFloat = rand.Float64
+	}
+	if randFloat() >= rate {
+		return
+	}
+	go s.runSynthesisAuditTrial(qc, pageID)
+}
+
+// runSynthesisAuditTrial runs one independent-verification trial for the
+// synthesis-satisfaction axis: a full forced slow-path retrieval (reusing
+// RetrieveSlowPathWithProgress as-is, same "复用已有的慢路径，不新增 prompt"
+// discipline as runAuditTrial), then checks whether its independently-derived
+// DirectEvidence point_ids intersect the served page's source_point_ids
+// (docs/impl/v1/wiki.md 步骤 4a's exact comparison — page scope, not a single
+// point_id match like ActivationLink/Bundle's audit). Any failure running the
+// slow path itself, or reading the page, is logged and dropped — no
+// WriteSynthesisOutcome call happens in that case.
+func (s *Service) runSynthesisAuditTrial(qc QueryContext, pageID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	if s.wikiSvc == nil {
+		return
+	}
+	page, err := s.wikiSvc.GetPage(pageID)
+	if err != nil || page == nil {
+		slog.Warn("retrieval: synthesis audit trial page lookup failed, dropping sample", "page_id", pageID, "error", err)
+		return
+	}
+	var scopeIDs []string
+	if err := json.Unmarshal([]byte(page.SourcePointIDs), &scopeIDs); err != nil {
+		slog.Warn("retrieval: synthesis audit trial page source_point_ids unmarshal failed, dropping sample", "page_id", pageID, "error", err)
+		return
+	}
+	scope := make(map[string]bool, len(scopeIDs))
+	for _, pid := range scopeIDs {
+		scope[pid] = true
+	}
+
+	es, err := s.RetrieveSlowPathWithProgress(ctx, qc, nil)
+	if err != nil {
+		slog.Warn("retrieval: synthesis audit trial slow path failed, dropping sample", "page_id", pageID, "error", err)
+		return
+	}
+
+	var slowPathDirectPointIDs []string
+	agree := false
+	for _, ev := range es.DirectEvidence {
+		slowPathDirectPointIDs = append(slowPathDirectPointIDs, ev.PointID)
+		if scope[ev.PointID] {
+			agree = true
+		}
+	}
+
+	if err := s.synthesisWriter.WriteSynthesisOutcome(pageID, qc.Question, slowPathDirectPointIDs, agree); err != nil {
+		slog.Warn("retrieval: write synthesis outcome failed", "page_id", pageID, "error", err)
+	}
+}
+
+// finishFastPath implements docs/impl/v1/retrieval.md 步骤 2's shared
+// candidate-building → KPN expand → evidence build → verify tail, reused by
+// both the single-unit hit path and the Bundle-resolved (possibly
+// multi-unit) hit path — this block never assumed single-unit internally, it
+// only ever received a single-unit hits list because the caller gated on it
+// upstream.
+func (s *Service) finishFastPath(ctx context.Context, workQC QueryContext, hits []DirectHit, linkIDs []string, activationHits []ActivationHit) (*EvidenceSet, []ActivationHit, bool) {
 	if !s.cfg.Retrieval.FastPath {
 		return nil, activationHits, false
 	}

@@ -13,6 +13,7 @@ think.md          总体思想与核心闭环
   -> unit.md       知识单元与知识点
   -> kpn.md        KnowledgePoint Network 激活与扩展边界
   -> precompile.md 导入阶段 vs 使用阶段；ActivationLink
+  -> activation-bundle.md  组合激活路径（熟路）
   -> cognitive-routing.md  认知路由与问题分流
   -> knowledge-processing-pattern.md  领域知识加工模式与证据槽位
   -> retrieval.md  分层检索与证据查找
@@ -36,6 +37,7 @@ think.md          总体思想与核心闭环
 | [unit.md](./unit.md) | 知识单元 | 定义知识单元与知识点的区别；说明如何从材料形成最小完整知识包，以及如何保留来源位置以支持追溯；定义 KnowledgePoint Network（KPN）作为知识点间的轻量上下文补充层。 |
 | [kpn.md](./kpn.md) | KnowledgePoint Network 设计 | 定义 KPN 的定位、激活边界、扩展边界和停止条件；说明 KPN 与 Concept、KnowledgePoint、ActivationLink 的职责边界。 |
 | [precompile.md](./precompile.md) | 初始激活结构 | 区分导入阶段形成的材料侧知识，与使用阶段形成的认知侧结构；说明领域、概念、ActivationLink 为何来自使用而非导入；定义 ActivationLink 的目标形态——认知入口规则（触发条件 + 认知条件 → 知识点及建议槽位角色），以及多链接身份与条件的来源置信约束。 |
+| [activation-bundle.md](./activation-bundle.md) | 组合激活路径（熟路） | 定义 ActivationBundle（熟路）：一组知识点在反复回答同一类问题过程中显影出的稳定组合，补上 ActivationLink 只覆盖单点、覆盖不到「问题需要综合多个知识点」这一半认知结构的缺口；说明熟路如何从真实问答中显影、如何被信任与修正，以及与 ActivationLink、Wiki 沉淀的分工边界。 |
 | [cognitive-routing.md](./cognitive-routing.md) | 认知路由 | 定义找 / 浅想 / 深想三条处理路径及其判据；说明"找 -> 浅想 -> 深想"的单向升级链与程序化升级信号；定义约束深想扩展的固定处理上限。 |
 | [knowledge-processing-pattern.md](./knowledge-processing-pattern.md) | 知识加工模式 | 定义领域相关的知识组织模板与证据槽位；说明模式为何前置于检索以跨越词汇鸿沟；说明槽位填充如何承担知识转换、缺口暴露和关系发现；说明模式挂载 Domain/Concept 与库演化。 |
 | [retrieval.md](./retrieval.md) | 知识激活与证据检索 | 描述 ActivationLink、目录结构树、全文检索和外部证据的分层检索路径；说明知识加工模式槽位如何驱动召回扩展；说明 KPN 如何在核心知识点召回后做局部上下文补充；说明认知结构检索与补充查找如何协作。 |
@@ -61,6 +63,7 @@ flowchart TB
   unit["unit.md<br/>知识单元"]
   kpn["kpn.md<br/>KPN 设计"]
   precompile["precompile.md<br/>初始激活结构"]
+  bundle["activation-bundle.md<br/>组合激活路径（熟路）"]
 
   routing["cognitive-routing.md<br/>认知路由"]
   kpp["knowledge-processing-pattern.md<br/>知识加工模式"]
@@ -94,6 +97,11 @@ flowchart TB
   precompile --> retrieval
   precompile --> study
   precompile --> wiki
+  precompile --> bundle
+  bundle --> retrieval
+  bundle --> study
+  bundle --> wiki
+  study --> bundle
 
   routing --> kpp
   routing --> rp
@@ -142,22 +150,23 @@ flowchart TB
 - `source.md` → `unit.md`：外部材料规范化后，形成可追溯的知识单元和知识点，以及知识点间的轻量 KPN 连接。
 - `unit.md` → `kpn.md`：KPN 定义知识点间上下文补充的激活、扩展和停止边界。
 - `unit.md` → `precompile.md`：知识单元是长期记忆的基础；导入阶段只形成材料侧结构和初始线索。
+- `precompile.md` → `activation-bundle.md`：ActivationLink 覆盖单个知识点的可信度；熟路在此基础上覆盖「一组知识点合在一起是否可信」，两者共享同一份真实使用信号，粒度不同、不互相替代。
 
 **问题处理**
 
 - `cognitive-routing.md` 把问题路由到找、浅想或深想路径，并调度后续环节；升级由程序信号触发。
 - `knowledge-processing-pattern.md` 在问题理解阶段按领域给出知识组织结构与证据槽位：槽位驱动检索扩展（跨越词汇鸿沟）、承载知识转换、以填充率定义证据充分性；模式实例是 Working Model 的骨架。
 - `reasoning-pattern.md` 在填充完成的 Working Model 上执行领域无关的推理形式（演绎/归纳/因果/比较/决策/编排）；工程形态是推理脚手架（步骤模板 + 输出契约 + 程序检查），结论必须回链槽位证据。
-- `retrieval.md` 在 ActivationLink、目录结构树、全文检索和外部证据之间分层召回；核心 KnowledgePoint 确定后，在 Working Model 需要时由 KPN 做局部上下文补充。
+- `retrieval.md` 在 Wiki 直答、熟路、ActivationLink、目录结构树、全文检索和外部证据之间分层召回；核心 KnowledgePoint 确定后，在 Working Model 需要时由 KPN 做局部上下文补充。
 - `evidence-mining.md` 在 Rerank 之后把知识单元粒度的候选加工为片段粒度的证据：逐字摘选、程序校验、可回链来源；有模式时按槽位定向摘选。
 - `working-model.md` 承接深想路径，把激活结果和证据组织为本次思考结构；其完整内容不默认进入 Trace。
 
 **学习与沉淀**
 
 - `trace.md` 仅在产生学习价值时记录 Learning Event，是 Study 的事实样本来源；**检索事件（activation_success / failure / gap）是主驱动，不依赖用户纠正**。
-- `study.md` 根据 Learning Event 调整长期记忆，不是复盘每次回答或完整推理过程；**ActivationLink 演化主要由检索事件累积驱动**。
+- `study.md` 根据 Learning Event 调整长期记忆，不是复盘每次回答或完整推理过程；**ActivationLink 演化主要由检索事件累积驱动**；同一批检索事件按问题类型归并后，也是熟路显影与巩固的依据。
 - `concept-evolution.md` 承接 Study 的认知层结构信号：候选概念自动识别，新增、合并与拆分由人工确认后执行，挂载的链接、模式和 Wiki 标记随概念迁移。
-- `wiki.md` 是表达层学习的产物；Wiki 更新由 Study 根据 Learning Event 驱动，而非完整 Trace。
+- `wiki.md` 是表达层学习的产物；Wiki 更新由 Study 根据 Learning Event 驱动，而非完整 Trace；识别哪类问题值得立传与识别熟路共用同一次真实问答观察，熟路的稳定组合也是判断沉淀范围与材料可靠度的参考依据之一。
 
 **横切：生命周期**
 
@@ -171,7 +180,7 @@ flowchart TB
 外部材料（source）
   -> 知识单元和知识点（unit）
   -> KnowledgePoint Network 补充上下文（unit / kpn / retrieval）
-  -> 使用中形成 ActivationLink（precompile / study）
+  -> 使用中形成 ActivationLink 与熟路（precompile / activation-bundle / study）
   -> 认知路由：找 / 浅想 / 深想（cognitive-routing）
   -> 知识加工模式识别与证据槽位生成（knowledge-processing-pattern，深想）
   -> 分层检索与证据查找（retrieval）
@@ -192,6 +201,8 @@ Only if learning value exists:
 
 ```text
 ActivationLink 负责找到知识，并建议其在 Working Model 中的用途；
+熟路（ActivationBundle）负责找到「一组经常配合出现的知识」，
+  只服务于问题确实需要综合多个知识点的场景；
 KPN 负责补充上下文；
 Knowledge Processing Pattern 负责给出领域知识结构；
 Evidence Mining 负责摘选证据；
@@ -208,6 +219,9 @@ Wiki 负责长期表达沉淀，是 Claim 集合的可读投影。
 ```text
 KPN 是上下文补充层，不是主检索层；
 ActivationLink 仍然是正式认知激活路径；
+熟路是 ActivationLink 的补充而非替代，只覆盖「多知识点组合」这一半场景，
+  且和 ActivationLink 一样持续接受真实使用检验：证伪时置信度持续走低，
+  无人问津时少有机会被试探，但从不被强制清零或移除；
 Trace 不是每次问答的必经步骤，不记录完整思考过程；
 Study 是长期记忆学习机制，不是思考复盘系统；
 Knowledge Brain 专注于知识经验累积，不承担完整人类反思与任务复盘。

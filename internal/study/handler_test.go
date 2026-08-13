@@ -14,15 +14,20 @@ func setupHandler(t *testing.T) (*Handler, *Service) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := config.StudyConfig{
-		CandidateConfidentMin: 5,
-		CandidateRatioMin:     0.6,
-		WikiKPMin:             4,
-		GapHitThreshold:       3,
-		ScanBatchSize:         200,
-		ReportPeriodDays:      30,
-		ReportMaxKeep:         10,
+		CreateConfidenceMin: 0.55,
+		CreateWidthMax:      0.03,
+		WikiKPMin:           4,
+		GapHitThreshold:     3,
+		ScanBatchSize:       200,
+		ReportPeriodDays:    30,
+		ReportMaxKeep:       10,
+		PruneMeanMax:        0.3,
+		PruneWidthMax:       0.02,
+		PruneSampleMin:      8,
+		PruneIdleDays:       30,
+		PruneStaleDays:      90,
 	}
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
 	handler := NewHandler(svc)
 	return handler, svc
 }

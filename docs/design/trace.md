@@ -43,7 +43,7 @@ activation_gap：当前没有合适 ActivationLink，但补充查找找到了被
 
 这些事件在问答过程中自动产生，记录的是「哪条路径被召回、是否进入最终回答、是否暴露缺口」等事实，不需要用户额外表态。`repeated_success` 和 `repeated_failure` 是对上述检索事件在相似场景下跨次累积的归纳，同样 primarily 来自使用过程，而非用户纠正。
 
-`user_correction` 是高价值但**非必要**的补充信号：它能加速边界修正和知识重新验证，在检索信号模糊时提供决定性证据，但**不是** ActivationLink 能够演化的前提。即使完全没有用户反馈，系统仍应仅凭检索事件的累积，完成候选链接形成、verified 晋升、降权和淘汰。
+`user_correction` 是高价值但**非必要**的补充信号：它能加速边界修正和知识重新验证，在检索信号模糊时提供决定性证据，但**不是** ActivationLink 能够演化的前提。即使完全没有用户反馈，系统仍应仅凭检索事件的累积，持续更新每条使用条件自己的置信度分布（机制见 `activation-convergence.md`）。
 
 ### Trace 只记录什么
 
@@ -106,9 +106,9 @@ ActivationLink 命中但失败；
 
 Learning Event 按学习信号分类，每种类型对应一类可被 Study 消费的事实。**ActivationLink 相关学习以检索事件为主**（`activation_success`、`activation_failure`、`activation_gap` 及其累积形态）；用户反馈类事件（如 `user_correction`）是补充加速，不是主驱动。
 
-**activation_success**：ActivationLink 命中且其指向的知识被实际采用，支撑了成功回答。单次事件只说明路径值得观察；多次在相似 scene / goal 下重复出现，可累积为 `repeated_success` 并推动强化或晋升。
+**activation_success**：ActivationLink 命中且其指向的知识被实际采用，支撑了成功回答。单次事件只是这条使用条件的一次成功观测，让它的置信度小幅上修；多次在相似 scene / goal 下重复出现，可累积为 `repeated_success`，作为同一条置信度分布持续收窄、抬高的证据。
 
-**activation_failure**：ActivationLink 命中但未能支撑有效回答，或命中知识未被采用、导致回答失败或降级。单次失败可能来自问题理解偏差或证据不足，不应立即废弃整条链接；多次在相似条件下重复出现，可累积为 `repeated_failure` 并推动降权或淘汰。
+**activation_failure**：ActivationLink 命中但未能支撑有效回答，或命中知识未被采用、导致回答失败或降级。单次失败只是这条使用条件的一次失败观测，让它的置信度小幅下修，不应立即废弃整条链接——失败证据只作用于具体命中的那一条使用条件，不牵连链接下其他独立积累证据的使用条件；多次在相似条件下重复出现，可累积为 `repeated_failure`，作为同一条置信度分布持续下修的证据。
 
 **activation_gap**：当前没有合适 ActivationLink，但通过目录结构召回、全文检索、外部证据或用户补充找到了有效知识，暴露激活路径缺口。事件应记录缺口层级 `gap_level`，判定是程序性的——回答完成回写采用结果时，对照被采用 KnowledgePoint 与本次命中概念、链接的挂载关系即可：
 
@@ -125,9 +125,9 @@ entry_gap  概念匹配整体失败，被采用的 KP 全靠目录 / FTS 兜底
 
 **user_correction**：用户明确纠正系统回答，表明当前知识、路径或边界存在问题。这是高价值补充信号，可加速重新验证或边界修正，但不应被理解为 ActivationLink 演化的必要条件。
 
-**repeated_success**：同类问题在相似场景下多次通过同一路径成功，适合强化 ActivationLink 或实践路径。若多次事件还表现出相似的核心变量组合与 Working Model 组织方式，可作为 Study 提炼候选实践路径的结构信号。详见 `study.md` 第 7 节。
+**repeated_success**：同类问题在相似场景下多次通过同一路径成功，适合持续抬高 ActivationLink 对应使用条件的置信度，或强化实践路径。若多次事件还表现出相似的核心变量组合与 Working Model 组织方式，可作为 Study 提炼候选实践路径的结构信号。详见 `study.md` 第 7 节。
 
-**repeated_failure**：同类问题在相似场景下多次通过同一路径失败，适合降权、淘汰或重组路径。
+**repeated_failure**：同类问题在相似场景下多次通过同一路径失败，适合持续下修 ActivationLink 对应使用条件的置信度，或重组路径。
 
 **knowledge_gap**：回答或检索暴露缺失事实、缺失上下文或材料侧不足，形成可追踪的知识缺口。
 
@@ -157,7 +157,7 @@ Learning Event 只记录最小必要信息，避免过度解释。
 事件可靠性或置信度。
 ```
 
-这些是设计概念，不是字段清单。记录应足够让 Study 判断是否需要强化、降权、淘汰、标记冲突、触发重编译或暂缓学习，而不必复述完整问答过程。
+这些是设计概念，不是字段清单。记录应足够让 Study 判断是否需要调整置信度、标记冲突、触发重编译或暂缓学习，而不必复述完整问答过程。
 
 Learning Event 不必包含「为什么模型这样推理」或「为什么某步检索发生」。学习提示应描述事实信号，例如「该 ActivationLink 在相似场景中第三次失败」，而不是叙事性复盘。
 
@@ -206,9 +206,9 @@ Learning Event 是 Study 的输入。
 Study 是长期记忆调整机制。
 ```
 
-Study 根据 Learning Event 中的事实样本执行强化、降权、淘汰、标记冲突、触发 Wiki 重编译等动作。Learning Reason 解释 Study 为何采取该动作，便于后续追踪、回滚和重评估。
+Study 根据 Learning Event 中的事实样本持续更新置信度、标记冲突、触发 Wiki 重编译等。Learning Reason 解释 Study 为何采取该动作，便于后续追踪、回滚和重评估。
 
-没有 Learning Event 支撑的学习动作，不应直接改变长期记忆的稳定结构。单次事件通常不足以晋升 verified ActivationLink 或触发 Wiki 重编译；Study 应结合多次检索事件累积、证据来源，以及可选的用户反馈信号综合判断。ActivationLink 演化**不依赖**用户纠正，检索事件本身即可提供足够驱动。
+没有 Learning Event 支撑的学习动作，不应直接改变长期记忆的稳定结构。单次事件通常只对一条使用条件的置信度产生小幅影响，不足以让它单独越过服务门槛，也不足以触发 Wiki 重编译；Study 应结合多次检索事件累积、证据来源，以及可选的用户反馈信号综合判断。ActivationLink 的置信度演化**不依赖**用户纠正，检索事件本身即可提供足够驱动。
 
 ## 7. Trace 与 Agent Runtime 的边界
 

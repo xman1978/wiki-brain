@@ -366,7 +366,7 @@ Knowledge Brain 不追求保存完整思考过程。
 是否存在认知缺口；
 是否出现用户纠正；
 是否发现知识冲突；
-是否有候选 ActivationLink；
+是否观测到新的 ActivationLink 使用条件；
 是否需要调整 Concept 或 Wiki；
 是否需要重新验证某个 KnowledgePoint。
 ```

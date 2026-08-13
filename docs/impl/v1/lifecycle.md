@@ -136,7 +136,7 @@ SQLite 侧的直接查询（KPN 扩展、代表 KP 反查等）同样追加 `lif
 
 ### 步骤 4：向 ActivationLink 与 Wiki 的传导
 
-lifecycle 变更不直接修改 activation_links 和 wiki_pages，通过两条既有机制间接生效：
+lifecycle 变更不直接修改 activation_links 和 wiki_pages，通过三条既有机制间接生效：
 
 ```text
 检索时过滤：激活层召回 JOIN knowledge_points 检查 lifecycle=current，
@@ -154,6 +154,10 @@ Wiki 标记：  SetUnitLifecycle 执行后，查询 wiki_pages.source_point_ids
 前两条无需在 lifecycle 模块写代码；第三条由 SetUnitLifecycle 内部调用 Wiki 模块的标记接口完成。
 
 注：activation_links 自身也有一套独立状态机（candidate / verified / weakened / deprecated，见 `activation.md`），与本文档的 KU/KP lifecycle 是两套不同的状态，互不映射——只在"匹配时联合过滤 KP lifecycle=current"这一点上产生交集。
+
+**熟路指针（2026-08-11 新增，2026-08-12 措辞订正）**：`docs/impl/v1/activation-bundle.md` 描述的 ActivationBundle（熟路）同样要求 `member_point_ids` 内的 KP 与所属 KU 均 `lifecycle=current` 才参与匹配（见该文档步骤 4「匹配器契约」，2026-08-12 起 Match 含硬性过滤+精确匹配+模型辅助匹配两级流程，lifecycle 过滤在硬性过滤之前执行，不受这次机制重构影响），Study 侧的显影/巩固扫描也要求同样的过滤（步骤 2，即便该步骤的身份判断机制已经从"纯分组"改为"先匹配已有熟路、未匹配上才聚类"，lifecycle 过滤这条不变）。这意味着熟路落地后会在上面的三条机制之外，成为第四条"lifecycle 变更需要传导"的场景（此前表述为"检索时过滤的第三个消费方"，把"检索时过滤"这一条机制和"激活层/Study感知"两个不同层级的东西混在一起说，容易读错，这里订正）。
+
+**lifecycle 变更是否需要对熟路生成降权信号，已定案（2026-08-12）**：需要，且规则区分"过期的是核心成员还是路肩成员"——过期的 point_id 若在某条 verified 熟路的核心（`member_point_ids`）里，立即生成降权信号（`verified → weakened`），单次事件触发，不等窗口统计，与本文档对 `verified` ActivationLink 的"Study 感知...生成降权信号"是同一条处理逻辑；若只在路肩（`fringe_point_ids`）里，不触发任何状态迁移，下一轮显影扫描时该点因 lifecycle 过滤自然从候选样本里消失。完整规则见 `activation-bundle.md` 步骤 3「巩固与状态迁移」——这条不依赖该文档"阶段 2"的 Retrieval/Trace 回写，属于"阶段 1"范围，可以和存储/匹配器/显影扫描一起实现。另需注意：熟路成员的变化（含这里的降权）**不会**反向触发 Wiki 侧的 `needs_recompile`——页面重编译只认 KP 自身的 lifecycle 变化（本文档步骤 4a 已经覆盖，与该 KP 是否也是熟路成员无关），不要为熟路单独加一条通知 Wiki 的路径。
 
 ### 步骤 5：暴露 HTTP API
 

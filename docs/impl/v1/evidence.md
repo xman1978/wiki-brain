@@ -6,6 +6,8 @@
 
 设计依据 `docs/design/evidence-mining.md`。核心原则：**挖掘是摘选不是改写，摘选结果程序可校验**。
 
+> **熟路指针（2026-08-11 新增，2026-08-12 候选组装方式定案）**：本节"Rerank 或激活层证据组装"目前枚举的是两个候选来源。`docs/impl/v1/activation-bundle.md` 步骤 4「匹配器契约」预期熟路（ActivationBundle）命中会成为第三个来源——命中即直接构建多 unit 的 direct 候选，同样需要在 EvidenceSet 构建之前经过本模块挖掘成片段级证据，不享受任何跳过通道。**候选组装是新增一处调用点，不复用 ActivationLink 现有那处**（2026-08-12 定案，随 `retrieval.md` 步骤 1 新增 `bundle_hits[]` 字段一并确定）：熟路的候选构建输入是 `member_point_ids`（一组 point_id），ActivationLink 现有那处调用点是按单个 `link_id → point_id` 构建，输入形状不同，勉强复用只会在函数内部再分叉一次"是不是熟路"，不如分开。挖掘逻辑本身按候选的 KU 正文处理，不关心候选来自哪一层，这一点不变、不需要改动——本文档只是候选的下游消费方，候选组装本身仍是 `retrieval.md`「阶段 2」的实现范围，本文档不代为实现。
+
 ## 数据结构
 
 证据挖掘不新增表。产出体现在 EvidenceSet 上：

@@ -59,9 +59,12 @@ historical 在所有文档里都找不到独立于 superseded / deprecated 的
   不是它独有的；
 
 candidate 和 retracted 分别要求"提取后先候选、验证通过才生效"和
-  "错误知识需要单独标记纠错历史"这类更大的流程变化，且 candidate 与
-  ActivationLink 已有的 candidate/verified 状态机（见 activation.md）
-  概念上会冲突，在没有具体产品需求驱动之前不引入。
+  "错误知识需要单独标记纠错历史"这类更大的流程变化，且 candidate
+  描述的"未决"概念，在 ActivationLink 那一侧现在也不再是一个状态名，
+  而是置信度分布还没收敛的表现（见 activation-convergence.md）——
+  KU/KP lifecycle 如果引入一个语义相近的 candidate 状态，容易让读者
+  把两套粒度完全不同的判断（材料本身是否当前有效，与某条使用条件的
+  置信度收没收敛）混为一谈，在没有具体产品需求驱动之前不引入。
 ```
 
 3 种状态已经能完整覆盖知识生命周期：current 是唯一参与检索的状态，superseded 和 deprecated 分别对应"被替换"和"被删除"这两个互不重叠的失效原因，且都保留数据用于追溯。
@@ -89,7 +92,7 @@ ActivationLink 是否仍然有效；
 Wiki 页面是否需要重新编译或标记过期。
 ```
 
-一条知识单元进入 superseded 或 deprecated 状态时，其下的知识点不再被激活。依赖这些知识点的 ActivationLink 也应暂停无条件强化（见 `activation.md` 状态机，ActivationLink 自身的 candidate/verified/weakened/deprecated 是独立于 KU/KP lifecycle 的另一套状态，不受此处影响，只是匹配时会联合过滤 `lifecycle=current`）。目录结构树保留材料的原有组织，但如果底层来源已失效，目录路径只能帮助定位历史材料，不能自动赋予其当前证据效力。Wiki 页面建立在知识单元、知识点和稳定激活路径之上，底层记忆状态变化时，相关 Wiki 页面也需要重新检查。
+一条知识单元进入 superseded 或 deprecated 状态时，其下的知识点不再被激活。依赖这些知识点的 ActivationLink 也应停止用新证据继续抬升置信度（见 `activation-convergence.md`，ActivationLink 自身的置信度是独立于 KU/KP lifecycle 的另一套连续判断，不受此处影响，只是匹配时会联合过滤 `lifecycle=current`，知识点一旦失效就不会再被匹配命中，自然也不会再积累新的正面证据）。目录结构树保留材料的原有组织，但如果底层来源已失效，目录路径只能帮助定位历史材料，不能自动赋予其当前证据效力。Wiki 页面建立在知识单元、知识点和稳定激活路径之上，底层记忆状态变化时，相关 Wiki 页面也需要重新检查。
 
 当来源材料被替换或删除时，影响会沿证据链向上传导：
 
@@ -112,9 +115,9 @@ current 知识可以进入激活、回答和 Wiki 维护，但仍需持续校验
 例如：
 
 ```text
-来源被替换，旧知识转为 superseded，相关 ActivationLink 暂停强化；
+来源被替换，旧知识转为 superseded，相关 ActivationLink 停止积累新的正面证据；
 来源被删除，旧知识转为 deprecated；
-实践反馈失败，相关路径可能需要降权（ActivationLink 自身的状态机，见 activation.md）。
+实践反馈失败，相关路径的置信度可能相应下修（ActivationLink 自身的置信度机制，见 activation-convergence.md）。
 ```
 
 ## 6. 总结

@@ -22,13 +22,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /activation-links/{id}", h.get)
 	mux.HandleFunc("GET /activation-links/{id}/questions", h.questions)
 	mux.HandleFunc("GET /activation-links/{id}/learning-results", h.learningResults)
-	mux.HandleFunc("POST /activation-links/{id}/confirm", h.confirm)
 	mux.HandleFunc("POST /activation-links/{id}/reject", h.reject)
 
 	mux.HandleFunc("GET /subject-synonyms", h.listSynonyms)
 	mux.HandleFunc("GET /subject-synonyms/{id}", h.getSynonym)
 	mux.HandleFunc("POST /subject-synonyms/{id}/confirm", h.confirmSynonym)
 	mux.HandleFunc("POST /subject-synonyms/{id}/reject", h.rejectSynonym)
+
+	h.registerBundleRoutes(mux)
 }
 
 type linkResp struct {
@@ -106,14 +107,32 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, resp)
 }
 
+// conditionResp is one observed condition's confidence-tier detail
+// (docs/impl/v1/activation.md 步骤 3 GET /activation-links/:id — Mean/Tier
+// computed at response-build time via conditionTier/conditionMean, not
+// stored/cached, consistent with this codebase's "读时算" convention).
+type conditionResp struct {
+	Subject             string  `json:"subject"`
+	Intent              string  `json:"intent"`
+	Audience            string  `json:"audience"`
+	Constraint          string  `json:"constraint"`
+	SuccessCount        int     `json:"success_count"`
+	FailureCount        int     `json:"failure_count"`
+	AuditedSuccessCount int     `json:"audited_success_count"`
+	AuditedFailureCount int     `json:"audited_failure_count"`
+	Mean                float64 `json:"mean"`
+	Tier                string  `json:"tier"`
+	LastSeenAt          string  `json:"last_seen_at,omitempty"`
+}
+
 type linkDetailResp struct {
 	linkResp
-	Scene                string   `json:"scene,omitempty"`
-	Goal                 string   `json:"goal,omitempty"`
-	UnitID               string   `json:"unit_id,omitempty"`
-	SourceTitle          string   `json:"source_title,omitempty"`
-	CreatedFrom          []string `json:"created_from"`
-	PendingPromoteReason string   `json:"pending_promote_reason,omitempty"`
+	Scene       string          `json:"scene,omitempty"`
+	Goal        string          `json:"goal,omitempty"`
+	UnitID      string          `json:"unit_id,omitempty"`
+	SourceTitle string          `json:"source_title,omitempty"`
+	CreatedFrom []string        `json:"created_from"`
+	Conditions  []conditionResp `json:"conditions"`
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
@@ -146,9 +165,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		UnitID:      unitID,
 		SourceTitle: sourceTitle,
 		CreatedFrom: createdFrom,
-	}
-	if pending, err := h.svc.Store().FindPendingPromote(id); err == nil && pending != nil {
-		resp.PendingPromoteReason = pending.Reason
+		Conditions:  toConditionResps(link.ObservedConditions, h.svc.confidenceCfg),
 	}
 	foundation.WriteJSON(w, http.StatusOK, resp)
 }
@@ -215,17 +232,22 @@ func (h *Handler) learningResults(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) confirm(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	link, err := h.svc.Confirm(id)
-	if err != nil {
-		foundation.WriteError(w, http.StatusBadRequest, err.Error())
-		return
+func toConditionResps(conds []ObservedCondition, cfg ConfidenceConfig) []conditionResp {
+	out := make([]conditionResp, 0, len(conds))
+	for _, c := range conds {
+		tier, mean := conditionTier(c, cfg)
+		r := conditionResp{
+			Subject: c.Subject, Intent: c.Intent, Audience: c.Audience, Constraint: c.Constraint,
+			SuccessCount: c.SuccessCount, FailureCount: c.FailureCount,
+			AuditedSuccessCount: c.AuditedSuccessCount, AuditedFailureCount: c.AuditedFailureCount,
+			Mean: mean, Tier: string(tier),
+		}
+		if !c.LastSeenAt.IsZero() {
+			r.LastSeenAt = c.LastSeenAt.Format("2006-01-02T15:04:05Z07:00")
+		}
+		out = append(out, r)
 	}
-	foundation.WriteJSON(w, http.StatusOK, map[string]string{
-		"link_id": link.LinkID,
-		"status":  link.Status,
-	})
+	return out
 }
 
 func (h *Handler) reject(w http.ResponseWriter, r *http.Request) {

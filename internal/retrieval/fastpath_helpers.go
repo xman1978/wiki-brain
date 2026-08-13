@@ -3,35 +3,43 @@ package retrieval
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/foundation/text"
+	"github.com/jxman78/wiki-brain/internal/session"
 )
 
+// classifyActivationMatches builds the ActivationHits Trace needs from every
+// LinkMatch Match() returned, and treats all of them as eligible for the
+// fast path (2026-08-13, docs/impl/v1/activation.md「置信度分档判定」/
+// docs/impl/v1/retrieval.md 步骤 2): Match() itself already decided, per
+// condition, whether this round should serve — tiering (exploring/
+// self_graded/trusted) and explore/audit sampling happened inside Match(),
+// so a returned LinkMatch is always meant to be used this round. There's no
+// more "verified-only" filter here — filtering by the link's stored status
+// field would be filtering by a value that's now a lagging cache of the same
+// per-condition confidence Match() just computed fresh.
 func classifyActivationMatches(matches []activation.LinkMatch) ([]ActivationHit, []activation.LinkMatch, bool) {
 	activationHits := make([]ActivationHit, len(matches))
 	allLinkIDs := make([]string, len(matches))
 	for i, m := range matches {
-		activationHits[i] = ActivationHit{LinkID: m.Link.LinkID, PointID: m.Link.PointID, MatchScore: m.Score}
+		activationHits[i] = ActivationHit{
+			LinkID: m.Link.LinkID, PointID: m.Link.PointID, MatchScore: m.Score, MatchedBy: m.MatchedBy,
+			Tier: string(m.Tier), AuditSampled: m.AuditSampled,
+			Subject: m.Subject, Intent: m.Intent, Audience: m.Audience, Constraint: m.Constraint,
+		}
 		allLinkIDs[i] = m.Link.LinkID
 	}
 	slog.Info("retrieval: activation layer matched", "link_count", len(matches), "link_ids", allLinkIDs)
 
-	var verified []activation.LinkMatch
-	for _, m := range matches {
-		if m.Link.Status == activation.StatusVerified {
-			verified = append(verified, m)
-		}
-	}
-	if len(verified) == 0 {
-		slog.Info("retrieval: activation matched candidate-only, recording hits and falling back to slow path",
-			"link_ids", allLinkIDs)
+	if len(matches) == 0 {
 		return activationHits, nil, false
 	}
-	return activationHits, verified, true
+	return activationHits, matches, true
 }
 
 func verifiedIDs(verified []activation.LinkMatch) (linkIDs, pointIDs []string) {
@@ -44,30 +52,227 @@ func verifiedIDs(verified []activation.LinkMatch) (linkIDs, pointIDs []string) {
 	return linkIDs, pointIDs
 }
 
-func (s *Service) resolveSingleUnitHits(pointIDs, linkIDs []string, _ []ActivationHit) ([]DirectHit, bool) {
+type unitResolutionStatus int
+
+const (
+	unitResolutionOK unitResolutionStatus = iota
+	unitResolutionFailed
+	unitResolutionAmbiguous
+)
+
+// resolveUnitsForPoints fetches current-KU hits for the matched verified
+// links' point_ids. Single-unit is the common, unchanged case; multi-unit is
+// reported as ambiguous so the caller can consult ActivationBundle before
+// giving up on the fast path (docs/impl/v1/retrieval.md 步骤 2).
+func (s *Service) resolveUnitsForPoints(pointIDs, linkIDs []string) ([]DirectHit, unitResolutionStatus) {
 	hits, err := s.store.GetCurrentUnitsByPointIDs(pointIDs)
 	if err != nil {
 		slog.Warn("retrieval: fast path unit lookup failed, falling back to slow path", "error", err)
-		return nil, false
+		return nil, unitResolutionFailed
 	}
 	if len(hits) == 0 {
 		slog.Warn("retrieval: fast path found no current KU for matched links, falling back", "link_ids", linkIDs)
-		return nil, false
+		return nil, unitResolutionFailed
 	}
 	unitSet := make(map[string]struct{}, len(hits))
 	for _, h := range hits {
 		unitSet[h.UnitID] = struct{}{}
 	}
 	if len(unitSet) > 1 {
-		unitIDs := make([]string, 0, len(unitSet))
-		for uid := range unitSet {
-			unitIDs = append(unitIDs, uid)
+		return hits, unitResolutionAmbiguous
+	}
+	return hits, unitResolutionOK
+}
+
+// resolveBundleForAmbiguousHits implements docs/impl/v1/retrieval.md 步骤 2's
+// Bundle-consultation branch: when verified ActivationLink matches span
+// multiple KUs (raw ambiguity), consult ActivationBundle before giving up on
+// the fast path. Only reached from resolveUnitsForPoints' ambiguous case —
+// single-unit hits never call this, so that path stays pixel-identical to
+// before.
+func (s *Service) resolveBundleForAmbiguousHits(ctx context.Context, workQC QueryContext, expandedQuery session.ExpandedQuery, matchCfg activation.MatchConfig, linkIDs, pointIDs []string) ([]DirectHit, bool) {
+	// 2026-08-13: no more Status==verified filter here, same reasoning as
+	// classifyActivationMatches — MatchBundles' tiering already decided which
+	// bundles are eligible to serve this round; trust its output set
+	// directly (docs/impl/v1/activation.md「置信度分档判定」).
+	verifiedBundles, err := s.activationSvc.MatchBundles(ctx, expandedQuery, matchCfg)
+	if err != nil {
+		slog.Warn("retrieval: bundle match failed, falling back to slow path", "error", err)
+		return nil, false
+	}
+
+	if len(verifiedBundles) == 0 {
+		// No verified Bundle covers this hit — form/enrich a candidate bundle
+		// from this real-time observation (docs/impl/v1/activation-bundle.md
+		// 步骤 4b), then fall back to slow path this round exactly as before;
+		// bundle formation is a side effect, not a reason to change today's
+		// control flow.
+		s.formCandidateBundle(workQC, pointIDs)
+		slog.Info("retrieval: activation matched verified links across multiple units, no verified bundle covers them, falling back to slow path",
+			"link_ids", linkIDs, "point_ids", pointIDs)
+		return nil, false
+	}
+
+	// 2026-08-13: 核心成员不再是建/刷新 Bundle 那一刻写死的静态数组，是
+	// 每个成员自己的 mean(member) 越过 serving_confidence_min 派生出来的
+	// 结果（docs/impl/v1/activation-bundle.md「成员置信度」组装时的用法）。
+	confCfg := s.activationSvc.ConfidenceConfig()
+	var resolvedPoints []string
+	if len(verifiedBundles) == 1 {
+		resolvedPoints = verifiedBundles[0].Bundle.CoreMemberPointIDs(confCfg)
+	} else {
+		conflict, err := s.bundlesConflict(verifiedBundles, confCfg)
+		if err != nil {
+			slog.Warn("retrieval: bundle conflict check failed, falling back to slow path", "error", err)
+			return nil, false
 		}
-		slog.Info("retrieval: activation matched verified links across multiple units, ambiguous, falling back to slow path",
-			"link_ids", linkIDs, "unit_ids", unitIDs)
+		if conflict {
+			bundleIDs := make([]string, len(verifiedBundles))
+			for i, bm := range verifiedBundles {
+				bundleIDs[i] = bm.Bundle.BundleID
+			}
+			slog.Info("retrieval: multiple verified bundles matched with a contradicts relation between core members, ambiguous, falling back to slow path",
+				"link_ids", linkIDs, "bundle_ids", bundleIDs)
+			return nil, false
+		}
+		seen := make(map[string]bool)
+		for _, bm := range verifiedBundles {
+			for _, pid := range bm.Bundle.CoreMemberPointIDs(confCfg) {
+				if seen[pid] {
+					continue
+				}
+				seen[pid] = true
+				resolvedPoints = append(resolvedPoints, pid)
+			}
+		}
+	}
+
+	hits, err := s.store.GetCurrentUnitsByPointIDs(resolvedPoints)
+	if err != nil {
+		slog.Warn("retrieval: fast path bundle unit lookup failed, falling back to slow path", "error", err)
+		return nil, false
+	}
+	if len(hits) == 0 {
+		slog.Warn("retrieval: fast path bundle resolved no current KU, falling back to slow path", "point_ids", resolvedPoints)
 		return nil, false
 	}
 	return hits, true
+}
+
+// bundlesConflict reports whether any core member of one matched bundle has
+// a contradicts KPN relation to any core member of another (docs/impl/v1/
+// retrieval.md 步骤 2, reusing the retrieval.Store.GetKPNConflicts primitive
+// already used for slow-path KPN expansion).
+func (s *Service) bundlesConflict(bundles []activation.BundleMatch, confCfg activation.ConfidenceConfig) (bool, error) {
+	conflictSets := make([]map[string]struct{}, len(bundles))
+	for i, bm := range bundles {
+		neighbors, err := s.store.GetKPNConflicts(bm.Bundle.CoreMemberPointIDs(confCfg))
+		if err != nil {
+			return false, err
+		}
+		set := make(map[string]struct{}, len(neighbors))
+		for _, n := range neighbors {
+			set[n.NeighborPointID] = struct{}{}
+		}
+		conflictSets[i] = set
+	}
+	for i := range bundles {
+		for j := range bundles {
+			if i == j {
+				continue
+			}
+			for _, pid := range bundles[j].Bundle.CoreMemberPointIDs(confCfg) {
+				if _, ok := conflictSets[i][pid]; ok {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
+// sameMemberSet reports order-independent set equality between two
+// point_id slices — used to dedupe real-time candidate bundle formation
+// against every existing non-deprecated bundle's core members.
+func sameMemberSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[string]struct{}, len(a))
+	for _, x := range a {
+		set[x] = struct{}{}
+	}
+	for _, x := range b {
+		if _, ok := set[x]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// formCandidateBundle implements docs/impl/v1/activation-bundle.md 步骤 4b: a
+// real-time formation path, additive to Study's periodic clustering scan
+// (internal/study/bundle_scan.go) — a multi-Link hit with no covering
+// verified Bundle seeds a candidate bundle from this single observation so
+// future identical hits have Bundle material to Match against. Idempotent on
+// exact core-member-set identity: a second identical hit appends an observed
+// condition to the existing bundle instead of creating a duplicate. Errors
+// are logged and swallowed — bundle formation is a side effect, never the
+// reason a fast-path turn fails or succeeds.
+func (s *Service) formCandidateBundle(workQC QueryContext, pointIDs []string) {
+	if s.activationSvc == nil || len(pointIDs) == 0 {
+		return
+	}
+	members := append([]string(nil), pointIDs...)
+	sort.Strings(members)
+
+	store := s.activationSvc.Store()
+	existing, err := store.ListMatchableBundles()
+	if err != nil {
+		slog.Warn("retrieval: list matchable bundles for dedup check failed", "error", err)
+		return
+	}
+
+	questionTerms := text.Terms(text.Normalize(workQC.Question))
+	cond := activation.NormalizeObservedCondition(workQC.Subject, workQC.Intent, workQC.Audience, workQC.Constraint, questionTerms, time.Now().UTC())
+
+	for _, b := range existing {
+		if sameMemberSet(b.MemberPointIDs(), members) {
+			if err := store.AppendBundleObservedCondition(b.BundleID, cond, 50); err != nil {
+				slog.Warn("retrieval: append observed condition to existing bundle failed", "bundle_id", b.BundleID, "error", err)
+				return
+			}
+			s.activationSvc.BundleMatcher().InvalidateCache()
+			slog.Info("retrieval: appended observed condition to existing candidate bundle from cross-unit ambiguity",
+				"bundle_id", b.BundleID, "point_ids", members)
+			return
+		}
+	}
+
+	createdFromJSON, err := json.Marshal([]string{"cross_unit_ambiguity"})
+	if err != nil {
+		slog.Warn("retrieval: marshal bundle created_from failed", "error", err)
+		return
+	}
+	seedMembers := make([]activation.BundleMember, 0, len(members))
+	now := time.Now().UTC()
+	for _, pid := range members {
+		seedMembers = append(seedMembers, activation.BundleMember{PointID: pid, SuccessCount: 1, FailureCount: 0, LastSeenAt: now})
+	}
+	newBundle := &activation.ActivationBundle{
+		RepresentativeTerms: strings.TrimSpace(workQC.Subject + " " + workQC.Intent),
+		ObservedConditions:  []activation.ObservedCondition{cond},
+		Members:             seedMembers,
+		Status:              activation.BundleStatusCandidate,
+		CreatedFrom:         string(createdFromJSON),
+	}
+	if err := store.CreateBundle(newBundle); err != nil {
+		slog.Warn("retrieval: create candidate bundle from cross-unit ambiguity failed", "error", err)
+		return
+	}
+	s.activationSvc.BundleMatcher().InvalidateCache()
+	slog.Info("retrieval: created candidate bundle from cross-unit ambiguity",
+		"bundle_id", newBundle.BundleID, "point_ids", members)
 }
 
 // filterMatchesByDomain keeps links whose KP source is in qc.DomainIDs when
@@ -106,106 +311,7 @@ func (s *Service) filterMatchesByDomain(matches []activation.LinkMatch, qc Query
 	return out
 }
 
-type normalizedTuple struct {
-	Subject    string
-	Intent     string
-	Audience   string
-	Constraint string
-}
-
-func (s *Service) normalizeTuple(ctx context.Context, qc QueryContext, vocab string) (*normalizedTuple, error) {
-	resp, err := s.llmClient.CompleteJSON(ctx, "session_normalize_tuple.md", map[string]string{
-		"question":               qc.Question,
-		"subject":                qc.Subject,
-		"intent":                 qc.Intent,
-		"audience":               qc.Audience,
-		"constraint":             qc.Constraint,
-		"known_condition_groups": vocab,
-	}, "classification")
-	if err != nil {
-		return nil, err
-	}
-	var out struct {
-		Subject    string `json:"subject"`
-		Intent     string `json:"intent"`
-		Audience   string `json:"audience"`
-		Constraint string `json:"constraint"`
-	}
-	if err := json.Unmarshal(resp, &out); err != nil {
-		return nil, fmt.Errorf("parse normalize response: %w", err)
-	}
-	if strings.TrimSpace(out.Intent) == "" && strings.TrimSpace(out.Subject) == "" {
-		return nil, fmt.Errorf("normalize returned empty subject and intent")
-	}
-	return &normalizedTuple{
-		Subject:    out.Subject,
-		Intent:     out.Intent,
-		Audience:   out.Audience,
-		Constraint: out.Constraint,
-	}, nil
-}
-
-// acceptNormalizedTuple reports whether norm aligns to at least one observed
-// condition group (same MatchConditionGroups semantics) and does not flip a
-// non-empty original constraint to a conflicting one (product gating).
-func acceptNormalizedTuple(orig QueryContext, norm *normalizedTuple, groups []activation.ObservedCondition, resolver *activation.SynonymResolver) bool {
-	if norm == nil || len(groups) == 0 {
-		return false
-	}
-	if resolver == nil {
-		resolver = activation.NewSynonymResolver()
-	}
-	origQC := text.Terms(text.Normalize(orig.Constraint))
-	newQC := text.Terms(text.Normalize(norm.Constraint))
-	if origQC != "" && newQC != "" && origQC != newQC {
-		return false
-	}
-	queryTopic, qi, qa, qc := activation.BuildQueryConditionTerms(
-		norm.Subject, norm.Intent, norm.Audience, norm.Constraint, resolver,
-	)
-	return activation.MatchConditionGroups(groups, queryTopic, qi, qa, qc, resolver)
-}
-
-// maybeNormalizeQueryBeforeMatch runs session_normalize_tuple against domain
-// verified condition groups and returns an updated QueryContext when the
-// result is accepted; otherwise returns qc unchanged.
-func (s *Service) maybeNormalizeQueryBeforeMatch(ctx context.Context, qc QueryContext) QueryContext {
-	if s.activationSvc == nil || !qc.DomainResolved || len(qc.DomainIDs) == 0 {
-		return qc
-	}
-	groups, err := s.activationSvc.Store().ListVerifiedConditionGroups(qc.DomainIDs, 40)
-	if err != nil {
-		slog.Warn("retrieval: load condition groups for normalize failed", "error", err)
-		return qc
-	}
-	if len(groups) == 0 {
-		return qc
-	}
-	var vocab strings.Builder
-	for _, c := range groups {
-		fmt.Fprintf(&vocab, "- subject=%s | intent=%s | audience=%s | constraint=%s\n",
-			c.Subject, c.Intent, c.Audience, c.Constraint)
-	}
-	norm, nerr := s.normalizeTuple(ctx, qc, vocab.String())
-	if nerr != nil {
-		slog.Warn("retrieval: tuple normalize failed, keeping parse tuple", "error", nerr)
-		return qc
-	}
-	resolver := activation.NewSynonymResolver()
-	if syns, serr := s.activationSvc.Store().ListActiveSynonyms(); serr == nil {
-		resolver.Load(syns)
-	}
-	if !acceptNormalizedTuple(qc, norm, groups, resolver) {
-		slog.Info("retrieval: normalized tuple rejected (no group align or constraint conflict), keeping parse tuple",
-			"orig_subject", qc.Subject, "norm_subject", norm.Subject)
-		return qc
-	}
-	slog.Info("retrieval: tuple normalized before Match",
-		"subject", norm.Subject, "intent", norm.Intent, "constraint", norm.Constraint)
-	out := qc
-	out.Subject = norm.Subject
-	out.Intent = norm.Intent
-	out.Audience = norm.Audience
-	out.Constraint = norm.Constraint
-	return out
-}
+// session_normalize_tuple 的 Match 前二次规范化调用已废弃（2026-08-12 定案）：
+// activation.Match 的第二轮批量模型辅助匹配解决的是同一个问题，不再需要
+// 这个独立的调用点。见 docs/impl/v1/retrieval.md 步骤 2、
+// docs/impl/v1/plan-parser-vocab-and-unit-ambiguity.md 顶部废弃说明。

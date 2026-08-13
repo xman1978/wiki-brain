@@ -21,14 +21,16 @@ func NewStore(db *sql.DB) *Store {
 const pageColumns = `page_id, page_type, entry_id, title, content, status,
 	source_point_ids, source_unit_ids, source_link_ids, observed_conditions, aliases, trigger_questions,
 	member_roles, uncovered_points, compiled_from, summary, aspects, prompt_version, model_name,
-	compiled_at, published_at, created_at, updated_at`
+	compiled_at, published_at, created_at, updated_at,
+	synthesis_success_count, synthesis_failure_count, synthesis_audited_success_count, synthesis_audited_failure_count`
 
 func scanPage(row interface{ Scan(...interface{}) error }) (*Page, error) {
 	var p Page
 	err := row.Scan(&p.PageID, &p.PageType, &p.EntryID, &p.Title, &p.Content, &p.Status,
 		&p.SourcePointIDs, &p.SourceUnitIDs, &p.SourceLinkIDs, &p.ObservedConditions, &p.Aliases, &p.TriggerQuestions,
 		&p.MemberRoles, &p.UncoveredPoints, &p.CompiledFrom, &p.Summary, &p.Aspects, &p.PromptVersion, &p.ModelName,
-		&p.CompiledAt, &p.PublishedAt, &p.CreatedAt, &p.UpdatedAt)
+		&p.CompiledAt, &p.PublishedAt, &p.CreatedAt, &p.UpdatedAt,
+		&p.SynthesisSuccessCount, &p.SynthesisFailureCount, &p.SynthesisAuditedSuccessCount, &p.SynthesisAuditedFailureCount)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +176,9 @@ func (s *Store) ListTopicPages() ([]TopicPageSummary, error) {
 		if err := rows.Scan(&t.PageID, &t.PageType, &t.EntryID, &t.Title, &t.Content, &t.Status,
 			&t.SourcePointIDs, &t.SourceUnitIDs, &t.SourceLinkIDs, &t.ObservedConditions, &t.Aliases, &t.TriggerQuestions,
 			&t.MemberRoles, &t.UncoveredPoints, &t.CompiledFrom, &t.Summary, &t.Aspects, &t.PromptVersion, &t.ModelName,
-			&t.CompiledAt, &t.PublishedAt, &t.CreatedAt, &t.UpdatedAt, &t.MemberCount); err != nil {
+			&t.CompiledAt, &t.PublishedAt, &t.CreatedAt, &t.UpdatedAt,
+			&t.SynthesisSuccessCount, &t.SynthesisFailureCount, &t.SynthesisAuditedSuccessCount, &t.SynthesisAuditedFailureCount,
+			&t.MemberCount); err != nil {
 			return nil, fmt.Errorf("wiki store: scan topic page: %w", err)
 		}
 		results = append(results, t)
@@ -265,6 +269,33 @@ func (s *Store) UpdatePageStatus(pageID, status string) error {
 	_, err := s.db.Exec(`UPDATE wiki_pages SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE page_id = ?`, status, pageID)
 	if err != nil {
 		return fmt.Errorf("wiki store: update page status: %w", err)
+	}
+	return nil
+}
+
+// RecordSynthesisOutcome updates a page's synthesis-satisfaction axis
+// (docs/impl/v1/wiki.md 步骤 4a) after one independent-verification trial.
+// Audit-only by design (unlike ActivationLink/Bundle's success_count/
+// audited_success_count split): every data point on this axis comes from
+// the same independent-comparison mechanism, so success_count and
+// audited_success_count (or the failure pair) always advance together —
+// there is no separate self-graded tier a served-but-unaudited answer could
+// contribute to (wiki.md 步骤 4a「未中选」explicitly rules that out).
+// Deliberately does NOT touch status/needs_recompile/index — the synthesis
+// axis is observation-only (wiki.md 步骤 4a「mean(page) 的消费方式」).
+func (s *Store) RecordSynthesisOutcome(pageID string, agree bool) error {
+	var q string
+	if agree {
+		q = `UPDATE wiki_pages SET synthesis_success_count = synthesis_success_count + 1,
+			synthesis_audited_success_count = synthesis_audited_success_count + 1,
+			updated_at = CURRENT_TIMESTAMP WHERE page_id = ?`
+	} else {
+		q = `UPDATE wiki_pages SET synthesis_failure_count = synthesis_failure_count + 1,
+			synthesis_audited_failure_count = synthesis_audited_failure_count + 1,
+			updated_at = CURRENT_TIMESTAMP WHERE page_id = ?`
+	}
+	if _, err := s.db.Exec(q, pageID); err != nil {
+		return fmt.Errorf("wiki store: record synthesis outcome: %w", err)
 	}
 	return nil
 }

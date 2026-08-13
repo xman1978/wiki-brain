@@ -45,8 +45,8 @@ retrieval:
   rerank_top_n: 20
 study:
   schedule_interval: "1h"
-  candidate_confident_min: 5
-  candidate_ratio_min: 0.6
+  create_confidence_min: 0.55
+  create_width_max: 0.03
   wiki_kp_min: 4
   gap_hit_threshold: 3
   scan_batch_size: 200
@@ -80,8 +80,8 @@ study:
 	if cfg.Queue.BufferSize != 50 {
 		t.Errorf("buffer_size = %d, want 50", cfg.Queue.BufferSize)
 	}
-	if cfg.Study.CandidateRatioMin != 0.6 {
-		t.Errorf("candidate_ratio_min = %f, want 0.6", cfg.Study.CandidateRatioMin)
+	if cfg.Study.CreateWidthMax != 0.03 {
+		t.Errorf("create_width_max = %f, want 0.03", cfg.Study.CreateWidthMax)
 	}
 }
 

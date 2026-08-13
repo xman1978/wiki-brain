@@ -15,17 +15,17 @@ import (
 
 	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/answer"
-	"github.com/jxman78/wiki-brain/internal/entry"
 	"github.com/jxman78/wiki-brain/internal/domain"
+	"github.com/jxman78/wiki-brain/internal/entry"
 	"github.com/jxman78/wiki-brain/internal/evidence"
 	"github.com/jxman78/wiki-brain/internal/foundation"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
 	"github.com/jxman78/wiki-brain/internal/foundation/db"
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
-	"github.com/jxman78/wiki-brain/internal/llmconfig"
 	"github.com/jxman78/wiki-brain/internal/foundation/progress"
 	"github.com/jxman78/wiki-brain/internal/foundation/queue"
+	"github.com/jxman78/wiki-brain/internal/llmconfig"
 	"github.com/jxman78/wiki-brain/internal/retrieval"
 	"github.com/jxman78/wiki-brain/internal/session"
 	"github.com/jxman78/wiki-brain/internal/source"
@@ -176,6 +176,32 @@ func main() {
 	activationMatcher := activation.NewMatcher(activationStore)
 	activationSvc := activation.NewService(activationStore, activationMatcher)
 	unitSvc.SetActivationNotifier(activationSvc)
+	activationSvc.SetConfidenceConfig(activation.ConfidenceConfig{
+		ServingConfidenceMin:  cfg.Retrieval.ServingConfidenceMin,
+		AuditSampleMin:        cfg.Retrieval.AuditSampleMin,
+		ExploreRateLow:        cfg.Retrieval.ExploreRateLow,
+		ExploreRateSelfGraded: cfg.Retrieval.ExploreRateSelfGraded,
+		ExploreRateTrusted:    cfg.Retrieval.ExploreRateTrusted,
+	})
+
+	// 问题四元组归一化（2026-08-12 新增，docs/impl/v1/retrieval.md 步骤 2）：
+	// 总是构造 TupleNormalizer 并挂上 LLM 客户端，是否实际生效由
+	// cfg.Retrieval.QuestionTupleNormEnabled 在 Retrieval 侧门控（默认关闭）。
+	tupleNormalizer := activation.NewTupleNormalizer(activationStore, activation.TupleNormConfig{
+		LocalSimMin:        cfg.Retrieval.QuestionTupleNormLocalSimMin,
+		VectorMatchEnabled: cfg.Retrieval.VectorMatchEnabled,
+		VectorSimMin:       cfg.Retrieval.VectorMatchSimMin,
+	})
+	tupleNormalizer.SetLLMClient(llmClient)
+	if cfg.Retrieval.VectorMatchEnabled && cfg.Retrieval.VectorModelDir != "" {
+		embedder, err := activation.NewGoformerEmbedder(cfg.Retrieval.VectorModelDir)
+		if err != nil {
+			slog.Warn("main: vector embedder load failed, tuple normalization tier 2.5 disabled", "error", err)
+		} else {
+			tupleNormalizer.SetEmbedder(embedder)
+		}
+	}
+	activationSvc.SetTupleNormalizer(tupleNormalizer)
 
 	evidenceSvc := evidence.NewService(llmClient, cfg.Evidence)
 
@@ -188,6 +214,10 @@ func main() {
 	answerSvc := answer.NewService(answerStore, llmClient, q, retrievalSvc)
 	traceSvc := trace.NewService(traceStore, cfg.Study.EntryNullRatioMin)
 	traceSvc.SetObservedConditionEnricher(activationSvc, cfg.Study.ObservedConditionsMax)
+	traceSvc.SetCorrectionWeight(cfg.Study.CorrectionWeight)
+	retrievalSvc.SetAuditOutcomeWriter(traceSvc)
+	traceSvc.SetSynthesisOutcomeWriter(wikiSvc)
+	retrievalSvc.SetSynthesisOutcomeWriter(traceSvc)
 	studySvc := study.NewService(studyStore, cfg.Study, activationSvc, wikiSvc, cfg.Wiki.RecompileNewKPMin, cfg.Wiki.QualifyingMinDaysActive,
 		study.CohesionConfig{
 			Min:     cfg.Wiki.EntryCohesionMin,
@@ -195,7 +225,7 @@ func main() {
 			WCooc:   cfg.Wiki.AspectWCooc,
 			CoocSat: cfg.Wiki.AspectCoocSat,
 			Gamma:   cfg.Wiki.AspectGamma,
-		}, cfg.Wiki.TopicClusterMinQuestions, cfg.Wiki.TopicClusterMinDaysActive)
+		}, cfg.Wiki.TopicClusterMinQuestions, cfg.Wiki.TopicClusterMinDaysActive, cfg.Retrieval.QuestionTupleNormIdleDays)
 
 	entrySvc := entry.NewService(entryStore, entry.Config{
 		AddEventMin:       cfg.Study.EntryAddEventMin,

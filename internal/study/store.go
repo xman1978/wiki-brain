@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/foundation/graph"
 )
 
@@ -30,15 +31,25 @@ func NewStore(db *sql.DB) *Store {
 // 计数会把同一 KP 的学习信号打散在多行、每行都到不了阈值；KP 本身才是稳定锚点，
 // 达标判定改在 point 级聚合上做。代表标签取 confident_count 最高（并列取
 // last_seen_at 最新）的一行，作为候选与后续链接的 question_terms。
-func (s *Store) ScanCandidates(confidentMin int, ratioMin float64, batchSize int) (int, error) {
+// 2026-08-13 修订（docs/impl/v1/study.md 步骤 1, docs/design/
+// activation-convergence.md 第 11 节）：达标判定从裸计数（confidentMin）
+// +裸比例（ratioMin）换成 Beta 均值/宽度公式——
+//
+//	mean_pre  = (s + 1) / (h + 2)
+//	width_pre = mean_pre * (1 - mean_pre) / (h + 3)
+//	达标: mean_pre >= createConfidenceMin AND width_pre <= createWidthMax
+//
+// 与 PruneCandidateConditions 的收敛判定同一套公式（不同门槛数值），
+// 理由是创建/剪枝问的是同一类"给定成功/失败次数，这个估计有多确定"。
+// 聚合本身（按 point_id GROUP BY，取 SUM(confident_count)/SUM(hit_count)）
+// 不变，只是判定表达式在 Go 侧算，不再放进 SQL HAVING——SQLite 没有原生
+// POW，Go 侧算更直接也更容易单测。
+func (s *Store) ScanCandidates(createConfidenceMin, createWidthMax float64, batchSize int) (int, error) {
 	rows, err := s.db.Query(`
 		SELECT point_id, SUM(confident_count), SUM(hit_count)
 		FROM question_kp_cooccurrence
 		GROUP BY point_id
-		HAVING SUM(confident_count) >= ?
-		  AND CAST(SUM(confident_count) AS FLOAT) / CAST(SUM(hit_count) AS FLOAT) >= ?
-		ORDER BY SUM(confident_count) DESC
-		LIMIT ?`, confidentMin, ratioMin, batchSize)
+		ORDER BY SUM(confident_count) DESC`)
 	if err != nil {
 		return 0, fmt.Errorf("study store: scan candidates: %w", err)
 	}
@@ -55,7 +66,15 @@ func (s *Store) ScanCandidates(confidentMin int, ratioMin float64, batchSize int
 		if err := rows.Scan(&a.pointID, &a.confidentCount, &a.hitCount); err != nil {
 			return 0, fmt.Errorf("study store: scan row: %w", err)
 		}
+		meanPre := activation.ConditionMean(a.confidentCount, a.hitCount-a.confidentCount)
+		widthPre := conditionWidth(meanPre, a.confidentCount, a.hitCount-a.confidentCount)
+		if meanPre < createConfidenceMin || widthPre > createWidthMax {
+			continue
+		}
 		aggs = append(aggs, a)
+		if len(aggs) >= batchSize {
+			break
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return 0, err
@@ -596,10 +615,21 @@ func (s *Store) GetLearningResult(resultID string) (*LearningResultDetail, error
 
 func (s *Store) QueryTraceSummary(periodDays int) (*TraceSummary, error) {
 	var summary TraceSummary
+	// path_type != 'audit' excludes the inert placeholder trace rows created by
+	// independent audit trials (docs/impl/v1/retrieval.md 步骤 2c,
+	// trace.Store.SaveAuditPlaceholder) — these carry retrieval_quality='unknown'
+	// and would otherwise inflate TotalTraces (a COUNT(*)-based denominator)
+	// without being counted in any of the confident/partial/gap buckets below,
+	// silently skewing ConfidentRate/FastPathRate downward as audit trials
+	// accumulate. The other trace-scanning queries in this file don't need the
+	// same guard: most already filter retrieval_quality='confident' (which
+	// 'unknown' never matches), and the KPN-citation SUM()s below are safe by
+	// construction since audit placeholders carry kpn_cited_count=cited_count=0.
 	rows, err := s.db.Query(`
 		SELECT retrieval_quality, COUNT(*)
 		FROM traces
 		WHERE created_at >= datetime('now', '-' || ? || ' days')
+		  AND path_type != 'audit'
 		GROUP BY retrieval_quality`, periodDays)
 	if err != nil {
 		return nil, fmt.Errorf("study store: trace summary: %w", err)
@@ -769,6 +799,12 @@ func (s *Store) HasKPNNeighbors(pointID string) (bool, error) {
 // verified already answered. confident_count is still selected (MAX) for
 // QualifyingKP.ConfidentCount, used only for material-ordering downstream
 // (docs/impl/v1/wiki.md 步骤 3), not as a filter.
+//
+// 2026-08-12 修订：不再要求人工 wiki_material_confirm——在不知道 Wiki 主题
+// 的前提下，人也无法判断某个 KP 是否该进入 Wiki，这道关卡是伪命题。qualifying
+// 只看 verified ActivationLink（本身已是 success 计数 + distinct 问题的判断），
+// 材料是否真的适合某个主题，交给 Wiki 编译时的整体判断（docs/impl/v1/wiki.md
+// 步骤 3/8）去做，而不是在候选阶段预先人工过滤。
 func (s *Store) QualifyingKPsByEntryFromCandidates() (map[string][]QualifyingKP, error) {
 	rows, err := s.db.Query(`
 		SELECT ku.entry_id, lc.point_id, MAX(lc.confident_count) AS max_confident, kp.content AS point_summary
@@ -1102,6 +1138,48 @@ func (s *Store) ListReports() ([]ReportMeta, error) {
 	return results, rows.Err()
 }
 
+// RecentConvergenceSnapshots loads the convergence section of the most
+// recent `limit` reports (oldest first) for the收敛趋势 trend
+// (docs/impl/v1/study.md 步骤 7). Reports saved before this section existed
+// unmarshal to a zero-value ConvergenceStats and are included as-is — they
+// still contribute a valid (if empty) point to the trend rather than being
+// filtered out, since the caller cares about the sequence's shape over time.
+func (s *Store) RecentConvergenceSnapshots(limit int) ([]ConvergenceTrendPoint, error) {
+	rows, err := s.db.Query(`
+		SELECT report_id, content, created_at
+		FROM study_reports
+		ORDER BY created_at DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("study store: recent convergence snapshots: %w", err)
+	}
+	defer rows.Close()
+
+	var points []ConvergenceTrendPoint
+	for rows.Next() {
+		var reportID, content string
+		var createdAt time.Time
+		if err := rows.Scan(&reportID, &content, &createdAt); err != nil {
+			return nil, fmt.Errorf("study store: scan convergence snapshot: %w", err)
+		}
+		var report Report
+		if err := json.Unmarshal([]byte(content), &report); err != nil {
+			continue
+		}
+		points = append(points, ConvergenceTrendPoint{
+			ReportID: reportID, GeneratedAt: createdAt, Stats: report.Convergence.Current,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// reverse to oldest-first
+	for i, j := 0, len(points)-1; i < j; i, j = i+1, j-1 {
+		points[i], points[j] = points[j], points[i]
+	}
+	return points, nil
+}
+
 func (s *Store) GetReport(reportID string) (*string, error) {
 	var content string
 	err := s.db.QueryRow(`SELECT content FROM study_reports WHERE report_id = ?`, reportID).Scan(&content)
@@ -1337,6 +1415,59 @@ func (s *Store) TopicClusterTraces(windowDays int) ([]TopicClusterTraceRow, erro
 	return out, rows.Err()
 }
 
+// BundleScanTraceRow is one trace's quadruple + question + timestamp + the
+// KPs it actually cited, consumed by ActivationBundle's显影扫描
+// (bundle_scan.go, docs/impl/v1/activation-bundle.md 步骤 4). Unlike
+// TopicClusterTraceRow, this DOES require retrieval_quality='confident' and
+// non-empty direct_point_ids — 熟路回答"这组知识点合在一起管不管用"，前提
+// 是这条问答确实答上来了、确实引用了知识点.
+type BundleScanTraceRow struct {
+	TraceID        string
+	Subject        string
+	Intent         string
+	Audience       string
+	Constraint     string
+	Question       string
+	CreatedAt      time.Time
+	DirectPointIDs []string
+}
+
+// BundleScanTraces implements docs/impl/v1/activation-bundle.md 步骤 4 第 1 步
+// 的取数：窗口内 confident 且 direct_point_ids 非空的 trace.
+func (s *Store) BundleScanTraces(windowDays int) ([]BundleScanTraceRow, error) {
+	rows, err := s.db.Query(`
+		SELECT trace_id, subject, intent, audience, constraint_text, question, created_at, direct_point_ids
+		FROM traces
+		WHERE created_at >= datetime('now', ?)
+		  AND retrieval_quality = 'confident'
+		  AND direct_point_ids != '[]'`,
+		fmt.Sprintf("-%d days", windowDays))
+	if err != nil {
+		return nil, fmt.Errorf("study store: bundle scan traces: %w", err)
+	}
+	defer rows.Close()
+
+	var out []BundleScanTraceRow
+	for rows.Next() {
+		var r BundleScanTraceRow
+		var pointsRaw string
+		if err := rows.Scan(&r.TraceID, &r.Subject, &r.Intent, &r.Audience, &r.Constraint, &r.Question, &r.CreatedAt, &pointsRaw); err != nil {
+			return nil, fmt.Errorf("study store: scan bundle scan trace: %w", err)
+		}
+		if err := json.Unmarshal([]byte(pointsRaw), &r.DirectPointIDs); err != nil {
+			continue
+		}
+		if len(r.DirectPointIDs) < 2 {
+			// 熟路是"一组知识点合在一起"的信号——单点问题继续走
+			// ActivationLink 最短路径（docs/impl/v1/activation-bundle.md
+			// 设计依据），不参与聚类.
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // HasNonRejectedTopicCandidate implements docs/impl/v1/wiki.md 步骤 8's
 // "去重": a topic_page_candidate learning_result whose reason carries this
 // quadruple's fingerprint and isn't status='rejected' means this quadruple
@@ -1387,4 +1518,188 @@ type ComplexityTraceRow struct {
 
 func init() {
 	_ = slog.Debug
+}
+
+// conditionWidth is the Beta posterior's variance-derived width
+// (mean*(1-mean)/(n+3)), used identically by both the create-threshold gate
+// (ScanCandidates above) and the prune classification below
+// (docs/impl/v1/study.md 步骤 1/3, docs/design/activation-convergence.md 第
+// 11 节).
+func conditionWidth(mean float64, successCount, failureCount int) float64 {
+	n := float64(successCount + failureCount)
+	return mean * (1 - mean) / (n + 3)
+}
+
+// PruneCandidateConditionRow is one condition slated for removal from a
+// link's observed_conditions, along with which classification triggered it.
+type PruneCandidateConditionRow struct {
+	// ConditionKey identifies the condition within the link
+	// (subject/intent/audience/constraint quadruple), used by the Service
+	// layer to find and remove the matching entry from the link's live
+	// ObservedConditions slice before calling ReplaceObservedConditions.
+	Subject, Intent, Audience, Constraint string
+	Classification                        string // "converged_low" | "long_idle"
+}
+
+// PruneResult is one link's prunable conditions, returned by
+// PruneCandidateConditions for the Service layer to act on (actual removal +
+// persistence goes through activation.Service.ReplaceObservedConditions, see
+// study.Service.pruneConditions — this Store function only identifies and
+// classifies, matching the split already used by tryCreateLink/
+// buildObservedConditions elsewhere in this package).
+type PruneResult struct {
+	LinkID     string
+	Conditions []PruneCandidateConditionRow
+}
+
+// PruneCandidateConditions scans every non-deprecated activation_links row's
+// observed_conditions and classifies each condition (docs/impl/v1/study.md
+// 步骤 3「收敛剪枝」):
+//
+//	converged-low (prune): mean < meanMax AND width <= widthMax AND
+//	  n >= sampleMin AND last_seen_at older than idleDays.
+//	long-idle (prune): n < sampleMin AND last_seen_at older than staleDays.
+//	everything else (incl. width > widthMax "self-contradictory" regardless
+//	  of mean) is left alone — surfaced via ConfidenceConvergenceStats for a
+//	  human to look at, not silently removed.
+func (s *Store) PruneCandidateConditions(meanMax, widthMax float64, sampleMin, idleDays, staleDays int) ([]PruneResult, error) {
+	rows, err := s.db.Query(`
+		SELECT link_id, observed_conditions FROM activation_links
+		WHERE status != ?`, activation.StatusDeprecated)
+	if err != nil {
+		return nil, fmt.Errorf("study store: prune scan: %w", err)
+	}
+	defer rows.Close()
+
+	now := time.Now().UTC()
+	idleCutoff := now.AddDate(0, 0, -idleDays)
+	staleCutoff := now.AddDate(0, 0, -staleDays)
+
+	var results []PruneResult
+	for rows.Next() {
+		var linkID, raw string
+		if err := rows.Scan(&linkID, &raw); err != nil {
+			return nil, fmt.Errorf("study store: prune scan row: %w", err)
+		}
+		if raw == "" {
+			continue
+		}
+		var conds []activation.ObservedCondition
+		if err := json.Unmarshal([]byte(raw), &conds); err != nil {
+			slog.Warn("study: prune scan: malformed observed_conditions, skipping link", "link_id", linkID, "error", err)
+			continue
+		}
+
+		var toPrune []PruneCandidateConditionRow
+		for _, c := range conds {
+			n := c.SuccessCount + c.FailureCount
+			mean := activation.ConditionMean(c.SuccessCount, c.FailureCount)
+			width := conditionWidth(mean, c.SuccessCount, c.FailureCount)
+
+			switch {
+			case mean < meanMax && width <= widthMax && n >= sampleMin && c.LastSeenAt.Before(idleCutoff):
+				toPrune = append(toPrune, PruneCandidateConditionRow{
+					Subject: c.Subject, Intent: c.Intent, Audience: c.Audience, Constraint: c.Constraint,
+					Classification: "converged_low",
+				})
+			case n < sampleMin && c.LastSeenAt.Before(staleCutoff):
+				toPrune = append(toPrune, PruneCandidateConditionRow{
+					Subject: c.Subject, Intent: c.Intent, Audience: c.Audience, Constraint: c.Constraint,
+					Classification: "long_idle",
+				})
+			}
+		}
+		if len(toPrune) > 0 {
+			results = append(results, PruneResult{LinkID: linkID, Conditions: toPrune})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// ConvergenceTierCounts is the count of observed conditions landing in each
+// service tier (docs/impl/v1/activation.md 状态机「服务分档」), across every
+// non-deprecated link's conditions.
+type ConvergenceTierCounts struct {
+	Exploring  int `json:"exploring"`
+	SelfGraded int `json:"self_graded"`
+	Trusted    int `json:"trusted"`
+}
+
+// ConvergenceStats aggregates the width distribution and tier counts across
+// all non-deprecated links' observed conditions (docs/impl/v1/study.md 步骤
+// 7「收敛趋势」, docs/design/activation-convergence.md 第 5 节): is the
+// confidence distribution narrowing, is the fraction of conditions still
+// consuming exploration budget going down. A snapshot on its own — Service
+// turns a sequence of these (via ListReports) into a trend.
+type ConvergenceStats struct {
+	TotalConditions int                   `json:"total_conditions"`
+	TierCounts      ConvergenceTierCounts `json:"tier_counts"`
+	AvgWidth        float64               `json:"avg_width"`
+	MaxWidth        float64               `json:"max_width"`
+	// WideCount is conditions whose width exceeds widthMax passed in — a
+	// proxy for "still exploring / not yet converged" independent of tier
+	// (tier only looks at mean, not width).
+	WideCount int `json:"wide_count"`
+}
+
+// ConfidenceConvergenceStats implements the aggregation above. cfg supplies
+// the same ConfidenceConfig Match()/RecordOutcome use (tier boundaries), and
+// wideWidthThreshold is prune_width_max (reused as the "still wide" cutoff
+// for WideCount — same number that would exempt a condition from
+// converged-low pruning as self-contradictory/still-exploring).
+func (s *Store) ConfidenceConvergenceStats(cfg activation.ConfidenceConfig, wideWidthThreshold float64) (ConvergenceStats, error) {
+	rows, err := s.db.Query(`
+		SELECT observed_conditions FROM activation_links
+		WHERE status != ?`, activation.StatusDeprecated)
+	if err != nil {
+		return ConvergenceStats{}, fmt.Errorf("study store: convergence stats: %w", err)
+	}
+	defer rows.Close()
+
+	var stats ConvergenceStats
+	var widthSum float64
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return ConvergenceStats{}, fmt.Errorf("study store: convergence stats row: %w", err)
+		}
+		if raw == "" {
+			continue
+		}
+		var conds []activation.ObservedCondition
+		if err := json.Unmarshal([]byte(raw), &conds); err != nil {
+			continue
+		}
+		for _, c := range conds {
+			mean := activation.ConditionMean(c.SuccessCount, c.FailureCount)
+			width := conditionWidth(mean, c.SuccessCount, c.FailureCount)
+			stats.TotalConditions++
+			widthSum += width
+			if width > stats.MaxWidth {
+				stats.MaxWidth = width
+			}
+			if width > wideWidthThreshold {
+				stats.WideCount++
+			}
+			tier, _ := activation.ConditionTier(c, cfg)
+			switch tier {
+			case activation.TierExploring:
+				stats.TierCounts.Exploring++
+			case activation.TierSelfGraded:
+				stats.TierCounts.SelfGraded++
+			case activation.TierTrusted:
+				stats.TierCounts.Trusted++
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return ConvergenceStats{}, err
+	}
+	if stats.TotalConditions > 0 {
+		stats.AvgWidth = widthSum / float64(stats.TotalConditions)
+	}
+	return stats, nil
 }

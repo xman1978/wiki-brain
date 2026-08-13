@@ -12,15 +12,28 @@ import (
 // ObservedCondition is one historically observed Session quadruple for a link
 // (docs/superpowers/specs/2026-07-22-activation-observed-conditions-design.md).
 // Match requires all four fields within the same group; groups OR across the list.
+//
+// 2026-08-13 起（docs/design/activation-convergence.md, docs/impl/v1/activation.md
+// 状态机）：HitCount 更名 SuccessCount，新增 FailureCount/AuditedSuccessCount/
+// AuditedFailureCount 承接连续置信度（Beta 后验）的证据计数；
+// KnownQuestionTerms 从 ActivationLink 表级列下沉为条件级字段，是字面问题
+// 捷径（见 matcher.go）反查"归属条件"的依据。
 type ObservedCondition struct {
-	Subject       string    `json:"subject"`
-	Intent        string    `json:"intent"`
-	Audience      string    `json:"audience"`
-	Constraint    string    `json:"constraint"`
-	QuestionTerms string    `json:"question_terms,omitempty"`
-	FirstSeenAt   time.Time `json:"first_seen_at"`
-	LastSeenAt    time.Time `json:"last_seen_at"`
-	HitCount      int       `json:"hit_count"`
+	Subject             string    `json:"subject"`
+	Intent              string    `json:"intent"`
+	Audience            string    `json:"audience"`
+	Constraint          string    `json:"constraint"`
+	QuestionTerms       string    `json:"question_terms,omitempty"`
+	FirstSeenAt         time.Time `json:"first_seen_at"`
+	LastSeenAt          time.Time `json:"last_seen_at"`
+	SuccessCount        int       `json:"success_count"`
+	FailureCount        int       `json:"failure_count"`
+	AuditedSuccessCount int       `json:"audited_success_count"`
+	AuditedFailureCount int       `json:"audited_failure_count"`
+	// KnownQuestionTerms accumulates every literal question's normalized term
+	// set that has ever routed to this specific condition (2026-08-13 下沉自
+	// ActivationLink.KnownQuestionTerms，见 matcher.go 字面问题捷径).
+	KnownQuestionTerms []string `json:"known_question_terms,omitempty"`
 }
 
 // NormalizeObservedCondition builds a dedupe-ready tuple from raw Session fields.
@@ -28,7 +41,7 @@ func NormalizeObservedCondition(subject, intent, audience, constraint, questionT
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	return ObservedCondition{
+	c := ObservedCondition{
 		Subject:       text.Normalize(subject),
 		Intent:        text.Terms(text.Normalize(intent)),
 		Audience:      text.NormalizeCompact(audience),
@@ -36,16 +49,45 @@ func NormalizeObservedCondition(subject, intent, audience, constraint, questionT
 		QuestionTerms: questionTerms,
 		FirstSeenAt:   now,
 		LastSeenAt:    now,
-		HitCount:      1,
+		SuccessCount:  1,
 	}
+	if questionTerms != "" {
+		c.KnownQuestionTerms = []string{questionTerms}
+	}
+	return c
 }
 
 func conditionKey(c ObservedCondition) string {
 	return c.Subject + "\x1f" + c.Intent + "\x1f" + c.Audience + "\x1f" + c.Constraint
 }
 
-// MergeObservedConditions unions by quadruple key, bumps hit_count/last_seen,
-// then trims to max (oldest last_seen_at dropped first). max<=0 means 50.
+// mergeKnownQuestionTerms unions two term sets, dedups, and caps at
+// maxKnownQuestionTerms (alphabetical trim — the set carries no per-entry
+// recency, same convention as the pre-2026-08-13 link-level column).
+func mergeKnownQuestionTerms(existing []string, add string) []string {
+	set := make(map[string]struct{}, len(existing)+1)
+	for _, q := range existing {
+		if q != "" {
+			set[q] = struct{}{}
+		}
+	}
+	if add != "" {
+		set[add] = struct{}{}
+	}
+	out := make([]string, 0, len(set))
+	for q := range set {
+		out = append(out, q)
+	}
+	sort.Strings(out)
+	if len(out) > maxKnownQuestionTerms {
+		out = out[:maxKnownQuestionTerms]
+	}
+	return out
+}
+
+// MergeObservedConditions unions by quadruple key, bumps success_count/
+// last_seen, folds QuestionTerms into KnownQuestionTerms, then trims to max
+// (oldest last_seen_at dropped first). max<=0 means 50.
 func MergeObservedConditions(existing []ObservedCondition, add ObservedCondition, max int) []ObservedCondition {
 	if max <= 0 {
 		max = 50
@@ -61,15 +103,17 @@ func MergeObservedConditions(existing []ObservedCondition, add ObservedCondition
 	}
 	k := conditionKey(add)
 	if prev, ok := byKey[k]; ok {
-		prev.HitCount++
+		prev.SuccessCount++
 		if add.LastSeenAt.After(prev.LastSeenAt) {
 			prev.LastSeenAt = add.LastSeenAt
 		}
 		if add.QuestionTerms != "" {
 			prev.QuestionTerms = add.QuestionTerms
 		}
+		prev.KnownQuestionTerms = mergeKnownQuestionTerms(prev.KnownQuestionTerms, add.QuestionTerms)
 		byKey[k] = prev
 	} else {
+		add.KnownQuestionTerms = mergeKnownQuestionTerms(add.KnownQuestionTerms, add.QuestionTerms)
 		byKey[k] = add
 		order = append(order, k)
 	}
@@ -90,8 +134,8 @@ func ReplaceObservedConditionsList(conds []ObservedCondition, max int) []Observe
 	}
 	var out []ObservedCondition
 	for _, c := range conds {
-		if c.HitCount <= 0 {
-			c.HitCount = 1
+		if c.SuccessCount <= 0 {
+			c.SuccessCount = 1
 		}
 		if c.FirstSeenAt.IsZero() {
 			c.FirstSeenAt = c.LastSeenAt
@@ -152,13 +196,13 @@ func (c LinkCondition) EffectiveConditions() []ObservedCondition {
 	// SubjectTerms is already a terms string; store as-is for Contains matching.
 	now := time.Now().UTC()
 	return []ObservedCondition{{
-		Subject:     c.SubjectTerms,
-		Intent:      intent,
-		Audience:    audience,
-		Constraint:  constraint,
-		FirstSeenAt: now,
-		LastSeenAt:  now,
-		HitCount:    1,
+		Subject:      c.SubjectTerms,
+		Intent:       intent,
+		Audience:     audience,
+		Constraint:   constraint,
+		FirstSeenAt:  now,
+		LastSeenAt:   now,
+		SuccessCount: 1,
 	}}
 }
 

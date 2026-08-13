@@ -55,11 +55,23 @@ type WikiNotifier interface {
 }
 
 // ActivationNotifier lets the Activation module's Matcher learn about KP
-// lifecycle changes, since its verified-link cache only holds links whose
+// lifecycle changes, since its matchable-link cache only holds links whose
 // target KP is lifecycle=current (docs/impl/v1/activation.md 步骤 2 候选加载).
 // SetUnitLifecycle no-ops when unset.
+//
+// NotifyPointsLifecycleChanged (2026-08-13, docs/impl/v1/activation.md「依赖」
+// Lifecycle) is the direct-write path that replaced Study's old indirect
+// "感知后生成降权信号" mechanism: for each pointID with a non-deprecated
+// existing link, re-derive its status — the lifecycle check inside that
+// derivation handles both directions (KP went non-current → link becomes
+// deprecated; KP restored → link re-derives from its conditions) through one
+// code path (activation.Service.deriveAndPersistStatus). InvalidateCache is
+// still called separately (by SetUnitLifecycle below) since lifecycle
+// changes affect Match's candidate pool independent of any single link's
+// status derivation.
 type ActivationNotifier interface {
 	InvalidateCache() error
+	NotifyPointsLifecycleChanged(pointIDs []string) error
 }
 
 // EntryNotifier lets cross-Source KPN matching (kpn_cross.go,
@@ -994,11 +1006,12 @@ func (s *Service) SetUnitLifecycle(unitIDs []string, lifecycle, reason string) e
 
 	slog.Info("unit: lifecycle changed", "unit_ids", unitIDs, "lifecycle", lifecycle, "reason", reason)
 
+	pointIDs := make([]string, len(points))
+	for i, p := range points {
+		pointIDs[i] = p.PointID
+	}
+
 	if s.wikiNotifier != nil {
-		pointIDs := make([]string, len(points))
-		for i, p := range points {
-			pointIDs[i] = p.PointID
-		}
 		if err := s.wikiNotifier.NotifyPointsLifecycleChanged(pointIDs); err != nil {
 			slog.Warn("unit: wiki notify failed", "error", err)
 		}
@@ -1007,6 +1020,9 @@ func (s *Service) SetUnitLifecycle(unitIDs []string, lifecycle, reason string) e
 	if s.activationNotifier != nil {
 		if err := s.activationNotifier.InvalidateCache(); err != nil {
 			slog.Warn("unit: activation notify failed", "error", err)
+		}
+		if err := s.activationNotifier.NotifyPointsLifecycleChanged(pointIDs); err != nil {
+			slog.Warn("unit: activation lifecycle notify failed", "error", err)
 		}
 	}
 

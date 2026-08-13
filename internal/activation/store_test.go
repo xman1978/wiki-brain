@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
 )
@@ -11,6 +12,61 @@ import (
 func setupTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	return foundation.NewTestDB(t)
+}
+
+// testConfidenceCfg is the ConfidenceConfig every activation package test
+// uses unless a test specifically wants to probe tier-boundary behavior with
+// its own values (docs/impl/v1/activation.md「服务分档」): 0.7 serving
+// threshold, a large audit_sample_min so trusted is never reached by
+// accident, explore_rate_low=1.0 so an exploring-tier condition always still
+// gets a chance to serve in deterministic (non-random-source) tests unless a
+// test overrides randFloat.
+func testConfidenceCfg() ConfidenceConfig {
+	return ConfidenceConfig{
+		ServingConfidenceMin:  0.7,
+		AuditSampleMin:        1000,
+		ExploreRateLow:        1.0,
+		ExploreRateSelfGraded: 0,
+		ExploreRateTrusted:    0,
+	}
+}
+
+// newTestService wires a Service with testConfidenceCfg applied — the
+// package's default test construction path, replacing the pre-2026-08-13
+// bare NewService(store, matcher) call sites so every test gets a
+// deterministic confidence configuration instead of the ConfidenceConfig
+// zero value (which would make every condition trivially "trusted").
+func newTestService(store *Store, matcher *Matcher) *Service {
+	svc := NewService(store, matcher)
+	svc.SetConfidenceConfig(testConfidenceCfg())
+	return svc
+}
+
+// verifyLink pushes every one of l's existing observed conditions well past
+// the serving threshold (success_count += 50) and persists — the
+// replacement for the old TransitionLink(..., StatusVerified, ...) helper
+// now that status is derived, not transitioned. A link created with no
+// observed conditions (legacy/fallback-path tests) has nothing to boost and
+// is returned unchanged — those tests rely on the empty-conditions fallback
+// match path, which is tier-exempt by design (see matcher.go), not on
+// status=verified.
+func verifyLink(t *testing.T, svc *Service, l *ActivationLink) *ActivationLink {
+	t.Helper()
+	if len(l.ObservedConditions) == 0 {
+		return l
+	}
+	conds := append([]ObservedCondition(nil), l.ObservedConditions...)
+	for i := range conds {
+		conds[i].SuccessCount += 50
+	}
+	if err := svc.ReplaceObservedConditions(l.LinkID, conds); err != nil {
+		t.Fatalf("verify link (boost conditions): %v", err)
+	}
+	updated, err := svc.GetLink(l.LinkID)
+	if err != nil {
+		t.Fatalf("get link after verify: %v", err)
+	}
+	return updated
 }
 
 func seedSource(t *testing.T, db *sql.DB, sourceID string) {
@@ -105,7 +161,7 @@ func TestStore_GetByID_NotFound(t *testing.T) {
 func TestService_CreateLink_Idempotent(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, NewMatcher(store))
+	svc := newTestService(store, NewMatcher(store))
 	seedKPFull(t, db, "kp1")
 
 	cond := LinkCondition{SubjectTerms: "s1", IntentTerms: []string{"i1"}}
@@ -126,7 +182,7 @@ func TestService_CreateLink_Idempotent(t *testing.T) {
 func TestService_CreateLink_RejectsRecreateOfDeprecated(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, NewMatcher(store))
+	svc := newTestService(store, NewMatcher(store))
 	seedKPFull(t, db, "kp1")
 
 	cond := LinkCondition{SubjectTerms: "s1"}
@@ -134,8 +190,8 @@ func TestService_CreateLink_RejectsRecreateOfDeprecated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create link: %v", err)
 	}
-	if _, err := svc.TransitionLink(l1.LinkID, StatusDeprecated, "manual_reject", nil); err != nil {
-		t.Fatalf("transition to deprecated: %v", err)
+	if err := store.UpdateStatus(l1.LinkID, StatusDeprecated); err != nil {
+		t.Fatalf("set deprecated: %v", err)
 	}
 
 	if _, err := svc.CreateLink("t1", cond, "kp1", nil); err == nil {
@@ -143,81 +199,68 @@ func TestService_CreateLink_RejectsRecreateOfDeprecated(t *testing.T) {
 	}
 }
 
-func TestService_TransitionLink_LegalPath(t *testing.T) {
+// TestService_DerivedStatus_TracksConditionConfidence replaces the old
+// discrete-transition test (TransitionLink was removed 2026-08-13, see
+// docs/design/activation-convergence.md): status is now derived from
+// observed_conditions confidence, not moved through explicit steps.
+// Boosting a condition's success_count past the serving threshold flips the
+// link to verified; clearing conditions (Reject) drops it back to candidate;
+// deprecating the target KP forces deprecated regardless of confidence.
+func TestService_DerivedStatus_TracksConditionConfidence(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, NewMatcher(store))
+	svc := newTestService(store, NewMatcher(store))
 	seedKPFull(t, db, "kp1")
 
-	l, err := svc.CreateLink("t1", LinkCondition{}, "kp1", nil)
+	l, err := svc.CreateLink("t1", LinkCondition{SubjectTerms: "住宿"}, "kp1", nil)
 	if err != nil {
 		t.Fatalf("create link: %v", err)
 	}
-
-	steps := []string{StatusVerified, StatusWeakened, StatusVerified, StatusWeakened, StatusDeprecated}
-	for _, to := range steps {
-		updated, err := svc.TransitionLink(l.LinkID, to, "test", []string{"ev1"})
-		if err != nil {
-			t.Fatalf("transition to %s: %v", to, err)
-		}
-		if updated.Status != to {
-			t.Errorf("status = %q, want %q", updated.Status, to)
-		}
-		if !updated.StatusChangedAt.Valid {
-			t.Errorf("status_changed_at not set after transition to %s", to)
-		}
+	if l.Status != StatusCandidate {
+		t.Fatalf("status = %q, want candidate on creation", l.Status)
 	}
 
-	results, err := store.ListLearningResultsByObject(ObjectTypeActivationLink, l.LinkID)
+	verified := verifyLink(t, svc, l)
+	if verified.Status != StatusVerified {
+		t.Fatalf("status = %q, want verified after boosting condition confidence", verified.Status)
+	}
+
+	rejected, err := svc.Reject(l.LinkID)
 	if err != nil {
-		t.Fatalf("list learning results: %v", err)
+		t.Fatalf("reject: %v", err)
 	}
-	if len(results) != len(steps) {
-		t.Fatalf("expected %d learning results, got %d", len(steps), len(results))
+	if rejected.Status != StatusCandidate {
+		t.Errorf("status = %q, want candidate after reject clears conditions", rejected.Status)
 	}
-	wantActions := []string{ActionPromote, ActionWeaken, ActionReverify, ActionWeaken, ActionDeprecate}
-	for i, r := range results {
-		if r.Action != wantActions[i] {
-			t.Errorf("result[%d].Action = %q, want %q", i, r.Action, wantActions[i])
-		}
-		if r.Status != ResultApplied {
-			t.Errorf("result[%d].Status = %q, want applied", i, r.Status)
-		}
+	if len(rejected.ObservedConditions) != 0 {
+		t.Errorf("expected observed_conditions cleared, got %+v", rejected.ObservedConditions)
 	}
-}
 
-func TestService_TransitionLink_RejectsIllegalMoves(t *testing.T) {
-	db := setupTestDB(t)
-	store := NewStore(db)
-	svc := NewService(store, NewMatcher(store))
-	seedKPFull(t, db, "kp1")
-
-	l, err := svc.CreateLink("t1", LinkCondition{}, "kp1", nil)
+	// Re-accumulate a condition and boost it again, then deprecate via KP
+	// lifecycle — deprecated must win over whatever the condition confidence
+	// says.
+	if err := store.AppendObservedCondition(l.LinkID, NormalizeObservedCondition("住宿", "", "", "", "", time.Now().UTC()), 50); err != nil {
+		t.Fatalf("append condition: %v", err)
+	}
+	fresh, err := svc.GetLink(l.LinkID)
 	if err != nil {
-		t.Fatalf("create link: %v", err)
+		t.Fatalf("get link: %v", err)
+	}
+	reverified := verifyLink(t, svc, fresh)
+	if reverified.Status != StatusVerified {
+		t.Fatalf("status = %q, want verified before lifecycle change", reverified.Status)
 	}
 
-	illegal := []string{StatusCandidate, StatusWeakened}
-	for _, to := range illegal {
-		if _, err := svc.TransitionLink(l.LinkID, to, "test", nil); err == nil {
-			t.Errorf("expected error transitioning candidate -> %s", to)
-		}
+	setLifecycle(t, db, "kp1", "superseded")
+	if err := svc.NotifyPointsLifecycleChanged([]string{"kp1"}); err != nil {
+		t.Fatalf("notify lifecycle changed: %v", err)
 	}
-
-	if _, err := svc.TransitionLink(l.LinkID, StatusVerified, "test", nil); err != nil {
-		t.Fatalf("promote: %v", err)
+	deprecated, err := svc.GetLink(l.LinkID)
+	if err != nil {
+		t.Fatalf("get link: %v", err)
 	}
-	if _, err := svc.TransitionLink(l.LinkID, StatusDeprecated, "test", nil); err == nil {
-		t.Error("expected error transitioning verified -> deprecated directly")
-	}
-	if _, err := svc.TransitionLink(l.LinkID, StatusWeakened, "test", nil); err != nil {
-		t.Fatalf("weaken: %v", err)
-	}
-	if _, err := svc.TransitionLink(l.LinkID, StatusDeprecated, "test", nil); err != nil {
-		t.Fatalf("deprecate from weakened: %v", err)
-	}
-	if _, err := svc.TransitionLink(l.LinkID, StatusVerified, "test", nil); err == nil {
-		t.Error("expected error transitioning out of deprecated (terminal state)")
+	if deprecated.Status != StatusDeprecated {
+		t.Errorf("status = %q, want deprecated once target KP is no longer current", deprecated.Status)
 	}
 }
 
@@ -273,46 +316,6 @@ func TestStore_TouchLastUsed(t *testing.T) {
 	}
 	if !got.LastUsedAt.Valid {
 		t.Error("expected last_used_at to be set after touch")
-	}
-}
-
-func TestStore_ListVerifiedLinksForCurrentKP_FiltersStatusAndLifecycle(t *testing.T) {
-	db := setupTestDB(t)
-	store := NewStore(db)
-	svc := NewService(store, NewMatcher(store))
-	seedKPFull(t, db, "kp1")
-	seedKPFull(t, db, "kp2")
-	setLifecycle(t, db, "kp2", "superseded")
-
-	candidate, err := svc.CreateLink("t-candidate", LinkCondition{}, "kp1", nil)
-	if err != nil {
-		t.Fatalf("create candidate link: %v", err)
-	}
-	verifiedCurrent, err := svc.CreateLink("t-verified-current", LinkCondition{}, "kp1", nil)
-	if err != nil {
-		t.Fatalf("create link: %v", err)
-	}
-	if _, err := svc.TransitionLink(verifiedCurrent.LinkID, StatusVerified, "test", nil); err != nil {
-		t.Fatalf("promote: %v", err)
-	}
-	verifiedStale, err := svc.CreateLink("t-verified-stale", LinkCondition{}, "kp2", nil)
-	if err != nil {
-		t.Fatalf("create link: %v", err)
-	}
-	if _, err := svc.TransitionLink(verifiedStale.LinkID, StatusVerified, "test", nil); err != nil {
-		t.Fatalf("promote: %v", err)
-	}
-	_ = candidate
-
-	links, err := store.ListVerifiedLinksForCurrentKP()
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(links) != 1 {
-		t.Fatalf("expected 1 verified+current link, got %d", len(links))
-	}
-	if links[0].LinkID != verifiedCurrent.LinkID {
-		t.Errorf("unexpected link returned: %+v", links[0])
 	}
 }
 
@@ -399,119 +402,125 @@ func TestStore_ListLinks_PointIDsDefaultsToBulkLimit(t *testing.T) {
 	}
 }
 
-func TestService_Confirm_ResolvesPendingAndPromotes(t *testing.T) {
+// TestService_Reject_ValidForAnyStatus_ClearsConditionsAndWritesPruneRecord
+// covers the 2026-08-13 rewrite (docs/impl/v1/activation.md 步骤 3): Reject
+// is valid for ANY status (not just candidate — a link that's already
+// verified may still turn out to rest on untrustworthy evidence), clears
+// ObservedConditions, and writes a prune_condition learning_results row
+// instead of the removed promote/deprecate transition vocabulary.
+func TestService_Reject_ValidForAnyStatus_ClearsConditionsAndWritesPruneRecord(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, NewMatcher(store))
+	svc := newTestService(store, NewMatcher(store))
 	seedKPFull(t, db, "kp1")
 
-	l, err := svc.CreateLink("t1", LinkCondition{}, "kp1", nil)
+	l, err := svc.CreateLink("t1", LinkCondition{SubjectTerms: "住宿"}, "kp1", nil)
 	if err != nil {
 		t.Fatalf("create link: %v", err)
 	}
-
-	pending := &LearningResult{
-		Action:     ActionPromote,
-		ObjectType: ObjectTypeActivationLink,
-		ObjectID:   l.LinkID,
-		Reason:     "repeated_success threshold met",
-		EventIDs:   `["ev1","ev2"]`,
-		Status:     ResultPendingConfirm,
-	}
-	if err := store.InsertLearningResult(pending); err != nil {
-		t.Fatalf("insert pending: %v", err)
-	}
-
-	updated, err := svc.Confirm(l.LinkID)
-	if err != nil {
-		t.Fatalf("confirm: %v", err)
-	}
-	if updated.Status != StatusVerified {
-		t.Errorf("status = %q, want verified", updated.Status)
-	}
-
-	results, err := store.ListLearningResultsByObject(ObjectTypeActivationLink, l.LinkID)
-	if err != nil {
-		t.Fatalf("list results: %v", err)
-	}
-	if len(results) != 2 {
-		t.Fatalf("expected pending + new applied result, got %d", len(results))
-	}
-
-	var pendingResolved, newApplied bool
-	for _, r := range results {
-		if r.ResultID == pending.ResultID {
-			if r.Status != ResultApplied || !r.ConfirmedBy.Valid || r.ConfirmedBy.String != "manual" {
-				t.Errorf("pending result not resolved correctly: %+v", r)
-			}
-			pendingResolved = true
-		} else {
-			if r.EventIDs != pending.EventIDs {
-				t.Errorf("new result should carry pending's event ids, got %q want %q", r.EventIDs, pending.EventIDs)
-			}
-			newApplied = true
-		}
-	}
-	if !pendingResolved || !newApplied {
-		t.Errorf("expected both pending resolution and new applied result, got %+v", results)
-	}
-}
-
-func TestService_Confirm_OnlyValidForCandidate(t *testing.T) {
-	db := setupTestDB(t)
-	store := NewStore(db)
-	svc := NewService(store, NewMatcher(store))
-	seedKPFull(t, db, "kp1")
-
-	l, err := svc.CreateLink("t1", LinkCondition{}, "kp1", nil)
-	if err != nil {
-		t.Fatalf("create link: %v", err)
-	}
-	if _, err := svc.TransitionLink(l.LinkID, StatusVerified, "test", nil); err != nil {
-		t.Fatalf("promote: %v", err)
-	}
-
-	if _, err := svc.Confirm(l.LinkID); err == nil {
-		t.Error("expected error confirming a non-candidate link")
-	}
-}
-
-func TestService_Reject_MarksDeprecatedAndResolvesPendingAsRejected(t *testing.T) {
-	db := setupTestDB(t)
-	store := NewStore(db)
-	svc := NewService(store, NewMatcher(store))
-	seedKPFull(t, db, "kp1")
-
-	l, err := svc.CreateLink("t1", LinkCondition{}, "kp1", nil)
-	if err != nil {
-		t.Fatalf("create link: %v", err)
-	}
-	pending := &LearningResult{
-		Action:     ActionPromote,
-		ObjectType: ObjectTypeActivationLink,
-		ObjectID:   l.LinkID,
-		Reason:     "repeated_success threshold met",
-		Status:     ResultPendingConfirm,
-	}
-	if err := store.InsertLearningResult(pending); err != nil {
-		t.Fatalf("insert pending: %v", err)
-	}
+	verifyLink(t, svc, l)
 
 	updated, err := svc.Reject(l.LinkID)
 	if err != nil {
 		t.Fatalf("reject: %v", err)
 	}
-	if updated.Status != StatusDeprecated {
-		t.Errorf("status = %q, want deprecated", updated.Status)
+	if updated.Status != StatusCandidate {
+		t.Errorf("status = %q, want candidate (empty conditions default landing point)", updated.Status)
+	}
+	if len(updated.ObservedConditions) != 0 {
+		t.Errorf("expected observed_conditions cleared, got %+v", updated.ObservedConditions)
 	}
 
 	got, err := store.ListLearningResultsByObject(ObjectTypeActivationLink, l.LinkID)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
+	found := false
 	for _, r := range got {
-		if r.ResultID == pending.ResultID && r.Status != ResultRejected {
-			t.Errorf("pending result should be rejected, got %q", r.Status)
+		if r.Action == ActionPruneCondition && r.Reason == "manual_reject" && r.Status == ResultApplied {
+			found = true
 		}
+	}
+	if !found {
+		t.Errorf("expected a prune_condition/manual_reject/applied learning_results row, got %+v", got)
+	}
+}
+
+// TestRecordOutcome_InvariantsAndImmediateStatus covers the plan's required
+// invariant tests: audited_* increments only ever ride along with
+// success_count/failure_count (never independently), and status reflects
+// the new counts without needing Match() to run again.
+func TestRecordOutcome_InvariantsAndImmediateStatus(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	svc := newTestService(store, NewMatcher(store))
+	seedKPFull(t, db, "kp1")
+
+	l, err := svc.CreateLink("t1", LinkCondition{SubjectTerms: "住宿"}, "kp1", nil)
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	cond := l.ObservedConditions[0]
+
+	for i := 0; i < 50; i++ {
+		if err := svc.RecordOutcome(l.LinkID, cond.Subject, cond.Intent, cond.Audience, cond.Constraint, true, ""); err != nil {
+			t.Fatalf("record outcome: %v", err)
+		}
+	}
+	updated, err := svc.GetLink(l.LinkID)
+	if err != nil {
+		t.Fatalf("get link: %v", err)
+	}
+	if updated.Status != StatusVerified {
+		t.Fatalf("status = %q, want verified immediately after RecordOutcome (no Match() needed)", updated.Status)
+	}
+	if updated.ObservedConditions[0].SuccessCount != 51 {
+		t.Errorf("success_count = %d, want 51 (1 from EffectiveConditions seed + 50 RecordOutcome calls)", updated.ObservedConditions[0].SuccessCount)
+	}
+
+	if err := svc.RecordAuditOutcome(l.LinkID, cond.Subject, cond.Intent, cond.Audience, cond.Constraint, true); err != nil {
+		t.Fatalf("record audit outcome (agree): %v", err)
+	}
+	if err := svc.RecordAuditOutcome(l.LinkID, cond.Subject, cond.Intent, cond.Audience, cond.Constraint, false); err != nil {
+		t.Fatalf("record audit outcome (disagree): %v", err)
+	}
+	final, err := svc.GetLink(l.LinkID)
+	if err != nil {
+		t.Fatalf("get link: %v", err)
+	}
+	fc := final.ObservedConditions[0]
+	if fc.AuditedSuccessCount != 1 || fc.AuditedFailureCount != 1 {
+		t.Fatalf("audited counts = %d/%d, want 1/1", fc.AuditedSuccessCount, fc.AuditedFailureCount)
+	}
+	if fc.AuditedSuccessCount > fc.SuccessCount {
+		t.Errorf("invariant broken: audited_success_count (%d) > success_count (%d)", fc.AuditedSuccessCount, fc.SuccessCount)
+	}
+	if fc.AuditedFailureCount > fc.FailureCount {
+		t.Errorf("invariant broken: audited_failure_count (%d) > failure_count (%d)", fc.AuditedFailureCount, fc.FailureCount)
+	}
+}
+
+// TestRecordOutcome_NoMatchingCondition_WarnsWithoutError covers "定位不到
+// 匹配条件时...不报错、记录 warn" (docs/impl/v1/activation.md 步骤 1).
+func TestRecordOutcome_NoMatchingCondition_WarnsWithoutError(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	svc := newTestService(store, NewMatcher(store))
+	seedKPFull(t, db, "kp1")
+
+	l, err := svc.CreateLink("t1", LinkCondition{SubjectTerms: "住宿"}, "kp1", nil)
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+
+	if err := svc.RecordOutcome(l.LinkID, "从未出现过的主体", "", "", "", true, ""); err != nil {
+		t.Fatalf("expected no error on missing condition, got %v", err)
+	}
+	unchanged, err := svc.GetLink(l.LinkID)
+	if err != nil {
+		t.Fatalf("get link: %v", err)
+	}
+	if unchanged.ObservedConditions[0].SuccessCount != l.ObservedConditions[0].SuccessCount {
+		t.Errorf("expected condition untouched on no-match, got %+v", unchanged.ObservedConditions[0])
 	}
 }

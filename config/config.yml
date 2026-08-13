@@ -104,6 +104,22 @@ retrieval:
   skeleton_injection_enabled: false  # 主题页骨架注入灰度开关，默认关闭，观测 resolved_outside_count 后再打开
   rerank_relevance_concise: false    # true 时证据过滤阶段用 rerank_relevance_concise.md（不输出 analysis，响应更短，但排查判断依据不便）
 
+  # 问题四元组归一化（2026-08-12 新增，默认关闭，见 docs/impl/v1/retrieval.md 步骤 2）
+  question_tuple_norm_enabled:      false  # 总开关，关闭时 tryFastPath 行为与改动前完全一致
+  question_tuple_norm_local_sim_min: 0.8   # Tier2 本地词集 Jaccard 相似度命中阈值（0-1）
+  question_tuple_norm_idle_days:    90     # question_tuple_norms 行超过该天数未命中由 Study 周期清理
+  vector_match_enabled:             false  # Tier2.5 向量早筛开关，独立于总开关，二者都为 true 才生效
+  vector_model_dir:                 "./models/bge-small-zh-v1.5"     # goformer 加载 embedding 模型权重的目录（HuggingFace safetensors），为空则不启用
+  vector_match_sim_min:             0.75   # 低于该余弦相似度直接判未命中、跳过 LLM；达到或高于仍需进入 LLM 判断（只拒绝，不单独确认命中）
+
+  # ActivationLink/Bundle 连续置信度（2026-08-13 新增，取代 study 节原
+  # auto_promote/promote_*/weaken_*/reverify_* — 详见 docs/impl/v1/activation.md）
+  serving_confidence_min:  0.7    # 服务门槛：mean(cond) 达到此值才算 self_graded/trusted，够格直接服务
+  audit_sample_min:        5      # 够格评估 trusted 档所需的独立核实样本量下限
+  explore_rate_low:        0.15   # exploring 档：本轮仍被选中试探的概率
+  explore_rate_self_graded: 0.10  # self_graded 档：本轮被抽样安排一次独立核实的概率
+  explore_rate_trusted:     0.03  # trusted 档：本轮被抽样安排一次独立核实（定期复查防漂移）的概率
+
 # Evidence 模块
 evidence:
   enabled:              true
@@ -165,32 +181,48 @@ wiki:
   aspect_max_size:               8
   aspect_questions_max:          5
 
+  # 综合满意度轴（步骤 4a，2026-08-13 新增）
+  synthesis_audit_rate:          0.05 # 每次 Wiki 直答服务后，被抽中触发一次
+                                       # 独立核实（复用 retrieval.md 步骤 2c
+                                       # 的编排），未中选不产生任何 synthesis
+                                       # 事件——audit-only，没有自评分支。
+
 # Study 模块
 study:
   schedule_interval:       "24h"
-  candidate_confident_min: 3
-  candidate_ratio_min:     0.6
+  # candidate_confident_min/candidate_ratio_min 已删除（2026-08-13，随
+  # docs/design/activation-convergence.md 第 11 节一并替换——创建门槛换成
+  # 与「收敛剪枝」同一套 Beta 均值/宽度公式）
+  create_confidence_min:   0.55  # mean_pre 门槛，见 docs/impl/v1/study.md 步骤 1
+  create_width_max:        0.03  # width_pre 门槛
   wiki_kp_min:             4
   gap_hit_threshold:       3
   scan_batch_size:         200
   report_period_days:      5
   report_max_keep:         10
   # —— V1 新增 ——
-  auto_promote:            false  # true 时晋升不经人工确认
-  promote_success_min:     3      # 晋升所需窗口内 activation_success 事件数
-  promote_distinct_min:    2      # 且来自 ≥ N 个不同 question_hash（防单一问题刷信号）
-  weaken_failure_min:      3      # 降权所需窗口内 activation_failure 事件数
-  weaken_ratio_min:        0.5    # 且窗口内 failure / (success+failure) ≥ 该比值
-  reverify_success_min:    2      # weakened 重新验证所需窗口内 success 数
-  event_window_days:       30     # 上述累积判定的时间窗口
-  candidate_idle_days:     30     # candidate 无新信号自动淘汰
-  deprecate_idle_days:     60     # weakened 无有效使用自动淘汰
+  # 2026-08-13：auto_promote/promote_success_min/promote_distinct_min/
+  # weaken_failure_min/weaken_ratio_min/reverify_success_min/
+  # candidate_idle_days/deprecate_idle_days 已删除（离散状态机随连续置信度
+  # 机制一起退休，见 docs/design/activation-convergence.md）——替代方式是
+  # retrieval.{serving_confidence_min,audit_sample_min,explore_rate_*}，见
+  # 上方 retrieval 节。
+  event_window_days:       30     # 报告回看窗口，兼收敛趋势报告与下方剪枝 idle 判定
   correction_weight:       2      # user_correction 关联链接时按 N 次 failure 计
   observed_conditions_max: 50     # ActivationLink 观测条件组上限
+  # —— 收敛剪枝（2026-08-13 新增，见 docs/impl/v1/study.md 步骤 3）——
+  # candidate_idle_days/deprecate_idle_days 已删除（随离散状态机一起废弃）
+  prune_mean_max:    0.3   # mean(cond) 低于此值才可能判"收敛低分"
+  prune_width_max:   0.02  # width(cond) 不超过此值才不算"自相矛盾"
+  prune_sample_min:  8     # success+failure 达到此值才有把握说"确实收敛"
+  prune_idle_days:   30    # 收敛低分剪枝：last_seen_at 距今超过此天数
+  prune_stale_days:  90    # 长期闲置剪枝：样本不足 prune_sample_min 且更久未被观测
   # —— subject 同义词挖掘（V1 新增）——
   synonym_gap_min:          3     # subject_synonym_gap 候选达标所需事件数
   synonym_gap_distinct_min: 2     # 且来自 ≥ N 个不同 question_hash
-  synonym_auto_promote:     false # true 时候选直接 active，不经人工确认
+  synonym_auto_promote:     true  # 2026-08-12 新默认（原 false）：候选直接 active，
+                                   # 不经人工确认，理由同 auto_promote；错误同义词对
+                                   # 最坏是 Match 第一轮多/少命中一次，可事后 reject
   # —— 概念演化（V1 新增）——
   entry_null_ratio_min:      0.7   # entry_gap 判定：无概念归属 KP 占比下限
   entry_add_event_min:       5     # 新增候选：簇内 entry_gap 事件数下限
@@ -203,3 +235,20 @@ study:
 
   # 问题复杂度观测量（两层架构扩展，只观测不驱动）
   complexity_min_questions:    3     # 条件组内问答数下限，低于此不出报告项
+
+  # —— ActivationBundle（熟路）阶段 1（docs/impl/v1/activation-bundle.md）——
+  # 阶段 1 只做存储/匹配/显影扫描/只读 API，不含 Retrieval 消费与 Trace 回写
+  # （阶段 2），因此 promote/weaken/reverify 相关阈值当前只有 lifecycle 驱动
+  # 的降权路径在用，其余留给阶段 2 接入 bundle_success/bundle_failure 事件后生效。
+  bundle_core_ratio_min:           0.5  # 核心/全部成员比例下限，过宽写报告不建 bundle
+  bundle_cluster_min_questions:    3    # 归一化四元组聚类：不同问题数下限
+  bundle_cluster_min_days_active:  7    # 且跨度天数下限
+  bundle_core_size_max:            8    # 核心成员数上限，超出视为核过宽
+  bundle_promote_success_min:      5    # 阶段 2 预留：candidate→verified 窗口成功数下限
+  bundle_promote_distinct_min:     4    # 阶段 2 预留：且来自 ≥ N 个不同问题
+  bundle_weaken_failure_min:       3    # 阶段 2 预留：verified→weakened 窗口失败数下限
+  bundle_weaken_ratio_min:         0.5  # 阶段 2 预留：且失败占比下限
+  bundle_reverify_success_min:     3    # 阶段 2 预留：weakened→verified 窗口成功数下限
+  bundle_candidate_idle_days:      60   # candidate 无新信号自动过期
+  bundle_deprecate_idle_days:      180  # weakened 长期无信号自动 deprecated
+  bundle_auto_promote:             true # 默认自动，理由同 study.auto_promote

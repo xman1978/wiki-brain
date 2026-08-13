@@ -22,10 +22,10 @@ V1 的目标是让系统**基本具备学习转化能力**：
 
 | 能力 | MVP | V1 |
 |------|-----|----|
-| ActivationLink | 仅 `link_candidates` 报告候选，不参与检索 | 正式数据结构 + 状态机，verified 链接参与召回 |
+| ActivationLink | 仅 `link_candidates` 报告候选，不参与检索 | 正式数据结构 + 连续置信度（每条观测条件自己的成功/失败计数与服务分档，见 `activation.md`「状态机」），self_graded/trusted 档命中参与召回 |
 | 学习信号 | Rerank 质量分级（confident / partial / gap）+ 共现统计 | 增加激活类事件：activation_success / activation_failure / activation_gap 及 repeated_* 累积 |
 | Study | 定时扫描，只产报告 | 执行学习动作：形成候选、晋升、降权、淘汰，输出 Learning Result + Learning Reason |
-| 检索链路 | 每次问答完整链路（≥4 次 LLM 调用） | ActivationLink 优先激活层；熟悉问题降至 1-2 次 LLM 调用 |
+| 检索链路 | 每次问答完整链路（≥4 次 LLM 调用） | ActivationLink 优先激活层；熟悉问题降至 3~4 次 LLM 调用（2026-08-11 修正：此前"1-2 次"是早期草案数字，与 `retrieval.md` 实际落地的 mining+verify+answer 三段式不符，见该文档「LLM 调用预算对照」） |
 | 证据粒度 | 知识单元整段正文进入回答与引用 | 证据挖掘：Rerank 后逐字摘选片段级证据，程序原文校验 |
 | KPN | 单 Source 内关系 | 跨 Source KP 对齐与关系合并 |
 | 生命周期 | 无 | 完整 3 状态：current / superseded / deprecated |
@@ -42,27 +42,38 @@ V1 的目标是让系统**基本具备学习转化能力**：
 
 **数据模型**：ActivationLink 连接「问题条件」与一组 KnowledgePoint，可经 KP 反查 KU、回到来源证据。激活条件采用 Session 四元组（主题/意图作匹配计分，对象/约束作硬性守门；question_terms 保留作展示与回退，预留 scene / goal 字段），另含目标 point_id、状态、统计信号（采用次数、失败次数、最近使用时间）、创建来源（哪些 Learning Event）。匹配以 standalone 补全后的 expanded_question 及四元组为基准，与 traces 记录同源（见 activation.md 步骤 2）。
 
-**状态机（V1 子集）**：
+**置信度与服务分档（2026-08-13 起取代下方"状态机"这个提法，见 `activation.md`「状态机」）**：信任的单位不是链接整体，是链接下每一条具体的观测条件——每条条件用自己的 `success_count`/`failure_count` 算一个连续的 Beta 后验均值（`mean(cond) = (success+1)/(success+failure+2)`），按这个分数落入三档服务分档：
 
 ```text
-candidate  候选链接，只辅助探索，不参与正式召回
-verified   已验证链接，参与正式召回，持续接受校验
-weakened   被降权链接，不作为首选激活路径
-deprecated 已淘汰链接，不再使用
+exploring     mean 未过服务门槛，本轮只有小概率被当作一次真实试探
+self_graded   mean 已过服务门槛，直接服务，偶尔被抽样做独立核实
+trusted       mean 已过服务门槛且经受住足够的独立核实，直接服务，
+              抽样核实频率更低（定期复查防漂移）
 ```
 
-`conflicted` 状态依赖深想路径的 conflict 槽位处理，推迟到 V3（认知系统版，见 docs/impl/v3/readme.md）；V1 预留状态枚举值。
+`activation_links.status` 列仍然存在，但含义改为从这三档派生、落库的缓存摘要（`verified ⟺ 存在 ≥1 条 tier∈{self_graded,trusted} 的条件`，`candidate ⟺` 不满足 verified 且 KP 仍 current，`deprecated ⟺` KP lifecycle 非 current），不再是驱动行为的真相源，也不再有 `weakened` 这个中间态——持续失败会让 mean 自然下滑回落 `candidate`，不需要一个单独的"降权"标签。
 
-**状态迁移规则**（由 Study 执行，阈值可配置）：
+**没有单独的"状态迁移规则"这一说**：不存在攒够阈值触发的离散跳变，每条观测条件的 mean 随每次真实使用（自证）或定期抽样核实（独立核实，见 `retrieval.md` 步骤 2c）持续、连续地更新，见 `docs/design/activation-convergence.md`。
 
-```text
-共现积累 / activation_gap 满足阈值   -> 创建 candidate
-candidate 在相似条件下 repeated_success -> 晋升 verified
-verified 在相似条件下 repeated_failure  -> 降权 weakened
-weakened 长期无有效使用                -> 淘汰 deprecated
-```
-
-单次事件不改变状态；只有跨事件累积信号才推动迁移（`study.md` 第 3 节学习信号使用原则）。
+> 以下这段保留原文供对照历史演进，不代表当前实现——这套离散四态状态机与迁移表已于 2026-08-13 被上面的连续置信度机制取代：
+>
+> ```text
+> candidate  候选链接，只辅助探索，不参与正式召回
+> verified   已验证链接，参与正式召回，持续接受校验
+> weakened   被降权链接，不作为首选激活路径
+> deprecated 已淘汰链接，不再使用
+> ```
+>
+> `conflicted` 状态依赖深想路径的 conflict 槽位处理，推迟到 V3（认知系统版，见 docs/impl/v3/readme.md）；V1 预留状态枚举值。
+>
+> ```text
+> 共现积累 / activation_gap 满足阈值   -> 创建 candidate
+> candidate 在相似条件下 repeated_success -> 晋升 verified
+> verified 在相似条件下 repeated_failure  -> 降权 weakened
+> weakened 长期无有效使用                -> 淘汰 deprecated
+> ```
+>
+> 单次事件不改变状态；只有跨事件累积信号才推动迁移。
 
 ### 2. 检索事件体系
 
@@ -95,7 +106,7 @@ Wiki：    稳定 KP 簇                      -> Wiki 编译候选（见能力 8
 
 **Learning Result 与 Learning Reason**：每个学习动作落库为 Learning Result，附 Learning Reason，说明触发来源（哪些 Learning Event）、影响对象、动作类型、依据和适用边界，支持事后追踪与回滚（`study.md` 第 9 节）。
 
-**人工监督**：candidate 的创建与降权、淘汰全自动执行；**candidate → verified 的晋升在 V1 默认需人工在 Page 上确认**（可配置为自动），因为 verified 直接影响正式召回，V1 需要先建立对信号质量的信心。这是 V1 的谨慎选择，不是设计约束；V3 视数据表现转为全自动。
+**人工监督（2026-08-12 修订，取代 2026-08-11「晋升默认自动，Wiki 材料准入单独加严」的口径）**：candidate 的创建与降权、淘汰全自动执行；**candidate → verified 的晋升默认也自动执行**（`study.auto_promote` 默认 `true`，可配置为人工确认），理由是 verified 唯一直接解锁的高风险动作——Retrieval 快路径——在生成答案前必经 `fast_path_verify`，误晋升的链接答不出来会回落慢路径，不会把错误答案直接送给用户；原先"默认人工确认"要防的风险已经被这道查询时的门槛结构性兜住。2026-08-11 曾额外认为 verified 不再隐含"人工看过、值得信赖到可以进入 Wiki 材料池"，因此给 Wiki 一阶编译材料的 qualifying 加了一道新的独立人工确认关卡（Wiki 材料确认）；2026-08-12 改判，该关卡整体废弃（见 `docs/design/wiki.md`「2026-08-12 改判」）——脱离具体 Wiki 主题语境，人工看着一条孤立的 KP 判断"值不值得沉淀"并不比程序多掌握信息，真正能做这个判断的时机是 Wiki 编译时（主题范围已定，编译时的整体判断——广度/连贯/稳定——自然回答了这个问题）。qualifying 因此恢复为只看 verified ActivationLink，V1 的"人工把关"仍然只落在一处："要不要相信这条激活路径"被查询时的 `fast_path_verify` 校验兜住，"要不要正式发布进 Wiki"由 `POST /wiki/compile` 的人工触发与编译时的整体判断把关，不需要在两者之间再加一道候选阶段的确认。
 
 **运行方式**：沿用 MVP 的 `time.Ticker` 定时扫描，不走异步队列；报告继续生成，内容扩展为「本周期执行了哪些学习动作及原因」。
 
@@ -118,7 +129,7 @@ Wiki：    稳定 KP 簇                      -> Wiki 编译候选（见能力 8
 - candidate 链接不参与快路径召回，最多作为 Rerank 候选的补充探索线索，且不得单独决定答案；
 - 快路径命中后仍产生 activation_success / activation_failure 事件，verified 不免审；
 - weakened / deprecated 不参与召回；
-- 快路径目标：熟悉问题的 LLM 调用从 ≥4 次降至 1-2 次（Rerank 精简或跳过 + Answer），这是 MVP readme 预留的演进方向。
+- 快路径目标：熟悉问题的 LLM 调用从 ≥4 次降至 3~4 次（挖掘 + 快路径校验 + Answer，命中需要模型辅助匹配时再加 1 次，见 `retrieval.md`「LLM 调用预算对照」、`activation.md` 步骤 2）；本条目原写"1-2 次（Rerank 精简或跳过）"，是 MVP readme 阶段的早期设想，实际落地路径没有走"精简版 Rerank"，2026-08-11 一并订正。
 
 ### 5. 证据挖掘：片段级证据
 
@@ -188,7 +199,7 @@ candidate / needs_verification / conflicted / historical / retracted 均已从�
 
 ### 10. Page 升级
 
-- **ActivationLink 管理视图**：按状态分列（candidate / verified / weakened / deprecated），展示激活条件、命中统计、Learning Reason；支持人工确认晋升、驳回候选；
+- **ActivationLink 管理视图**：按状态分列（candidate / verified / weakened / deprecated），展示激活条件、命中统计、Learning Reason；支持人工确认晋升（`auto_promote=false` 时的灰度回退路径）、驳回候选；
 - **Wiki 视图**：候选确认、页面阅读、待重编译标记、修订记录；
 - **学习动作审计**：Learning Result 列表，可从动作回溯到触发它的 Learning Event；
 - 问答界面增加反馈入口（能力 9）与快路径标识（本次回答走了激活层还是完整链路，便于验证学习效果）。
@@ -201,10 +212,10 @@ candidate / needs_verification / conflicted / historical / retracted 均已从�
 
 ```text
 1. Lifecycle 基础     KU/KP 状态字段 + 索引过滤（后续所有能力都要感知状态）
-2. ActivationLink     数据模型 + 状态机 + 存储（学习转化的核心对象）
+2. ActivationLink     数据模型 + 连续置信度/服务分档 + 存储（学习转化的核心对象）
 3. 检索事件           activation_* 事件产生与写入（学习燃料）
 4. Study 执行         学习动作 + Learning Result / Reason + 人工确认流
-5. 检索激活层         verified 链接参与召回，快慢路径分叉
+5. 检索激活层         self_graded/trusted 档命中参与召回，快慢路径分叉
 6. 证据挖掘           Rerank 后片段级摘选 + 原文校验（引用与学习信号细化到片段级）
 7. 跨 Source KPN      KP 对齐与关系合并
 8. Wiki 编译初版      候选确认 -> 编译 -> 发布 -> 检索接入 -> 重编译标记
@@ -212,6 +223,8 @@ candidate / needs_verification / conflicted / historical / retracted 均已从�
 10. 概念演化          gap_level 判定 + 候选聚合 + 人工确认迁移
                       （依赖 trace / study / wiki 均已完成）
 ```
+
+**ActivationBundle（熟路，2026-08-11 新增，设计方向，不在上面的强制顺序内）**：ActivationLink 只记「单个知识点管不管用」，锚点是 `point_id`；熟路是它之上的组合激活层，记「一组知识点合在一起，对同一类问题管不管用」。设计依据 `docs/design/activation-bundle.md`，工程方案 `docs/impl/v1/activation-bundle.md`。尚未排期，`wiki.md`/`wiki-generation.md`/`retrieval.md`/`trace.md`/`study.md`/`activation.md`/`lifecycle.md`/`evidence.md`/`page.md` 各留了「熟路指针」标注未来可能的接入点，当前判据/行为均未变。
 
 1-5 构成「学习转化」最小闭环，是 V1 的主体；6-9 在闭环跑通后叠加。证据挖掘（6）独立于闭环，可视情况提前——它不依赖 ActivationLink，只依赖 Rerank 之后的既有链路。
 
@@ -253,7 +266,7 @@ Bleve
 | 顺序 | 文档 | 内容 |
 | --- | --- | --- |
 | 1 | [lifecycle.md](./lifecycle.md) | KU/KP 生命周期状态、reupload/删除触发、Bleve 同步过滤、向链接与 Wiki 的传导 |
-| 2 | [activation.md](./activation.md) | activation_links 数据模型、状态机与迁移约束、激活条件匹配器、人工确认 API |
+| 2 | [activation.md](./activation.md) | activation_links 数据模型、连续置信度与服务分档（取代原状态机与迁移约束）、激活条件匹配器、人工确认 API |
 | 3 | [trace.md](./trace.md) | activation_success / failure / gap 事件产生规则、traces 表扩展、反馈通道扩展 |
 | 4 | [study.md](./study.md) | 学习动作执行（创建/晋升/降权/淘汰）、learning_results、晋升确认流、报告扩展 |
 | 5 | [retrieval.md](./retrieval.md) | Wiki 直答层与激活层、快慢路径分叉与回落、生命周期过滤改动点、LLM 调用预算 |
@@ -302,9 +315,12 @@ Agent 接入层（service / agent 架构对外开放）
 
 ```text
 学习转化闭环：同类问题反复问答后，系统自动形成 candidate ActivationLink，
-              人工确认晋升 verified 后，后续同类问题走快路径命中；
-检索行为改变：熟悉问题 LLM 调用降至 1-2 次，回答延迟明显下降，
-              且 direct evidence 命中率不低于完整链路；
+              达到统计门槛后自动晋升 verified（2026-08-11 修订，默认不
+              经人工确认），后续同类问题走快路径命中；这批 KP 同时即
+              qualifying 为 Wiki 材料（2026-08-12 修订：不再单独经过
+              Wiki 材料确认，是否够格立传由编译时的整体判断回答）；
+检索行为改变：熟悉问题 LLM 调用降至 3~4 次（2026-08-11 订正，见能力 4），
+              回答延迟明显下降，且 direct evidence 命中率不低于完整链路；
 学习可审计：  每个 ActivationLink 状态迁移都能回溯到 Learning Result、
               Learning Reason 和支撑它的 Learning Event；
 引用精确：    回答引用可定位到知识单元内的原文片段，幻构片段被
