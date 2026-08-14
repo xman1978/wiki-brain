@@ -137,7 +137,7 @@ func (s *Service) checkSlowPathSufficiency(ctx context.Context, es *retrieval.Ev
 		"direct", len(es.DirectEvidence),
 		"supporting", len(es.Supporting),
 		"reason", reason)
-	return s.handleNone(ctx, es), outcome
+	return s.handleNoneWithReason(es, reason), outcome
 }
 
 func (s *Service) generateWithDeep(ctx context.Context, es *retrieval.EvidenceSet, forceDeep bool) *generated {
@@ -473,10 +473,18 @@ func stripThinkTags(s string) string {
 }
 
 func (s *Service) handleNone(_ context.Context, es *retrieval.EvidenceSet) *generated {
+	return s.handleNoneWithReason(es, "")
+}
+
+func (s *Service) handleNoneWithReason(es *retrieval.EvidenceSet, reason string) *generated {
+	content := "知识库中暂无相关材料，无法回答该问题。"
+	if reason != "" {
+		content += "\n\n> 证据判断理由：" + reason
+	}
 	r := &AnswerResult{
 		AnswerID:    uuid.New().String(),
 		Question:    es.Question,
-		Content:     "知识库中暂无相关材料，无法回答该问题。",
+		Content:     content,
 		Citations:   []string{},
 		HasAnswer:   false,
 		Path:        "none",

@@ -120,9 +120,9 @@ retrieval:
   explore_rate_self_graded: 0.10  # self_graded 档：本轮被抽样安排一次独立核实的概率
   explore_rate_trusted:     0.03  # trusted 档：本轮被抽样安排一次独立核实（定期复查防漂移）的概率
 
-# Evidence 模块
+# Evidence 模块挖掘
 evidence:
-  enabled:              true
+  enabled:              false
   batch_max_chars:      6000   # 单次 LLM 调用携带的 KU 正文字符数上限（rune）
   max_fragments_per_ku: 5      # 单 KU 最多保留片段数（超出按输出顺序截断）
   min_fragment_chars:   8      # 短于该长度的片段丢弃（无信息量）
