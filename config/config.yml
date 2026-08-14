@@ -232,6 +232,11 @@ study:
   entry_merge_overlap_min:   0.6   # 且共同采用中 KP 重叠比例下限
   entry_candidate_idle_days: 60    # 候选无新信号自动过期
   entry_event_window_days:   90    # 聚合统计的时间窗口（长于链接窗口）
+  entry_add_auto_confirm:    true  # 2026-08-14 改判：新增概念/事实（kind=add）
+                                   # 创建后自动确认，不再需要人工点击"确认"；
+                                   # 仅限新增，kind=merge（合并已有概念）仍需
+                                   # 人工确认。见 docs/design/concept-evolution.md
+                                   # "2026-08-14 改判"
 
   # 问题复杂度观测量（两层架构扩展，只观测不驱动）
   complexity_min_questions:    3     # 条件组内问答数下限，低于此不出报告项

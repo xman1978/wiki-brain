@@ -25,6 +25,13 @@ type Config struct {
 	MergeOverlapMin   float64
 	CandidateIdleDays int
 	EventWindowDays   int
+	// AutoConfirmAdd, when set, immediately confirms every freshly created
+	// kind=add candidate (2026-08-14 改判, docs/design/concept-evolution.md
+	// "2026-08-14 改判" — supersedes the original "always human-gated"
+	// design). Scoped to new concept/fact creation only: kind=merge
+	// candidates (restructuring existing concepts) still require a human
+	// confirm regardless of this flag.
+	AutoConfirmAdd bool
 }
 
 // KPNRematchNotifier lets the KPN cross-Source matching pipeline
@@ -141,19 +148,40 @@ func (s *Service) ProposeAddCandidate(domainID, suggestedName, suggestedDescript
 	if err != nil {
 		return "", err
 	}
+	s.autoConfirmAdd(candidateID, suggestedDescription)
 	return candidateID, nil
+}
+
+// autoConfirmAdd immediately confirms a freshly created kind=add candidate
+// when cfg.AutoConfirmAdd is set (2026-08-14 改判 — new concepts/facts no
+// longer require a human confirm step, see the Config.AutoConfirmAdd doc
+// comment). description is passed through explicitly because confirmAdd
+// only takes it from a ConfirmAddRequest override, not from the candidate's
+// own evidence — auto-confirm has no dialog to source it from otherwise.
+// Best-effort: a failure here is logged but doesn't fail the caller, since
+// the candidate is already safely persisted as pending_confirm and can
+// still be confirmed manually from the UI.
+func (s *Service) autoConfirmAdd(candidateID, description string) {
+	if !s.cfg.AutoConfirmAdd || candidateID == "" {
+		return
+	}
+	var req *ConfirmAddRequest
+	if description != "" {
+		req = &ConfirmAddRequest{Description: description}
+	}
+	if _, err := s.Confirm(candidateID, req, nil); err != nil {
+		slog.Error("concept: auto-confirm add candidate failed", "candidate_id", candidateID, "error", err)
+	}
 }
 
 // CreateManualCandidate implements the "新增" button in the concept
 // evolution UI: the button itself only opens a client-side draft form (no
 // server call, nothing persisted) — this is what actually runs when the
-// user clicks that draft's own "确认" (save as pending_confirm) or "驳回"
-// (save then immediately reject) button, with whatever domain/name/point_ids
-// they'd filled in by then. Either way it inserts a kind=add candidate
-// exactly like any other; the concept itself is still only ever created
-// later through the normal Confirm path when that saved candidate is
-// opened from the 待确认 list — evidence.origin="manual" is audit-only, no
-// design doc defines a bypass of the human-confirm step.
+// user clicks that draft's own "确认" (save as pending_confirm, and — when
+// cfg.AutoConfirmAdd is set, 2026-08-14 改判 — immediately applied from
+// there too) or "驳回" (save then immediately reject) button, with whatever
+// domain/name/point_ids they'd filled in by then. evidence.origin="manual"
+// is audit-only.
 func (s *Service) CreateManualCandidate(domainID, suggestedName, description, conceptKind string, pointIDs []string) (candidateID string, err error) {
 	conceptKind, err = ValidateEntryKind(conceptKind)
 	if err != nil {
@@ -171,7 +199,12 @@ func (s *Service) CreateManualCandidate(domainID, suggestedName, description, co
 	// editable description field from there whichever origin, so typing one
 	// on the draft form survives the save-then-reopen-to-confirm gap.
 	evidence := ContentDrivenEvidence{Origin: "manual", Description: description}
-	return s.store.InsertAddCandidate(domain, suggestedName, conceptKind, pointIDs, nil, evidence, "人工手动新增概念候选")
+	candidateID, err = s.store.InsertAddCandidate(domain, suggestedName, conceptKind, pointIDs, nil, evidence, "人工手动新增概念候选")
+	if err != nil {
+		return "", err
+	}
+	s.autoConfirmAdd(candidateID, description)
+	return candidateID, nil
 }
 
 // Scan runs the two clustering subtasks plus idle expiry
@@ -373,9 +406,11 @@ func (s *Service) scanAddClusters(summary *ScanSummary) error {
 		// as the DB column default; kind:fact here would require asserting a
 		// judgment this pipeline never makes, unlike kpn_entry_propose.md's
 		// content-driven clusters.
-		if _, err := s.store.InsertAddCandidate(domainID, name, EntryKindConcept, pointIDs, eventIDs, evidence, reason); err != nil {
+		newCandidateID, err := s.store.InsertAddCandidate(domainID, name, EntryKindConcept, pointIDs, eventIDs, evidence, reason)
+		if err != nil {
 			return err
 		}
+		s.autoConfirmAdd(newCandidateID, "")
 		summary.AddCreated++
 	}
 	return nil

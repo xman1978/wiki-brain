@@ -65,33 +65,55 @@
 数据库：全新空库（删除旧 .db 与 Bleve 索引目录）
 ```
 
-`config.yml` 测试期建议值（目的：把"反复问答天数"压缩到单日可完成，不改变判定逻辑）：
+`config.yml` 测试期建议值（目的：把"反复问答天数"压缩到单日可完成，不改变判定逻辑）。**2026-08-13 起离散状态机（`candidate_confident_min`/`promote_success_min`/`promote_distinct_min`/`weaken_failure_min`/`auto_promote` 等）已随连续置信度机制整体废弃，以下按 `internal/foundation/config/config.go` + `config/config.yml` 当前实际字段重写**：
 
 ```yaml
 study:
   schedule_interval:       "24h"   # 调大，统一用 POST /study/run 手动触发，保证时序可控
-  candidate_confident_min: 3       # 默认 5，压低共现门槛
-  promote_success_min:     3       # 保持默认
-  promote_distinct_min:    2       # 保持默认（要求 ≥2 个不同问法，测试集已备变体）
-  weaken_failure_min:      3
-  auto_promote:            false   # 必须保持 false，验证人工确认流
+  create_confidence_min:   0.3     # 默认 0.55，压低创建门槛（mean_pre，见 study.md 步骤 1）
+  create_width_max:        1.0     # 默认 0.03，放宽宽度门槛，配合上面压低的 min 让创建更容易触发
+  correction_weight:       2       # 默认值，user_correction 关联链接按 N 次 failure 计
+  observed_conditions_max: 50      # 默认值，ActivationLink 观测条件组上限
+  prune_mean_max:          0.3     # 默认值
+  prune_width_max:         0.02    # 默认值
+  prune_sample_min:        8       # 默认值
+  prune_idle_days:         30      # 默认值
+  prune_stale_days:        90      # 默认值
 retrieval:
   fast_path:               true
   fast_path_fallback:      true
+  serving_confidence_min:  0.7     # 默认值：mean(cond) 达到此值才算 self_graded/trusted
+  audit_sample_min:        5       # 默认值：够格评估 trusted 档所需的独立核实样本量
+  explore_rate_low:        1.0     # 测试期调到 1.0：exploring 档必被抽中，避免探索概率把命中埋进随机性里
+  explore_rate_self_graded: 0.10   # 默认值
+  explore_rate_trusted:     0.03   # 默认值
 evidence:
   enabled:                 true
 wiki:
+  synthesis_audit_rate:    0.05    # 默认值，纯观测性（不进 needs_recompile/selfcheck/publish 判据）
   # P8 冒烟时可临时压低 days_active；正式验收以默认值为准，轴二不强制达标
   # qualifying_min_days_active: 1
   # 主题候选（P12 轴二观测）按提问四元组聚类，见 docs/impl/v1/wiki.md 步骤 8
   # topic_cluster_min_questions / topic_cluster_min_days_active 保持配置默认即可
 ```
 
+`explore_rate_low` 测试期建议临时调到 `1.0`：连续置信度机制下，即使一条链接的某个条件已跨过 `serving_confidence_min` 进入 `exploring`（等等——`exploring` 档是"未跨过"`serving_confidence_min` 的档，本身就概率抽样服务，见下方术语说明），是否本轮真的走快路径仍按 `explore_rate_*` 概率抽样，默认 `0.15` 会让 M1/M2 这类"重复同一问法应稳定命中"的测试引入不必要的随机噪声；调到 `1.0` 消除这层噪声，不改变被测的匹配/服务逻辑本身。
+
+**术语对照（新旧状态机映射，供全文档阅读时心里换算，来源 `docs/impl/v1/activation.md`「状态机」节 + `internal/activation/confidence.go`）**：
+
+- 不再有全局的"打分是否命中"阈值判断；`activation_links.observed_conditions` 每条观测条件（唯一键为 subject/intent/audience/constraint 四元组）各自独立累计 `success_count`/`failure_count`（自证，来自每次快路径服务后的结果回写 `RecordOutcome`）与 `audited_success_count`/`audited_failure_count`（独立核实，来自后台按 `explore_rate_*` 概率抽样触发的慢路径对照校验 `RecordAuditOutcome`）；
+- `mean(cond) = (success_count+1)/(success_count+failure_count+2)`（Beta(success+1, failure+1) 后验均值，新条件 0/0 时为 0.5）；
+- 三档服务分层（`Tier`，由 `conditionTier` 计算，只在 `GET /activation-links/:id` 响应的 `conditions[].tier` 中可读，`status` 字段本身不区分档位）：`exploring`（`mean < serving_confidence_min`，仅按 `explore_rate_low` 概率被抽中试探）、`self_graded`（`mean ≥ serving_confidence_min` 但独立核实样本 `audited_success_count+audited_failure_count < audit_sample_min`，或核实均值未达标）、`trusted`（`mean ≥ serving_confidence_min` 且独立核实样本数 ≥ `audit_sample_min` 且核实均值也 ≥ `serving_confidence_min`）；
+- `status` 字段是从 `observed_conditions` 派生的缓存摘要（`deriveAndPersistStatus`），**不是判断依据**：只要任一条件达到 `self_graded`/`trusted` 档，`status=verified`；若目标 KP `lifecycle != current`，无论条件档位如何强制 `status=deprecated`（生命周期覆盖优先于置信度，且**直接**到 `deprecated`，中间不经过任何"降权"中间态——`weakened` 状态已整体废弃）；否则 `status=candidate`；
+- 没有任何"人工确认晋升"的端点。`POST /activation-links/:id/reject` 是唯一的人工干预端点，语义是"清空该链接全部观测条件、重新开始"（不是"驳回一个待确认的晋升提案"），任何状态下都可调用，调用后 `status` 重新派生（现有 KP 为 current 时回到 `candidate`）；
+- 创建门槛同样换成 Beta 均值/宽度公式：`mean_pre`/`width_pre` 由 `question_kp_cooccurrence.confident_count`/`hit_count` 算出，`mean_pre ≥ create_confidence_min` 且 `width_pre ≤ create_width_max` 才创建 `candidate` 链接（`internal/study/service.go` `createCandidates`，替代旧的 `candidate_confident_min`/`candidate_ratio_min` 原始计数/比例门槛）；
+- 清理机制是"剪枝"（`PruneCandidateConditions`，Study 步骤 3）而不是"降权转移状态"：低置信度或长期未见的单条 observed_condition 被直接从数组里删除（不是整条链接被标记 `weakened`），`learning_results` 记 `action=prune_condition`，`reason` 区分 `manual_reject`（人工）与自动剪枝原因（低分/idle/stale）。
+
 **观察面**：
 
-- API：`POST /answer`（响应 `path_type`）、`GET /traces`（`path_type`/`activation_link_ids`）、`GET /activation-links`、`GET /study/results`、`GET /learning-events`、`GET /wiki/pages`、`GET /units/:id`（lifecycle）；
-- DB：`learning_events`、`activation_links`、`learning_results`、`traces`、`knowledge_units.lifecycle`、`knowledge_point_relations.scope`、`wiki_pages`；
-- 日志：LLM 调用次数按 `LLMClient` 调用日志逐问计数（这是标准 2 的核心指标，若当前无此日志需先补一行 slog）。
+- API：`POST /answer`（响应 `path_type`）、`GET /traces`（`path_type`/`activation_link_ids`）、`GET /activation-links`（列表，字段含 `status`/`adopt_count`/`fail_count`，均为派生/遗留聚合值，不是判断依据）、`GET /activation-links/:id`（详情，字段含 `conditions[]`，每项 `{subject, intent, audience, constraint, success_count, failure_count, audited_success_count, audited_failure_count, mean, tier, last_seen_at}` ——本方案后续步骤判定优先读这里而非顶层 `status`）、`GET /activation-bundles`、`GET /activation-bundles/:id`（字段含 `members[]`/`core_member_point_ids`）、`GET /study/results`、`GET /learning-events`、`GET /wiki/pages`、`GET /units/:id`（lifecycle）；
+- DB：`learning_events`、`activation_links`（`observed_conditions` 列为 JSON，是 `conditions[]` 的落库来源）、`learning_results`、`traces`、`knowledge_units.lifecycle`、`knowledge_point_relations.scope`、`wiki_pages`（含 `synthesis_success_count`/`synthesis_failure_count`/`synthesis_audited_success_count`/`synthesis_audited_failure_count` 四个纯观测计数列）；
+- 日志：LLM 调用次数按 `LLMClient` 调用日志逐问计数（这是标准 2 的核心指标，若当前无此日志需先补一行 slog）；后台独立核实（`RecordAuditOutcome`）与 Wiki 合成审计（`wiki_synthesis_audit_*`）会异步追加慢路径对照调用，统计"某一题的 LLM 调用次数"时应只数该题同步返回前发生的调用，不要把异步抽样触发的核实调用也算进单题预算。
 
 ## 4. 问答测试集
 
@@ -258,14 +280,9 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
 
 按序执行，前一阶段是后一阶段的数据基础。每阶段列出操作、验证点、通过标准。
 
-### P0 导入与提取验收（MVP 链路回归 + lifecycle 初始状态)
-
-1. 前置检查：`preset/domains.json` 必须覆盖技术域（数据库/容器/运维类 Domain 与 Concept），否则 Domain 预过滤会把技术问题全部错杀在入口——缺失先补 preset 再开测；
-2. 依次上传 21 份文档 → 等 `source_process`/`unit_extract` 完成；
-3. 验证：21 个 source 状态 ready；每份文档 KU/KP 数量 > 0 且抽查 KU 的 `line_start/line_end` 切片能对上原文（技术文档必抽：K8S、达梦、AlwaysOn 三篇长文档各 2 个 KU，重点看代码块/表格是否被切断——命令步骤被从中间切开属提取期缺陷）；所有 KU/KP `lifecycle=current`；`GET /sources` 无影子行。
-4. 通过标准：无提取失败；制度域关键事实（45 天、-5 分、256 元、6%、25%）与技术域关键事实（2377/TCP、containerd、MAX_SESSION_STATEMENT 20000、MAX_CONNECTIONS 128、srvctl 归档五步、chmod u+s）均能在某个 KP/KU 中找到。
-
 ### P1 慢路径基线（标准 4 前半 + P3 的对照组）
+
+**前置（原 P0 导入与提取验收，已合并/删除独立测试脚本）**：`preset/domains.json` 必须覆盖技术域（数据库/容器/运维类 Domain 与 Concept），否则 Domain 预过滤会把技术问题全部错杀在入口；依次上传 21 份文档并等 `source_process`/`unit_extract` 完成；确认 21 个 source 状态 ready、`GET /sources` 无影子行、所有 KU/KP `lifecycle=current` 后再进入本阶段——本方案不再对导入/提取本身设独立验收步骤与脚本（`v1_p0_ingest_test.py` 已删除），提取质量改为在 P1 逐题作答过程中随事实命中情况一并核验。
 
 1. 逐题执行 A 组 + T 组全部主问法 + B 组 + C 组 + D 组 + G 组（准确率扩展题库 48 题，单轮提问），每题记录：`path_type`、回答是否含期望要点、引用 fact_id 数、LLM 调用次数、耗时；
 2. 验证点：
@@ -278,28 +295,29 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
    - 慢路径 LLM 调用次数记录为基线（预期 ≥4 次/题）。
 3. 通过标准：以上全部成立。activation_gap 一条都没有 → 标准 1 的燃料链路断裂，先修再继续。
 
-### P2 学习转化：candidate 形成与人工晋升（标准 1 前半 + 标准 3）
+### P2 学习转化：candidate 形成与置信度收敛（标准 1 前半 + 标准 3）
 
-**2026-08-07 修订**（对齐四元组精确匹配 + 按 point 聚合建链后的实测口径；不改产品设计）：
+**2026-08-13 改判（取代此前"人工晋升 verified"这整套设计，本节全文重写）**：ActivationLink 不再有 candidate→verified 的人工确认步骤——`POST /activation-links/:id/confirm` 端点已从代码中移除（`internal/activation/handler.go` 路由表中不存在）。置信度改为连续自收敛：每条 `observed_conditions` 独立累计 `success_count`/`failure_count`，`mean = (success+1)/(success+failure+2)` 达到 `serving_confidence_min` 即视为 `self_graded` 档，`status` 自动派生为 `verified`——**没有任何人工确认动作参与这个过程**。人工唯一能做的是 `POST /activation-links/:id/reject`（清空条件、打回 `candidate`，见第 3 节术语对照），语义是"推倒重来"而不是"驳回一个待确认的提案"。
 
-- Matcher 已是四元组完全匹配：变体问法**不保证**落到同一条 ActivationLink，因此「再问变体 → 同一 link 的 `success_n` 自然凑满」不再作为全清单硬门槛。
-- Study 按 `point_id` 建/刷新链接：邻近主题（如 A9↔A11 回款簇、T12↔F1_PRE 达梦运维簇）可能共享 `point_id` 或串进同一 link。脚本必须以**题号独占归属**判定 confirm/reject/对照组，禁止把「凡出现过该题 direct evidence 的 point」一锅端到多题上。
-- `POST /activation-links/:id/reject` 的终态是 `deprecated`（不是字面 `rejected`）；learning_result 记 `action=deprecate`。
+本节沿用旧版遗留的 "Matcher 已是四元组完全匹配" 与 "按 point_id 归属" 两条实测经验，均仍成立：
 
-1. 培养清单（制度域 6 题 + 技术域 5 题，覆盖两域）：A1、A2、A4、A9、A11、A12 + T8、T12、T15、T13，以及 F1 前置问题「达梦怎么查询会话执行情况」；每题至少 2 种不同问法（题库变体 + `--extra-phrasing-file`），保证共现/gap 侧 `distinct question_hash ≥ 2` 且 confident。靶子约束：A4 必须入选（P6 制度侧靶子）、T15 必须入选（P6 技术侧靶子）、T8 必须入选（P5 技术侧靶子）；A11 入选但**不**进入确认集，专作「脚本未 confirm 的归属链接不得变 verified」对照；
+- Matcher 是四元组完全匹配：变体问法**不保证**落到同一条 ActivationLink，因此「再问变体 → 同一 link 的 success_count 自然凑满」不作为全清单硬门槛。
+- Study 按 `point_id` 建/刷新链接：邻近主题（如 A9↔A11 回款簇、T12↔F1_PRE 达梦运维簇）可能共享 `point_id` 或串进同一 link。脚本必须以**题号独占归属**判定观察/对照组，禁止把「凡出现过该题 direct evidence 的 point」一锅端到多题上。
+
+1. 培养清单（制度域 6 题 + 技术域 5 题，覆盖两域）：A1、A2、A4、A9、A11、A12 + T8、T12、T15、T13，以及 F1 前置问题「达梦怎么查询会话执行情况」；每题至少 2 种不同问法（题库变体 + `--extra-phrasing-file`），保证共现侧 `distinct question_hash ≥ 2` 且 confident。靶子约束：A4 必须入选（P6 制度侧靶子）、T15 必须入选（P6 技术侧靶子）、T8 必须入选（P5 技术侧靶子）；A11 入选但**刻意少问几轮**（只问 1 轮、不追加复现），专作"欠采样条件应停留在 exploring 档、`mean` 不跨过 `serving_confidence_min`"的对照组——它不再是"未被人工确认"的对照，而是"证据量不足以自然收敛"的对照；
 2. `POST /study/run`；
-3. 验证 candidate 创建：培养清单各题在**独占归属**下至少能关联到一条 `status=candidate` 的链接（共享 point 的串台记入观测，不阻塞）；每条归属链接有 `learning_results(action=create_candidate, status=applied)`，reason 含 confident_count/ratio/触发来源事件 id，能 JOIN 回 `learning_events`；技术域归属链接的激活条件应带对象/约束字段（如"达梦"/"神通"/"oracle rac"），字段为空要记录（将走回退匹配路径）；
-4. 再培养一轮（全清单变体各再问一遍；对晋升演示题 A1 **额外**用主问法原句 + 至少 1 个不同问法复现，尽量让同一四元组攒到 `activation_success`）→ `POST /study/run`：
-   - **硬门槛**：`auto_promote=false` 下，本阶段归属链接不得自动变成 `verified`（仍为 `candidate`，除非后续人工 confirm）；
-   - **硬门槛**：至少 **1** 条归属链接出现 `action=promote, status=pending_confirm`（通常来自 A1；验证「提案不改状态、等人确认」路径）；
-   - **观测**：其余题是否出现 pending_confirm、各 link 的 `adopt_count`——精确匹配下多数题可能仍 < `promote_success_min`，属预期，写入报告不判 FAIL；
-5. 按题号独占归属执行人工动作（同一 `link_id` 只操作一次）：确认集 A1、A4、A9、A12、T8、T12、T15、F1_PRE 的归属链接 `POST .../confirm`（已是 `verified` 则跳过，记观测）；A2、T13 的归属链接 `POST .../reject`；**不对 A11 的归属链接调用 confirm**；
-6. 验证：确认集归属链接 `status=verified` 且有对应 `promote`（或等价确认）learning_result；reject 归属链接 `status=deprecated` 且不参与后续召回；A11 独占归属链接仍非 `verified`；
+3. 验证 candidate 创建：培养清单各题在**独占归属**下至少能关联到一条 `status=candidate` 的链接（共享 point 的串台记入观测，不阻塞）；每条归属链接有 `learning_results(action=create_candidate, status=applied)`，reason 含 `mean_pre`/`width_pre`/触发来源事件 id（替代旧版的 confident_count/ratio 措辞，字段来自 `question_kp_cooccurrence.confident_count`/`hit_count` 换算），能 JOIN 回 `learning_events`；技术域归属链接的激活条件应带对象/约束字段（如"达梦"/"神通"/"oracle rac"）；
+4. 再培养一轮（全清单变体各再问一遍；对收敛演示题 A1 **额外**用主问法原句 + 至少 2 个不同问法反复复现，让同一四元组的 `success_count` 尽量往上堆，目标是让它先于其他题跨过 `serving_confidence_min`）→ `POST /study/run`：
+   - **硬门槛**：至少 **1** 条归属链接的某个观测条件 `mean` 跨过 `serving_confidence_min`（GET 详情响应 `conditions[].tier` 为 `self_graded` 或 `trusted`），对应 `GET /activation-links/:id` 顶层 `status=verified`——这条链接**没有经过任何人工确认动作**，验证的正是"自动收敛，无需人工晋升"这一新设计；预期来自 A1（第 4 步刻意集中复现的题）；
+   - **观测**：其余归属链接各自的 `conditions[].mean`/`success_count`/`failure_count`/`tier` 分布，精确匹配下多数题的观测条件可能仍停留在 `exploring` 档（`mean < serving_confidence_min`），属预期，写入报告不判 FAIL；
+   - **对照**：A11 归属链接（第 1 步刻意欠采样）此时 `conditions[].tier` 应仍为 `exploring`，`status` 仍为 `candidate`——用以证明"收敛需要真实证据积累，不是问一次就自动 verified"；
+5. 人工动作：仅对 A2、T13 的归属链接调用 `POST /activation-links/:id/reject`（不再有"确认集"人工操作——A1/A4/A9/A12/T8/T12/T15/F1_PRE 全部依赖第 4 步的自然收敛，不主动干预）；
+6. 验证：A2、T13 归属链接 reject 后 `observed_conditions` 被清空（`GET .../id` 响应 `conditions` 为空数组）、`status` 重新派生为 `candidate`（KP 仍 current，不会落到 `deprecated`——`deprecated` 只由 KP lifecycle 触发，reject 本身不产生 deprecated）、且不参与后续快路径召回（下一轮问该题应 `path_type=full`，因为没有任何达标条件可服务）；`learning_results` 记 `action=prune_condition, reason=manual_reject, status=applied`；A11 独占归属链接仍非 `verified`；
 7. 通过标准：
-   - candidate 不经确认绝不出现在 verified 列表（标准 1 前半）；
-   - 至少 1 条 `promote/pending_confirm` 路径被跑通，且 pending 期间链接状态未变；
-   - reject → `deprecated`；
-   - 每次迁移都能从 learning_result → reason → event_ids 完整回溯（标准 3）；
+   - 至少 1 条归属链接**未经人工确认**、仅凭 `RecordOutcome` 自然回写即达到 `self_graded`/`trusted` 档并使 `status` 派生为 `verified`（标准 1 前半，验证的是"自动收敛"而非"晋升流程"）；
+   - A11 对照组在同一轮 Study 后仍未跨过 `serving_confidence_min`（观测证据量与置信度正相关，不是问一次就收敛）；
+   - reject → 条件清空 → `status` 重新派生为 `candidate`（不是字面 `deprecated`，也不是旧版文档写的 `rejected`）；
+   - 每次条件变化都能从 `learning_result`（`action=create_candidate` 或 `action=prune_condition`）→ `reason` → `event_ids` 完整回溯（标准 3）；
    - 题号↔链接按独占归属判定，邻近主题串台只记观测。
 
 ### P3 快路径生效（标准 1 后半 + 标准 2）+ 对象守门 + ActivationLink 可用性验证
@@ -344,7 +362,7 @@ F 组每题跑 3 次，任何一次错误激活（trace 的 activation_link_ids 
    - 隔离（防测试互相污染，2026-08-07）：
      - **M4 前**：从 F1_PRE 链接的 `observed_conditions` 剔除 constraint 含 Windows 的历史组（前次超集探针经慢路径 Enrich 写回会导致本次误命中），并重启刷新 Matcher 缓存；
      - **M6/M7**：任一轮 `path_type=full` 会触发 `EnrichFromConfidentFullPath` 写回观测组；下一轮及进入 M7 前必须再次 `observed_conditions='[]'` 并重启，否则测到的不是回退分支。
-8. M8 状态过滤（2026-07-22 修订；2026-08-07 同步 P2）：P2 已将 A2、T13 **reject → deprecated**，重问应走 `path_type=full` 且不得激活这两条链接；另抽 A11（P2 有意未 confirm、应仍为 candidate）确认 candidate 可 Match 记信号但不走快路径；weakened/deprecated 或目标 KP 非 current 的链接不参与匹配（与 P2/P5 的验证点呼应，本阶段不重复造场景，仅复核一次现状）。
+8. M8 服务分层过滤（2026-08-13 改判后重写）：P2 已将 A2、T13 **reject → 条件清空 → status=candidate**（不是字面 `deprecated`），重问应走 `path_type=full` 且不得激活这两条链接（没有任何达标条件可服务，不是因为状态被禁用）；另抽 A11（P2 中刻意欠采样、其观测条件仍停留在 `exploring` 档）确认它可以被 Match 找到并记一次观测信号（`RecordOutcome` 仍会写入 `exploring` 条件的 `success_count`/`failure_count`），但本轮是否真正提供服务取决于 `explore_rate_low` 抽样（测试期已把该值调到 `1.0`，见第 3 节，因此预期本轮会被抽中试探，但试探本身不代表"晋升"，只是多了一次观测数据）；`status=deprecated`（KP lifecycle 非 current）的链接不参与匹配——本阶段不重复造场景，复用 P5 会产生的现状即可（若 P5 尚未跑，此半句只记观测）。
 
 **轴二：证据充分性校验（步骤 2a，`fast_path_verify`）**
 
@@ -378,15 +396,17 @@ M3 不设通过标准；V1 并入快路径正向样本观测。
 
 ### P5 自我修正与删除生命周期（标准 5 + 标准 6 删除侧，两域各删一个靶子）
 
-1. 前置：A1（报销规定）、T8（RAC 开启归档）两条 verified 链接已就位（P2）；
+**2026-08-13 改判后重写**：`verified→weakened` 这条迁移已不存在（`weakened` 状态整体废弃）。生命周期驱动的降权改为**直接到 `deprecated`**：`deriveAndPersistStatus` 每次都会先查目标 KP 的 lifecycle，非 `current` 时无论 `observed_conditions` 算出的置信度如何，强制 `status=deprecated`，单次触发、不等待任何失败次数或比值累积窗口（见 `docs/impl/v1/lifecycle.md` 步骤 4、`internal/activation/service.go` `deriveAndPersistStatus`/`NotifyPointsLifecycleChanged`）。
+
+1. 前置：A1（报销规定）、T8（RAC 开启归档）两条链接此时 `status=verified`（P2 自然收敛产生，非人工确认）；
 2. `DELETE /sources/:id` 删除《日常费用报销期限管理规定》和《Oracle RAC 开启归档》；
-3. 立即验证生命周期：两个 source 全部 KU/KP `lifecycle=deprecated`；Bleve 查询不再返回；
+3. 立即验证生命周期：两个 source 全部 KU/KP `lifecycle=deprecated`；Bleve 查询不再返回；**同一时刻**（删除应触发 `NotifyPointsLifecycleChanged` 回调，不需要等 `POST /study/run`）A1、T8 对应链接 `GET /activation-links/:id` 的 `status` 应已变为 `deprecated`——这是本阶段与旧版最大的行为差异：迁移不再需要累积 `failure_count` 或跑 Study，是 lifecycle 变化的即时副作用；
 4. 重问 A1、T8 的各变体各 3-4 次：
    - 期望回答不再引用已删除文档的任何 KP（标准 6：旧知识退出回答）；
-   - 快路径行为：链接目标 KP 已非 current，反查为空 → 回落慢路径（`path_type=full`），产生 `activation_failure`（reason=not_cited/answer_gap）；
+   - 快路径行为：链接 `status=deprecated`，不参与 Match → 直接回落慢路径（`path_type=full`），产生 `activation_failure`（reason=not_cited/answer_gap，或因链接已不参与匹配而直接不出现在 `activation_hits` 中，两者都算通过，以实际观测记录为准）；
    - 回答应表现为知识缺口而非引用残留内容；技术侧注意区分：T8 删除后若回答从《Oracle RAC 问题汇总》等其他 RAC 文档拼凑出归档步骤属幻构（那些文档没有归档内容），必须计缺陷；A2（差旅费 3 个月）此时也应只剩《差旅费报销制度》一个来源，顺带验证同主题另一文档不受牵连；
-5. `POST /study/run` → 验证 A1、T8 两链接 verified→weakened 的 learning_result（failure_n≥3 且比值达标），weakened 后不再参与召回；
-6. 通过标准：删除后 0 次回答引用 deprecated KP；两域降权迁移均自动发生且可审计；快路径自动回落无 5xx。
+5. `POST /study/run` → 核对 A1、T8 两链接此刻的 `learning_results`：第 3 步的即时 `deprecated` 迁移本身不写 `learning_result`（`deriveAndPersistStatus` 只是状态派生，不经过 `InsertLearningResult`），可审计性来自 `activation_failure`/`activation_gap` 这类 `learning_events`（能查到该链接在 KP 变更后的匹配尝试）与 `GET /activation-links/:id` 当前 `status=deprecated` 本身；不应再出现任何针对这两条链接的新增 `create_candidate`/`prune_condition` learning_result（说明它们此时确实"只降不升"，已退出学习循环）；
+6. 通过标准：删除后 0 次回答引用 deprecated KP；两域降权迁移均在删除时即时自动发生（`status=deprecated`）且可通过「删除前 verified→删除后立即 deprecated」这一状态对照 + 后续无新增学习动作两点审计；快路径自动回落无 5xx。
 
 ### P6 Reupload 换血（标准 6 更新侧，Shadow Source 机制，两域各换一个靶子）
 
@@ -394,7 +414,7 @@ M3 不设通过标准；V1 并入快路径正向样本观测。
 2. 分别 `POST /sources/:id/reupload` 上传修改版；
 3. 处理期间验证：`GET /sources` 不出现影子行；此时问 A4 仍答「-5」、问 T15 仍答「128」（旧 KU 仍 current）；
 4. 完成后验证：旧 KU/KP `lifecycle=superseded`；问 A4 答「-10」、问 T15 答「256」且引用新 KU；superseded KU 不进入任何回答；
-5. 依赖旧 KP 的 ActivationLink 停止强化：重问后 `POST /study/run`，确认 A4、T15 链接无 adopt_count 增长、无晋升/reverify（文档规则：目标 KP 非 current 只降不升）；
+5. 依赖旧 KP 的 ActivationLink 停止强化：重问后 `POST /study/run`，确认 A4、T15 链接的 `conditions[]` 中 `success_count`/`failure_count`/`mean` 均无增长（`adopt_count`/`fail_count` 这两个顶层聚合字段同理不再增长，仅作参考不作判据），且 `status` 已因 KP 非 current 强制为 `deprecated`（旧规则"目标 KP 非 current 只降不升"在新机制下体现为：`deriveAndPersistStatus` 检测到 lifecycle 非 current 时直接锁定 `deprecated`，不再计算任何条件的置信度，因此不存在"继续晋升"的可能）；
 6. 失败分支：任选一个 source 再造一次必失败的 reupload（如上传空文件/触发 LLM 失败），验证原 Source 与旧 KU/KP 完全不受影响，影子 status=failed，`POST /sources/:id/reupload/retry` 可续跑。
 7. 通过标准：两域换血原子性均成立（要么全新要么全旧，无中间态暴露）；新旧答案切换准确。
 
@@ -416,7 +436,7 @@ M3 不设通过标准；V1 并入快路径正向样本观测。
 
 ### P8 Wiki 初版闭环（标准 7，两域各一个主题）
 
-**前提说明（2026-07-29 修订，qualifying KP 口径变更，见 `docs/design/wiki.md`）**：qualifying KP 现在同时要求 (a) `confident_count ≥ wiki_confident_min`（不变）、(b) 对应 ActivationLink 已 `status=verified`（新增，复用晋升机制而非另立次数口径）、(c) 词条级还额外要求 `days_active ≥ wiki.qualifying_min_days_active`（默认 7，衡量"持续采用"）。参照 P11 的既有拆分方式，本阶段也拆成两半：**轴一是确定性的（verified 链接门槛按代码逻辑生效，可直接验收），轴二是观测性的（days_active 门槛能否在单次脚本运行的自然日窗口内自然达标）**，不要求轴二必须达标才算通过——脚本单次运行大概率仍停在 `needs_more_data`（仅因 days_active 不够），这不算失败，只要能证明"verified 门槛生效 + 门槛逻辑本身正确"即可。真正要观测 days_active 生效，需要跨真实自然日多次运行（`--skip-cultivate` 续跑）或临时调低 `config.yml` 的 `qualifying_min_days_active` 冒烟测试，两者都不在本阶段的必过范围内。
+**前提说明（2026-07-29 修订，qualifying KP 口径变更，见 `docs/design/wiki.md`；2026-08-13 编注更新产生机制，判据本身不变）**：qualifying KP 同时要求 (a) `confident_count ≥ wiki_confident_min`（不变）、(b) 对应 ActivationLink 已 `status=verified`（复用同一个 `status` 字段读取，**不**是另立次数口径）、(c) 词条级还额外要求 `days_active ≥ wiki.qualifying_min_days_active`（默认 7，衡量"持续采用"）。`status=verified` 现在由连续置信度收敛自动产生（见第 3 节术语对照），**不再有任何人工确认步骤**——旧版本节曾要求脚本对每个 point_id 显式调 `POST /activation-links/:id/confirm`，该端点已不存在，第 2 步已重写为"靠重复问答让链接自然收敛"。参照 P11 的既有拆分方式，本阶段也拆成两半：**轴一是确定性的（verified 判据按代码逻辑生效，可直接验收），轴二是观测性的（days_active 门槛能否在单次脚本运行的自然日窗口内自然达标）**，不要求轴二必须达标才算通过——脚本单次运行大概率仍停在 `needs_more_data`（仅因 days_active 不够），这不算失败，只要能证明"verified 判据生效 + 判据逻辑本身正确"即可。真正要观测 days_active 生效，需要跨真实自然日多次运行（`--skip-cultivate` 续跑）或临时调低 `config.yml` 的 `qualifying_min_days_active` 冒烟测试，两者都不在本阶段的必过范围内。
 
 编译流程也改为两步（`docs/impl/v1/wiki.md` 步骤 2）：`POST /wiki/compile/analyze` 先产出拟采用的论断结构（claims/tensions，不落库），人工确认后把该结构原样（或编辑后）带回 `POST /wiki/compile`；跳过 analyze 直接调用 compile 时服务端会自动内部跑一遍分析，效果等价，仍应验收。
 
@@ -434,7 +454,7 @@ M3 不设通过标准；V1 并入快路径正向样本观测。
 **一阶 page_type 与生成路径（`docs/impl/v1/wiki.md`「概念页 / 事实页」，2026-08-03）**：`POST /wiki/compile`、`POST /wiki/compile/analyze` 的 `page_type` **只接受 `concept` | `fact`**（可省略，由目标 `entries.kind` 派生；传入时必须与 kind 一致，否则 400）。主题页（`page_type=topic`）只能由二阶端点 `POST /wiki/pages/:id/topic/analyze`、`POST /wiki/pages/:id/topic/compile` 产出（详见 P12）。正式 Wiki 生成只有两条路径：① Study 问答积累 → `wiki_candidate` → 人工确认后一阶编译；② 人工指定词条直接编译（可无 `result_id`）。**不存在预览 / cold-start 路径**。本阶段每个领域培养的仍是单一词条（一个业务话题对应一个 KP 聚簇挂在同一 `entry_id` 上），脚本按 `entries.kind` 传匹配的 `page_type`。
 
 1. 制度域主题「销售回款管理」：围绕应收账款文档密集问答（A9、A10、A11 及其变体，凑足 wiki_confident_min 与 wiki_kp_min）；技术域主题「Oracle RAC」：围绕 T10、T11、T18、B4 密集问答（11g/19c/问题汇总三篇文档的 KP 同 entry 聚簇，天然满足多 KU 依赖，比单文档主题更能检验编译的综合能力）；
-2. `POST /study/run` → 对每个被密集问答覆盖的 point_id，`GET /activation-links?point_id=...&status=candidate` 应能找到候选链接 → 逐个 `POST /activation-links/:id/confirm` 促成 `verified`（轴一，必过：这一步验证"多次验证"门槛确实复用了既有晋升状态机，而不是另造一套次数口径）；
+2. `POST /study/run` → 对每个被密集问答覆盖的 point_id，`GET /activation-links?point_id=...&status=candidate` 应能找到候选链接 → **不再有人工确认步骤**：对每个候选 point_id 追加数轮重复问答（不同变体，目标是让其观测条件的 `mean` 跨过 `serving_confidence_min`），再 `POST /study/run` 使其自然收敛为 `status=verified`（轴一，必过：这一步验证 qualifying 判据确实复用了 `status` 字段本身，而 `status` 现在完全由置信度自动派生，不存在另一套次数口径，也不存在人工晋升动作）；
 3. 再次 `POST /study/run` → 验证两域各出现 `action=wiki_candidate, status=pending_confirm, object_id=<entry_id>`（若因 days_active 未达标仍是 `needs_more_data`，按前提说明记为观测性缺口，不判失败，但要核实 `Reason`/`Stats` 中 `qualifying_kp_count`、`kpn_connection_count` 已经达标，只差 `days_active`）；
 4. 若拿到 `pending_confirm`：`POST /wiki/compile/analyze`（`entry_id` + `result_id`，`page_type` 与 `entries.kind` 一致）→ 核对返回的 claims 均引用白名单内 point_id、tensions 结构合理；Page 确认后把该结构带回 `POST /wiki/compile` → 页面 draft：验证要素齐全（稳定结论、KP/KU/source_ref 回链、待验证点、更新时间、依赖 KU 列表），正文引用通过白名单校验（不引用 analyze 阶段未确认的 point_id），且落库 `page_type` ∈ {concept, fact} 与 kind 一致；
 5. `POST /wiki/pages/:id/publish` → 重问该主题问题：`path_type=wiki`，回答基于页面并附证据回链，且不产生激活类事件（wiki 直答不经激活层）；
@@ -444,17 +464,23 @@ M3 不设通过标准；V1 并入快路径正向样本观测。
 
 ### P9 用户反馈通道（标准 8）
 
-1. 对一条 verified 链接支撑的快路径回答，连续提交 2 次「纠正」反馈（`POST /traces/:id/feedback, type=correction`）；
-2. 验证：`learning_events` 出现 `user_correction` 且 payload 含 `link_ids`；
-3. `POST /study/run`：按 correction_weight=2，2 次纠正折算 4 次 failure，应直接触发降权（对照组：仅 2 次自然 activation_failure 不足 weaken_failure_min=3 不降权）——以此证明「加速」作用可观察；
-4. 「有用」反馈路径：提交 positive 不改变链接状态，仅入报告；
-5. 通过标准：纠正加速效果在 learning_result 的 reason 统计数字中可见。
+**2026-08-13 改判后重写**：`weaken_failure_min`/`weaken_ratio_min` 及"降权"这一离散动作均已废弃，`correction_weight` 机制本身保留（`docs/impl/v1/trace.md`：一次 `user_correction` 关联到某链接时，按 `study.correction_weight`（默认 2）次数直接计入该链接对应观测条件的 `failure_count`），但触发点从"越过一个固定次数阈值就跳变到 weakened"改为"failure_count 增长把 `mean(cond)` 拉低，进而可能使该条件的 tier 从 self_graded/trusted 掉回 exploring，`status` 才可能相应从 verified 掉回 candidate"——是否真的掉回取决于这条条件在纠正前积累了多少 `success_count`（mean 公式是比例关系，不是简单计数阈值），因此"加速"这件事现在体现为**同样两次纠正，对 mean 的拉低幅度是自然 failure 的 `correction_weight` 倍**，而不是"直接跳变状态"。
+
+1. 找一条 `status=verified` 的链接支撑的快路径回答（复用 P2/P3 中已自然收敛的链接，如 A1），记录纠正前该链接 `GET /activation-links/:id` 响应中命中条件的 `success_count`/`failure_count`/`mean`/`tier`；
+2. 对该回答连续提交 2 次「纠正」反馈（`POST /traces/:id/feedback, type=correction`）；
+3. 验证：`learning_events` 出现 `user_correction` 且 payload 含 `link_ids`；
+4. `POST /study/run` 后重新 `GET /activation-links/:id`：对照纠正前后同一条件的 `failure_count` 应增长 `correction_weight`（默认 2）× 2 = 4（而不是单次自然 `activation_failure` 那样只 +1），`mean` 相应下降；对照组：另找一条同样起点的链接，只让它经历 2 次自然的 `activation_failure`（不提交纠正），`failure_count` 只 +2，`mean` 下降幅度明显更小——以两者 `mean` 下降斜率的差异证明"加速"效果，而不是去看是否跨过某个固定的 weaken 次数阈值；若纠正样本恰好把 `mean` 拉低到 `serving_confidence_min` 以下，`status` 会相应从 `verified` 变回 `candidate`，一并记录但不是本阶段唯一判据；
+5. 「有用」反馈路径：提交 positive 不改变 `failure_count`，仅入报告；
+6. 通过标准：两组（纠正 vs 自然失败）在同样 2 次事件后的 `failure_count` 增量与 `mean` 降幅存在可观察的倍数差异，且能从 `learning_events(user_correction)` payload 回溯到具体链接与 `correction_weight` 折算依据。
 
 ### P10 审计与报告总核（标准 3 收口）
 
-1. 拉取全量 `GET /study/results`：每条 ActivationLink 状态迁移（create/promote/weaken/reverify/deprecate）、每次 Wiki 动作都有记录，`object_id`、`reason`、关联 event_ids 三要素齐全；
-2. 随机抽 5 条 result 反向核对：reason 中的统计数字（success_n/failure_n/distinct_n）与 `learning_events` 按窗口重算一致；
-3. 学习报告包含：本周期学习动作清单、kpn_citation_rate（MVP 链路未被破坏）、知识缺口清单（含 C 组两题、P4 的「命中但挖不出片段」类缺口若出现）。
+**2026-08-13 改判后重写**：`promote`/`weaken`/`reverify`/`deprecate` 四个离散动作已不存在于 `learning_results.action` 词表中（`internal/activation/types.go` 当前完整枚举：`create_candidate`/`prune_condition`/`gap_flag`/`wiki_candidate`/`recompile_flag`/`entry_add_candidate`/`entry_merge_candidate`/`entry_add`/`entry_merge`/`topic_page_candidate`）。`prune_condition` 一个动作同时承担了旧版 `promote`/`weaken`/`reverify`/`deprecate` 里"链接观测条件发生了变化"的记录职责（`reason`/`confirmed_by` 区分是人工 reject 还是 Study 自动剪枝触发）——"晋升"这件事（`status` 从 candidate 派生为 verified）不再单独写一条 learning_result，它是 `create_candidate` 之后条件持续累积、`deriveAndPersistStatus` 每次写入时静默重算的结果，唯一能审计到的落点是 `GET /activation-links/:id` 当前的 `status`/`conditions[]`，而不是某一条历史 learning_result。
+
+1. 拉取全量 `GET /study/results`：核对出现的 `action` 值均落在上述词表内，不应再看到 `promote`/`weaken`/`reverify`/`deprecate`/`confirm` 字样；每条 `create_candidate`/`prune_condition` 都有 `object_id`（link_id）、`reason`、关联 `event_ids` 三要素齐全；每次 Wiki 动作（`wiki_candidate`/`recompile_flag`/`topic_page_candidate`）同样齐全；
+2. 随机抽 5 条 `create_candidate` result 反向核对：reason 中的 `mean_pre`/`width_pre` 与 `question_kp_cooccurrence` 表当时的 `confident_count`/`hit_count` 按公式重算一致；随机抽 5 条 `prune_condition` result，区分 `reason=manual_reject`（对应人工 `POST /activation-links/:id/reject` 调用）与自动剪枝原因，二者数量与 P2/P9 实际触发的操作次数对得上；
+3. 补充审计"状态收敛"本身（因为它不再产生 learning_result）：随机抽 3 条当前 `status=verified` 的链接，核对其 `conditions[]` 中至少一条 `mean ≥ retrieval.serving_confidence_min`，且该 `mean` 用 `(success_count+1)/(success_count+failure_count+2)` 公式能从同一响应里的 `success_count`/`failure_count` 重算出来——这是本节标准 3「可审计」在新机制下的对应验收点，审计对象从"一次迁移记录"变成"当前派生状态与底层计数的一致性"；
+4. 学习报告包含：本周期学习动作清单（`created_candidates`/`synonym_candidates_created`/`pruned_conditions`，取代旧版 `promoted`/`pending_promotions`/`weakened`/`reverified` 字段——`internal/study/types.go` `LearningActionsSummary` 当前结构）、kpn_citation_rate（MVP 链路未被破坏）、知识缺口清单（含 C 组两题、P4 的「命中但挖不出片段」类缺口若出现）。
 
 ### P11 Subject 同义词收敛（2026-07-24 新增，`activation.md` 附属表 + 步骤 3a）
 
@@ -520,10 +546,10 @@ M3 不设通过标准；V1 并入快路径正向样本观测。
 ## 7. 执行注意事项
 
 - **时序控制**：全程手动 `POST /study/run`，禁止依赖 Ticker，否则事件 processed 状态不可控；
-- **变体问法是硬要求（共现/distinct 侧）**：`promote_distinct_min=2` 要求不同 question_hash，同一字面重复问只累计 success_n 不累计 distinct_n；P2 培养清单必须备 ≥2 问法。但自四元组精确匹配起，变体**不保证**命中同一 ActivationLink——P2 的 `pending_confirm` 只要求至少跑通 1 条（见 P2 步骤 4），其余 adopt 覆盖作观测；
+- **变体问法是硬要求（共现侧）**：Study 创建候选链接看的是 `question_kp_cooccurrence` 换算出的 `mean_pre`/`width_pre`（`create_confidence_min`/`create_width_max`），同一字面重复问只累计同一 `question_hash` 下的计数，对 `mean_pre` 的抬升有限；P2 培养清单必须备 ≥2 问法。但自四元组精确匹配起，变体**不保证**命中同一 ActivationLink——P2 的收敛硬门槛只要求至少跑通 1 条归属链接自然到达 `self_graded`/`trusted` 档（见 P2 步骤 4），其余观测条件的 `mean`/`tier` 分布作观测；
 - **P2 链接归属**：确认/驳回/对照组按题号独占归属，勿用「题的 direct point_id 并集」做多题共享判定（A9↔A11、T12↔F1_PRE 邻近簇会误伤）；
 - **阶段间不清库**：P2-P12 依赖 P1 积累的事件；靶子文档已按域错开（P5 删报销规定+RAC 归档、P6 改培训积分+神通、P7 新增两份 contradicts fixture、P8 改应收账款+19c RAC、P11 复用 F1_PRE 且不得在 P11 前调整其四元组字段、P12 直接读 P8 落盘结果不重新培养信号），执行时勿调换；P12 必须排在 P8 之后。
 - **真实 LLM 的波动**：正确率类指标按题判要点命中而非逐字比对（技术域例外：命令与参数名必须逐字对）；单题失败先重跑一次排除 LLM 抖动，复现两次才计为缺陷；
 - **缺陷归因**：每个失败点先区分「提取期缺陷（KU/KP 就没有该事实）」与「检索/回答期缺陷」，前者不属于 V1 目标范围但需记录；
-- **技术文档的特有风险**：代码块/长表格密集，KU 按行切片可能把命令截断（P0 抽查覆盖）；LLM 对通用技术知识有强先验，容易"不看文档也答对"或"用先验覆盖文档细节"——凡技术题必须核验引用片段确实来自对应文档，答对但引用为空/错源一律计缺陷；
+- **技术文档的特有风险**：代码块/长表格密集，KU 按行切片可能把命令截断（导入完成后应抽查 K8S、达梦、AlwaysOn 三篇长文档各 2 个 KU 的 `line_start/line_end` 切片是否对应原文完整片段，重点看代码块/表格是否被切断）；LLM 对通用技术知识有强先验，容易"不看文档也答对"或"用先验覆盖文档细节"——凡技术题必须核验引用片段确实来自对应文档，答对但引用为空/错源一律计缺陷；
 - **不要用的事实**：《Oracle 11g RAC》文内网段表述自相矛盾（网络表私有网段 222.222.222.0/24，服务器表却是 172.16.1.x），勿以此设题，也不要当成系统缺陷。

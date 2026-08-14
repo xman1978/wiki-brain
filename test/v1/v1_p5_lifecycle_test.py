@@ -3,21 +3,36 @@
 V1 验收测试方案（test/v1/v1-acceptance-test-plan.md）P5：自我修正与删除生命周期
 （标准 5 + 标准 6 删除侧）。
 
-依赖 P2：方案假定 A1（报销规定）、T8（RAC 开启归档）此时已是 verified 链接。本次
-实际测试环境里 A1、T8 都没能攒够 confident_count 形成候选（见 P2 报告），所以
-"verified→weakened"这部分在当前数据下没有对象可测——脚本会在运行时动态查一遍，
-真有 verified 链接就测，没有就如实报告"无相关链接可测"，不假装测过。删除生命周期
-本身（lifecycle=deprecated、检索不再返回）不依赖 verified 链接，照常全测。
+依赖 P2：方案假定 A1（报销规定）、T8（RAC 开启归档）此时已通过重复问答自然收敛为
+status=verified 链接。若实际测试环境里 A1、T8 都没能攒够置信度形成 verified 链接
+（见 P2 报告），"verified→deprecated"这部分在当前数据下没有对象可测——脚本会在
+运行时动态查一遍，真有 verified 链接就测，没有就如实报告"无相关链接可测"，不假装
+测过。删除生命周期本身（lifecycle=deprecated、检索不再返回）不依赖 verified 链接，
+照常全测。
+
+2026-08-13 改判后重写（`weakened` 状态整体废弃）：生命周期驱动的降权不再是"failure_n
+累积达到 weaken_failure_min 才降权"，而是 SoftDelete 在同一次调用内同步触发
+`unit.Service.setLifecycle` -> `activationNotifier.NotifyPointsLifecycleChanged`
+-> `deriveAndPersistStatus`（`internal/source/service.go` SoftDelete、
+`internal/unit/service.go` 对应 setLifecycle 逻辑均为同步调用，无异步队列），
+把相关链接直接置为 `status=deprecated`——不经过任何中间态，也不需要等
+`POST /study/run` 或累积失败次数。因此本脚本在 DELETE 之后、还没跑 study/run
+之前就应该已经能观察到 status=deprecated。
 
 流程：
   1. 删除《日常费用报销期限管理规定》《Oracle RAC 开启归档》两个 Source；
-  2. 核对两个 Source 下 KU/KP 全部 lifecycle=deprecated；
+  2. 核对两个 Source 下 KU/KP 全部 lifecycle=deprecated；同时核对删除前 verified
+     的链接此刻已 status=deprecated（不等 study/run）；
   3. 重问 A1、T8 各 3-4 个变体：核对不再引用被删文档的 KP；技术侧额外核查 T8 删除后
      是否从《Oracle RAC 问题汇总》等其他 RAC 文档拼凑出归档步骤（那些文档没有归档
      内容，出现即为幻构缺陷）；顺带重问 A2（差旅费）确认不受牵连；
-  4. 若 A1/T8 存在（或曾存在过的）verified 链接指向被删内容，重问后 POST /study/run，
-     核对 verified→weakened 迁移及 learning_result 可审计；
-  5. 通过标准：0 次引用 deprecated KP；快路径自动回落无 5xx。
+  4. 若 A1/T8 存在（或曾存在过的）链接指向被删内容，`POST /study/run` 后核对：这次
+     status=deprecated 的迁移本身不写新的 learning_result（`deriveAndPersistStatus`
+     只是状态派生，不经过 InsertLearningResult），可审计性来自「删除前 verified →
+     删除后立即 deprecated」这一状态对照，以及此后不再出现任何针对该链接的新
+     `create_candidate`/`prune_condition` learning_result（说明其确实已退出学习循环）；
+  5. 通过标准：0 次引用 deprecated KP；两域链接均在删除时点即时变为 deprecated；
+     快路径自动回落无 5xx。
 
 用法：
   python3 test/v1/v1_p5_lifecycle_test.py
@@ -159,6 +174,18 @@ def main():
 
     deleted_source_ids = {sid for sid in target_ids.values() if sid}
 
+    print("\n--- 核对删除前 verified 链接此刻（未跑 study/run）已即时变为 deprecated ---")
+    immediate_deprecate_report = {}
+    for title, links in pre_links.items():
+        for link in links:
+            current = c.db_activation_link(conn, link["link_id"])
+            now_status = current["status"] if current else None
+            immediate_deprecate_report[link["link_id"]] = {"title": title, "status_now": now_status}
+            print(
+                f"  {title} 链接 {link['link_id']}: 删除前 verified，删除后（未跑 study/run）现状态={now_status} "
+                f"{'PASS' if now_status == 'deprecated' else 'FAIL/待复核'}"
+            )
+
     print("\n--- 重问 A1/T8/A2 各变体，核对不引用已删内容 ---")
     a1_row = next(r for r in c.load_group("A", full_text) if c.row_id(r) == "A1")
     t8_row = next(r for r in c.load_group("T", full_text) if c.row_id(r) == "T8")
@@ -201,7 +228,7 @@ def main():
     for content in t8_suspect:
         print(f"  ! 需人工核对是否幻构: {content[:200]}")
 
-    print("\n--- POST /study/run，核对 verified->weakened（若删除前存在相关链接）---")
+    print("\n--- POST /study/run，核对 deprecated 迁移不产生新学习动作（若删除前存在相关链接）---")
     study_result = None
     weaken_report = {}
     any_pre_links = any(pre_links.values())
@@ -212,12 +239,20 @@ def main():
             for link in links:
                 results = c.db_learning_results_for_object(conn, link["link_id"])
                 current = c.db_activation_link(conn, link["link_id"])
+                new_actions_after_delete = [
+                    r for r in results if r["action"] in ("create_candidate", "prune_condition")
+                ]
                 weaken_report[link["link_id"]] = {
                     "title": title,
                     "status_now": current["status"] if current else None,
                     "learning_results": [{"action": r["action"], "status": r["status"], "reason": r["reason"]} for r in results],
+                    "note": "deprecated 迁移本身不写 learning_result（deriveAndPersistStatus 只做状态派生）；"
+                            "可审计性来自「删除前 verified → 删除后立即 deprecated」的状态对照",
                 }
-                print(f"  {title} 链接 {link['link_id']}: 现状态={current['status'] if current else '?'}")
+                print(
+                    f"  {title} 链接 {link['link_id']}: 现状态={current['status'] if current else '?'} "
+                    f"（study/run 后 learning_results 总数={len(results)}）"
+                )
     else:
         print("  当前环境下 A1/T8 删除前都没有 verified 链接指向其内容，此步骤无对象可测（如实记录，非脚本缺陷）。")
 
@@ -231,6 +266,11 @@ def main():
     print(f"删除后引用 deprecated KP 次数: {total_cited_deleted}（目标 0）: {'PASS' if total_cited_deleted == 0 else 'FAIL'}")
     bad_lifecycle = [t for t, r in lifecycle_report.items() if r["non_deprecated_units"] or r["non_deprecated_points"]]
     print(f"两个 Source 下 KU/KP 全部 deprecated: {'PASS' if not bad_lifecycle else 'FAIL'} ({bad_lifecycle})")
+    bad_immediate = [lid for lid, r in immediate_deprecate_report.items() if r["status_now"] != "deprecated"]
+    print(
+        f"删除前 verified 链接均在删除时即时变为 deprecated（不等 study/run）: "
+        f"{'PASS' if not bad_immediate else 'FAIL'} ({bad_immediate or '无相关链接可测/全部通过'})"
+    )
     a2_errors = [r for r in ask_report["A2"] if r.get("error")]
     print(f"A2（差旅费，不应受牵连）无异常: {'PASS' if not a2_errors else 'FAIL'}")
     print(f"T8 疑似幻构（从其他 RAC 文档拼凑步骤）: {len(t8_suspect)} 条，需人工确认")
@@ -243,6 +283,7 @@ def main():
         "ask_report": ask_report,
         "t8_suspect_hallucination": t8_suspect,
         "study_result": study_result,
+        "immediate_deprecate_report": immediate_deprecate_report,
         "weaken_report": weaken_report,
     }
     jsonl_path = c.write_jsonl([record], Path(args.out), "v1_p5_lifecycle")

@@ -35,6 +35,10 @@ type Source struct {
 	CompletedAt         sql.NullTime
 	UnitsCompletedAt    sql.NullTime
 	UnitsBuiltAt        sql.NullTime
+	RegisterDurationMs  sql.NullInt64
+	ConvertDurationMs   sql.NullInt64
+	UnitsDurationMs     sql.NullInt64
+	SemanticsDurationMs sql.NullInt64
 	Origin              string
 	OriginPageID        sql.NullString
 	ReflowSkippedEdges  int
@@ -131,13 +135,14 @@ func (s *Store) IncrementReflowSkippedEdges(sourceID string, delta int) error {
 
 func (s *Store) GetByID(sourceID string) (*Source, error) {
 	src := &Source{}
-	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at, units_built_at, origin, origin_page_id, reflow_skipped_edges
+	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at, units_built_at, register_duration_ms, convert_duration_ms, units_duration_ms, semantics_duration_ms, origin, origin_page_id, reflow_skipped_edges
 		FROM sources WHERE source_id = ?`, sourceID).Scan(
 		&src.SourceID, &src.Title, &src.Format, &src.FileName,
 		&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status, &src.UnitsStatus, &src.UnitsStage,
 		&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
 		&src.WordCount, &src.ShadowOf, &src.Version, &src.CreatedAt, &src.UpdatedAt,
 		&src.ProcessingStartedAt, &src.CompletedAt, &src.UnitsCompletedAt, &src.UnitsBuiltAt,
+		&src.RegisterDurationMs, &src.ConvertDurationMs, &src.UnitsDurationMs, &src.SemanticsDurationMs,
 		&src.Origin, &src.OriginPageID, &src.ReflowSkippedEdges)
 	if err != nil {
 		return nil, fmt.Errorf("source store: get by id: %w", err)
@@ -270,14 +275,20 @@ func (s *Store) UpdateStatus(sourceID, status string, errorMsg *string) error {
 	now := time.Now().UTC()
 	switch status {
 	case "processing":
-		_, err := s.db.Exec(`UPDATE sources SET status = ?, error_msg = ?, processing_started_at = ?, updated_at = ? WHERE source_id = ?`,
-			status, errVal, now, now, sourceID)
+		_, err := s.db.Exec(`UPDATE sources SET status = ?, error_msg = ?, processing_started_at = ?, updated_at = ?,
+				register_duration_ms = CAST((julianday(?) - julianday(created_at)) * 86400000 AS INTEGER)
+			WHERE source_id = ?`,
+			status, errVal, now, now, now, sourceID)
 		if err != nil {
 			return fmt.Errorf("source store: update status: %w", err)
 		}
 	case "completed", "failed":
-		_, err := s.db.Exec(`UPDATE sources SET status = ?, error_msg = ?, completed_at = ?, updated_at = ? WHERE source_id = ?`,
-			status, errVal, now, now, sourceID)
+		_, err := s.db.Exec(`UPDATE sources SET status = ?, error_msg = ?, completed_at = ?, updated_at = ?,
+				convert_duration_ms = CASE WHEN processing_started_at IS NOT NULL
+					THEN CAST((julianday(?) - julianday(processing_started_at)) * 86400000 AS INTEGER)
+					ELSE convert_duration_ms END
+			WHERE source_id = ?`,
+			status, errVal, now, now, now, sourceID)
 		if err != nil {
 			return fmt.Errorf("source store: update status: %w", err)
 		}
@@ -299,7 +310,14 @@ func (s *Store) UpdateStatus(sourceID, status string, errorMsg *string) error {
 func (s *Store) UpdateUnitsStatus(sourceID, unitsStatus string) error {
 	switch unitsStatus {
 	case "completed", "failed":
-		_, err := s.db.Exec(`UPDATE sources SET units_status = ?, units_completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE source_id = ?`,
+		_, err := s.db.Exec(`UPDATE sources SET units_status = ?, units_completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP,
+				semantics_duration_ms = CASE WHEN units_built_at IS NOT NULL
+					THEN CAST((julianday(CURRENT_TIMESTAMP) - julianday(units_built_at)) * 86400000 AS INTEGER)
+					ELSE semantics_duration_ms END,
+				units_duration_ms = CASE WHEN units_built_at IS NULL AND completed_at IS NOT NULL
+					THEN CAST((julianday(CURRENT_TIMESTAMP) - julianday(completed_at)) * 86400000 AS INTEGER)
+					ELSE units_duration_ms END
+			WHERE source_id = ?`,
 			unitsStatus, sourceID)
 		if err != nil {
 			return fmt.Errorf("source store: update units status: %w", err)
@@ -332,7 +350,10 @@ func (s *Store) MarkUnitsSemanticsStarted(sourceID string) error {
 	_, err := s.db.Exec(`UPDATE sources
 		SET units_stage = 'semantics',
 			units_built_at = CURRENT_TIMESTAMP,
-			updated_at = CURRENT_TIMESTAMP
+			updated_at = CURRENT_TIMESTAMP,
+			units_duration_ms = CASE WHEN completed_at IS NOT NULL
+				THEN CAST((julianday(CURRENT_TIMESTAMP) - julianday(completed_at)) * 86400000 AS INTEGER)
+				ELSE units_duration_ms END
 		WHERE source_id = ?`, sourceID)
 	if err != nil {
 		return fmt.Errorf("source store: mark units semantics started: %w", err)
@@ -820,10 +841,10 @@ func (s *Store) GetOutlineTree(sourceID string) ([]OutlineTree, error) {
 
 func buildOutlineTree(outlines []Outline) []OutlineTree {
 	nodeMap := make(map[string]*OutlineTree)
-	var roots []OutlineTree
+	var rootIDs []string
 
 	for _, o := range outlines {
-		node := OutlineTree{
+		node := &OutlineTree{
 			OutlineID: o.OutlineID,
 			Title:     o.Title,
 			Level:     o.Level,
@@ -836,31 +857,38 @@ func buildOutlineTree(outlines []Outline) []OutlineTree {
 			s := o.Summary.String
 			node.Summary = &s
 		}
-		nodeMap[o.OutlineID] = &node
+		nodeMap[o.OutlineID] = node
 
 		if !o.ParentID.Valid {
-			roots = append(roots, node)
+			rootIDs = append(rootIDs, o.OutlineID)
 		}
 	}
 
+	// Link by outline_id (not by dereferencing into value copies) so that
+	// grandchildren attached later in this loop are still visible through
+	// the parent's pointer once we convert the whole tree to values below.
+	childIDs := make(map[string][]string)
 	for _, o := range outlines {
 		if o.ParentID.Valid {
-			if parent, ok := nodeMap[o.ParentID.String]; ok {
-				child := nodeMap[o.OutlineID]
-				parent.Children = append(parent.Children, *child)
+			if _, ok := nodeMap[o.ParentID.String]; ok {
+				childIDs[o.ParentID.String] = append(childIDs[o.ParentID.String], o.OutlineID)
 			}
 		}
 	}
 
-	// Rebuild roots to include updated children
-	var result []OutlineTree
-	for _, o := range outlines {
-		if !o.ParentID.Valid {
-			result = append(result, *nodeMap[o.OutlineID])
+	var toValue func(id string) OutlineTree
+	toValue = func(id string) OutlineTree {
+		node := *nodeMap[id]
+		node.Children = []OutlineTree{}
+		for _, cid := range childIDs[id] {
+			node.Children = append(node.Children, toValue(cid))
 		}
+		return node
 	}
-	if result == nil {
-		result = []OutlineTree{}
+
+	result := make([]OutlineTree, 0, len(rootIDs))
+	for _, id := range rootIDs {
+		result = append(result, toValue(id))
 	}
 	return result
 }

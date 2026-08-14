@@ -240,7 +240,16 @@ func (s *Service) extractRerankSemanticBatchOnce(ctx context.Context, sourceTitl
 		if len(result.Results) == 0 {
 			return map[string]rerank.Semantics{}, []rerankSemanticCandidate{batch[0]}, nil
 		}
-		return matchSingleCandidateResult(batch[0], result.Results[0]), nil, nil
+		semantics, ok := matchSingleCandidateResult(batch[0], result.Results[0])
+		if !ok {
+			// Structurally present but missing a required field — same
+			// discard-eligible treatment as an omitted result (see the
+			// batch>1 branch below), not a fatal error.
+			slog.Warn("unit: rerank semantics single-candidate result missing a required field, treating as unmatched",
+				"unit_id", batch[0].id)
+			return map[string]rerank.Semantics{}, []rerankSemanticCandidate{batch[0]}, nil
+		}
+		return semantics, nil, nil
 	}
 
 	indexCount := make(map[int]int, len(result.Results))
@@ -270,8 +279,7 @@ func (s *Service) extractRerankSemanticBatchOnce(ctx context.Context, sourceTitl
 				"content_actual", runePrefixDebug(candidate.content, 40))
 			continue
 		}
-		matchedIndex[extracted.Index] = true
-		semantics[candidate.id] = rerank.Semantics{
+		semantic := rerank.Semantics{
 			UnitID:        candidate.id,
 			SourceTheme:   extracted.SourceTheme,
 			ContentTheme:  extracted.ContentTheme,
@@ -280,6 +288,18 @@ func (s *Service) extractRerankSemanticBatchOnce(ctx context.Context, sourceTitl
 			Scope:         extracted.Scope,
 			PromptVersion: rerank.ExtractPromptVersion,
 		}
+		if field := semanticMissingField(semantic); field != "" {
+			// A required field came back empty — treat exactly like an
+			// omitted/mismatched result (falls into missing below) rather
+			// than publishing an incomplete row, so it gets the same
+			// retry-then-discard handling as any other unresolved unit
+			// instead of failing PublishGeneration's fatal safety net later.
+			slog.Warn("unit: rerank semantics result missing a required field, treating as unmatched",
+				"unit_id", candidate.id, "index", extracted.Index, "missing_field", field)
+			continue
+		}
+		matchedIndex[extracted.Index] = true
+		semantics[candidate.id] = semantic
 	}
 
 	var missing []rerankSemanticCandidate
@@ -291,25 +311,29 @@ func (s *Service) extractRerankSemanticBatchOnce(ctx context.Context, sourceTitl
 	return semantics, missing, nil
 }
 
-// matchSingleCandidateResult assigns extracted unconditionally to candidate
-// — a batch of one has nothing for index or content_head to disambiguate,
-// and requiring them anyway only reproduces the same alignment failures a
-// single candidate can't actually have (e.g. the model quoting the body
-// text after a unit's own leading markdown heading as content_head,
-// correctly, without that phrase being a byte-prefix of the full content it
-// was asked about).
-func matchSingleCandidateResult(candidate rerankSemanticCandidate, extracted rerankSemanticExtraction) map[string]rerank.Semantics {
-	return map[string]rerank.Semantics{
-		candidate.id: {
-			UnitID:        candidate.id,
-			SourceTheme:   extracted.SourceTheme,
-			ContentTheme:  extracted.ContentTheme,
-			Intent:        extracted.Intent,
-			Object:        extracted.Object,
-			Scope:         extracted.Scope,
-			PromptVersion: rerank.ExtractPromptVersion,
-		},
+// matchSingleCandidateResult assigns extracted to candidate without needing
+// index or content_head to disambiguate — a batch of one has nothing for
+// those to resolve, and requiring them anyway only reproduces the same
+// alignment failures a single candidate can't actually have (e.g. the model
+// quoting the body text after a unit's own leading markdown heading as
+// content_head, correctly, without that phrase being a byte-prefix of the
+// full content it was asked about). The returned bool is false when a
+// required field (see semanticMissingField) came back empty — the caller
+// treats that the same as no result at all.
+func matchSingleCandidateResult(candidate rerankSemanticCandidate, extracted rerankSemanticExtraction) (map[string]rerank.Semantics, bool) {
+	semantic := rerank.Semantics{
+		UnitID:        candidate.id,
+		SourceTheme:   extracted.SourceTheme,
+		ContentTheme:  extracted.ContentTheme,
+		Intent:        extracted.Intent,
+		Object:        extracted.Object,
+		Scope:         extracted.Scope,
+		PromptVersion: rerank.ExtractPromptVersion,
 	}
+	if semanticMissingField(semantic) != "" {
+		return nil, false
+	}
+	return map[string]rerank.Semantics{candidate.id: semantic}, true
 }
 
 // runePrefixDebug returns the first n runes of s, for diagnostic logging

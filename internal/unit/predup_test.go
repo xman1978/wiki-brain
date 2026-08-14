@@ -662,6 +662,85 @@ func TestExtractRerankSemanticBatch_StillOmittedAfterFallbackIsIgnoredNotFailed(
 	}
 }
 
+// semanticEntryMissingField is like semanticEntry but leaves one required
+// field ("source_theme"/"content_theme"/"intent"/"scope") empty — simulating
+// the real production failure this whole fix targets: the model returns a
+// structurally well-formed, correctly-indexed/content_head-matched result
+// that is nonetheless incomplete.
+func semanticEntryMissingField(index int, contentHead, missingField string) string {
+	entry := map[string]any{
+		"index": index, "content_head": contentHead,
+		"source_theme": "s", "content_theme": "c", "intent": "i", "object": "o", "scope": "g",
+	}
+	entry[missingField] = ""
+	b, _ := json.Marshal(entry)
+	return string(b)
+}
+
+// TestExtractRerankSemanticBatch_EmptyRequiredFieldDiscardsOnlyThatUnit is
+// the regression test for the bug reported against a real import: a unit
+// whose extracted semantics came back with an empty required field (e.g.
+// "scope") must be retried and, if still incomplete after every fallback
+// tier, discarded on its own — exactly like a genuinely omitted result —
+// instead of being published with a blank field and later blowing up
+// PublishGeneration's fatal safety net (validateSemantic), which used to
+// fail the *entire* source's unit extraction over one unit's incomplete
+// result.
+func TestExtractRerankSemanticBatch_EmptyRequiredFieldDiscardsOnlyThatUnit(t *testing.T) {
+	svc, fake := setupRerankSemanticFakeService(t)
+	batch := []rerankSemanticCandidate{{id: "u1", content: "出差期间往返机票"}, {id: "u2", content: "住宿费按城市分级标准"}}
+
+	fake.SetResponseSequence("unit_semantics_extract.md", []llm.FakeResponse{
+		// initial: u1 fine, u2 comes back with an empty scope.
+		{Output: semanticResultJSON(
+			semanticEntry(1, "出差期间往返机票"),
+			semanticEntryMissingField(2, "住宿费按城市分级标准", "scope"),
+		)},
+		{Output: semanticResultJSON()}, // batch retry of just u2: still nothing usable
+		{Output: semanticResultJSON(semanticEntryMissingField(1, "住宿费按城市分级标准", "scope"))}, // per-unit fallback: still empty scope
+	})
+
+	got, err := svc.extractRerankSemanticBatch(t.Context(), "差旅制度", batch)
+	if err != nil {
+		t.Fatalf("extractRerankSemanticBatch: %v", err)
+	}
+	if _, ok := got["u1"]; !ok {
+		t.Fatalf("got = %+v, want u1 (complete) present", got)
+	}
+	if _, ok := got["u2"]; ok {
+		t.Fatalf("got = %+v, want u2 (never resolved a non-empty scope) absent, not published with a blank field", got)
+	}
+	if calls := countCalls(fake, "unit_semantics_extract.md"); calls != 3 {
+		t.Fatalf("unit_semantics_extract.md calls = %d, want 3 (initial + batch retry + per-unit fallback, then give up on u2 alone)", calls)
+	}
+}
+
+// TestExtractRerankSemanticBatchOnce_SingleCandidateEmptyFieldTreatedAsMissing
+// covers the batch-of-one path (matchSingleCandidateResult) directly: unlike
+// index/content_head, which a single candidate is exempt from needing to
+// match, an empty required field must still be rejected — this is the exact
+// tier-3 (per-unit fallback) call that used to slip an incomplete result all
+// the way through to PublishGeneration.
+func TestExtractRerankSemanticBatchOnce_SingleCandidateEmptyFieldTreatedAsMissing(t *testing.T) {
+	svc, fake := setupRerankSemanticFakeService(t)
+	candidate := rerankSemanticCandidate{id: "u1", content: "出差期间往返机票"}
+
+	fake.SetResponse("unit_semantics_extract.md", llm.FakeResponse{
+		Output: semanticResultJSON(semanticEntryMissingField(1, "出差期间往返机票", "source_theme")),
+	})
+
+	semantics, missing, err := svc.extractRerankSemanticBatchOnce(t.Context(), "差旅制度", []rerankSemanticCandidate{candidate})
+	if err != nil {
+		t.Fatalf("extractRerankSemanticBatchOnce: %v", err)
+	}
+	if len(semantics) != 0 {
+		t.Fatalf("semantics = %+v, want none (incomplete result must not be published)", semantics)
+	}
+	if len(missing) != 1 || missing[0].id != "u1" {
+		t.Fatalf("missing = %+v, want [u1]", missing)
+	}
+}
+
 // TestExtractRerankSemanticBatch_ContentHeadMismatchIsTreatedAsMissing
 // verifies the anti-hallucination guard: a result whose content_head doesn't
 // actually match its claimed index's unit is rejected (not stored under the

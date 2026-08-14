@@ -220,7 +220,7 @@ candidate / needs_verification / conflicted / historical / retracted 均已从�
 7. 跨 Source KPN      KP 对齐与关系合并
 8. Wiki 编译初版      候选确认 -> 编译 -> 发布 -> 检索接入 -> 重编译标记
 9. 反馈通道 + Page    user_correction、管理视图、审计视图
-10. 概念演化          gap_level 判定 + 候选聚合 + 人工确认迁移
+10. 概念演化          gap_level 判定 + 候选聚合 + 新增默认自动确认/合并人工确认迁移
                       （依赖 trace / study / wiki 均已完成）
 ```
 
@@ -274,7 +274,7 @@ Bleve
 | 7 | [kpn.md](./kpn.md) | 跨 Source KP 匹配、scope 字段与去重、contradicts 报告接入 |
 | 8 | [wiki.md](./wiki.md) | 页面编译 Prompt 与白名单校验、发布与 Wiki 直答、重编译生命周期 |
 | 9 | [page.md](./page.md) | 反馈入口与路径徽标、链接管理 / Wiki / 审计视图、lifecycle 操作入口 |
-| 10 | [concept-evolution.md](./concept-evolution.md) | 概念新增 / 合并：gap_level 判定、候选聚合、人工确认与迁移事务、preset 优先级 |
+| 10 | [concept-evolution.md](./concept-evolution.md) | 概念新增 / 合并：gap_level 判定、候选聚合、迁移事务（新增默认自动确认，合并仍人工确认，2026-08-14 改判）、preset 优先级 |
 
 ---
 

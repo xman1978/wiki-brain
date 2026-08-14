@@ -6,7 +6,10 @@ V1 验收测试方案 P3：快路径生效（标准 1 后半 + 标准 2）+ 对�
   准确（守门/不串台）硬门槛；已培养问法 M1+M2 召回率 ≥70% 软门槛；
   不要求 M1/M2 逐次全过；不引入向量匹配。
 
-依赖 P2 已把 A1/A9/A12/T8/T12/T15/F1_PRE 确认为 verified，A2/T13 reject→deprecated。
+依赖 P2：A1/A9/A12/T8/T12/T15/F1_PRE 应已通过重复问答自然收敛为 status=verified
+（2026-08-13 起无任何人工确认动作，见 activation.md「状态机」），A2/T13 经
+POST .../reject 清空观测条件后回落为 status=candidate（不是字面 deprecated——
+deprecated 只由目标 KP lifecycle 非 current 触发）。
 
 用法：
   python3 test/v1/v1_p3_fastpath_test.py \\
@@ -37,7 +40,8 @@ RUN_SH = REPO_ROOT / "run.sh"
 RECALL_MIN_RATIO = 0.70
 
 FASTPATH_IDS = ["A1", "A9", "A12", "T8", "T12", "T15"]
-FULL_ONLY_IDS = ["A2", "T13"]  # M8: deprecated, 应走 full
+FULL_ONLY_IDS = ["A2", "T13"]  # M8: P2 reject 后 conditions 已清空、status=candidate（不是
+# deprecated），无可服务条件应走 full
 F1_PRE_ID = "F1_PRE"
 F1_PRE_BASELINE = "达梦怎么查询会话执行情况"
 F1_PRE_M4_PROBE = "达梦在Windows环境下怎么查询会话执行情况？"
@@ -609,14 +613,14 @@ def run_m6_m7(base_url, db_path, timeout, delay, repeats):
 
 
 def run_m8(base_url, conn, full_text, id_to_title, timeout, delay):
-    print("\n========== M8 状态过滤（deprecated / candidate） ==========")
+    print("\n========== M8 服务分层过滤（reject 清空条件后的 candidate / 欠采样的 exploring） ==========")
     report = {"full_only": {}, "a11_candidate": None}
 
     for rid in FULL_ONLY_IDS:
         row = load_row_by_id(full_text, rid)
         question = c.question_variants(row)[0]
         r = ask_once(base_url, conn, question, id_to_title, timeout=timeout)
-        print(f"{rid}（应 full）: path_type={r['path_type']} links={r['activation_link_ids']}")
+        print(f"{rid}（reject 后 conditions 清空，应 full）: path_type={r['path_type']} links={r['activation_link_ids']}")
         report["full_only"][rid] = r
         time.sleep(delay)
 
@@ -752,7 +756,7 @@ def summarize(m1, m2, m3, m4, m5, e3, m6m7, m8, v4, baseline, repeats):
     for rid, r in m8["full_only"].items():
         ok = r["path_type"] == "full"
         m8_ok = m8_ok and ok
-        print(f"M8 {rid} deprecated→full: {'PASS' if ok else 'FAIL'}（实际 {r['path_type']}）")
+        print(f"M8 {rid} reject清空条件→full: {'PASS' if ok else 'FAIL'}（实际 {r['path_type']}）")
     a11 = m8["a11_candidate"]
     print(
         f"M8 A11: path_type={a11['ask']['path_type']} activated={a11['activated_link_statuses']} "

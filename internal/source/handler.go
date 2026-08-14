@@ -250,6 +250,18 @@ func (h *Handler) getSource(w http.ResponseWriter, r *http.Request) {
 	if src.UnitsBuiltAt.Valid {
 		resp["units_built_at"] = src.UnitsBuiltAt.Time.Format("2006-01-02T15:04:05Z")
 	}
+	if src.RegisterDurationMs.Valid {
+		resp["register_duration_ms"] = src.RegisterDurationMs.Int64
+	}
+	if src.ConvertDurationMs.Valid {
+		resp["convert_duration_ms"] = src.ConvertDurationMs.Int64
+	}
+	if src.UnitsDurationMs.Valid {
+		resp["units_duration_ms"] = src.UnitsDurationMs.Int64
+	}
+	if src.SemanticsDurationMs.Valid {
+		resp["semantics_duration_ms"] = src.SemanticsDurationMs.Int64
+	}
 
 	foundation.WriteJSON(w, http.StatusOK, resp)
 }

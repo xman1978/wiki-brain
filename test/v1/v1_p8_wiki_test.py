@@ -20,14 +20,18 @@ point_id 聚合），不是 activation_links 的 subject 条件组，所以本�
 P11（见 test/v1/v1_p11_synonym_test.py），针对的是 ActivationLink 快路径命中，
 不是 Wiki 候选门槛。
 
-注意（2026-07-29 修订，qualifying KP 口径变更，见 docs/design/wiki.md）：
-qualifying KP 现在除 confident_count 外，还要求 (a) 对应 ActivationLink 已
-status=verified、(b) 词条级 days_active ≥ wiki.qualifying_min_days_active
-（默认 7）。参照 P11 的既有拆分方式，本脚本把这两条也拆成两半：
+注意（2026-07-29 修订，qualifying KP 口径变更，见 docs/design/wiki.md；2026-08-13
+编注：status=verified 的产生机制已改为连续置信度自然收敛，判据本身——直接读
+status 字段——不变）：qualifying KP 现在除 confident_count 外，还要求 (a) 对应
+ActivationLink 已 status=verified、(b) 词条级 days_active ≥
+wiki.qualifying_min_days_active（默认 7）。参照 P11 的既有拆分方式，本脚本把这两条
+也拆成两半：
 
-  轴一（确定性，必过）：verified 门槛——cultivate 产生 candidate 链接后，
-    脚本显式对每个 point_id 调 POST /activation-links/:id/confirm 促成
-    verified，验证"多次验证复用既有晋升状态机"这条设计生效；
+  轴一（确定性，必过）：verified 门槛——2026-08-13 起没有任何人工确认动作
+    （POST /activation-links/:id/confirm 端点已移除）：cultivate 产生 candidate
+    链接后，脚本对尚未收敛的 point_id 追加若干轮重复问答（converge_verified_links），
+    让其观测条件的 mean 自然跨过 retrieval.serving_confidence_min，验证"qualifying
+    判据直接读 status 字段，而 status 完全由置信度自动派生"这条设计生效；
   轴二（观测性，不要求达标）：days_active 门槛——这依赖真实自然日跨度，单次
     脚本运行（本身只读 DB，见 v1_common.py 头部注释，不会去反向改
     question_kp_cooccurrence.last_seen_at 伪造跨天数据）大概率无法自然凑够
@@ -73,8 +77,9 @@ db_entry_kind 传匹配的 page_type。Wiki 正式生成只有两条路径：Stu
 流程（严格对应方案 P8 步骤 1-8）：
   1. 探测 A9/A10/A11（制度域「销售回款管理」）与 T10/T11/T18/B4（技术域「Oracle RAC」）
      各自命中的 KP 及其 entry_id，围绕这些词条密集问答；
-  2. POST /study/run → 对每个命中的 point_id 找 candidate 状态的 ActivationLink
-     并逐个 POST /activation-links/:id/confirm 促成 verified（轴一，必过）；
+  2. POST /study/run → 对每个命中的 point_id，若尚未自然收敛为 verified 则
+     反复补问已知问法直至其观测条件的 mean 跨过 serving_confidence_min（轴一，
+     必过；无任何人工确认动作）；
   3. 再次 POST /study/run，核对两域各出现 action=wiki_candidate, status=pending_confirm
      （若因 days_active 仍是 needs_more_data，按轴二记为观测性缺口，不判失败）；
   4. 若拿到 pending_confirm：POST /wiki/compile/analyze（entry_id + result_id，
@@ -195,27 +200,59 @@ def resolve_entry_ids(conn, bank):
     return entry_ids
 
 
-def confirm_verified_links(base_url, point_ids):
-    """轴一（确定性，必过）：qualifying KP 现在要求对应 ActivationLink 已
-    verified（docs/design/wiki.md）。cultivate() 之后这些 point_id 应该已经各有一条 candidate
-    链接（由 Study 步骤 2 的共现达标创建）；这里显式把它们 confirm 成 verified，
-    验证"多次验证复用既有晋升状态机"而不是空等 auto_promote。
-    返回 {point_id: link_id} 供调用方核对。
+def _point_to_questions(*banks):
+    """把 rid -> {question_variants, point_ids} 的培养 bank 反过来映射成
+    point_id -> 该 point 关联过的全部问法，供收敛阶段针对尚未 verified 的
+    point 精准补问。"""
+    out = {}
+    for bank in banks:
+        for item in bank.values():
+            for pid in item.get("point_ids") or set():
+                out.setdefault(pid, set()).update(item["question_variants"])
+    return out
+
+
+def converge_verified_links(base_url, point_ids, point_to_questions, timeout, delay, max_extra_rounds=3):
+    """轴一（确定性，必过）：2026-08-13 起没有 confirm 端点，qualifying 判据直接
+    读 status 字段，而 status 由 observed_conditions 的置信度自动派生（见
+    docs/impl/v1/activation.md「状态机」）。这里不再调用任何人工确认接口，
+    而是对尚未收敛为 verified 的 point_id 反复重问其已知问法、并在每轮之后
+    POST /study/run，让其对应链接的 mean 自然跨过 serving_confidence_min。
+    返回 {point_id: link_id} —— 收敛成功（status=verified）的集合，供调用方核对。
     """
-    confirmed = {}
-    for pid in point_ids:
-        links = c.http_get_json(base_url, f"/activation-links?point_id={pid}&status=candidate&limit=5")
-        if not links:
-            print(f"    ! point_id={pid} 没有 candidate 状态的 ActivationLink，跳过 confirm")
-            continue
-        link_id = links[0]["link_id"]
-        resp, status = c.http_post_json(base_url, f"/activation-links/{link_id}/confirm", {})
-        if status == 200 and resp.get("status") == "verified":
-            confirmed[pid] = link_id
-            print(f"    point_id={pid} link_id={link_id} confirmed → verified")
-        else:
-            print(f"    ! point_id={pid} link_id={link_id} confirm 失败: HTTP {status} {resp}")
-    return confirmed
+    converged = {}
+
+    def _check_once():
+        for pid in list(point_ids):
+            if pid in converged:
+                continue
+            links = c.http_get_json(base_url, f"/activation-links?point_id={pid}&limit=5")
+            for link in links:
+                if link.get("status") == "verified":
+                    converged[pid] = link["link_id"]
+                    print(f"    point_id={pid} link_id={link['link_id']} 已自然收敛 → verified")
+                    break
+
+    _check_once()
+    for rnd in range(max_extra_rounds):
+        pending = [pid for pid in point_ids if pid not in converged]
+        if not pending:
+            break
+        print(f"  收敛补问 第 {rnd + 1}/{max_extra_rounds} 轮，待收敛 point_id 数={len(pending)}")
+        for pid in pending:
+            for q in point_to_questions.get(pid, ()):
+                try:
+                    c.ask_via_session(base_url, q, deep=False, timeout=timeout)
+                except Exception as e:
+                    print(f"    ! 补问出错 ({pid}): {e}")
+                time.sleep(delay)
+        c.http_post_json(base_url, "/study/run", {}, timeout=180)
+        _check_once()
+
+    still_pending = [pid for pid in point_ids if pid not in converged]
+    if still_pending:
+        print(f"    ! {len(still_pending)} 个 point_id 补问 {max_extra_rounds} 轮后仍未收敛为 verified（观测记录，非脚本缺陷）: {still_pending}")
+    return converged
 
 
 def find_wiki_candidate_result(base_url, entry_id):
@@ -389,13 +426,16 @@ def main():
     study_result, _ = c.http_post_json(args.base_url, "/study/run", {}, timeout=180)
     print(json.dumps(study_result, ensure_ascii=False, indent=2)[:2000])
 
-    print("\n--- 轴一（确定性，必过）：confirm candidate 链接 → verified ---")
+    print("\n--- 轴一（确定性，必过）：让候选链接自然收敛为 verified（无人工确认动作） ---")
     all_point_ids = set()
     for bank in (policy_bank, tech_bank):
         for item in bank.values():
             all_point_ids |= item["point_ids"]
-    confirmed_links = confirm_verified_links(args.base_url, all_point_ids)
-    print(f"  已 confirm 为 verified 的 point_id 数: {len(confirmed_links)}/{len(all_point_ids)}")
+    point_to_questions = _point_to_questions(policy_bank, tech_bank)
+    confirmed_links = converge_verified_links(
+        args.base_url, all_point_ids, point_to_questions, args.timeout, args.delay
+    )
+    print(f"  已自然收敛为 verified 的 point_id 数: {len(confirmed_links)}/{len(all_point_ids)}")
 
     print("\n>>> POST /study/run（第 2 次：verified 门槛已满足，核对 wiki_candidate）")
     study_result, _ = c.http_post_json(args.base_url, "/study/run", {}, timeout=180)
@@ -548,7 +588,7 @@ def main():
 
     conn.close()
     print("\n========== P8 通过标准核对 ==========")
-    print(f"轴一（confirm→verified，必过）: {len(confirmed_links)}/{len(all_point_ids)} 个 point_id 已 confirm")
+    print(f"轴一（自然收敛→verified，必过，无人工确认动作）: {len(confirmed_links)}/{len(all_point_ids)} 个 point_id 已收敛为 verified")
     for label in ("policy", "tech"):
         info = domain_pages.get(label) or {}
         if info.get("error") == "no wiki_candidate":

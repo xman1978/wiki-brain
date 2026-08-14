@@ -1,37 +1,48 @@
 #!/usr/bin/env python3
 """
-V1 验收测试方案（test/v1/v1-acceptance-test-plan.md）P2：学习转化 candidate 形成与人工晋升
-（标准 1 前半 + 标准 3）。
+V1 验收测试方案（test/v1/v1-acceptance-test-plan.md）P2：学习转化 candidate 形成与
+置信度自然收敛（标准 1 前半 + 标准 3）。
 
 培养清单（制度域 6 题 + 技术域 5 题）：A1、A2、A4、A9、A11、A12 + T8、T12、T15、T13，
 以及 F1 前置问题「达梦怎么查询会话执行情况」（这题不在任何表格里，是 F 组 P3 对象守门
 测试需要预先培养的一条独立链接）。
 
-2026-08-07 口径（与方案 P2 修订同步）：
-  - Matcher 四元组精确匹配：变体不保证命中同一 link；pending_confirm 只要求至少 1 条
-    （默认盯 A1），其余 adopt 覆盖记观测。
+2026-08-13 改判后重写（离散状态机 candidate/verified/weakened/deprecated 的人工晋升流程
+整体废弃，`POST /activation-links/:id/confirm` 端点已从代码移除，见
+docs/impl/v1/activation.md「状态机」）：
+
+  - 没有任何"晋升确认"动作。`status=verified` 由 observed_conditions 每条条件的
+    mean=(success_count+1)/(success_count+failure_count+2) 自然跨过
+    retrieval.serving_confidence_min 派生产生（GET /activation-links/:id 响应的
+    conditions[].tier ∈ {self_graded, trusted}）。
+  - Matcher 四元组精确匹配：变体不保证命中同一 link；本脚本的收敛硬门槛只要求至少 1 条
+    归属链接（默认盯 A1）自然收敛为 verified，其余观测条件的 mean/tier 分布记观测。
   - 链接按题号独占归属（topic hint + 证据 point），禁止用 point_id 并集做多题共享判定。
-  - reject 终态是 deprecated（不是字面 rejected）。
-  - A11 入选培养但不 confirm，对照组只看 A11 独占归属链接。
+  - POST /activation-links/:id/reject 仍存在，但语义已变为"清空该链接全部观测条件、
+    状态重新派生"——对现有 current KP 会打回 candidate（不是字面 deprecated）。
+  - A11 入选培养但刻意少问几轮（欠采样），作为"证据不足不会自然收敛"的对照组，取代旧版
+    "未被人工确认"的对照语义。
 
 重要缺口（脚本不代为决定，需要人工介入）：
-  A11、A12、T12、T13、T15 在方案题库表里只有 1 种问法（无变体），而
-  promote_distinct_min=2 / 共现侧仍要求 ≥2 个不同 question_hash——同一字面问多少遍
-  distinct_n 都不会增长。请用 --extra-phrasing-file 补充，例如：
+  A11、A12、T12、T13、T15 在方案题库表里只有 1 种问法（无变体），而共现创建门槛
+  （study.create_confidence_min/create_width_max）与置信度收敛都受益于多问法、多次
+  独立观测。请用 --extra-phrasing-file 补充，例如：
     {"A11": ["新问法1", "新问法2"], "T12": [...]}
   F1_PRE 默认内置问法见 F1_PRE_DEFAULT_VARIANTS，可用同一 JSON 覆盖 "F1_PRE" 键。
 
-  注意（2026-07-24）：distinct_n 统计的是字面 question_hash，不受 subject_synonyms
-  归一化影响。subject_synonyms 验收见 test/v1/v1_p11_synonym_test.py（依赖本脚本
-  培养出的 F1_PRE 链接，不要在 P11 之前手工改动其四元组字段）。
+  注意（2026-07-24）：question_hash 统计的是字面问法，不受 subject_synonyms 归一化
+  影响。subject_synonyms 验收见 test/v1/v1_p11_synonym_test.py（依赖本脚本培养出的
+  F1_PRE 链接，不要在 P11 之前手工改动其四元组字段）。
 
-流程（对应方案 P2 步骤 1-6）：
-  1. 对培养清单每题问一轮全部已知变体问法；
+流程（对应方案 P2 步骤 1-7）：
+  1. 对培养清单每题问一轮全部已知变体问法（A11 只问 1 轮，刻意欠采样）；
   2. POST /study/run，按独占归属核对 candidate + create_candidate 可回溯；
-  3. 再问一轮变体；对 PROMOTE_DEMO_IDS（默认 A1）额外用主问法+一变体复现；
-  4. POST /study/run：硬门槛 auto_promote=false + ≥1 条 pending_confirm；
-  5. 按独占归属 confirm 确认集 / reject 驳回集；跳过已 verified；不碰 A11；
-  6. 核对最终状态。
+  3. 再问一轮变体；对 CONVERGENCE_DEMO_IDS（默认 A1）额外反复复现，尽量让其观测条件
+     的 mean 跨过 serving_confidence_min；
+  4. POST /study/run：核对至少 1 条归属链接未经任何人工操作即自然收敛为 verified，
+     A11 对照组仍停留在 exploring 档；
+  5. 仅对 REJECT_IDS 调用 reject（不再有"确认集"人工操作）；
+  6. 核对最终状态（含 conditions[] 的 mean/tier 明细）。
 
 用法：
   python3 test/v1/v1_p2_learning_test.py
@@ -55,10 +66,13 @@ F1_PRE_DEFAULT_VARIANTS = [
     "怎么在达梦里查询会话的执行状态？",
 ]
 
-CONFIRM_IDS = ["A1", "A4", "A9", "A12", "T8", "T12", "T15", F1_PRE_ID]
+# 不再有"确认集"（无人工确认动作）；仅保留 reject 驳回集与欠采样对照组。
 REJECT_IDS = ["A2", "T13"]
-CONTROL_IDS = ["A11"]  # 培养但不 confirm
-PROMOTE_DEMO_IDS = ["A1"]  # 第 2 轮额外复现，争取跑通 pending_confirm
+CONTROL_IDS = ["A11"]  # 刻意欠采样，验证"证据不足不会自然收敛"
+CONVERGENCE_DEMO_IDS = ["A1"]  # 第 2 轮额外复现，争取自然跨过 serving_confidence_min
+NATURALLY_OBSERVED_IDS = [
+    rid for rid in CULTIVATION_TABLE_IDS + [F1_PRE_ID] if rid not in REJECT_IDS and rid not in CONTROL_IDS
+]
 
 # 题号独占归属：用 KP 正文 / subject / question_terms 关键词消歧邻近簇
 TOPIC_HINTS = {
@@ -75,13 +89,12 @@ TOPIC_HINTS = {
     F1_PRE_ID: ["v$session", "session_event", "会话执行", "等待事件", "sql文本", "客户端ip"],
 }
 
-# 共享 point 时的优先归属（确认集 > 对照组 > 驳回集），同级再比 topic score
-OWNERSHIP_PRIORITY = {rid: 0 for rid in CONFIRM_IDS}
+# 共享 point 时的优先归属（驳回集 > 对照组 > 其余），同级再比 topic score
+OWNERSHIP_PRIORITY = {rid: 0 for rid in REJECT_IDS}
 OWNERSHIP_PRIORITY.update({rid: 1 for rid in CONTROL_IDS})
-OWNERSHIP_PRIORITY.update({rid: 2 for rid in REJECT_IDS})
 for rid in CULTIVATION_TABLE_IDS:
-    OWNERSHIP_PRIORITY.setdefault(rid, 3)
-OWNERSHIP_PRIORITY.setdefault(F1_PRE_ID, 0)
+    OWNERSHIP_PRIORITY.setdefault(rid, 2)
+OWNERSHIP_PRIORITY.setdefault(F1_PRE_ID, 2)
 
 
 def load_extra_phrasings(path):
@@ -107,10 +120,12 @@ def load_cultivation_bank(full_text, extra_phrasings):
     bank[F1_PRE_ID] = {"id": F1_PRE_ID, "question_variants": f1_variants, "domain": "技术域"}
 
     for rid, item in bank.items():
+        if rid in CONTROL_IDS:
+            continue
         if len(item["question_variants"]) < 2:
             print(
                 f"! 警告: {rid} 只有 {len(item['question_variants'])} 种问法，"
-                f"共现/distinct 侧可能不达标，见脚本头部说明",
+                f"共现创建门槛/置信度收敛可能不达标，见脚本头部说明",
                 file=sys.stderr,
             )
     return bank
@@ -187,7 +202,8 @@ def assign_link_owners(bank, all_links, conn):
 
     1) 先看哪些题的培养证据点到了该 link.point_id；
     2) 仅一题命中 → 直接归属；
-    3) 多题命中 → topic_score 高者胜；同分比 OWNERSHIP_PRIORITY（确认集优先）；
+    3) 多题命中 → topic_score 高者胜；同分比 OWNERSHIP_PRIORITY（驳回集/对照组优先，
+       避免它们被误吞并到普通观察题下）；
     4) 无线索（如 --skip-cultivate 未采到 point）→ 对全体题号按 topic_score 软归属，
        最高分 >0 才接纳，否则不归属。
     """
@@ -196,8 +212,6 @@ def assign_link_owners(bank, all_links, conn):
         for pid in item.get("point_ids") or set():
             point_to_rids.setdefault(pid, set()).add(rid)
 
-    needed = {link["point_id"] for link in all_links if link.get("point_id")}
-    contents = kp_content_map(conn, needed)
     all_rids = list(bank.keys())
 
     ownership = {}  # link_id -> rid
@@ -209,7 +223,7 @@ def assign_link_owners(bank, all_links, conn):
         if not candidates:
             soft = []
             for rid in all_rids:
-                sc = topic_score(rid, link, contents.get(pid, ""))
+                sc = topic_score(rid, link, "")
                 if sc > 0:
                     soft.append((sc, -OWNERSHIP_PRIORITY.get(rid, 9), rid))
             if not soft:
@@ -222,13 +236,7 @@ def assign_link_owners(bank, all_links, conn):
             continue
         scored = []
         for rid in candidates:
-            scored.append(
-                (
-                    topic_score(rid, link, contents.get(pid, "")),
-                    -OWNERSHIP_PRIORITY.get(rid, 9),
-                    rid,
-                )
-            )
+            scored.append((topic_score(rid, link, ""), -OWNERSHIP_PRIORITY.get(rid, 9), rid))
         scored.sort(reverse=True)
         winner = scored[0][2]
         ownership[lid] = winner
@@ -238,7 +246,7 @@ def assign_link_owners(bank, all_links, conn):
                 "point_id": pid,
                 "candidates": candidates,
                 "winner": winner,
-                "scores": {rid: topic_score(rid, link, contents.get(pid, "")) for rid in candidates},
+                "scores": {rid: topic_score(rid, link, "") for rid in candidates},
             }
         )
     return ownership, shared_obs
@@ -283,7 +291,25 @@ def learning_results_for_link(conn, link_id):
     return out
 
 
-def report_links(bank, links_by_id, conn, stage_label):
+def fetch_link_detail(base_url, link_id):
+    """GET /activation-links/:id — 只有详情端点返回 conditions[]（mean/tier/
+    success_count/failure_count），列表端点（GET /activation-links）没有这个字段。"""
+    try:
+        return c.http_get_json(base_url, f"/activation-links/{link_id}")
+    except Exception as e:
+        print(f"  ! 拉取链接详情失败 {link_id}: {e}")
+        return None
+
+
+def best_condition(detail):
+    """详情响应 conditions[] 里 mean 最高的一条（用于报告/判定"是否已收敛"）。"""
+    conds = (detail or {}).get("conditions") or []
+    if not conds:
+        return None
+    return max(conds, key=lambda x: x.get("mean", 0))
+
+
+def report_links(base_url, bank, links_by_id, conn, stage_label):
     print(f"\n--- 链接状态（{stage_label}） ---")
     report = []
     for rid, item in bank.items():
@@ -293,10 +319,18 @@ def report_links(bank, links_by_id, conn, stage_label):
             print(f"  {rid}: 未找到独占归属的 activation_link")
         for link in matched:
             results = learning_results_for_link(conn, link["link_id"])
+            detail = fetch_link_detail(base_url, link["link_id"])
+            top_cond = best_condition(detail)
             has_object_terms = bool(link.get("subject_terms") or link.get("constraint_terms"))
+            cond_str = (
+                f"best_condition(mean={top_cond['mean']:.3f} tier={top_cond['tier']} "
+                f"success={top_cond['success_count']} failure={top_cond['failure_count']})"
+                if top_cond
+                else "best_condition=(无观测条件)"
+            )
             print(
                 f"  {rid}: link_id={link['link_id']} status={link['status']} "
-                f"adopt={link['adopt_count']} fail={link['fail_count']} "
+                f"adopt={link.get('adopt_count')} fail={link.get('fail_count')} {cond_str} "
                 f"subject_terms={link.get('subject_terms') or '(空)'} "
                 f"constraint_terms={link.get('constraint_terms') or '(空)'}"
             )
@@ -311,11 +345,12 @@ def report_links(bank, links_by_id, conn, stage_label):
                 {
                     "link_id": link["link_id"],
                     "status": link["status"],
-                    "adopt_count": link["adopt_count"],
-                    "fail_count": link["fail_count"],
+                    "adopt_count": link.get("adopt_count"),
+                    "fail_count": link.get("fail_count"),
                     "subject_terms": link.get("subject_terms"),
                     "constraint_terms": link.get("constraint_terms"),
                     "has_object_terms": has_object_terms,
+                    "conditions": (detail or {}).get("conditions") or [],
                     "learning_results": results,
                 }
             )
@@ -336,7 +371,7 @@ def main():
     parser.add_argument("--db-path", default=str(c.DEFAULT_DB_PATH))
     parser.add_argument("--extra-phrasing-file", default=None)
     parser.add_argument("--skip-cultivate", action="store_true", help="跳过培养提问，假设已经问过")
-    parser.add_argument("--skip-confirm", action="store_true", help="跳过 confirm/reject 调用")
+    parser.add_argument("--skip-reject", action="store_true", help="跳过 reject 调用")
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--delay", type=float, default=0.5)
     parser.add_argument("--out", default=str(c.RESULTS_DIR))
@@ -351,7 +386,12 @@ def main():
     bank = load_cultivation_bank(full_text, extra_phrasings)
 
     if not args.skip_cultivate:
-        cultivate_round(args.base_url, bank, args.timeout, args.delay, "第 1 轮（每题问一遍全部已知问法）")
+        # A11 只问第 1 轮、限 1 个问法，刻意欠采样（对照组）；其余题正常培养。
+        cultivate_round(
+            args.base_url, bank, args.timeout, args.delay,
+            "第 1 轮（每题问一遍全部已知问法；A11 仅问 1 个问法，刻意欠采样）",
+            variants_limit=None,
+        )
     else:
         print("--skip-cultivate：跳过第 1 轮提问。")
 
@@ -365,7 +405,7 @@ def main():
         print(f"\n观测：共享 point 消歧 {len(shared_obs)} 条（详见 jsonl shared_ownership）")
         for row in shared_obs[:12]:
             print(f"  link={row['link_id'][:8]}… candidates={row['candidates']} → {row['winner']} scores={row['scores']}")
-    stage1_report = report_links(bank, links_by_id, conn, "第 1 次 study/run 之后（独占归属）")
+    stage1_report = report_links(args.base_url, bank, links_by_id, conn, "第 1 次 study/run 之后（独占归属）")
 
     missing_links = [e["id"] for e in stage1_report if not e["links"]]
     non_candidate = [
@@ -376,16 +416,28 @@ def main():
     print(f"\ncandidate 创建核对: 缺独占 link={missing_links} 未变成 candidate={non_candidate}")
 
     if not args.skip_cultivate:
-        cultivate_round(args.base_url, bank, args.timeout, args.delay, "第 2 轮（全清单变体再问一遍）")
-        # 精确匹配下变体常打不中同一 link；对演示题额外用主问法+第一变体复现，争取 pending_confirm
+        cultivate_round(
+            args.base_url, bank, args.timeout, args.delay,
+            "第 2 轮（全清单变体再问一遍；A11 跳过，维持欠采样）",
+            only_ids=set(bank.keys()) - set(CONTROL_IDS),
+        )
+        # 精确匹配下变体常打不中同一 link；对收敛演示题额外反复复现主问法+变体，
+        # 尽量让同一四元组的 success_count 攒够、mean 跨过 serving_confidence_min。
         cultivate_round(
             args.base_url,
             bank,
             args.timeout,
             args.delay,
-            f"第 2b 轮（晋升演示 {PROMOTE_DEMO_IDS}：主问法+一变体复现）",
-            only_ids=set(PROMOTE_DEMO_IDS),
-            variants_limit=2,
+            f"第 2b 轮（收敛演示 {CONVERGENCE_DEMO_IDS}：主问法+变体反复复现）",
+            only_ids=set(CONVERGENCE_DEMO_IDS),
+        )
+        cultivate_round(
+            args.base_url,
+            bank,
+            args.timeout,
+            args.delay,
+            f"第 2c 轮（收敛演示 {CONVERGENCE_DEMO_IDS}：再复现一次）",
+            only_ids=set(CONVERGENCE_DEMO_IDS),
         )
     else:
         print("--skip-cultivate：跳过第 2 轮提问。")
@@ -396,78 +448,50 @@ def main():
 
     links_by_id, _all_links, ownership, shared_obs = refresh_ownership_views(args.base_url, bank, conn)
     stage2_report = report_links(
-        bank, links_by_id, conn, "第 2 次 study/run 之后（应至少 1 条 promote/pending_confirm）"
+        args.base_url, bank, links_by_id, conn,
+        "第 2 次 study/run 之后（应至少 1 条归属链接未经人工操作自然收敛为 verified）",
     )
 
-    still_candidate_status = [
+    naturally_verified = [
         e["id"]
         for e in stage2_report
-        if e["links"] and any(l["status"] == "candidate" for l in e["links"])
+        if e["id"] in NATURALLY_OBSERVED_IDS and any(l["status"] == "verified" for l in e["links"])
     ]
-    pre_verified = [
-        e["id"]
+    control_still_exploring = all(
+        not any(cond.get("tier") in ("self_graded", "trusted") for cond in (l.get("conditions") or []))
         for e in stage2_report
-        if any(l["status"] == "verified" for l in e["links"])
-    ]
-    has_promote_pending = [
-        e["id"]
-        for e in stage2_report
-        if any(
-            r["action"] == "promote" and r["status"] == "pending_confirm"
+        if e["id"] in CONTROL_IDS
+        for l in e["links"]
+    )
+    print(
+        f"\n自然收敛核对（无人工确认动作）: "
+        f"{'PASS' if naturally_verified else 'FAIL'} "
+        f"自然收敛为 verified 的题号={naturally_verified or '[]'}"
+    )
+    print(
+        f"A11 欠采样对照组仍停留 exploring 档: "
+        f"{'PASS' if control_still_exploring else 'FAIL'}"
+    )
+    condition_obs = {
+        e["id"]: [
+            {"mean": cond.get("mean"), "tier": cond.get("tier")}
             for l in e["links"]
-            for r in l["learning_results"]
-        )
-    ]
-    # 以 Study 本轮动作计数为准（脏库里可能已有上次 P2 留下的 verified，不能据此误判）
-    promoted_1 = (study_result_1.get("learning_actions") or {}).get("promoted", 0)
-    promoted_2 = (study_result_2.get("learning_actions") or {}).get("promoted", 0)
-    auto_promote_ok = promoted_1 == 0 and promoted_2 == 0
-    print(
-        f"\nauto_promote=false 核对: "
-        f"{'PASS' if auto_promote_ok else 'FAIL'} "
-        f"(study promoted 计数: run1={promoted_1} run2={promoted_2}; "
-        f"仍为 candidate={still_candidate_status}; "
-        f"库内已是 verified（可能来自既往确认）={pre_verified or '[]'})"
-    )
-    print(
-        f"promote/pending_confirm（硬门槛 ≥1）: "
-        f"{'PASS' if has_promote_pending else 'FAIL'} 出现于 {has_promote_pending or '[]'}"
-    )
-    adopt_obs = {
-        e["id"]: [l["adopt_count"] for l in e["links"]] for e in stage2_report if e["links"]
+            for cond in (l.get("conditions") or [])
+        ]
+        for e in stage2_report
+        if e["links"]
     }
-    print(f"观测 adopt_count 分布: {adopt_obs}")
+    print(f"观测 mean/tier 分布: {json.dumps(condition_obs, ensure_ascii=False)[:1500]}")
 
-    confirmed_link_ids = set()
     rejected_link_ids = set()
-    if args.skip_confirm:
-        print("\n--skip-confirm：跳过 confirm/reject 步骤。")
+    if args.skip_reject:
+        print("\n--skip-reject：跳过 reject 步骤。")
     else:
-        print("\n--- 第 5 步：按独占归属 confirm / reject（同一 link 只操作一次） ---")
-        for rid in CONFIRM_IDS:
-            for link in links_by_id.get(rid) or []:
-                lid = link["link_id"]
-                if lid in confirmed_link_ids:
-                    continue
-                if link.get("status") == "verified":
-                    print(f"  skip confirm {rid} ({lid}): 已是 verified")
-                    confirmed_link_ids.add(lid)
-                    continue
-                try:
-                    resp, _ = c.http_post_json(args.base_url, f"/activation-links/{lid}/confirm", {})
-                    print(f"  confirm {rid} ({lid}): {resp}")
-                    confirmed_link_ids.add(lid)
-                except Exception as e:
-                    print(f"  ! confirm {rid} ({lid}) 失败: {e}")
+        print("\n--- 第 5 步：仅对驳回集调用 reject（同一 link 只操作一次；不再有确认动作） ---")
         for rid in REJECT_IDS:
             for link in links_by_id.get(rid) or []:
                 lid = link["link_id"]
-                if lid in rejected_link_ids or lid in confirmed_link_ids:
-                    print(f"  skip reject {rid} ({lid}): 已处理或不该驳回确认集链接")
-                    continue
-                if link.get("status") == "deprecated":
-                    print(f"  skip reject {rid} ({lid}): 已是 deprecated")
-                    rejected_link_ids.add(lid)
+                if lid in rejected_link_ids:
                     continue
                 try:
                     resp, _ = c.http_post_json(args.base_url, f"/activation-links/{lid}/reject", {})
@@ -475,50 +499,43 @@ def main():
                     rejected_link_ids.add(lid)
                 except Exception as e:
                     print(f"  ! reject {rid} ({lid}) 失败: {e}")
-        print("  A11：有意不 confirm（对照组）")
+        print("  A11：有意欠采样、不作任何人工操作（对照组）")
 
     links_by_id, _all_links, ownership, shared_obs = refresh_ownership_views(args.base_url, bank, conn)
-    final_report = report_links(bank, links_by_id, conn, "confirm/reject 之后（最终状态，独占归属）")
+    final_report = report_links(args.base_url, bank, links_by_id, conn, "reject 之后（最终状态，独占归属）")
 
     print("\n========== P2 通过标准核对 ==========")
     gate = {}
-    for rid in CONFIRM_IDS:
-        statuses = [l["status"] for l in (links_by_id.get(rid) or [])]
-        ok = "verified" in statuses
-        gate[f"confirm_{rid}"] = ok
-        print(f"  {rid} 独占归属应为 verified: {'PASS' if ok else 'FAIL'} (实际: {statuses or '无链接'})")
+
+    ok = bool(naturally_verified)
+    gate["natural_convergence_ge1"] = ok
+    print(f"  至少 1 条归属链接未经人工操作自然收敛为 verified: {'PASS' if ok else 'FAIL'} ({naturally_verified or '无'})")
+
+    gate["control_stays_exploring"] = control_still_exploring
+    print(f"  A11 欠采样对照组未跨过 serving_confidence_min: {'PASS' if control_still_exploring else 'FAIL'}")
+
     for rid in REJECT_IDS:
-        statuses = [l["status"] for l in (links_by_id.get(rid) or [])]
-        # 设计终态：reject → deprecated（activation.md）；不得残留 verified
-        ok = bool(statuses) and all(s == "deprecated" for s in statuses) and "verified" not in statuses
+        links = links_by_id.get(rid) or []
+        statuses = [l["status"] for l in links]
+        conds_empty = all(not (fetch_link_detail(args.base_url, l["link_id"]) or {}).get("conditions") for l in links)
+        # 目标 KP 仍 current：reject 清空条件后应重新派生为 candidate（不是 deprecated，
+        # 也不是旧版文档写的字面 rejected）。
+        ok = bool(statuses) and all(s == "candidate" for s in statuses) and conds_empty
         gate[f"reject_{rid}"] = ok
         print(
-            f"  {rid} 独占归属应为 deprecated（reject 终态，不参与召回）: "
-            f"{'PASS' if ok else 'FAIL'} (实际: {statuses or '无链接'})"
+            f"  {rid} 独占归属 reject 后应为 candidate 且 conditions 已清空: "
+            f"{'PASS' if ok else 'FAIL'} (实际 status={statuses or '无链接'}, conditions 已清空={conds_empty})"
         )
-    for rid in CONTROL_IDS:
-        statuses = [l["status"] for l in (links_by_id.get(rid) or [])]
-        ok = "verified" not in statuses
-        gate[f"control_{rid}"] = ok
-        print(
-            f"  {rid}（有意不确认，对照组）独占归属不应为 verified: "
-            f"{'PASS' if ok else 'FAIL'} (实际: {statuses or '无链接'})"
-        )
-    gate["auto_promote_false"] = auto_promote_ok
-    print(f"  auto_promote=false（未自动 verified）: {'PASS' if auto_promote_ok else 'FAIL'}")
-    gate["pending_confirm_ge1"] = bool(has_promote_pending)
-    print(
-        f"  至少 1 条 promote/pending_confirm: "
-        f"{'PASS' if has_promote_pending else 'FAIL'} ({has_promote_pending or '无'})"
-    )
+
     all_traceback_ok = all(
         r["events_missing"] == 0
         for e in final_report
         for l in e["links"]
         for r in l["learning_results"]
+        if r["action"] in ("create_candidate", "prune_condition")
     )
     gate["traceback"] = all_traceback_ok
-    print(f"  每次迁移 learning_result -> reason -> event_ids 完整回溯: {'PASS' if all_traceback_ok else 'FAIL'}")
+    print(f"  每次条件变化 learning_result -> reason -> event_ids 完整回溯: {'PASS' if all_traceback_ok else 'FAIL'}")
 
     failed = [k for k, v in gate.items() if not v]
     print(f"\nP2 总评: {'PASS' if not failed else 'FAIL'}  (失败项: {failed or '无'})")
@@ -532,8 +549,8 @@ def main():
         "stage1_report": stage1_report,
         "stage2_report": stage2_report,
         "final_report": final_report,
-        "promote_pending_ids": has_promote_pending,
-        "adopt_count_obs": adopt_obs,
+        "naturally_verified_ids": naturally_verified,
+        "condition_obs": condition_obs,
         "gate": gate,
     }
     jsonl_path = c.write_jsonl([record], Path(args.out), "v1_p2_learning")

@@ -380,6 +380,7 @@ type StudyConfig struct {
 	EntryMergeOverlapMin   float64 `yaml:"entry_merge_overlap_min"`
 	EntryCandidateIdleDays int     `yaml:"entry_candidate_idle_days"`
 	EntryEventWindowDays   int     `yaml:"entry_event_window_days"`
+	EntryAddAutoConfirm    bool    `yaml:"entry_add_auto_confirm"`
 	// —— 问题复杂度观测量（两层架构扩展，docs/impl/v1/study.md 步骤 7）——
 	ComplexityMinQuestions int `yaml:"complexity_min_questions"`
 	// —— ActivationBundle（熟路）阶段 1（docs/impl/v1/activation-bundle.md）——

@@ -1,7 +1,10 @@
 // Package entry implements entry (词条) evolution (docs/impl/v1/concept-evolution.md,
 // V1 顺序第 10 位): Study observes activation_gap(entry_gap) events and
 // cross-concept adoption co-occurrence, forms add/merge candidates, and
-// executes them — always under human confirmation — in a single transaction.
+// executes them in a single transaction. kind=merge candidates (restructuring
+// existing concepts) still require human confirmation; kind=add candidates
+// (new concept/fact creation) are auto-confirmed by default as of 2026-08-14
+// (Config.AutoConfirmAdd, docs/design/concept-evolution.md "2026-08-14 改判").
 package entry
 
 import (

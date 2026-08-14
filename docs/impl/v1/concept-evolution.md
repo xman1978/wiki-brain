@@ -2,7 +2,7 @@
 
 ## 职责
 
-消费 `activation_gap`（entry_gap 层级）与采用共现统计，形成概念**新增**与**合并**候选；候选经人工确认后在事务内执行。设计依据：`docs/design/concept-evolution.md`。
+消费 `activation_gap`（entry_gap 层级）与采用共现统计，形成概念**新增**与**合并**候选；候选在事务内执行——新增（kind=add）默认创建后自动执行（`entry_add_auto_confirm`，2026-08-14 改判），合并（kind=merge）仍然经人工确认后才执行。设计依据：`docs/design/concept-evolution.md`。
 
 `entry_candidates(kind=add)` 还有第二个候选来源：跨 Source KPN 匹配（`docs/impl/v1/kpn.md` 步骤 3）在遇到 entry_id 为空的 KP 时，按 domain 聚类直接写入候选，不依赖任何查询信号——`evidence.origin` 用 `content_driven` 区分于本模块自身产出的 `usage_driven` 候选，两者共用同一套确认/驳回 API，仅确认执行时的下游动作不同：`content_driven` 候选确认后会触发 KPN 侧的定向重新匹配（回调通知，详见 kpn.md 步骤 6），本模块的确认逻辑本身不感知这个差异。
 
@@ -105,6 +105,10 @@ study:
   entry_merge_overlap_min:   0.6   # 且共同采用中 KP 重叠比例下限
   entry_candidate_idle_days: 60    # 候选无新信号自动过期
   entry_event_window_days:   90    # 聚合统计的时间窗口（长于链接窗口）
+  entry_add_auto_confirm:    true  # 2026-08-14 改判：kind=add 候选创建后自动
+                                   # confirm，不再等待人工点击；kind=merge 不
+                                   # 受此项影响，仍然只能人工 confirm。见设计
+                                   # 文档第 4a 节、本文档步骤 3。
 ```
 
 单一条件不触发候选：新增需事件数、问题数、重叠度全部达标；合并需共现次数与重叠比例同时达标（只摇摆不重叠可能是问题模糊，只重叠不共现可能是正常邻近概念——V1 无摇摆信号，共现统计承担其角色）。
@@ -181,7 +185,9 @@ kind=merge：
   reason 补记执行摘要（迁移 KU 数、标记页面数）。
 ```
 
-reject：candidate 与 learning_results 置 rejected，不做任何结构改动。概念演化**没有** auto 模式——与链接晋升的 `auto_promote` 不同，结构性改动一律人工确认（设计文档第 4 节）。
+reject：candidate 与 learning_results 置 rejected，不做任何结构改动。
+
+**2026-08-14 改判，取代上一段"概念演化没有 auto 模式"的口径**：kind=add 候选创建后（步骤 2 的新增聚类、`unit` 模块内容驱动的 `ProposeAddCandidate` 调用、Page 手动新增草稿共三处创建入口）默认立即自动执行等价于人工调用一次 `confirm`（不带任何覆盖字段，直接用候选自身的 suggested_name / domain_id / evidence）——由 `entry_add_auto_confirm` 配置项控制，默认 `true`，置 `false` 时行为回到本文档原描述的"始终等待人工 confirm"。kind=merge 不受影响，创建后仍然只停在 `pending_confirm`，只能人工 `confirm`/`reject`，理由见设计文档第 4a 节（新增与合并的风险结构不同：新增此刻还没有任何东西挂在新概念上，合并会牵动已经在工作的 ActivationLink/Wiki 页面）。`POST /entries/candidates/:id/confirm`/`reject` 端点本身不变——auto-confirm 只是省略了"人工点一次"这一步，走的是完全相同的 confirm 执行路径（同一个事务、同样写 `learning_results(status=applied)`），因此审计侧不需要区分"人工 confirm"与"auto-confirm"两种来源。
 
 ### 步骤 4：当前入口排除与 preset 规则
 
@@ -193,7 +199,7 @@ foundation preset 加载：UPSERT 不清除 merged_into / origin。
 
 ### 步骤 5：报告与 Page 扩展
 
-Study 报告 JSON 新增 `entry_candidates` 节（pending 候选摘要 + 窗口内 entry_gap 统计）。Page 审计视图增加概念候选列表：展示依据（事件数、问题列表、KP 集合、重叠度），提供 confirm（含改名 / 选 target 表单）和 reject 入口，风格沿用链接晋升确认流。
+Study 报告 JSON 新增 `entry_candidates` 节（pending 候选摘要 + 窗口内 entry_gap 统计）。Page 审计视图增加概念候选列表：展示依据（事件数、问题列表、KP 集合、重叠度），提供 confirm（含改名 / 选 target 表单）和 reject 入口，风格沿用链接晋升确认流。**2026-08-14 改判后**，`entry_add_auto_confirm=true`（默认）时 kind=add 候选创建后即刻 applied，这个列表里能看到的 pending 候选将主要是 kind=merge（人工确认的常态入口收窄到合并场景）；`entry_add_auto_confirm=false` 时行为回到本节原描述，两种候选都会出现在列表里。
 
 ## 依赖
 

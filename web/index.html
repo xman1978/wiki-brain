@@ -422,7 +422,9 @@
     /* ── TIMELINE ─────────────────────────────────────────── */
     .timeline { padding:0; min-width:0; }
     .timeline-title { font-size:12px; font-weight:600; color:var(--text-2); margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
-    .timeline-title .tl-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; min-width:0; }
+    .timeline-title .tl-title-left { display:flex; align-items:baseline; gap:8px; min-width:0; flex:1; }
+    .timeline-title .tl-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+    .timeline-title .tl-upload-at { font-size:11px; font-weight:400; color:var(--text-3); flex-shrink:0; white-space:nowrap; }
     .timeline-steps { display:flex; align-items:flex-start; width:100%; gap:0; }
     .tl-step { flex:1; min-width:0; display:flex; flex-direction:column; position:relative; align-items:stretch; }
     .tl-rail { display:flex; flex-direction:row; align-items:center; width:100%; height:14px; }
@@ -825,7 +827,10 @@
 <div class="file-drawer" id="fileDrawer">
   <div class="drawer-header">
     <span>文件管理</span>
-    <button class="btn-ghost" onclick="closeFileDrawer()">✕</button>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button class="btn btn-sm" onclick="loadSources()">刷新</button>
+      <button class="btn-ghost" onclick="closeFileDrawer()">✕</button>
+    </div>
   </div>
   <div class="drawer-body">
     <div class="drawer-top">
@@ -1650,6 +1655,11 @@ function updateTraceInAnswerCard(answerId, trace) {
 }
 
 var FACT_ID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
+// Same UUID, optionally wrapped in a markdown code span (the model sometimes
+// emits `fact_id` in backticks). Matches the whole wrapped form so the
+// backticks get consumed too — otherwise the injected [text](url) ends up
+// *inside* a code span, where CommonMark never parses link syntax.
+var FACT_ID_WRAPPED_RE = /`?([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})`?/g;
 
 function buildFactIdNumbering(content, citations) {
   var map = {};
@@ -1669,7 +1679,7 @@ function linkifyEvidence(content, map, answerId) {
   // href 带上归属回答的 answer_id（evidence:<answer_id>:<fact_id>），
   // 点击时才能切回那条回答自己的证据快照，而不是永远打开最新一条。
   var prefix = answerId ? ('evidence:' + answerId + ':') : 'evidence:';
-  return (content || '').replace(FACT_ID_RE, function(fid) {
+  return (content || '').replace(FACT_ID_WRAPPED_RE, function(whole, fid) {
     var num = map[fid] || '?';
     return '[证据' + num + '](' + prefix + fid + ')';
   });
@@ -2227,17 +2237,17 @@ function showTimeline(title, phase, sourceData, uploadStart) {
   var panel = document.getElementById('timelinePanel');
   var now = new Date();
   var steps = TL_STEPS.map(function(s) {
-    var state = 'wait', time = '';
+    var state = 'wait', raw = null;
     if (phase === 'uploading') {
-      if (s.id === 'upload') { state = 'active'; time = fmtTime(uploadStart); }
+      if (s.id === 'upload') { state = 'active'; raw = uploadStart; }
     } else if (phase === 'upload_failed') {
-      if (s.id === 'upload') { state = 'fail'; time = fmtTime(uploadStart); }
+      if (s.id === 'upload') { state = 'fail'; raw = uploadStart; }
     } else if (phase === 'uploaded') {
-      if (s.id === 'upload')   { state = 'done'; time = fmtTime(uploadStart); }
-      if (s.id === 'register') { state = 'done'; time = fmtTime(now); }
+      if (s.id === 'upload')   { state = 'done'; raw = uploadStart; }
+      if (s.id === 'register') { state = 'done'; raw = now; }
     } else if (phase === 'processing') {
-      if (s.id === 'upload')   { state = 'done'; time = fmtTime(uploadStart); }
-      if (s.id === 'register') { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
+      if (s.id === 'upload')   { state = 'done'; raw = uploadStart; }
+      if (s.id === 'register') { state = 'done'; raw = sourceData ? sourceData.created_at : null; }
       if (s.id === 'convert')  { state = 'active'; }
     } else if (phase === 'units_pending') {
       // Source processing (convert) is done, but knowledge-unit extraction
@@ -2247,42 +2257,50 @@ function showTimeline(title, phase, sourceData, uploadStart) {
       // reach completed/failed instead of marking "units" done just because
       // the source status flipped (see sources.units_status, written by
       // unit.Service's queue handler).
-      if (s.id === 'upload')   { state = 'done'; time = fmtTime(uploadStart); }
-      if (s.id === 'register') { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
-      if (s.id === 'convert')  { state = 'done'; time = sourceData ? fmtTime(sourceData.completed_at) : ''; }
+      if (s.id === 'upload')   { state = 'done'; raw = uploadStart; }
+      if (s.id === 'register') { state = 'done'; raw = sourceData ? sourceData.created_at : null; }
+      if (s.id === 'convert')  { state = 'done'; raw = sourceData ? sourceData.completed_at : null; }
       if (s.id === 'units')    { state = 'active'; }
     } else if (phase === 'semantics_pending') {
-      if (s.id === 'upload')    { state = 'done'; time = fmtTime(uploadStart); }
-      if (s.id === 'register')  { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
-      if (s.id === 'convert')   { state = 'done'; time = sourceData ? fmtTime(sourceData.completed_at) : ''; }
-      if (s.id === 'units')     { state = 'done'; time = sourceData ? fmtTime(sourceData.units_built_at) : ''; }
+      if (s.id === 'upload')    { state = 'done'; raw = uploadStart; }
+      if (s.id === 'register')  { state = 'done'; raw = sourceData ? sourceData.created_at : null; }
+      if (s.id === 'convert')   { state = 'done'; raw = sourceData ? sourceData.completed_at : null; }
+      if (s.id === 'units')     { state = 'done'; raw = sourceData ? sourceData.units_built_at : null; }
       if (s.id === 'semantics') { state = 'active'; }
     } else if (phase === 'units_failed') {
-      if (s.id === 'upload')   { state = 'done'; time = fmtTime(uploadStart); }
-      if (s.id === 'register') { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
-      if (s.id === 'convert')  { state = 'done'; time = sourceData ? fmtTime(sourceData.completed_at) : ''; }
+      if (s.id === 'upload')   { state = 'done'; raw = uploadStart; }
+      if (s.id === 'register') { state = 'done'; raw = sourceData ? sourceData.created_at : null; }
+      if (s.id === 'convert')  { state = 'done'; raw = sourceData ? sourceData.completed_at : null; }
       if (sourceData && sourceData.units_stage === 'semantics') {
-        if (s.id === 'units')     { state = 'done'; time = fmtTime(sourceData.units_built_at); }
-        if (s.id === 'semantics') { state = 'fail'; time = fmtTime(sourceData.units_completed_at); }
+        if (s.id === 'units')     { state = 'done'; raw = sourceData.units_built_at; }
+        if (s.id === 'semantics') { state = 'fail'; raw = sourceData.units_completed_at; }
       } else if (s.id === 'units') {
-        state = 'fail'; time = sourceData ? fmtTime(sourceData.units_completed_at) : '';
+        state = 'fail'; raw = sourceData ? sourceData.units_completed_at : null;
       }
     } else if (phase === 'completed') {
       state = 'done';
-      if (s.id === 'upload')   time = fmtTime(uploadStart);
-      if (s.id === 'register') time = sourceData ? fmtTime(sourceData.created_at) : '';
-      if (s.id === 'convert')  time = sourceData ? fmtTime(sourceData.completed_at) : '';
-      if (s.id === 'units')    time = sourceData ? fmtTime(sourceData.units_built_at) : '';
-      if (s.id === 'semantics') time = sourceData ? fmtTime(sourceData.units_completed_at) : '';
+      if (s.id === 'upload')   raw = uploadStart;
+      if (s.id === 'register') raw = sourceData ? sourceData.created_at : null;
+      if (s.id === 'convert')  raw = sourceData ? sourceData.completed_at : null;
+      if (s.id === 'units')    raw = sourceData ? sourceData.units_built_at : null;
+      if (s.id === 'semantics') raw = sourceData ? sourceData.units_completed_at : null;
     } else if (phase === 'failed') {
-      if (s.id === 'upload')   { state = 'done'; time = fmtTime(uploadStart); }
-      if (s.id === 'register') { state = 'done'; time = sourceData ? fmtTime(sourceData.created_at) : ''; }
-      if (s.id === 'convert')  { state = 'done'; time = sourceData ? fmtTime(sourceData.completed_at) : ''; }
-      if (s.id === 'units')    { state = 'fail'; time = fmtTime(now); }
+      if (s.id === 'upload')   { state = 'done'; raw = uploadStart; }
+      if (s.id === 'register') { state = 'done'; raw = sourceData ? sourceData.created_at : null; }
+      if (s.id === 'convert')  { state = 'done'; raw = sourceData ? sourceData.completed_at : null; }
+      if (s.id === 'units')    { state = 'fail'; raw = now; }
     }
-    return { label: s.label, state: state, time: time };
+    return { label: s.label, state: state, raw: raw };
   });
-  panel.innerHTML = renderTimeline(title, steps, sourceData);
+  // Each dot marks the instant a stage finished; the time consumed *in* that
+  // stage is the gap since the previous dot (there is no marker before the
+  // first dot, so 文件上传 shows no duration — it is the origin, not a span).
+  var prevRaw = null;
+  steps.forEach(function(s) {
+    s.time = (s.raw && prevRaw) ? fmtDuration(new Date(s.raw) - new Date(prevRaw)) : '';
+    if (s.raw) prevRaw = s.raw;
+  });
+  panel.innerHTML = renderTimeline(title, steps, sourceData, uploadStart);
 }
 
 function closeSourceTimelineProgress() {
@@ -2398,24 +2416,23 @@ function buildStepsFromSource(d) {
     var state = 'wait', time = '';
     if (s.id === 'upload') {
       state = 'done';
-      time = fmtTime(d.created_at);
     } else if (s.id === 'register') {
       state = 'done';
-      time = fmtTime(d.created_at);
+      time = fmtMs(d.register_duration_ms);
     } else if (s.id === 'convert') {
       if (d.status === 'pending') { state = 'wait'; }
-      else if (d.status === 'processing') { state = 'active'; time = fmtTime(d.processing_started_at); }
-      else { state = 'done'; time = fmtTime(d.completed_at); }
+      else if (d.status === 'processing') { state = 'active'; }
+      else { state = 'done'; time = fmtMs(d.convert_duration_ms); }
     } else if (s.id === 'units') {
       if (d.status !== 'completed') { state = 'wait'; }
-      else if (d.units_status === 'completed') { state = 'done'; time = fmtTime(d.units_built_at || d.units_completed_at); }
-      else if (d.units_status === 'failed' && d.units_stage !== 'semantics') { state = 'fail'; time = fmtTime(d.units_completed_at); }
-      else if (d.units_stage === 'semantics') { state = 'done'; time = fmtTime(d.units_built_at); }
+      else if (d.units_status === 'completed') { state = 'done'; time = fmtMs(d.units_duration_ms); }
+      else if (d.units_status === 'failed' && d.units_stage !== 'semantics') { state = 'fail'; time = fmtMs(d.units_duration_ms); }
+      else if (d.units_stage === 'semantics') { state = 'done'; time = fmtMs(d.units_duration_ms); }
       else { state = 'active'; }
     } else if (s.id === 'semantics') {
       if (d.status !== 'completed') { state = 'wait'; }
-      else if (d.units_status === 'completed') { state = 'done'; time = fmtTime(d.units_completed_at); }
-      else if (d.units_status === 'failed' && d.units_stage === 'semantics') { state = 'fail'; time = fmtTime(d.units_completed_at); }
+      else if (d.units_status === 'completed') { state = 'done'; time = fmtMs(d.semantics_duration_ms); }
+      else if (d.units_status === 'failed' && d.units_stage === 'semantics') { state = 'fail'; time = fmtMs(d.semantics_duration_ms); }
       else if (d.units_stage === 'semantics') { state = 'active'; }
       else { state = 'wait'; }
     }
@@ -2423,8 +2440,12 @@ function buildStepsFromSource(d) {
   });
 }
 
-function renderTimeline(title, steps, sourceData) {
-  var html = '<div class="timeline"><div class="timeline-title"><span class="tl-name">' + esc(title) + '</span>';
+function renderTimeline(title, steps, sourceData, uploadStart) {
+  var uploadAt = (sourceData && sourceData.created_at) || uploadStart || null;
+  var uploadStr = fmtDateTime(uploadAt);
+  var html = '<div class="timeline"><div class="timeline-title"><div class="tl-title-left"><span class="tl-name">' + esc(title) + '</span>';
+  if (uploadStr) html += '<span class="tl-upload-at">' + esc(uploadStr) + '</span>';
+  html += '</div>';
   if (sourceData && sourceData.source_id) html += '<button class="copy-btn" onclick="event.stopPropagation();copy(\'' + esc(sourceData.source_id) + '\',this)">ID</button>';
   html += '</div><div class="timeline-steps">';
   steps.forEach(function(s, i) {
@@ -2452,6 +2473,30 @@ function fmtTime(t) {
     var d = t instanceof Date ? t : new Date(t);
     return d.toLocaleTimeString('zh-CN', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
   } catch(e) { return ''; }
+}
+
+function fmtDateTime(t) {
+  if (!t) return '';
+  try {
+    var d = t instanceof Date ? t : new Date(t);
+    if (isNaN(d.getTime())) return '';
+    var p = function(n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  } catch(e) { return ''; }
+}
+
+function fmtMs(ms) {
+  if (ms == null || ms === '' || isNaN(ms)) return '';
+  return ms + 'ms';
+}
+
+function fmtDuration(ms) {
+  if (ms == null || isNaN(ms) || ms < 0) return '';
+  var totalSec = Math.round(ms / 1000);
+  if (totalSec < 1) return '<1秒';
+  if (totalSec < 60) return totalSec + '秒';
+  var min = Math.floor(totalSec / 60), sec = totalSec % 60;
+  return sec ? (min + '分' + sec + '秒') : (min + '分钟');
 }
 
 // sources.status only reflects source processing (parse/outline) — knowledge

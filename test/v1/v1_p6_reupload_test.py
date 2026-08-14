@@ -3,8 +3,9 @@
 V1 验收测试方案（test/v1/v1-acceptance-test-plan.md）P6：Reupload 换血
 （标准 6 更新侧，Shadow Source 机制，两域各换一个靶子）。
 
-两个靶子在本次测试环境里都已经是 verified 链接（P2 里 A4、T15 confirm 成功），
-换血后能不能观察到"目标 KP 非 current 只降不升"是本阶段的重点。
+两个靶子在本次测试环境里都应已通过 P2 重复问答自然收敛为 verified 链接（2026-08-13
+起无 confirm 动作），换血后能不能观察到"目标 KP 非 current → 链接直接 deprecated，
+不再计算任何置信度（只降不升）"是本阶段的重点。
 
 流程：
   1. 生成两份改写文件：《培训积分管理办法》"每旷课1次 | -5" -> "-10"；
@@ -13,8 +14,11 @@ V1 验收测试方案（test/v1/v1-acceptance-test-plan.md）P6：Reupload 换�
   2. POST /sources/:id/reupload 上传；
   3. 轮询期间验证 GET /sources 不出现影子行，此时问 A4/T15 仍是旧值；
   4. 完成后验证旧 KU/KP lifecycle=superseded，问 A4/T15 变成新值且引用新 KU；
-  5. 核对 A4、T15 对应 verified 链接的 adopt_count 在换血前后没有继续增长
-     （目标 KP 非 current，只降不升）；
+  5. 核对 A4、T15 对应链接换血前后的 conditions[] success_count/failure_count/mean
+     没有继续增长，且旧 KP 变 superseded（非 current）后链接 status 已直接变为
+     deprecated（`deriveAndPersistStatus` 检测到非 current 时强制锁定，不再计算
+     任何条件的置信度——旧规则"目标 KP 非 current 只降不升"在新机制下就是"直接
+     deprecated，无法再继续晋升"）；
   6. 失败分支：对第三个 Source（万相公文销售奖励制度，避开两个真实靶子）上传空文件，
      验证影子 status=failed、原 Source 不受影响，然后用 reupload/retry 续跑一次
      （这次传回真实内容，验证 retry 能救回来）。注意：空文件是否真的会让
@@ -123,6 +127,9 @@ def check_target(base_url, conn, target, timeout, delay):
 
     old_verified_links = c.db_links_for_source(conn, source_id, status="verified")
     old_adopt_counts = {l["link_id"]: l["adopt_count"] for l in old_verified_links}
+    old_conditions = {
+        l["link_id"]: json.loads(l["observed_conditions"] or "[]") for l in old_verified_links
+    }
     print(f"  换血前 verified 链接: {[(l['link_id'], l['adopt_count']) for l in old_verified_links]}")
 
     mod_path = build_modified_file(title, target["old_line"], target["new_line"])
@@ -163,14 +170,22 @@ def check_target(base_url, conn, target, timeout, delay):
     new_link_states = {}
     for link_id, old_count in old_adopt_counts.items():
         current = c.db_activation_link(conn, link_id)
+        new_conds = json.loads(current["observed_conditions"] or "[]") if current else []
+        conditions_grew = len(new_conds) > len(old_conditions.get(link_id) or []) or any(
+            (nc.get("success_count", 0) + nc.get("failure_count", 0))
+            > sum((oc.get("success_count", 0) + oc.get("failure_count", 0)) for oc in (old_conditions.get(link_id) or []) if oc.get("subject") == nc.get("subject"))
+            for nc in new_conds
+        )
         new_link_states[link_id] = {
             "old_adopt_count": old_count,
             "new_status": current["status"] if current else None,
             "new_adopt_count": current["adopt_count"] if current else None,
             "adopt_count_grew": bool(current and current["adopt_count"] > old_count),
+            "conditions_grew": conditions_grew,
+            "status_forced_deprecated": bool(current and current["status"] == "deprecated"),
         }
         print(f"  链接 {link_id}: 换血前 adopt_count={old_count} -> 现状态={current['status'] if current else '?'} "
-              f"adopt_count={current['adopt_count'] if current else '?'}")
+              f"adopt_count={current['adopt_count'] if current else '?'} conditions_grew={conditions_grew}")
 
     old_marker_gone = target["old_answer_marker"] not in (new_answer or {}).get("content", "")
     new_marker_present = target["new_answer_marker"] in (new_answer or {}).get("content", "")

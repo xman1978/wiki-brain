@@ -16,7 +16,11 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // RegisterRoutes implements docs/impl/v1/concept-evolution.md 步骤 3: list,
-// confirm, reject. There is no auto mode — confirm is always a human action.
+// confirm, reject. Confirm remains a manual action for kind=merge and for
+// kind=add when Config.AutoConfirmAdd is off; when it's on (the 2026-08-14
+// default), the service auto-confirms every freshly created kind=add
+// candidate itself, so these endpoints see it mainly as a manual fallback
+// (auto-confirm failure, or the flag disabled) rather than the normal path.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /entries/candidates", h.list)
 	mux.HandleFunc("GET /entries/candidates/by-domain", h.listByDomain)

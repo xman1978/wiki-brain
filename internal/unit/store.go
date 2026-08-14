@@ -246,9 +246,25 @@ func validateSemantic(unitID string, semantic rerank.Semantics) error {
 		return fmt.Errorf("semantic prompt_version for unit %s = %q, want %q",
 			unitID, semantic.PromptVersion, rerank.ExtractPromptVersion)
 	}
-	// object is allowed to be empty (unit_semantics_extract.md v14): when the
-	// unit's text never states who a rule applies to, the model is instructed
-	// to leave it blank rather than fabricate a value or repeat content_theme.
+	if field := semanticMissingField(semantic); field != "" {
+		return fmt.Errorf("semantic %s is empty for unit %s", field, unitID)
+	}
+	return nil
+}
+
+// semanticMissingField returns the name of the first required field that's
+// empty (after trimming), or "" if semantic is well-formed. Shared by
+// validateSemantic (store.go's fatal, "this should never happen" safety net
+// on the write path — see its own comment) and extractRerankSemanticBatchOnce
+// (rerank_semantics.go's per-unit fallback matching, where the fix actually
+// belongs: a result with an empty required field must be treated the same as
+// an omitted one — retried, then discarded if it's still empty after every
+// fallback tier — instead of reaching PublishGeneration's safety net and
+// failing the whole source's extraction over one unit's incomplete result).
+// object is allowed to be empty (unit_semantics_extract.md v14): when the
+// unit's text never states who a rule applies to, the model is instructed to
+// leave it blank rather than fabricate a value or repeat content_theme.
+func semanticMissingField(semantic rerank.Semantics) string {
 	for _, field := range []struct {
 		name  string
 		value string
@@ -259,10 +275,10 @@ func validateSemantic(unitID string, semantic rerank.Semantics) error {
 		{name: "scope", value: semantic.Scope},
 	} {
 		if strings.TrimSpace(field.value) == "" {
-			return fmt.Errorf("semantic %s is empty for unit %s", field.name, unitID)
+			return field.name
 		}
 	}
-	return nil
+	return ""
 }
 
 // InsertStandaloneUnit inserts one new current knowledge unit together with

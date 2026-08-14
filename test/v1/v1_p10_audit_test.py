@@ -34,9 +34,10 @@ def fetch_all_results(base_url, limit=2000):
 
 def check_three_essentials(results):
     """object_id/reason 对所有 result 都该有；event_ids 只对"由 learning_events
-    驱动"的迁移有意义——reason=manual_confirm/manual_reject 是人工直接调
-    confirm/reject 触发的迁移，背后没有 learning_event（人的点击就是原因本身），
-    这类 result 没有 event_ids 是正常的，不能算审计缺口。"""
+    驱动"的动作有意义——reason=manual_reject 是人工直接调 POST
+    /activation-links/:id/reject 触发的 prune_condition（2026-08-13 起
+    confirm 端点已不存在，唯一的人工动作只剩 reject），背后没有 learning_event
+    （人的点击就是原因本身），这类 result 没有 event_ids 是正常的，不能算审计缺口。"""
     missing = []
     for r in results:
         event_ids = r.get("event_ids")
@@ -54,13 +55,17 @@ def check_three_essentials(results):
     return missing
 
 
+# 2026-08-13 改判后重写：promote/weaken/reverify/deprecate 已废弃，reason 文本
+# 只来自 create_candidate（`internal/study/service.go` "共现命中：confident_count=
+# %d, hit_count=%d, ratio=%.2f"）与 prune_condition（"收敛剪枝：converged_low=%d,
+# long_idle=%d，剩余观测条件 %d 条" 或 manual_reject）两类动作。
 NUMBER_PATTERNS = {
-    "success_n": r"success_n[=:：]\s*(\d+)",
-    "failure_n": r"failure_n[=:：]\s*(\d+)",
-    "distinct_n": r"distinct_n[=:：]\s*(\d+)",
     "confident_count": r"confident_count[=:：]\s*(\d+)",
     "hit_count": r"hit_count[=:：]\s*(\d+)",
     "ratio": r"ratio[=:：]\s*([\d.]+)",
+    "converged_low": r"converged_low[=:：]\s*(\d+)",
+    "long_idle": r"long_idle[=:：]\s*(\d+)",
+    "remaining_conditions": r"剩余观测条件\s*(\d+)\s*条",
 }
 
 
@@ -117,6 +122,15 @@ def main():
     print(f"\n三要素（object_id/reason/event_ids）齐全: {'PASS' if not missing else 'FAIL'}")
     for m in missing[:10]:
         print(f"  ! {m}")
+
+    # 2026-08-13 改判：promote/weaken/reverify/deprecate/confirm 已从 action 词表移除
+    # （internal/activation/types.go 当前枚举 create_candidate/prune_condition/
+    # gap_flag/wiki_candidate/recompile_flag/entry_add_candidate/
+    # entry_merge_candidate/entry_add/entry_merge/topic_page_candidate）。
+    DEAD_ACTIONS = {"promote", "weaken", "reverify", "deprecate", "confirm"}
+    stale_actions = sorted(DEAD_ACTIONS & set(by_action.keys()))
+    print(f"action 词表不含已废弃动作(promote/weaken/reverify/deprecate/confirm): "
+          f"{'PASS' if not stale_actions else 'FAIL'} ({stale_actions or '无'})")
 
     print(f"\n--- 2. 随机抽 {args.sample} 条反向核对 ---")
     sample_pool = [r for r in results if r.get("object_id")]

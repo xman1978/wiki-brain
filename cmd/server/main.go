@@ -235,6 +235,7 @@ func main() {
 		MergeOverlapMin:   cfg.Study.EntryMergeOverlapMin,
 		CandidateIdleDays: cfg.Study.EntryCandidateIdleDays,
 		EventWindowDays:   cfg.Study.EntryEventWindowDays,
+		AutoConfirmAdd:    cfg.Study.EntryAddAutoConfirm,
 	}, wikiSvc)
 	studySvc.SetEntrySvc(entrySvc)
 	unitSvc.SetEntryNotifier(entrySvc)
