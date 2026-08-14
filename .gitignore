@@ -8,3 +8,4 @@ bin/
 run.pid
 test/mvp/results/
 test/v1/results/
+test/original/alltxt.zip
