@@ -81,35 +81,41 @@ def resolve_source_id(base_url, title):
     return None
 
 
-def poll_shadow(base_url, shadow_id, timeout_s=600, interval_s=3):
+def poll_shadow(base_url, shadow_id, timeout_s=600):
     """轮询影子 source：completed+completed=成功且尚未 swap；404=已 swap 完成并删除；
-    failed=处理失败。"""
-    deadline = time.time() + timeout_s
-    while True:
+    failed=处理失败。用 poll_with_backoff 而不是固定间隔——影子处理通常几秒内
+    结束，指数退避能更快发现完成，长时间未完成时也不会一直高频轮询。"""
+    last_src = {"src": None}
+
+    def check():
         try:
             src = c.http_get_json(base_url, f"/sources/{shadow_id}")
         except Exception:
-            return "swapped_and_gone", None
+            return ("swapped_and_gone", None)
+        last_src["src"] = src
         if src.get("status") == "failed" or src.get("units_status") == "failed":
-            return "failed", src
+            return ("failed", src)
         if src.get("status") == "completed" and src.get("units_status") == "completed":
-            return "shadow_completed_not_yet_swapped", src
-        if time.time() >= deadline:
-            return "timeout", src
-        time.sleep(interval_s)
+            return ("shadow_completed_not_yet_swapped", src)
+        return None
+
+    result = c.poll_with_backoff(check, timeout_s)
+    if result is None:
+        return "timeout", last_src["src"]
+    return result
 
 
-def wait_swap_done(base_url, target_id, shadow_id, timeout_s=600, interval_s=3):
+def wait_swap_done(base_url, target_id, shadow_id, timeout_s=600):
     """真正的换血完成信号是影子行消失（被删）——GET /sources/:shadow_id 404。"""
-    deadline = time.time() + timeout_s
-    while True:
+
+    def check():
         try:
             c.http_get_json(base_url, f"/sources/{shadow_id}")
         except Exception:
             return True
-        if time.time() >= deadline:
-            return False
-        time.sleep(interval_s)
+        return None
+
+    return c.poll_with_backoff(check, timeout_s) is True
 
 
 def ask_once(base_url, question, timeout):

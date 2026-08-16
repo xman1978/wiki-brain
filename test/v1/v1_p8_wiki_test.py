@@ -563,16 +563,17 @@ def main():
         print(f"  {label} reupload: HTTP {status} {resp}")
         shadow_id = resp.get("shadow_source_id")
 
-        deadline = time.time() + 300
-        while True:
+        def _shadow_gone():
             try:
                 c.http_get_json(args.base_url, f"/sources/{shadow_id}")
+                return None
             except Exception:
-                break
-            if time.time() >= deadline:
-                print(f"  ! {label} reupload 超时未完成")
-                break
-            time.sleep(3)
+                return True
+
+        # poll_with_backoff 而非固定 3s 间隔——换血通常几秒内完成，指数退避能更快
+        # 发现完成，长时间未完成时也不会一直高频轮询。
+        if not c.poll_with_backoff(_shadow_gone, 300):
+            print(f"  ! {label} reupload 超时未完成")
 
         study_result_2, _ = c.http_post_json(args.base_url, "/study/run", {}, timeout=180)
         page_after = c.http_get_json(args.base_url, f"/wiki/pages/{page_info['page_id']}")

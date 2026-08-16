@@ -213,6 +213,7 @@ func main() {
 	retrievalSvc := retrieval.NewService(retrievalStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, activationSvc, evidenceSvc, wikiSvc)
 	answerSvc := answer.NewService(answerStore, llmClient, q, retrievalSvc)
 	traceSvc := trace.NewService(traceStore, cfg.Study.EntryNullRatioMin)
+	traceSvc.SetLLMClient(llmClient)
 	traceSvc.SetObservedConditionEnricher(activationSvc, cfg.Study.ObservedConditionsMax)
 	traceSvc.SetCorrectionWeight(cfg.Study.CorrectionWeight)
 	retrievalSvc.SetAuditOutcomeWriter(traceSvc)

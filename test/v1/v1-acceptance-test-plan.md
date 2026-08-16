@@ -19,6 +19,10 @@
 
 第四项：Wiki 两层架构扩展（P12，2026-07-30 新增，设计/实现见 `docs/impl/v1/wiki.md` 步骤 7-10）——页面关系派生、主题页候选（按真实提问四元组聚类，另可 `POST /wiki/topics` 人工指定范围）与二阶编译、检索骨架注入、写作草稿、回流防护，均为 P8 一阶闭环之上的扩展能力，不改变标准 7 本身的判定口径。无 Wiki 预览 / cold-start 路径。
 
+第五项：问题四元组归一化（P13，2026-08-12 新增，config-gated 默认关闭，见 `internal/activation/tuplenorm.go`、`docs/impl/v1/retrieval.md` 步骤 2）——`tryFastPath` 里、送入 Matcher/BundleMatcher/Wiki 四元组直答入口之前的归一化层，吸收 LLM 抽取的措辞抖动，不改变这三处入口本身"纯精确匹配"的判据。
+
+第六项：ActivationBundle 跨 unit 歧义仲裁（P14，2026-08-12 部分落地，见 `internal/retrieval/fastpath_helpers.go`）——ActivationLink 快路径命中跨多个 knowledge_unit 时，先 consult ActivationBundle（不冲突则合并核心成员继续快路径，无覆盖则实时新建/加强 candidate Bundle），是"阶段 2"里率先接通的一个入口，不是完整阶段 2（`bundle_hits[]`、Trace 的 `bundle_success`/`bundle_failure`、成员置信度随线上流量自然收敛仍未接线，P14 轴二用人工种子验证仲裁分支本身）。
+
 ## 2. 测试数据画像
 
 ### 2.1 制度域（10 篇）
@@ -119,11 +123,11 @@ wiki:
 
 期望答案以文档原文为准；「期望证据」指引用片段应落在的原文位置。每题标注用途。A/T/G 三组同时内嵌于 `test/mvp/mvp-acceptance-test-plan.md` 第 4 节（准确率测试集），两处同源，修改须同步。
 
-### 4.1 A 组 · 单文档事实类（学习信号主力，每题含 2-3 个变体问法）
+### 4.1 A 组 · 单文档事实类（学习信号主力，每题含 1-2 个变体问法；2026-08-15 修订：原标注"2-3 个"与实际题库不符，多数题仅 1-2 个问法已足够验证匹配泛化，A1 由 3 变体裁剪为 2，省 1 次会话+回答往返，不影响 P2/P3 判据——P2 步骤 4 对 A1 的额外复现走独立的 `--extra-phrasing-file`，不依赖本表变体数）
 
 | ID | 问题（主问法 / 变体） | 期望答案要点 | 期望证据来源 |
 |----|---------------------|-------------|-------------|
-| A1 | 招待费用报销期限是多久？ / 请客吃饭的发票多久内要报掉？ / 业务招待费超过多长时间不能报销？ | 费用实际发生之日起 45 天内；逾期财务不受理、费用个人承担 | 报销规定·第一条 |
+| A1 | 招待费用报销期限是多久？ / 请客吃饭的发票多久内要报掉？ | 费用实际发生之日起 45 天内；逾期财务不受理、费用个人承担 | 报销规定·第一条 |
 | A2 | 差旅费报销期限是多久？ / 出差发票几个月内有效？ | 发票开具之日起 3 个月内（办公、市内交通、通讯、差旅同此） | 报销规定·第二条 |
 | A3 | 发票能跨年报销吗？ | 原则上禁止跨年报销 | 报销规定·第四条 |
 | A4 | 培训旷课一次扣几分？ / 不请假缺席培训怎么扣分？ | 每旷课 1 次 -5 分 | 培训积分·第五条积分规则表 |
@@ -138,7 +142,7 @@ wiki:
 | A13 | 战略项目的奖金系数是多少？ | 6%（A 类 5%，B/C/D 类 4%，E 类 3%，万相公文/无纸化会议 1%） | 项目考核·5.1 表 |
 | A14 | 员工当年离职，项目奖金还发吗？ | 不予发放 | 项目考核·3.2 第 10 条 |
 
-### 4.2 T 组 · 技术单文档事实类（技术域学习信号主力，每题含 2-3 个变体问法）
+### 4.2 T 组 · 技术单文档事实类（技术域学习信号主力，每题含 1-2 个变体问法；2026-08-15 修订：同 A 组标注不符实情，题库本身已偏精简，未作内容改动，仅更正描述）
 
 | ID | 问题（主问法 / 变体） | 期望答案要点 | 期望证据来源 |
 |----|---------------------|-------------|-------------|
@@ -525,6 +529,37 @@ M3 不设通过标准；V1 并入快路径正向样本观测。
 
 **通过标准**：轴一 1-5 步全部成立（`page_type=topic` 被拒绝、relations 接口结构正确、草稿生命周期与写回防护、回流字段落库、报告新板块存在）即判 PASS；轴二 6-7 步仅记录数字，不影响判定。
 
+### P13 问题四元组归一化（2026-08-12 新增，config-gated，见 `internal/activation/tuplenorm.go`、`docs/impl/v1/retrieval.md` 步骤 2）
+
+**前提说明**：`question_tuple_norm_enabled`（及子开关 `vector_match_enabled`）默认 `false`，本阶段临时改写 `config/config.yml` 并 `run.sh restart` 使其生效（同 P3 `set_fast_path_verify`/`restart_server` 的既有做法），跑完必须恢复默认值并再次重启——不应该在验收结束后把这两个开关遗留为打开状态。脚本 `test/v1/v1_p13_tuplenorm_test.py` 已实现该开-跑-关三段式，异常路径也会执行恢复。
+
+1. 打开 `question_tuple_norm_enabled=true`（可选加 `--enable-vector` 同时打开 `vector_match_enabled`，需要 `config.yml` 的 `vector_model_dir` 指向真实已下载的 goformer 权重目录，否则 Tier2.5 优雅降级为跳过，不影响其余判定）；
+2. 用同一潜在问题的两种不同措辞（`--variants-file` 提供，默认内置一对示例）分别通过独立 session 提问；
+3. 核对第一次问法后 `question_tuple_norms` 表按 `domain_id` 各插入一行新的 canonical 记录（Tier4：全部未命中）；
+4. 核对第二次问法后 `question_tuple_norms` **没有**新增行（说明 Tier1/2/2.5/3 之一命中了第一次的 canonical，四元组被替换后再送入 Matcher）；
+5. 核对两次问法命中的 `knowledge_points` 存在交集，且交集里每个 point 在 `question_kp_cooccurrence` 上体现为**同一 `question_terms` 分组的 `hit_count` 增长**，而不是分裂出一个新分组——这是归一化要解决的"抖动导致学习信号碎片化"问题（同 MEMORY.md「V1 test root causes」记录的现象）本身是否被吸收的直接证据。
+
+**通过标准**：3/4/5 三步全部成立即判 PASS。不直接断言 `path_type=fast`——归一化命中只解决"落到同一 canonical 四元组"，是否已经收敛到能服务快路径是 ActivationLink 自身的置信度收敛曲线（P2 覆盖），本阶段不重复验证。
+
+### P14 ActivationBundle 跨 unit 歧义仲裁（2026-08-12 部分落地，见 `internal/retrieval/fastpath_helpers.go` `resolveBundleForAmbiguousHits`/`formCandidateBundle`）
+
+**前提**：需要两条已达到 self_graded/trusted 服务档的 ActivationLink（`--link-id-a`/`--link-id-b`），分属不同 `knowledge_unit`，且在同一探测问法（`--probe-question`）上都能被 Tier1 精确匹配命中——可从 P2/P3 已培养的链接中挑选语义相近但归属不同文档/单元的一对（如「两篇 RAC 部署文档」场景，见 `test/v1/v1_common.py` `SOURCE_ABBREV_TO_TITLES` 的 `两篇 rac`），或专门为本阶段培养一对。
+
+**已知实现现状（决定了轴二只能用人工种子验证）**：Bundle 成员的 `RecordMemberOutcome` 尚未接入真实 Trace 回写路径（`grep RecordMemberOutcome` 只命中方法定义与其自身单测），即"成员置信度随线上使用继续收敛"这条闭环写了原语、还没接线，无法端到端自然培养到 serving 阈值。
+
+**轴一（确定性，直接验收，端到端可跑）**：
+
+1. 用 `--probe-question` 提问，验证 `direct_point_ids` 同时包含两条链接各自的 `point_id`（说明真的触发了跨 unit 歧义，而不是被别的分支提前拦截）；
+2. 验证本轮 `path_type != fast`（没有 verified Bundle 覆盖，正确回落慢路径）；
+3. 验证 `activation_bundles` 表出现（或被追加了 observed condition 的已有）一条 `status=candidate`、`member_point_ids` 同时覆盖两个 point_id 的行。
+
+**轴二（人工种子，只验证仲裁分支本身，不代表真实收敛概率，`--seed-member-confidence` 触发）**：
+
+4. 若两个 point 之间已存在 KPN `contradicts` 关系：把轴一形成的 candidate Bundle 全部成员 `success_count` 人工摆到远超 `retrieval.serving_confidence_min`（默认 0.7）对应阈值的水平后重问，验证仍然 `path_type != fast`（冲突不应被仲裁合并）；
+5. 若不存在 `contradicts`：同样人工摆高成员置信度后重问，验证 `path_type=fast` 且 `direct_point_ids` 仍同时包含两点（`bundlesConflict` 判空、`CoreMemberPointIDs` 正确合并）。
+
+**通过标准**：轴一 1-3 步全部成立即判 PASS（可独立于轴二判定）；轴二 4/5（二选一，取决于两点间是否已有 `contradicts` 关系）作为附加判定，用于确认仲裁分支代码路径本身正确，不计入"真实收敛"相关的任何量化指标。
+
 ## 6. 量化验收指标汇总
 
 | 指标 | 目标 | 采集阶段 |
@@ -549,6 +584,7 @@ M3 不设通过标准；V1 并入快路径正向样本观测。
 - **变体问法是硬要求（共现侧）**：Study 创建候选链接看的是 `question_kp_cooccurrence` 换算出的 `mean_pre`/`width_pre`（`create_confidence_min`/`create_width_max`），同一字面重复问只累计同一 `question_hash` 下的计数，对 `mean_pre` 的抬升有限；P2 培养清单必须备 ≥2 问法。但自四元组精确匹配起，变体**不保证**命中同一 ActivationLink——P2 的收敛硬门槛只要求至少跑通 1 条归属链接自然到达 `self_graded`/`trusted` 档（见 P2 步骤 4），其余观测条件的 `mean`/`tier` 分布作观测；
 - **P2 链接归属**：确认/驳回/对照组按题号独占归属，勿用「题的 direct point_id 并集」做多题共享判定（A9↔A11、T12↔F1_PRE 邻近簇会误伤）；
 - **阶段间不清库**：P2-P12 依赖 P1 积累的事件；靶子文档已按域错开（P5 删报销规定+RAC 归档、P6 改培训积分+神通、P7 新增两份 contradicts fixture、P8 改应收账款+19c RAC、P11 复用 F1_PRE 且不得在 P11 前调整其四元组字段、P12 直接读 P8 落盘结果不重新培养信号），执行时勿调换；P12 必须排在 P8 之后。
+- **P13/P14 排序与库依赖**：两者都是纯增量能力（config-gated 开关 + 新表 + 新的仲裁分支），不依赖也不破坏 P1-P12 的既有信号，理论上可在 P2（已有 verified/self_graded 链接可复用）之后的任意时点插入,不要求清库或重新导入文档。惟一的硬顺序要求是各自内部：P13 必须先把 `question_tuple_norm_enabled` 改回 `true` 并重启（脚本自动做，见 P13 说明），跑完必须恢复默认值再重启，避免污染后续阶段（P13 之后如果还要跑别的阶段，务必确认脚本的 `finally` 块确实执行了恢复，非正常中断——如 kill -9——需要人工核对 `config.yml` 是否被卡在 `true`）；P14 轴二依赖轴一先产出 candidate Bundle 的 `bundle_id`，不能单独跑。两阶段之间无先后依赖，可按任意顺序执行，也可以反复重跑（P13 每次都会重新走一遍开-测-关，P14 的 `formCandidateBundle` 对同一核心成员集合是幂等追加，不会因重跑而产生重复行）。
 - **真实 LLM 的波动**：正确率类指标按题判要点命中而非逐字比对（技术域例外：命令与参数名必须逐字对）；单题失败先重跑一次排除 LLM 抖动，复现两次才计为缺陷；
 - **缺陷归因**：每个失败点先区分「提取期缺陷（KU/KP 就没有该事实）」与「检索/回答期缺陷」，前者不属于 V1 目标范围但需记录；
 - **技术文档的特有风险**：代码块/长表格密集，KU 按行切片可能把命令截断（导入完成后应抽查 K8S、达梦、AlwaysOn 三篇长文档各 2 个 KU 的 `line_start/line_end` 切片是否对应原文完整片段，重点看代码块/表格是否被切断）；LLM 对通用技术知识有强先验，容易"不看文档也答对"或"用先验覆盖文档细节"——凡技术题必须核验引用片段确实来自对应文档，答对但引用为空/错源一律计缺陷；

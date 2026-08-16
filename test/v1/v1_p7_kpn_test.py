@@ -76,17 +76,19 @@ def build_fixture_file(fixture):
     return out_path
 
 
-def wait_source_ready(base_url, source_id, timeout_s=600, interval_s=3):
-    deadline = time.time() + timeout_s
-    while True:
+def wait_source_ready(base_url, source_id, timeout_s=600):
+    """用 poll_with_backoff 而非固定 3s 间隔——source 处理通常几秒内结束，指数
+    退避能更快发现完成，长时间未完成时也不会一直高频轮询。"""
+
+    def check():
         src = c.http_get_json(base_url, f"/sources/{source_id}")
         if src["status"] == "failed" or src.get("units_status") == "failed":
             return src
         if src["status"] == "completed" and src.get("units_status") == "completed":
             return src
-        if time.time() >= deadline:
-            return None
-        time.sleep(interval_s)
+        return None
+
+    return c.poll_with_backoff(check, timeout_s)
 
 
 def summarize_relations(conn):

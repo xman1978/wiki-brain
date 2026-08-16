@@ -1,14 +1,18 @@
 package trace
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jxman78/wiki-brain/internal/answer"
+	"github.com/jxman78/wiki-brain/internal/foundation/llm"
+	"github.com/jxman78/wiki-brain/internal/foundation/text"
 	"github.com/jxman78/wiki-brain/internal/retrieval"
 )
 
@@ -19,6 +23,7 @@ type Service struct {
 	observedConditionsMax int
 	correctionWeight      int
 	synthesisWriter       SynthesisOutcomeWriter
+	llmClient             llm.LLMClient
 }
 
 // ObservedConditionEnricher is implemented by activation.Service — optional so
@@ -61,12 +66,24 @@ func (s *Service) SetCorrectionWeight(n int) {
 	s.correctionWeight = n
 }
 
+// SetLLMClient wires the LLM call resolvePointBinding uses to re-derive
+// which KP a multi-KP unit's direct evidence actually corresponds to
+// (2026-08-16 design decision — see chat: retrieval-time point_id tagging on
+// a whole-unit candidate is a guess made before the answer exists; this
+// async, post-answer call has the question, the generated answer, and every
+// sibling KP's own content to judge from, so it corrects the tag rather than
+// inheriting it). A nil client (activation-less test setups) leaves
+// resolvePointBinding a no-op.
+func (s *Service) SetLLMClient(c llm.LLMClient) {
+	s.llmClient = c
+}
+
 func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 	start := time.Now()
 	slog.Debug("trace: process start", "answer_id", r.AnswerID, "question", r.Question)
 
 	grade := gradeQuality(r)
-	s.applyConstraintGate(&grade, r)
+	s.resolveDirectEvidence(&grade, r)
 	slog.Debug("trace: quality graded",
 		"answer_id", r.AnswerID,
 		"quality", grade.Quality,
@@ -158,6 +175,218 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 		"duration_ms", time.Since(start).Milliseconds())
 }
 
+// resolveDirectEvidence is the single post-answer correction pass over a
+// confident grade's DirectPointIDs, replacing what used to be two separate
+// steps (2026-08-16 design — see chat):
+//
+//   - point-binding correction: a unit-level retrieval candidate can only
+//     carry one nominal point_id, chosen as a guess before the answer
+//     existed, even when its text spans several sibling KPs;
+//   - constraint-consistency gating: docs/impl/v1/trace.md's 约束一致性判定
+//     used to compare the question's constraint against a unit-level
+//     semantic summary (source_theme/content_theme/object/scope), which is
+//     too coarse to reflect a specific sibling KP's own numeric/detail
+//     content and produced false-positive drops (e.g. constraint "逾期三个月"
+//     vs a KP whose content says "90天" — same fact, different surface form).
+//
+// For a unit with >1 current KP (ambiguous — AmbiguousUnitPoints), both
+// jobs are folded into one resolve_kp_binding.md call: the LLM sees the
+// question, the generated answer, and every sibling KP's own content, so it
+// judges both "which KP(s) does this answer actually correspond to" and
+// "does the question's constraint actually hold for that KP's content"
+// (semantic equivalence tolerated) in a single pass — no separate
+// unit-summary-based check runs for these points.
+//
+// For a unit with 0 or 1 current KP (unambiguous — never reaches the LLM,
+// per "仅多 KP unit 触发" 2026-08-16 决策), constraint consistency still
+// needs checking, but there is no candidate to pick between — it falls back
+// to the same deterministic term-overlap rule as before, just against that
+// one point's own content instead of the unit-level summary.
+//
+// LLM/parse/lookup failures are non-fatal: the affected point_id(s) are
+// kept as originally tagged and the rest of trace_write proceeds unaffected.
+func (s *Service) resolveDirectEvidence(grade *gradeResult, r *answer.AnswerResult) {
+	es := r.EvidenceSet
+	if grade.Quality != QualityConfident || es == nil || es.PathType == retrieval.PathTypeWiki {
+		return
+	}
+	directPointIDs := grade.DirectPointIDs
+	if len(directPointIDs) == 0 {
+		return
+	}
+
+	pointToUnit := make(map[string]string, len(es.DirectEvidence))
+	for _, ev := range es.DirectEvidence {
+		if ev.PointID != "" {
+			pointToUnit[ev.PointID] = ev.UnitID
+		}
+	}
+
+	unitSeen := make(map[string]bool)
+	var unitIDs []string
+	for _, pid := range directPointIDs {
+		if uid, ok := pointToUnit[pid]; ok && uid != "" && !unitSeen[uid] {
+			unitSeen[uid] = true
+			unitIDs = append(unitIDs, uid)
+		}
+	}
+
+	var ambiguous map[string][]PointSummary
+	if s.llmClient != nil && len(unitIDs) > 0 {
+		var err error
+		ambiguous, err = s.store.AmbiguousUnitPoints(unitIDs)
+		if err != nil {
+			slog.Warn("trace: resolve direct evidence: load ambiguous unit points failed", "answer_id", r.AnswerID, "error", err)
+		}
+	}
+
+	// Split into points whose unit the LLM will vet (ambiguous) vs points
+	// that fall back to the deterministic own-content constraint check.
+	var ambiguousUnitOrder []string
+	ambiguousUnitSeen := make(map[string]bool)
+	simplePoints := make([]string, 0, len(directPointIDs))
+	for _, pid := range directPointIDs {
+		uid := pointToUnit[pid]
+		if _, ok := ambiguous[uid]; ok {
+			if !ambiguousUnitSeen[uid] {
+				ambiguousUnitSeen[uid] = true
+				ambiguousUnitOrder = append(ambiguousUnitOrder, uid)
+			}
+			continue
+		}
+		simplePoints = append(simplePoints, pid)
+	}
+
+	resolvedByUnit := make(map[string][]string, len(ambiguousUnitOrder))
+	if len(ambiguousUnitOrder) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		for _, uid := range ambiguousUnitOrder {
+			resolved, ok := s.resolveUnitBinding(ctx, r.Question, r.Content, ambiguous[uid])
+			if !ok {
+				// Fall back to this unit's originally-tagged point_id(s),
+				// still subject to the deterministic own-content check below.
+				for _, pid := range directPointIDs {
+					if pointToUnit[pid] == uid {
+						simplePoints = append(simplePoints, pid)
+					}
+				}
+				continue
+			}
+			resolvedByUnit[uid] = resolved
+		}
+	}
+
+	kept := s.filterByConstraintOwnContent(simplePoints, es.Constraint, r.AnswerID)
+
+	out := make([]string, 0, len(directPointIDs))
+	seen := make(map[string]bool, len(directPointIDs))
+	addUnique := func(pid string) {
+		if pid != "" && !seen[pid] {
+			seen[pid] = true
+			out = append(out, pid)
+		}
+	}
+	for _, pid := range kept {
+		addUnique(pid)
+	}
+	for _, uid := range ambiguousUnitOrder {
+		for _, pid := range resolvedByUnit[uid] {
+			addUnique(pid)
+		}
+	}
+
+	if len(out) == 0 {
+		grade.Quality = QualityPartial
+	}
+	grade.DirectPointIDs = out
+}
+
+// filterByConstraintOwnContent applies 约束一致性判定 (constraint.go) to a
+// set of unambiguous points, using each point's own content as the evidence
+// side of the term-overlap check (replacing the old unit-level semantic
+// summary — see resolveDirectEvidence doc comment). A content lookup
+// failure skips the gate for the affected points rather than blocking the
+// trace (matches the old gate's fail-open behavior).
+func (s *Service) filterByConstraintOwnContent(pointIDs []string, constraint, answerID string) []string {
+	if constraint == "" || len(pointIDs) == 0 {
+		return pointIDs
+	}
+	items := splitConstraintItems(constraint)
+	if len(items) == 0 {
+		return pointIDs
+	}
+
+	contents, err := s.store.PointContents(pointIDs)
+	if err != nil {
+		slog.Error("trace: constraint gate content lookup failed", "answer_id", answerID, "error", err)
+		return pointIDs
+	}
+
+	var kept, dropped []string
+	for _, pid := range pointIDs {
+		if pointConflictsWithConstraint(items, text.TermSet(contents[pid])) {
+			dropped = append(dropped, pid)
+			continue
+		}
+		kept = append(kept, pid)
+	}
+	if len(dropped) > 0 {
+		slog.Info("trace: constraint mismatch dropped direct citations",
+			"answer_id", answerID, "constraint", constraint, "dropped_point_ids", dropped)
+	}
+	return kept
+}
+
+// resolveUnitBinding runs one resolve_kp_binding.md call for a single
+// ambiguous unit — judging both which KP(s) the answer corresponds to and
+// whether the question's constraint actually holds for their content. ok=false
+// on any LLM/parse failure or an empty candidate set — the caller falls back
+// to that unit's originally-tagged point_id(s) through the deterministic
+// own-content constraint check.
+func (s *Service) resolveUnitBinding(ctx context.Context, question, answerContent string, candidates []PointSummary) (resolved []string, ok bool) {
+	if len(candidates) == 0 {
+		return nil, false
+	}
+
+	valid := make(map[string]bool, len(candidates))
+	var candidatesText strings.Builder
+	for _, c := range candidates {
+		valid[c.PointID] = true
+		fmt.Fprintf(&candidatesText, "【%s】\n%s\n\n", c.PointID, c.Content)
+	}
+
+	raw, err := s.llmClient.CompleteJSON(ctx, "resolve_kp_binding.md", map[string]string{
+		"question":   question,
+		"answer":     answerContent,
+		"candidates": candidatesText.String(),
+	}, "classification")
+	if err != nil {
+		slog.Warn("trace: resolve point binding: llm call failed", "error", err)
+		return nil, false
+	}
+
+	var result struct {
+		PointIDs []string `json:"point_ids"`
+		Reason   string   `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		slog.Warn("trace: resolve point binding: parse response failed", "error", err)
+		return nil, false
+	}
+
+	out := make([]string, 0, len(result.PointIDs))
+	for _, pid := range result.PointIDs {
+		if valid[pid] {
+			out = append(out, pid)
+		} else {
+			slog.Warn("trace: resolve point binding: llm returned out-of-candidate point_id, dropped", "point_id", pid)
+		}
+	}
+	slog.Debug("trace: resolve point binding done", "resolved", out, "reason", result.Reason)
+	return out, true
+}
+
 // enrichObservedConditions appends this turn's Session quadruple onto links
 // for confidently cited points on the full path (slow path / fast fallback),
 // and — before appending — mines subject_synonym_gap candidates from links
@@ -216,66 +445,6 @@ func (s *Service) detectSubjectSynonymGaps(t *Trace) {
 			slog.Error("trace: save subject_synonym_gap event failed", "trace_id", t.TraceID, "error", err)
 		}
 	}
-}
-
-// applyConstraintGate enforces 约束一致性判定 (constraint.go) on a confident
-// grade: cited direct points whose unit semantics conflict with the question
-// constraint are removed from DirectPointIDs, and when none survive the grade
-// downgrades to partial — so the mismatch produces no confident learning
-// signal (no cooccurrence confident_count, no activation_gap event, and an
-// activation hit on a dropped point grades as activation_failure/not_cited).
-// Wiki-path grading keeps its own rule (cited_point_ids, no unit mapping on
-// the snapshot); a semantics lookup failure skips the gate rather than
-// blocking the trace.
-func (s *Service) applyConstraintGate(grade *gradeResult, r *answer.AnswerResult) {
-	es := r.EvidenceSet
-	if grade.Quality != QualityConfident || es == nil || es.PathType == retrieval.PathTypeWiki || es.Constraint == "" {
-		return
-	}
-	items := splitConstraintItems(es.Constraint)
-	if len(items) == 0 {
-		return
-	}
-
-	pointToUnit := make(map[string]string, len(es.DirectEvidence))
-	unitIDs := make([]string, 0, len(es.DirectEvidence))
-	seen := make(map[string]bool)
-	for _, e := range es.DirectEvidence {
-		if e.PointID != "" && e.UnitID != "" {
-			pointToUnit[e.PointID] = e.UnitID
-			if !seen[e.UnitID] {
-				seen[e.UnitID] = true
-				unitIDs = append(unitIDs, e.UnitID)
-			}
-		}
-	}
-	unitTerms, err := s.store.UnitSemanticTerms(unitIDs)
-	if err != nil {
-		slog.Error("trace: constraint gate semantics lookup failed", "answer_id", r.AnswerID, "error", err)
-		return
-	}
-
-	var kept, dropped []string
-	for _, pid := range grade.DirectPointIDs {
-		if pointConflictsWithConstraint(items, unitTerms[pointToUnit[pid]]) {
-			dropped = append(dropped, pid)
-			continue
-		}
-		kept = append(kept, pid)
-	}
-	if len(dropped) == 0 {
-		return
-	}
-
-	grade.DirectPointIDs = kept
-	if len(kept) == 0 {
-		grade.Quality = QualityPartial
-	}
-	slog.Info("trace: constraint mismatch dropped direct citations",
-		"answer_id", r.AnswerID,
-		"constraint", es.Constraint,
-		"dropped_point_ids", dropped,
-		"quality", grade.Quality)
 }
 
 func (s *Service) updateCooccurrence(t *Trace, r *answer.AnswerResult) {

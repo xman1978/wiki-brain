@@ -52,12 +52,14 @@ func TestConstraintConflicts(t *testing.T) {
 	}
 }
 
-func insertTestUnitSemantics(t *testing.T, db *sql.DB, unitID, sourceTheme, contentTheme, object, scope string) {
+func insertTestKPContent(t *testing.T, db *sql.DB, pointID, content string) {
 	t.Helper()
-	_, err := db.Exec(`INSERT INTO unit_rerank_semantics (unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
-		VALUES (?, ?, ?, '说明', ?, ?, 'v12')`, unitID, sourceTheme, contentTheme, object, scope)
+	db.Exec(`INSERT OR IGNORE INTO sources (source_id, title, format, file_name, original_path, markdown_path, status) VALUES ('s-test', 'test', 'markdown', 'test.md', '/test.md', '/test.md', 'completed')`)
+	db.Exec(`INSERT OR IGNORE INTO knowledge_units (unit_id, source_id, center, line_start, line_end, status, prompt_version) VALUES ('u-test', 's-test', 'test', 1, 10, 'completed', 'v1')`)
+	_, err := db.Exec(`INSERT INTO knowledge_points (point_id, unit_id, source_id, content, point_type) VALUES (?, 'u-test', 's-test', ?, 'fact')
+		ON CONFLICT(point_id) DO UPDATE SET content = excluded.content`, pointID, content)
 	if err != nil {
-		t.Fatalf("insert unit semantics: %v", err)
+		t.Fatalf("insert test kp content: %v", err)
 	}
 }
 
@@ -78,13 +80,13 @@ func mismatchAnswerResult(constraint string) *answer.AnswerResult {
 	}
 }
 
-// 问题约束指向不同实体（神通）而证据语义属于达梦 → 引用被剔除，分级降为
-// partial，不产生 confident 共现信号。
+// 问题约束指向不同实体（神通）而该 KP 自己的内容属于达梦 → 引用被剔除，
+// 分级降为 partial，不产生 confident 共现信号（2026-08-16 起判据换成 KP
+// 自己的 content，不再是 unit 级预算摘要 —— 见 resolveDirectEvidence）。
 func TestProcessTrace_ConstraintMismatch_DowngradesToPartial(t *testing.T) {
 	svc, store, db := setupService(t)
 	insertTestAnswer(t, db, "a-001")
-	insertTestKP(t, db, "p1")
-	insertTestUnitSemantics(t, db, "u-test", "达梦数据库优化", "数据库会话监控", "数据库会话", "达梦数据库")
+	insertTestKPContent(t, db, "p1", "达梦数据库优化 数据库会话监控 达梦数据库")
 
 	svc.ProcessTrace(mismatchAnswerResult("神通数据库"))
 
@@ -102,14 +104,13 @@ func TestProcessTrace_ConstraintMismatch_DowngradesToPartial(t *testing.T) {
 	}
 }
 
-// 约束与证据一致（达梦数据库）或正交（生产环境）时分级不受影响。
+// 约束与 KP 内容一致（达梦数据库）或正交（生产环境）时分级不受影响。
 func TestProcessTrace_ConstraintCompatible_StaysConfident(t *testing.T) {
 	for _, constraint := range []string{"达梦数据库", "生产环境", "达梦数据库, Windows环境"} {
 		t.Run(constraint, func(t *testing.T) {
 			svc, store, db := setupService(t)
 			insertTestAnswer(t, db, "a-001")
-			insertTestKP(t, db, "p1")
-			insertTestUnitSemantics(t, db, "u-test", "达梦数据库优化", "数据库会话监控", "数据库会话", "达梦数据库")
+			insertTestKPContent(t, db, "p1", "达梦数据库优化 数据库会话监控 达梦数据库")
 
 			svc.ProcessTrace(mismatchAnswerResult(constraint))
 
@@ -125,8 +126,10 @@ func TestProcessTrace_ConstraintCompatible_StaysConfident(t *testing.T) {
 	}
 }
 
-// 单元缺少预计算语义时守门不启用，分级照旧。
-func TestProcessTrace_ConstraintGate_SkipsWithoutSemantics(t *testing.T) {
+// KP 内容与约束无任何共享词（正交，而非"同维度不同实体"）时不算冲突，
+// 分级照旧 —— 覆盖 insertTestKP 默认写入的泛化 content（'test'）这种
+// 现实中"该 unit 没有可比对语义"的等价情形。
+func TestProcessTrace_ConstraintGate_OrthogonalContentSkips(t *testing.T) {
 	svc, store, db := setupService(t)
 	insertTestAnswer(t, db, "a-001")
 	insertTestKP(t, db, "p1")
@@ -135,6 +138,6 @@ func TestProcessTrace_ConstraintGate_SkipsWithoutSemantics(t *testing.T) {
 
 	traces, _ := store.ListTraces(QualityConfident, "", "", 20, 0)
 	if len(traces) != 1 {
-		t.Fatalf("expected 1 confident trace when semantics missing, got %d", len(traces))
+		t.Fatalf("expected 1 confident trace when content has no overlapping terms, got %d", len(traces))
 	}
 }

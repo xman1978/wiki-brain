@@ -26,7 +26,9 @@ import argparse
 import json
 import re
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import v1_common as c
@@ -59,9 +61,12 @@ def fragment_segments(expected_fragment):
     return [s.replace(" ", "") for s in text.split("……") if s.strip()]
 
 
-def check_evidence_against_unit_range(base_url, ev, markdown_cache, unit_cache):
+def check_evidence_against_unit_range(base_url, ev, markdown_cache, unit_cache, cache_lock):
     """比 P1 的"全文子串"更严格：取 ev 对应 KU 的 line_start/line_end，切原文，
-    再核验 ev.content 是否落在那个切片里（而不只是全文任意位置）。"""
+    再核验 ev.content 是否落在那个切片里（而不只是全文任意位置）。
+
+    cache_lock 保护 markdown_cache/unit_cache——并行提问时多题可能同时命中
+    同一 unit/Source，避免重复拉取或竞争写入同一份缓存。"""
     unit_id = ev.get("unit_id")
     ref = ev.get("source_ref")
     if isinstance(ref, str):
@@ -70,24 +75,27 @@ def check_evidence_against_unit_range(base_url, ev, markdown_cache, unit_cache):
     if not unit_id or not source_id:
         return {"unit_id": unit_id, "checked": False, "reason": "缺 unit_id/source_id"}
 
-    if unit_id not in unit_cache:
-        try:
-            unit_cache[unit_id] = c.http_get_json(base_url, f"/units/{unit_id}")
-        except Exception as e:
-            unit_cache[unit_id] = None
-            print(f"    ! GET /units/{unit_id} 失败: {e}", file=sys.stderr)
-    unit = unit_cache[unit_id]
+    with cache_lock:
+        if unit_id not in unit_cache:
+            try:
+                unit_cache[unit_id] = c.http_get_json(base_url, f"/units/{unit_id}")
+            except Exception as e:
+                unit_cache[unit_id] = None
+                print(f"    ! GET /units/{unit_id} 失败: {e}", file=sys.stderr)
+        unit = unit_cache[unit_id]
     if not unit:
         return {"unit_id": unit_id, "checked": False, "reason": "unit 未找到"}
 
-    if source_id not in markdown_cache:
-        markdown_cache[source_id] = c.http_get_text(base_url, f"/sources/{source_id}/markdown")
-    lines = markdown_cache[source_id].splitlines()
+    with cache_lock:
+        if source_id not in markdown_cache:
+            markdown_cache[source_id] = c.http_get_text(base_url, f"/sources/{source_id}/markdown")
+        full_doc = markdown_cache[source_id]
+    lines = full_doc.splitlines()
     start, end = unit["line_start"], unit["line_end"]
     slice_text = "\n".join(lines[max(start - 1, 0):end])
 
     content = ev.get("content", "") or ""
-    in_full_doc = content in markdown_cache[source_id]
+    in_full_doc = content in full_doc
     in_unit_range = content in slice_text
     return {
         "unit_id": unit_id,
@@ -99,7 +107,7 @@ def check_evidence_against_unit_range(base_url, ev, markdown_cache, unit_cache):
     }
 
 
-def run_question(base_url, question, expected_fragment, id_to_title, markdown_cache, unit_cache, timeout):
+def run_question(base_url, question, expected_fragment, id_to_title, markdown_cache, unit_cache, cache_lock, timeout):
     t0 = time.time()
     turn, result = c.ask_via_session(base_url, question, deep=False, timeout=timeout)
     latency = time.time() - t0
@@ -116,7 +124,7 @@ def run_question(base_url, question, expected_fragment, id_to_title, markdown_ca
     for ev in all_ev:
         if not ev.get("mined"):
             continue
-        chk = check_evidence_against_unit_range(base_url, ev, markdown_cache, unit_cache)
+        chk = check_evidence_against_unit_range(base_url, ev, markdown_cache, unit_cache, cache_lock)
         chk["fact_id"] = ev.get("fact_id")
         range_checks.append(chk)
         if chk.get("checked") and not chk.get("in_full_doc"):
@@ -174,7 +182,11 @@ def main():
     parser.add_argument("--db-path", default=str(c.DEFAULT_DB_PATH))
     parser.add_argument("--log-path", default=str(c.REPO_ROOT / "logs" / "wiki-brain.log"))
     parser.add_argument("--timeout", type=float, default=180.0)
-    parser.add_argument("--delay", type=float, default=0.5)
+    parser.add_argument(
+        "--workers", type=int, default=6,
+        help="并发提问数（各题彼此独立：不同问题、不共享 session_id、不改 config.yml，"
+             "安全并行；设为 1 退化为原来的顺序提问）",
+    )
     parser.add_argument("--out", default=str(c.RESULTS_DIR))
     args = parser.parse_args()
 
@@ -185,26 +197,35 @@ def main():
     full_text = c.load_plan_text()
     id_to_title = c.fetch_source_titles(args.base_url)
     markdown_cache, unit_cache = {}, {}
+    cache_lock = threading.Lock()
 
     questions = [(r["id"], r["question"], r["expected_fragment"]) for r in load_d_group_questions(full_text)]
     questions += [(f"EXTRA{i+1}", q, "") for i, q in enumerate(EXTRA_LONG_TABLE_QUESTIONS)]
 
-    print(f"共 {len(questions)} 道题（D 组 {len(questions) - len(EXTRA_LONG_TABLE_QUESTIONS)} + 新增 {len(EXTRA_LONG_TABLE_QUESTIONS)}）。\n")
+    print(f"共 {len(questions)} 道题（D 组 {len(questions) - len(EXTRA_LONG_TABLE_QUESTIONS)} + 新增 {len(EXTRA_LONG_TABLE_QUESTIONS)}，并发数={args.workers}）。\n")
 
-    records = []
-    for qid, question, expected_fragment in questions:
-        print(f"[{qid}] {question}")
-        rec = run_question(args.base_url, question, expected_fragment, id_to_title, markdown_cache, unit_cache, args.timeout)
-        rec["id"] = qid
-        if rec.get("error"):
-            print(f"  ! {rec['error']}")
-        else:
-            print(
-                f"  mined={rec['mined_count']} fallback={rec['fallback_count']} "
-                f"行号范围校验失败={rec['mined_range_fail']} fragment_hit={rec['fragment_hit']}"
-            )
-        records.append(rec)
-        time.sleep(args.delay)
+    records = [None] * len(questions)
+    workers = max(1, min(args.workers, len(questions)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                run_question, args.base_url, question, expected_fragment, id_to_title, markdown_cache, unit_cache, cache_lock, args.timeout
+            ): i
+            for i, (qid, question, expected_fragment) in enumerate(questions)
+        }
+        for future in as_completed(futures):
+            i = futures[future]
+            qid = questions[i][0]
+            rec = future.result()
+            rec["id"] = qid
+            if rec.get("error"):
+                print(f"[{qid}] ! {rec['error']}")
+            else:
+                print(
+                    f"[{qid}] mined={rec['mined_count']} fallback={rec['fallback_count']} "
+                    f"行号范围校验失败={rec['mined_range_fail']} fragment_hit={rec['fragment_hit']}"
+                )
+            records[i] = rec
 
     print("\n扫描证据挖掘日志...")
     log_counts, log_err = scan_log_for_evidence_patterns(Path(args.log_path))

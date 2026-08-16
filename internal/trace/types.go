@@ -32,6 +32,14 @@ type Trace struct {
 	SkeletonPageID string `json:"skeleton_page_id,omitempty"`
 }
 
+// PointSummary is a knowledge_point's identity + content, used by
+// resolvePointBinding to present an ambiguous unit's candidate KPs to the LLM.
+type PointSummary struct {
+	PointID string
+	UnitID  string
+	Content string
+}
+
 type Cooccurrence struct {
 	QuestionTerms  string    `json:"question_terms"`
 	PointID        string    `json:"point_id"`

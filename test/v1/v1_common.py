@@ -237,6 +237,24 @@ def poll_until(fn, timeout_s, interval_s=1.0):
         time.sleep(interval_s)
 
 
+def poll_with_backoff(fn, timeout_s, initial_interval_s=0.5, max_interval_s=5.0, factor=1.6):
+    """同 poll_until，但轮询间隔从 initial_interval_s 起按 factor 指数增长、封顶
+    max_interval_s——比固定间隔更快发现"很快就完成了"的情况（如 source
+    处理、Shadow Source 换血通常几秒内结束），长时间未完成时也不会一直高频
+    轮询服务端。用于 P6/P7/P8 里原先 interval_s=3 的固定间隔轮询（影子 Source
+    处理、reupload 完成等待）。"""
+    deadline = time.time() + timeout_s
+    interval = initial_interval_s
+    while True:
+        val = fn()
+        if val:
+            return val
+        if time.time() >= deadline:
+            return None
+        time.sleep(interval)
+        interval = min(interval * factor, max_interval_s)
+
+
 # ---------------------------------------------------------------------------
 # DB（只读）——方案第 3 节"观察面"里 API 覆盖不到的部分，如按 trace_id 查 learning_events
 # ---------------------------------------------------------------------------
@@ -464,6 +482,48 @@ def db_cooccurrence_for_point(conn, point_id):
         (point_id,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def db_question_tuple_norms(conn, domain_id=None, since_created_at=None):
+    """P13：question_tuple_norms 表（migration 049）——四元组归一化的 canonical
+    存储，按 domain_id 分域。since_created_at 用于增量核对"这一轮新插入了几条
+    canonical 行"（Tier4 才会插入新行，Tier1/2/2.5-拒绝之外的命中只 TouchLastHit
+    刷新 last_hit_at，不新增行）。见 internal/activation/tuplenorm.go。"""
+    q = "SELECT * FROM question_tuple_norms WHERE 1=1"
+    params = []
+    if domain_id:
+        q += " AND domain_id = ?"
+        params.append(domain_id)
+    if since_created_at:
+        q += " AND created_at > ?"
+        params.append(since_created_at)
+    q += " ORDER BY created_at"
+    rows = conn.execute(q, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def db_activation_bundles(conn, status=None):
+    """P14：activation_bundles 表（migration 048/051）——ActivationBundle 熟路存储。
+    member_point_ids 是 JSON 数组（BundleMember 对象，含 success_count/
+    failure_count/last_seen_at，见 internal/activation/bundle_types.go）。GET
+    /activation-bundles 也能拿到同样的数据（h.toBundleResp 派生了
+    core_member_point_ids），这里提供 DB 直读版本以便在同一次查询里核对
+    observed_conditions/created_from 等 API 响应可能未透传全的字段。"""
+    q = "SELECT * FROM activation_bundles WHERE 1=1"
+    params = []
+    if status:
+        q += " AND status = ?"
+        params.append(status)
+    q += " ORDER BY created_at"
+    rows = conn.execute(q, params).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["member_point_ids_parsed"] = json.loads(d["member_point_ids"] or "[]")
+        d["observed_conditions_parsed"] = json.loads(d["observed_conditions"] or "[]")
+        d["created_from_parsed"] = json.loads(d["created_from"] or "[]")
+        out.append(d)
+    return out
 
 
 # ---------------------------------------------------------------------------

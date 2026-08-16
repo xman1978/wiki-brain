@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/jxman78/wiki-brain/internal/foundation/text"
 )
 
 type Store struct {
@@ -270,37 +269,94 @@ func (s *Store) EntryNullRatio(pointIDs []string) (float64, error) {
 	return float64(nullCount.Int64) / float64(total), nil
 }
 
-// UnitSemanticTerms returns, per unit_id, the term set built from that unit's
-// precomputed rerank semantics (source_theme/content_theme/object/scope) —
-// the evidence side of the constraint-consistency gate (constraint.go). Units
-// without a semantics row are simply absent from the result (gate skips them).
-func (s *Store) UnitSemanticTerms(unitIDs []string) (map[string]map[string]struct{}, error) {
-	result := make(map[string]map[string]struct{})
+// AmbiguousUnitPoints returns, for each unitID whose knowledge_units currently
+// has more than one lifecycle='current' knowledge_point, the full list of
+// those points (id + content). Units with 0 or 1 current point are omitted
+// entirely — they carry no point-binding ambiguity for resolvePointBinding
+// to resolve, so callers skip the LLM call for them (docs/impl/v1/trace.md
+// point-binding resolution step).
+func (s *Store) AmbiguousUnitPoints(unitIDs []string) (map[string][]PointSummary, error) {
+	result := make(map[string][]PointSummary)
 	if len(unitIDs) == 0 {
 		return result, nil
 	}
 
-	placeholders := make([]string, len(unitIDs))
-	args := make([]interface{}, len(unitIDs))
-	for i, uid := range unitIDs {
-		placeholders[i] = "?"
-		args[i] = uid
+	seen := make(map[string]bool, len(unitIDs))
+	placeholders := make([]string, 0, len(unitIDs))
+	args := make([]interface{}, 0, len(unitIDs))
+	for _, id := range unitIDs {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+	if len(placeholders) == 0 {
+		return result, nil
 	}
 
-	rows, err := s.db.Query(fmt.Sprintf(`
-		SELECT unit_id, source_theme, content_theme, object, scope
-		FROM unit_rerank_semantics WHERE unit_id IN (%s)`, strings.Join(placeholders, ",")), args...)
+	rows, err := s.db.Query(fmt.Sprintf(
+		`SELECT point_id, unit_id, content FROM knowledge_points
+		 WHERE unit_id IN (%s) AND lifecycle = 'current'
+		 ORDER BY unit_id, created_at ASC`, strings.Join(placeholders, ",")), args...)
 	if err != nil {
-		return nil, fmt.Errorf("trace store: unit semantic terms: %w", err)
+		return nil, fmt.Errorf("trace store: ambiguous unit points: %w", err)
+	}
+	defer rows.Close()
+
+	byUnit := make(map[string][]PointSummary)
+	for rows.Next() {
+		var p PointSummary
+		if err := rows.Scan(&p.PointID, &p.UnitID, &p.Content); err != nil {
+			return nil, fmt.Errorf("trace store: scan ambiguous unit point: %w", err)
+		}
+		byUnit[p.UnitID] = append(byUnit[p.UnitID], p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("trace store: ambiguous unit points rows: %w", err)
+	}
+
+	for unitID, points := range byUnit {
+		if len(points) > 1 {
+			result[unitID] = points
+		}
+	}
+	return result, nil
+}
+
+// PointContents returns each pointID's own knowledge_points.content — the
+// evidence side of the constraint-consistency gate for unambiguous points
+// (constraint.go / resolveDirectEvidence), replacing the old unit-level
+// semantic summary. Points with no matching row are simply absent from the
+// result (gate treats them as no-evidence-to-conflict-with, same as before).
+func (s *Store) PointContents(pointIDs []string) (map[string]string, error) {
+	result := make(map[string]string)
+	if len(pointIDs) == 0 {
+		return result, nil
+	}
+
+	placeholders := make([]string, len(pointIDs))
+	args := make([]interface{}, len(pointIDs))
+	for i, pid := range pointIDs {
+		placeholders[i] = "?"
+		args[i] = pid
+	}
+
+	rows, err := s.db.Query(fmt.Sprintf(
+		`SELECT point_id, content FROM knowledge_points WHERE point_id IN (%s)`,
+		strings.Join(placeholders, ",")), args...)
+	if err != nil {
+		return nil, fmt.Errorf("trace store: point contents: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var unitID, sourceTheme, contentTheme, object, scope string
-		if err := rows.Scan(&unitID, &sourceTheme, &contentTheme, &object, &scope); err != nil {
-			return nil, fmt.Errorf("trace store: scan unit semantic terms: %w", err)
+		var pointID, content string
+		if err := rows.Scan(&pointID, &content); err != nil {
+			return nil, fmt.Errorf("trace store: scan point content: %w", err)
 		}
-		result[unitID] = text.TermSet(sourceTheme + " " + contentTheme + " " + object + " " + scope)
+		result[pointID] = content
 	}
 	return result, rows.Err()
 }

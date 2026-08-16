@@ -29,7 +29,9 @@ import argparse
 import json
 import re
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import v1_common as c
@@ -69,7 +71,7 @@ def wait_trace(conn, answer_id, timeout_s=15):
     return c.poll_until(lambda: c.db_trace_by_answer_id(conn, answer_id), timeout_s, 0.5)
 
 
-def check_d_group(base_url, row, direct_ev, supporting_ev, markdown_cache):
+def check_d_group(base_url, row, direct_ev, supporting_ev, markdown_cache, markdown_lock):
     all_ev = direct_ev + supporting_ev
     mined_check = []
     for ev in all_ev:
@@ -81,10 +83,14 @@ def check_d_group(base_url, row, direct_ev, supporting_ev, markdown_cache):
         sid = (ref or {}).get("source_id")
         if not sid:
             continue
-        if sid not in markdown_cache:
-            markdown_cache[sid] = c.http_get_text(base_url, f"/sources/{sid}/markdown")
+        # 并行提问会有多题同时命中同一 Source 的证据，加锁避免重复拉取/竞争写入
+        # 同一份 markdown 缓存（内容不大，加锁开销可忽略）。
+        with markdown_lock:
+            if sid not in markdown_cache:
+                markdown_cache[sid] = c.http_get_text(base_url, f"/sources/{sid}/markdown")
+            content = markdown_cache[sid]
         mined_check.append(
-            {"fact_id": ev.get("fact_id"), "is_substring": ev.get("content", "") in markdown_cache[sid]}
+            {"fact_id": ev.get("fact_id"), "is_substring": ev.get("content", "") in content}
         )
 
     # 「...」内才是真正的期望片段文本；外面的"表行/片段/所在..."是描述性后缀，不能
@@ -102,7 +108,11 @@ def check_d_group(base_url, row, direct_ev, supporting_ev, markdown_cache):
     return mined_check, frag_hit
 
 
-def run_question(base_url, conn, row, id_to_title, markdown_cache, timeout):
+def run_question(base_url, db_path, row, id_to_title, markdown_cache, markdown_lock, timeout):
+    """每道题各自开一个只读 DB 连接（P1 题目间彼此独立：不同问题、不共享
+    session_id、不改 config.yml），供 ThreadPoolExecutor 并行调用——sqlite3
+    连接本身不是线程安全的，重开连接比跨线程共享一个连接更简单也更便宜
+    （只读连接，见 v1_common.py open_db）。"""
     if not row["question"]:
         return {**row, "domain": c.domain_of(row["id"]), "error": "题库缺少问题文本"}
 
@@ -128,12 +138,16 @@ def run_question(base_url, conn, row, id_to_title, markdown_cache, timeout):
     key_terms = c.extract_key_terms(row["expected_points"]) if row["expected_points"] else []
     found_terms = [t for t in key_terms if t.lower() in content.lower()]
 
-    trace = wait_trace(conn, result.get("answer_id"))
-    events = c.db_learning_events_for_trace(conn, trace["trace_id"]) if trace else []
+    conn = c.open_db(db_path)
+    try:
+        trace = wait_trace(conn, result.get("answer_id"))
+        events = c.db_learning_events_for_trace(conn, trace["trace_id"]) if trace else []
+    finally:
+        conn.close()
 
     mined_check, fragment_hit = ([], None)
     if row["group"] == "D" and row["expected_fragment"]:
-        mined_check, fragment_hit = check_d_group(base_url, row, direct_ev, supporting_ev, markdown_cache)
+        mined_check, fragment_hit = check_d_group(base_url, row, direct_ev, supporting_ev, markdown_cache, markdown_lock)
 
     return {
         **row,
@@ -257,7 +271,11 @@ def main():
     parser.add_argument("--group", choices=GROUPS + ["all"], default="all")
     parser.add_argument("--ids", help="逗号分隔题号，如 A1,T3,D2（优先于 --group）")
     parser.add_argument("--timeout", type=float, default=180.0)
-    parser.add_argument("--delay", type=float, default=0.5, help="题间等待秒数")
+    parser.add_argument(
+        "--workers", type=int, default=6,
+        help="并发提问数（P1 各题彼此独立：不同问题、不共享 session_id、不改 config.yml，"
+             "安全并行；设为 1 退化为原来的顺序提问）",
+    )
     parser.add_argument("--out", default=str(c.RESULTS_DIR))
     args = parser.parse_args()
 
@@ -276,27 +294,34 @@ def main():
         sys.exit(1)
 
     id_to_title = c.fetch_source_titles(args.base_url)
-    conn = c.open_db(args.db_path)
     markdown_cache = {}
+    markdown_lock = threading.Lock()
 
-    print(f"共 {len(bank)} 道题待测。\n")
-    records = []
-    for i, row in enumerate(bank, 1):
-        print(f"[{i}/{len(bank)}] {row['id']}: {row['question']}")
-        rec = run_question(args.base_url, conn, row, id_to_title, markdown_cache, args.timeout)
-        if rec.get("error"):
-            print(f"  ! 出错: {rec['error']}")
-        else:
-            found, total = rec["key_term_coverage"]
-            print(
-                f"  path_type={rec.get('path_type')} direct_hit={rec['direct_hit']} "
-                f"关键词 {found}/{total} 耗时 {rec['latency_s']}s"
-            )
-        records.append(rec)
-        if i < len(bank):
-            time.sleep(args.delay)
-
-    conn.close()
+    print(f"共 {len(bank)} 道题待测（并发数={args.workers}）。\n")
+    records = [None] * len(bank)
+    workers = max(1, min(args.workers, len(bank)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                run_question, args.base_url, args.db_path, row, id_to_title, markdown_cache, markdown_lock, args.timeout
+            ): i
+            for i, row in enumerate(bank)
+        }
+        done = 0
+        for future in as_completed(futures):
+            i = futures[future]
+            row = bank[i]
+            rec = future.result()
+            done += 1
+            if rec.get("error"):
+                print(f"[{done}/{len(bank)}] {row['id']}: ! 出错: {rec['error']}")
+            else:
+                found, total = rec["key_term_coverage"]
+                print(
+                    f"[{done}/{len(bank)}] {row['id']}: path_type={rec.get('path_type')} direct_hit={rec['direct_hit']} "
+                    f"关键词 {found}/{total} 耗时 {rec['latency_s']}s"
+                )
+            records[i] = rec
 
     print("\n========== P1 通过标准核对 ==========")
     print(summarize(records))
