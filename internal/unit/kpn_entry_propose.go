@@ -155,16 +155,18 @@ func (s *Service) proposeEntriesForOrphans(ctx context.Context, logSourceID, dom
 	if err != nil {
 		slog.Warn("unit: kpn orphan propose reload units after match failed", "domain_id", domainID, "error", err)
 	}
-	assigned := make(map[string]bool, len(units))
+	assignedEntryByUnit := make(map[string]string, len(units))
 	for _, u := range units {
 		if u.EntryID.Valid && u.EntryID.String != "" {
-			assigned[u.UnitID] = true
+			assignedEntryByUnit[u.UnitID] = u.EntryID.String
 		}
 	}
 
 	var factOrphans, conceptOrphans []KnowledgePoint
+	pointIDsByAssignedEntry := make(map[string][]string)
 	for _, p := range orphans {
-		if assigned[p.UnitID] {
+		if entryID, ok := assignedEntryByUnit[p.UnitID]; ok {
+			pointIDsByAssignedEntry[entryID] = append(pointIDsByAssignedEntry[entryID], p.PointID)
 			continue
 		}
 		if kindByUnit[p.UnitID] == "fact" {
@@ -172,6 +174,15 @@ func (s *Service) proposeEntriesForOrphans(ctx context.Context, logSourceID, dom
 		} else {
 			conceptOrphans = append(conceptOrphans, p)
 		}
+	}
+
+	// 幂等性修复根因一：同类直接匹配（不经候选确认）当场就把 entry_id 写回
+	// 了这批点所在的 KU，但本次调用一开始做跨 Source 分组时用的还是旧的
+	// entry_id 快照，这批点不会被本次调用的 CrossSourceKPN 主流程处理到。
+	// 复用 RematchPoints（原本只在人工确认新建候选时触发）在同一次调用内
+	// 立即把它们补上一次真正的跨 Source 匹配，不用等下一次外部触发才发现。
+	for entryID, pointIDs := range pointIDsByAssignedEntry {
+		s.RematchPoints(entryID, pointIDs)
 	}
 
 	touched := 0

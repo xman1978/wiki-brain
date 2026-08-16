@@ -117,9 +117,32 @@ groupLoop:
 			}
 		}
 
+		// 幂等性修复根因二（见 kpn_cross_pairs_seen 迁移注释）：把已经问过模型
+		// 的配对从候选里排除，只送真正新出现的配对，重复触发才会趋向收敛而
+		// 不是每次都重新问一遍候选池的（因 confident_count 漂移而不同的）子集。
+		newPointIDs := pointIDsOf(g.points)
+		unseenOpposite, err := s.store.FilterUnseenOpposite(newPointIDs, opposite)
+		if err != nil {
+			slog.Warn("unit: cross kpn filter unseen opposite failed", "entry_id", g.id, "error", err)
+		} else {
+			opposite = unseenOpposite
+		}
+		if len(opposite) == 0 {
+			continue
+		}
+
 		opposite = s.trimOppositeByConfidence(opposite, len(g.points))
 
 		for _, chunk := range splitCrossBatch(g.points, opposite, crossBatchMaxSize) {
+			if len(chunk.oppositePoints) == 0 {
+				// A trailing chunk that ran out of opposite candidates
+				// before its newPoints slice was exhausted — crossKPNBatch
+				// would no-op on it anyway, so skip it outright rather than
+				// counting it as a batch (docs/impl/v1/kpn.md 幂等性修复:
+				// 否则某个分组自身"新点"数超过单批上限时，batches 计数会
+				// 永远卡在非 0，即使真的已经没有工作剩下).
+				continue
+			}
 			if batchesRun >= maxBatches {
 				slog.Warn("unit: cross kpn batch cap reached, dropping remaining groups",
 					"source_id", sourceID, "max_batches", maxBatches)
@@ -133,6 +156,8 @@ groupLoop:
 			created, _, err := s.crossKPNBatch(ctx, sourceID, chunk.newPoints, chunk.oppositePoints, unitCenterMap, sourceTitleMap)
 			if err != nil {
 				slog.Warn("unit: cross kpn batch failed", "source_id", sourceID, "error", err)
+			} else if err := s.store.RecordCrossPairsSeen(pointIDsOf(chunk.newPoints), pointIDsOf(chunk.oppositePoints)); err != nil {
+				slog.Warn("unit: cross kpn record seen pairs failed", "source_id", sourceID, "error", err)
 			}
 			result.RelationsCreated += created
 			result.Batches++
@@ -165,6 +190,16 @@ groupLoop:
 		"source_id", sourceID, "batches", result.Batches, "relations_created", result.RelationsCreated,
 		"orphan_points", len(orphans), "entry_candidates_touched", result.EntryCandidatesTouched)
 	return result, nil
+}
+
+// pointIDsOf extracts point_id in order — shared by the seen-pairs
+// bookkeeping in CrossSourceKPN/RematchPoints.
+func pointIDsOf(points []KnowledgePoint) []string {
+	ids := make([]string, len(points))
+	for i, p := range points {
+		ids[i] = p.PointID
+	}
+	return ids
 }
 
 type crossGroup struct {
@@ -240,7 +275,14 @@ type crossBatchChunk struct {
 // splitCrossBatch hard-splits (new, opposite) into ≤maxSize-total chunks —
 // reached when a group's new-point count alone already exceeds maxSize, so
 // confidence-based trimming of the opposite side (which runs first) wasn't
-// enough (docs/impl/v1/kpn.md 步骤 2, "仍超则硬切多批").
+// enough (docs/impl/v1/kpn.md 步骤 2, "仍超则硬切多批"). Whenever opposite
+// still has candidates left to place, each newPoints chunk reserves at
+// least one slot for them — otherwise a chunk sized exactly maxSize gets 0
+// budget for opposite and compares nothing (crossKPNBatch no-ops on empty
+// opposite), yet still counts as a "batch" every trigger with no way to
+// ever make progress on it (2026-08-16 修复: 曾导致 CrossSourceKPN 在新点数
+// 超过单批上限的分组上，batches 计数永远卡在非 0，即使已经没有实际工作剩
+// 下 — 见 kpn_cross_pairs_seen 幂等性修复的验证记录).
 func splitCrossBatch(newPoints, opposite []KnowledgePoint, maxSize int) []crossBatchChunk {
 	if len(newPoints)+len(opposite) <= maxSize {
 		return []crossBatchChunk{{newPoints: newPoints, oppositePoints: opposite}}
@@ -248,12 +290,17 @@ func splitCrossBatch(newPoints, opposite []KnowledgePoint, maxSize int) []crossB
 
 	var chunks []crossBatchChunk
 	oppRemaining := opposite
-	for i := 0; i < len(newPoints); i += maxSize {
-		end := i + maxSize
+	for i := 0; i < len(newPoints); {
+		chunkSize := maxSize
+		if len(oppRemaining) > 0 && chunkSize > 1 {
+			chunkSize--
+		}
+		end := i + chunkSize
 		if end > len(newPoints) {
 			end = len(newPoints)
 		}
 		newChunk := newPoints[i:end]
+		i = end
 
 		budget := maxSize - len(newChunk)
 		if budget < 0 {
@@ -459,8 +506,20 @@ func (s *Service) RematchPoints(conceptID string, pointIDs []string) []string {
 		if len(opposite) == 0 {
 			continue
 		}
+		unseenOpposite, err := s.store.FilterUnseenOpposite(pointIDsOf(srcPoints), opposite)
+		if err != nil {
+			slog.Warn("unit: kpn rematch filter unseen opposite failed", "entry_id", conceptID, "source_id", sourceID, "error", err)
+		} else {
+			opposite = unseenOpposite
+		}
+		if len(opposite) == 0 {
+			continue
+		}
 		opposite = s.trimOppositeByConfidence(opposite, len(srcPoints))
 		for _, chunk := range splitCrossBatch(srcPoints, opposite, crossBatchMaxSize) {
+			if len(chunk.oppositePoints) == 0 {
+				continue
+			}
 			sourceTitleMap, err := s.sourceTitleMapForPoints(chunk.newPoints, chunk.oppositePoints)
 			if err != nil {
 				slog.Warn("unit: kpn rematch get source titles failed", "entry_id", conceptID, "source_id", sourceID, "error", err)
@@ -470,6 +529,9 @@ func (s *Service) RematchPoints(conceptID string, pointIDs []string) []string {
 			if err != nil {
 				slog.Warn("unit: kpn rematch batch failed", "entry_id", conceptID, "source_id", sourceID, "error", err)
 				continue
+			}
+			if err := s.store.RecordCrossPairsSeen(pointIDsOf(chunk.newPoints), pointIDsOf(chunk.oppositePoints)); err != nil {
+				slog.Warn("unit: kpn rematch record seen pairs failed", "entry_id", conceptID, "source_id", sourceID, "error", err)
 			}
 			totalCreated += created
 			totalBatches++

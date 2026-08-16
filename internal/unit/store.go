@@ -587,6 +587,114 @@ func (s *Store) DeleteCrossRelationsBySourceID(sourceID string) (int, error) {
 	return int(n), nil
 }
 
+// FilterUnseenOpposite drops any opposite candidate that kpn_cross_pairs_seen
+// already records against every one of newPointIDs — i.e. every pair this
+// candidate could form with the current "new" side has already been sent to
+// crossKPNBatch at least once. A candidate stays in if even one pair with
+// newPointIDs is still unseen (docs/impl/v1/kpn.md 幂等性修复: 避免重复触发
+// kpn-cross 时把已经问过的组合再问一遍，同时不因为凑巧对某个 new point
+// 问过就整体跳过对其他 new point 仍未问过的组合).
+func (s *Store) FilterUnseenOpposite(newPointIDs []string, opposite []KnowledgePoint) ([]KnowledgePoint, error) {
+	if len(newPointIDs) == 0 || len(opposite) == 0 {
+		return opposite, nil
+	}
+	oppositeIDs := make([]string, len(opposite))
+	for i, p := range opposite {
+		oppositeIDs[i] = p.PointID
+	}
+
+	newPlaceholders := strings.TrimSuffix(strings.Repeat("?,", len(newPointIDs)), ",")
+	oppPlaceholders := strings.TrimSuffix(strings.Repeat("?,", len(oppositeIDs)), ",")
+	args := make([]any, 0, len(newPointIDs)+len(oppositeIDs))
+	for _, id := range newPointIDs {
+		args = append(args, id)
+	}
+	for _, id := range oppositeIDs {
+		args = append(args, id)
+	}
+
+	rows, err := s.db.Query(fmt.Sprintf(`SELECT opposite_point_id, COUNT(*) FROM kpn_cross_pairs_seen
+		WHERE new_point_id IN (%s) AND opposite_point_id IN (%s)
+		GROUP BY opposite_point_id`, newPlaceholders, oppPlaceholders), args...)
+	if err != nil {
+		return nil, fmt.Errorf("unit store: filter unseen opposite: %w", err)
+	}
+	defer rows.Close()
+
+	seenCount := make(map[string]int, len(oppositeIDs))
+	for rows.Next() {
+		var oppID string
+		var count int
+		if err := rows.Scan(&oppID, &count); err != nil {
+			return nil, fmt.Errorf("unit store: filter unseen opposite scan: %w", err)
+		}
+		seenCount[oppID] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("unit store: filter unseen opposite rows: %w", err)
+	}
+
+	fullySeen := len(newPointIDs)
+	unseen := make([]KnowledgePoint, 0, len(opposite))
+	for _, p := range opposite {
+		if seenCount[p.PointID] >= fullySeen {
+			continue
+		}
+		unseen = append(unseen, p)
+	}
+	return unseen, nil
+}
+
+// RecordCrossPairsSeen marks every (new_point_id, opposite_point_id) combo
+// actually sent to one crossKPNBatch LLM call as seen, regardless of
+// whether that call produced a relation for it — a "no relation" verdict is
+// itself a settled answer that later triggers should not re-ask by default.
+func (s *Store) RecordCrossPairsSeen(newPointIDs, oppositePointIDs []string) error {
+	if len(newPointIDs) == 0 || len(oppositePointIDs) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("unit store: record cross pairs seen begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO kpn_cross_pairs_seen (new_point_id, opposite_point_id) VALUES (?, ?)`)
+	if err != nil {
+		return fmt.Errorf("unit store: record cross pairs seen prepare: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, newID := range newPointIDs {
+		for _, oppID := range oppositePointIDs {
+			if _, err := stmt.Exec(newID, oppID); err != nil {
+				return fmt.Errorf("unit store: record cross pairs seen exec: %w", err)
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// DeleteCrossPairsSeenBySourceID clears kpn_cross_pairs_seen rows touching
+// sourceID's own points (either side, same reasoning as
+// DeleteCrossRelationsBySourceID) — must run alongside that function
+// whenever a Source's entry_id grouping is recomputed (MatchEntries),
+// otherwise points would look "already asked" against their old opposite
+// group and never get re-matched under the corrected grouping.
+func (s *Store) DeleteCrossPairsSeenBySourceID(sourceID string) (int, error) {
+	res, err := s.db.Exec(`DELETE FROM kpn_cross_pairs_seen
+		WHERE new_point_id IN (SELECT point_id FROM knowledge_points WHERE source_id = ?)
+		OR opposite_point_id IN (SELECT point_id FROM knowledge_points WHERE source_id = ?)`, sourceID, sourceID)
+	if err != nil {
+		return 0, fmt.Errorf("unit store: delete cross pairs seen by source: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("unit store: delete cross pairs seen by source rows affected: %w", err)
+	}
+	return int(n), nil
+}
+
 func (s *Store) UpdateUnitStatus(unitID, status string, errorMsg *string) error {
 	var errVal sql.NullString
 	if errorMsg != nil {

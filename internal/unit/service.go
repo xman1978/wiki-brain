@@ -703,6 +703,12 @@ func (s *Service) MatchEntries(ctx context.Context, sourceID, domainID string) {
 	} else if deleted > 0 {
 		slog.Info("unit: dropped stale cross kpn relations after entry rematch", "source_id", sourceID, "deleted", deleted)
 	}
+	// 已比对配对记账也要一并清空——否则这些点会在旧 entry_id 分组下被标记
+	// "已经问过"，换到新分组后 FilterUnseenOpposite 会误把它们当作已覆盖过
+	// 而跳过，导致新分组下永远不会真正重新匹配。
+	if _, err := s.store.DeleteCrossPairsSeenBySourceID(sourceID); err != nil {
+		slog.Warn("unit: delete stale cross kpn seen-pairs after rematch failed", "source_id", sourceID, "error", err)
+	}
 	if _, err := s.CrossSourceKPN(ctx, sourceID); err != nil {
 		slog.Warn("unit: rebuild cross kpn after entry rematch failed", "source_id", sourceID, "error", err)
 	}

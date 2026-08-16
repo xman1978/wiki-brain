@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -450,6 +451,53 @@ func TestCrossSourceKPN_Idempotent(t *testing.T) {
 	if len(rels) != 1 {
 		t.Fatalf("expected exactly 1 relation total (no duplicate), got %d", len(rels))
 	}
+
+	if result2.Batches != 0 {
+		t.Errorf("expected 0 batches on re-trigger (pair already seen, nothing left to ask), got %d", result2.Batches)
+	}
+}
+
+// TestCrossSourceKPN_SeenPairsSkipRedundantLLMCall is the regression test for
+// the 2026-08-16 idempotency fix (根因二): re-triggering kpn-cross for a
+// Source whose candidates haven't changed must not re-send the same pair to
+// the LLM a second time — kpn_cross_pairs_seen should make the second run a
+// no-op batch-wise, not just relation-count-wise (a batch that re-asks and
+// happens to get the same answer would still look "idempotent" by relation
+// count alone while burning an LLM call every trigger, which is the actual
+// production symptom this fix addresses).
+func TestCrossSourceKPN_SeenPairsSkipRedundantLLMCall(t *testing.T) {
+	svc, fake, db := setupTestService(t)
+	store := NewStore(db)
+
+	seedDomain(t, db, "d1", "D")
+	seedEntry(t, db, "c1", "d1", "C")
+	seedSourceWithDomain(t, db, "new-src", "d1")
+	seedSourceWithDomain(t, db, "existing-src", "d1")
+	seedKUWithEntry(t, store, "ku-new", "new-src", "c1", "new topic")
+	seedKP(t, store, "kp-new", "ku-new", "new-src", "new content")
+	seedKUWithEntry(t, store, "ku-existing", "existing-src", "c1", "existing topic")
+	seedKP(t, store, "kp-existing", "ku-existing", "existing-src", "existing content")
+
+	fake.SetResponse("kpn_cross_match.md", llm.FakeResponse{
+		Output: `{"relations": []}`,
+	})
+
+	if _, err := svc.CrossSourceKPN(context.Background(), "new-src"); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	callsAfterFirst := len(fake.Calls())
+	if callsAfterFirst == 0 {
+		t.Fatalf("expected first run to call the LLM at least once")
+	}
+
+	if _, err := svc.CrossSourceKPN(context.Background(), "new-src"); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	callsAfterSecond := len(fake.Calls())
+	if callsAfterSecond != callsAfterFirst {
+		t.Errorf("expected no additional LLM calls on re-trigger of an unchanged pair, first=%d second=%d",
+			callsAfterFirst, callsAfterSecond)
+	}
 }
 
 // TestMatchEntries_DropsStaleCrossRelationsOnEntryReclassify covers the fix
@@ -494,6 +542,79 @@ func TestMatchEntries_DropsStaleCrossRelationsOnEntryReclassify(t *testing.T) {
 	rels, _ = store.GetRelationsByPointID("kp-new", "")
 	if len(rels) != 0 {
 		t.Errorf("expected stale cross relation dropped after entry reclassify, got %+v", rels)
+	}
+}
+
+// TestMatchEntries_ClearsSeenPairsOnReclassify is the regression test for
+// the other half of the 2026-08-16 idempotency fix: DeleteCrossPairsSeenBySourceID
+// must run alongside DeleteCrossRelationsBySourceID whenever MatchEntries
+// regroups a Source's points under a different entry_id — otherwise
+// FilterUnseenOpposite would see the old (entry_id=c1) seen-pairs rows and
+// wrongly treat the point as "already asked" under the new (entry_id=c2)
+// grouping, permanently blocking it from ever being cross-matched again.
+func TestMatchEntries_ClearsSeenPairsOnReclassify(t *testing.T) {
+	svc, fake, db := setupTestService(t)
+	store := NewStore(db)
+
+	seedDomain(t, db, "d1", "D")
+	seedEntry(t, db, "c1", "d1", "C1")
+	seedEntry(t, db, "c2", "d1", "C2")
+	seedSourceWithDomain(t, db, "new-src", "d1")
+	seedSourceWithDomain(t, db, "existing-src", "d1")
+	seedKUWithEntry(t, store, "ku-new", "new-src", "c1", "new topic")
+	seedKP(t, store, "kp-new", "ku-new", "new-src", "new content")
+	seedKUWithEntry(t, store, "ku-existing-c1", "existing-src", "c1", "existing c1 topic")
+	seedKP(t, store, "kp-existing-c1", "ku-existing-c1", "existing-src", "existing c1 content")
+	seedKUWithEntry(t, store, "ku-existing-c2", "existing-src", "c2", "existing c2 topic")
+	seedKP(t, store, "kp-existing-c2", "ku-existing-c2", "existing-src", "existing c2 content")
+
+	fake.SetResponse("kpn_cross_match.md", llm.FakeResponse{
+		Output: `{"relations": []}`,
+	})
+
+	// Initial match under c1: kp-new gets compared against kp-existing-c1
+	// and the pair is recorded as seen, with no relation (LLM said none).
+	if _, err := svc.CrossSourceKPN(context.Background(), "new-src"); err != nil {
+		t.Fatalf("initial cross kpn: %v", err)
+	}
+	seenBefore, err := store.FilterUnseenOpposite([]string{"kp-new"}, []KnowledgePoint{{PointID: "kp-existing-c1"}})
+	if err != nil {
+		t.Fatalf("FilterUnseenOpposite: %v", err)
+	}
+	if len(seenBefore) != 0 {
+		t.Fatalf("expected kp-new/kp-existing-c1 pair to be recorded as seen after initial run, got %+v", seenBefore)
+	}
+
+	// MatchEntries clears ku-new's entry_id and re-derives it via LLM
+	// classify+match — configure the fakes so it lands on c2 this time
+	// (simulating a manual domain reassignment surfacing a better match).
+	fake.SetResponse("unit_kind_classify.md", llm.FakeResponse{
+		Output: `{"classifications": [{"unit_id": "ku-new", "kind": "concept"}]}`,
+	})
+	fake.SetResponse("unit_entry_match.md", llm.FakeResponse{
+		Output: `{"matches": [{"unit_id": "ku-new", "entry_id": "c2"}]}`,
+	})
+	svc.MatchEntries(context.Background(), "new-src", "d1")
+
+	// Under the new c2 grouping, kp-new must be free to be asked about
+	// kp-existing-c2 — if the seen-pairs ledger wasn't cleared, a stale row
+	// keyed on the old c1 pairing wouldn't block this (different opposite
+	// point_id), but a bug that cleared relations without clearing seen-pairs
+	// would still leave kp-new/kp-existing-c1 marked seen forever, which is
+	// harmless post-reclassify but proves the cleanup ran; the real
+	// assertion is that the new pairing actually got asked at all.
+	rels, _ := store.GetRelationsByPointID("kp-new", "")
+	for _, r := range rels {
+		if r.Scope == RelationScopeCross {
+			t.Fatalf("expected no stale cross relation surviving reclassify, got %+v", r)
+		}
+	}
+	seenAfter, err := store.FilterUnseenOpposite([]string{"kp-new"}, []KnowledgePoint{{PointID: "kp-existing-c2"}})
+	if err != nil {
+		t.Fatalf("FilterUnseenOpposite after reclassify: %v", err)
+	}
+	if len(seenAfter) != 0 {
+		t.Errorf("expected kp-new/kp-existing-c2 pair to have been asked (and recorded seen) by MatchEntries's rebuild, got unseen=%+v", seenAfter)
 	}
 }
 
@@ -635,9 +756,6 @@ func TestSplitCrossBatch_HardSplitsOversizedNewPoints(t *testing.T) {
 	opposite := []KnowledgePoint{{PointID: "o1"}, {PointID: "o2"}}
 
 	chunks := splitCrossBatch(newPoints, opposite, 2)
-	if len(chunks) != 3 {
-		t.Fatalf("expected 3 chunks (5 new points / maxSize=2), got %d", len(chunks))
-	}
 	totalNew := 0
 	totalOpp := 0
 	for _, c := range chunks {
@@ -650,8 +768,44 @@ func TestSplitCrossBatch_HardSplitsOversizedNewPoints(t *testing.T) {
 	if totalNew != 5 {
 		t.Errorf("expected all 5 new points distributed, got %d", totalNew)
 	}
-	if totalOpp > 2 {
-		t.Errorf("opposite points should never be reused across chunks, got total %d from only 2 available", totalOpp)
+	if totalOpp != 2 {
+		t.Errorf("expected both opposite points placed exactly once, got total %d from 2 available", totalOpp)
+	}
+}
+
+// TestSplitCrossBatch_NeverWastesAChunkWhileOppositeRemains is the
+// regression test for the 2026-08-16 fix: a newPoints chunk landing on
+// exactly maxSize used to get 0 budget for opposite even while opposite
+// candidates were still waiting to be placed — that chunk compared nothing
+// (crossKPNBatch no-ops on empty opposite) yet still counted as a "batch"
+// every trigger, so CrossSourceKPN's batches count could never reach 0 for
+// a group whose own new-point count exceeded crossBatchMaxSize, even after
+// every real pair had already been covered by kpn_cross_pairs_seen.
+func TestSplitCrossBatch_NeverWastesAChunkWhileOppositeRemains(t *testing.T) {
+	newPoints := make([]KnowledgePoint, 80)
+	for i := range newPoints {
+		newPoints[i] = KnowledgePoint{PointID: fmt.Sprintf("n%d", i)}
+	}
+	opposite := []KnowledgePoint{{PointID: "o1"}}
+
+	chunks := splitCrossBatch(newPoints, opposite, 60)
+
+	for _, c := range chunks {
+		if len(c.newPoints) == 60 && len(c.oppositePoints) == 0 {
+			t.Fatalf("got a maxSize-sized newPoints chunk with 0 opposite budget while opposite candidates existed: %+v", chunks)
+		}
+	}
+
+	totalNew, totalOpp := 0, 0
+	for _, c := range chunks {
+		totalNew += len(c.newPoints)
+		totalOpp += len(c.oppositePoints)
+	}
+	if totalNew != 80 {
+		t.Errorf("expected all 80 new points distributed, got %d", totalNew)
+	}
+	if totalOpp != 1 {
+		t.Errorf("expected the 1 opposite point placed exactly once, got %d", totalOpp)
 	}
 }
 

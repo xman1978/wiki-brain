@@ -70,8 +70,8 @@ queue:
 
 # FileView 服务（格式转换）
 fileview:
-#  base_url:          "http://127.0.0.1:8000"
-  base_url:          "http://192.168.0.169:9000"
+#  base_url:          "http://192.168.0.169:9000"
+  base_url:          "http://127.0.0.1:9100"
   poll_interval_ms:  1500
   max_poll_seconds:  600
 
@@ -122,7 +122,7 @@ retrieval:
 
 # Evidence 模块挖掘
 evidence:
-  enabled:              false
+  enabled:              true
   batch_max_chars:      6000   # 单次 LLM 调用携带的 KU 正文字符数上限（rune）
   max_fragments_per_ku: 5      # 单 KU 最多保留片段数（超出按输出顺序截断）
   min_fragment_chars:   8      # 短于该长度的片段丢弃（无信息量）

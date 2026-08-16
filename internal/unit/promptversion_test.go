@@ -22,6 +22,7 @@ func TestPromptVersionConstantsMatchTemplates(t *testing.T) {
 		{"unit_gap_extract.md", promptVersionGapExtract},
 		{"unit_boundary_extract.md", promptVersionBoundaryExtract},
 		{"unit_point_extract.md", promptVersionPointExtract},
+		{"unit_point_coverage_fill.md", promptVersionPointCoverageFill},
 		{"kpn_extract.md", promptVersionKPNExtract},
 		{"kpn_cross_match.md", promptVersionKPNCross},
 		{"unit_semantics_extract.md", rerank.ExtractPromptVersion},

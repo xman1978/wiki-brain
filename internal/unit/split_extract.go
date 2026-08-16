@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	promptVersionBoundaryExtract = "v3"
-	promptVersionPointExtract    = "v3"
+	promptVersionBoundaryExtract   = "v3"
+	promptVersionPointExtract      = "v4"
+	promptVersionPointCoverageFill = "v1"
 	// promptVersionSplitExtract tags candidates produced by the two-step
 	// boundary+point split pipeline — derived from the two prompts' own
 	// versions so it can never silently drift out of sync with them the way
@@ -146,7 +147,93 @@ func (s *Service) extractPointsForSplitUnit(ctx context.Context, u llmUnit, unit
 			LastLineAnchor:  u.LastLineAnchor,
 		})
 	}
+	if len(points) > 0 {
+		points = s.ensurePointsCoverage(ctx, u, unitContent, points)
+	}
 	return out.Center, points, len(points) > 0, nil
+}
+
+// ensurePointsCoverage guards against the extraction model compressing
+// several parallel numeric sub-items (table rows / list items) in a busy
+// category into one generic sentence and silently dropping the rest — a
+// failure mode observed in production (V1 P4 acceptance testing, 2026-08-16:
+// a "结果分" table cell with 7 sibling sub-rules had 2 of them, including
+// "考试成绩低于80分-1", compressed out of existence, making numeric-specific
+// questions about them permanently unanswerable since knowledge_points is
+// the only content the rerank relevance judge ever sees). Mirrors
+// internal/evidence/service.go's mining validation, direction reversed: that
+// checks mined content is a real substring of the source; this checks every
+// numeric row/item in the source is mentioned by at least one point.
+func (s *Service) ensurePointsCoverage(ctx context.Context, u llmUnit, unitContent string, points []llmPoint) []llmPoint {
+	rows := detectNumericRowSignatures(unitContent)
+	missing := uncoveredRows(rows, points)
+	if len(missing) == 0 {
+		return points
+	}
+	slog.Info("unit: point coverage gap detected", "unit_id", u.UnitID, "center", u.Center, "missing_rows", len(missing))
+
+	filled, err := s.fillPointsCoverageGap(ctx, u, unitContent, missing)
+	if err != nil {
+		slog.Warn("unit: point coverage gap fill call failed", "unit_id", u.UnitID, "error", err)
+	} else if len(filled) > 0 {
+		points = append(points, filled...)
+		slog.Info("unit: point coverage gap filled by supplemental extraction", "unit_id", u.UnitID, "added_points", len(filled))
+		missing = uncoveredRows(rows, points)
+	}
+
+	for _, r := range missing {
+		slog.Warn("unit: point coverage gap, verbatim row fallback added", "unit_id", u.UnitID, "row", r.text)
+		points = append(points, llmPoint{
+			Content:         cleanRowText(r.text),
+			Type:            "rule",
+			LineStart:       u.LineStart,
+			FirstLineAnchor: u.FirstLineAnchor,
+			LineEnd:         u.LineEnd,
+			LastLineAnchor:  u.LastLineAnchor,
+		})
+	}
+	// PointID renumbered here so fallback/supplemental points get stable,
+	// unique local ids consistent with the p%d scheme extractPointsForSplitUnit
+	// assigned to the first-pass points above.
+	for i := range points {
+		points[i].PointID = fmt.Sprintf("p%d", i+1)
+		points[i].UnitID = u.UnitID
+	}
+	return points
+}
+
+func (s *Service) fillPointsCoverageGap(ctx context.Context, u llmUnit, unitContent string, missing []rowSignature) ([]llmPoint, error) {
+	texts := make([]string, len(missing))
+	for i, r := range missing {
+		texts[i] = r.text
+	}
+	vars := map[string]string{
+		"unit_content":   unitContent,
+		"uncovered_rows": strings.Join(texts, "\n"),
+	}
+	data, err := s.llmClient.CompleteJSON(ctx, "unit_point_coverage_fill.md", vars, "extraction")
+	if err != nil {
+		return nil, err
+	}
+	var out pointExtractOutput
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	points := make([]llmPoint, 0, len(out.Points))
+	for _, p := range out.Points {
+		if strings.TrimSpace(p.Content) == "" || strings.TrimSpace(p.Type) == "" {
+			continue
+		}
+		points = append(points, llmPoint{
+			Content:         p.Content,
+			Type:            p.Type,
+			LineStart:       u.LineStart,
+			FirstLineAnchor: u.FirstLineAnchor,
+			LineEnd:         u.LineEnd,
+			LastLineAnchor:  u.LastLineAnchor,
+		})
+	}
+	return points, nil
 }
 
 func buildLLMUnitFromBoundary(seg Segment, mdLines []string, bu boundaryUnit, index int) (llmUnit, string, []int, bool) {

@@ -245,6 +245,22 @@ temperature：0
 每次调用记录：source_id、outline_id、prompt_version、模型名、token 用量
 ```
 
+#### 2.5 知识点覆盖度校验（并列子项数值完整性，2026-08-16 新增）
+
+> 本节描述的是当前实际生效的 split 流程（`unit_boundary_extract.md` 定边界 + `unit_point_extract.md` 逐 unit 提取知识点，`internal/unit/split_extract.go`）在这一步之后新增的校验，不属于本文档上方描述的旧版单次联合调用流程（该流程已废弃，本文档尚未整体按 split 流程重写，这里只新增本节，其余章节口径与实际实现的既存落差不在本次任务范围内一并修正）。
+
+背景（V1 P4 验收测试发现）：知识点提取把一个 unit 内多条并列子规则（如表格同一类目下的多行、列表内的多项）压缩成一句笼统摘要时，可能把其中部分子规则的具体数值（分值、金额、期限等）完全丢弃，且不一定是触发了字数上限——模型在子项较多时有时会主动选择泛化概括而不是逐项列举。这个丢失发生在提取阶段、写入持久化的 `knowledge_points` 表，之后检索链路（尤其 rerank 相关性判断——它只能看到 `knowledge_points`，看不到 unit 原文）永久看不到这个数字，即使原文和 evidence 挖掘环节都完好无损。
+
+校验机制（`internal/unit/points_coverage.go`，对标 `internal/evidence/service.go` 挖掘校验的方法论、方向相反——不是"挖出来的东西必须真实存在"，而是"原文里的东西必须至少被提到一次"）：
+
+1. 逐 unit 扫描原文，识别 markdown 表格数据行（跳过表头/分隔行）与列表项，只保留**含数字**的行/项作为待校验对象（`detectNumericRowSignatures`）——非数字的并列文字项误报率太高，不纳入校验；
+2. 对每个待校验行/项，检查其全部数字 token 是否都能在这一 unit 已提取的全部 `points[].content` 拼接文本里找到子串（`uncoveredRows`）；只要有一个数字缺失就判定该行/项未覆盖；
+3. 有未覆盖行/项时，先发起一次针对性补充提取调用（`unit_point_coverage_fill.md`，只传未覆盖清单，不重新生成全部知识点），补充结果并入 `points`，重新校验一次；
+4. 补充调用后仍未覆盖的行/项，直接把原文（清洗掉 markdown 表格/列表标记后）作为一条 `type=rule` 的知识点原样写入，保证任何情况下都不会永久丢失——对标 evidence 挖掘"整段回退"的兜底逻辑；
+5. 全程用 `slog` 记录三个观测点：`unit: point coverage gap detected`（发现缺口）、`unit: point coverage gap filled by supplemental extraction`（补充调用救回）、`unit: point coverage gap, verbatim row fallback added`（连补充调用都没能说清楚，走了原文兜底——这是真正值得人工关注的信号）。
+
+`unit_point_extract.md`（当前 v4）同步加固了并列数值子项的提取指令，明确禁止把带不同数值的并列子项合并成一句笼统总结，并给出与本次故障同构的反例。
+
 ### 步骤 3：校验和重试
 
 ```text
