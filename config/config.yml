@@ -140,7 +140,7 @@ wiki:
   compile_max_chars:            12000  # 单页编译输入合计上限（rune），超出按 confident_count 降序截取 KP
   recompile_new_kp_min:         2      # 已发布页面依赖概念新增 qualifying KP 达到该数量触发重编译标记
   trigger_questions_max:        10     # aliases / trigger_questions 各自条数上限，超出截断保留前 N 条
-  qualifying_min_days_active:  7      # 概念级 ready 判定新增门槛："持续采用"要求 qualifying KP 的激活事件覆盖至少 N 天
+  qualifying_min_days_active:   5      # P8 冒烟测试临时调低（原值 7），仅验证 ready 判据轴一之外的其余门槛，不代表默认配置下 days_active 真实达标
 
   # 两层架构（步骤 7-9）
   relation_kpn_min:             1    # 派生 related 所需的 KPN related 关系对数

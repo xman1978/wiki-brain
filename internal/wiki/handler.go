@@ -755,6 +755,8 @@ func writePageError(w http.ResponseWriter, err error) {
 		foundation.WriteError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrPageArchived), errors.Is(err, ErrInvalidStateTransition), errors.Is(err, ErrQualityGateFailed):
 		foundation.WriteError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrNoQualifyingPoints):
+		foundation.WriteError(w, http.StatusConflict, "该词条当前没有可用于编译的合格知识点，可能是底层材料刚被 reupload 换血、新内容尚未重新积累出可信的激活记录，请补充问答让相关知识点重新收敛后再重试")
 	default:
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 	}

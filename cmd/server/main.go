@@ -343,7 +343,7 @@ func main() {
 	sessionParser := session.NewParser(llmClient)
 	sessionParser.SetDomainCatalog(retrievalDomainCatalog{store: retrievalStore})
 	session.NewHandler(sessionStore, sessionParser).RegisterRoutes(apiMux)
-	activation.NewHandler(activationSvc).RegisterRoutes(apiMux)
+	activation.NewHandler(activationSvc, unitStore, sourceStore).RegisterRoutes(apiMux)
 	wiki.NewHandler(wikiSvc).RegisterRoutes(apiMux)
 	entry.NewHandler(entrySvc).RegisterRoutes(apiMux)
 	domain.NewHandler(domainSvc).RegisterRoutes(apiMux)

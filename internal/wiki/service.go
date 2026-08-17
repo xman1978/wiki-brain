@@ -408,7 +408,7 @@ func (s *Service) gatherAnalyzeInputs(conceptID string, requireVerified bool) (*
 		return nil, fmt.Errorf("wiki: list qualifying points: %w", err)
 	}
 	if len(qualifying) == 0 {
-		return nil, fmt.Errorf("wiki: no qualifying points for concept %s", conceptID)
+		return nil, fmt.Errorf("%w: concept %s currently has no qualifying knowledge points (material may have just been replaced by a reupload and hasn't earned verified activation yet)", ErrNoQualifyingPoints, conceptID)
 	}
 	byID := make(map[string]QualifyingPoint, len(qualifying))
 	for _, p := range qualifying {
@@ -752,7 +752,7 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 		return nil, fmt.Errorf("wiki: list qualifying points: %w", err)
 	}
 	if len(qualifying) == 0 {
-		return nil, fmt.Errorf("wiki: no qualifying points for concept %s", conceptID)
+		return nil, fmt.Errorf("%w: concept %s currently has no qualifying knowledge points (material may have just been replaced by a reupload and hasn't earned verified activation yet)", ErrNoQualifyingPoints, conceptID)
 	}
 	byID := make(map[string]QualifyingPoint, len(qualifying))
 	for _, p := range qualifying {

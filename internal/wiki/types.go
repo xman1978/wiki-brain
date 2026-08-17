@@ -23,6 +23,13 @@ var (
 	// set force=true (docs/impl/v1/wiki-generation.md 阶段 G). handler.go
 	// maps this to HTTP 409, same tier as ErrPageAlreadyExists.
 	ErrQualityGateFailed = errors.New("wiki: pre-publish quality gate failed")
+	// ErrNoQualifyingPoints is returned by analyze/compile/recompile when a
+	// concept currently has zero qualifying KP — most commonly right after a
+	// reupload replaces the concept's KUs/KPs with new point_ids that have no
+	// ActivationLink yet (verified trust does not carry over across a
+	// reupload by design, see docs/impl/v1/lifecycle.md). This is an expected
+	// business state, not a server fault — handler.go maps it to HTTP 409.
+	ErrNoQualifyingPoints = errors.New("wiki: no qualifying points for concept")
 )
 
 // Page.page_type — concept/fact are one-tier compile outputs sharing the

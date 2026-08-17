@@ -4162,19 +4162,32 @@ function renderPointIdList(ids) {
 // 成员置信度表（2026-08-13，docs/impl/v1/activation-bundle.md「成员置信度：
 // Bundle 独有的第二根轴」）：每个成员自己的 success/failure Beta 后验，核心
 // 徽标 = point_id 出现在后端算好的 core_member_point_ids（tier 自评/可信）。
-function renderBundleMembersTable(members, coreIds) {
+function renderBundleMembersTable(members, coreIds, memberDetails) {
   if (!members || !members.length) return '<div style="font-size:12px;color:var(--text-3);padding:8px 0">暂无成员</div>';
   var coreSet = {};
   (coreIds || []).forEach(function(id) { coreSet[id] = true; });
+  var detailByID = {};
+  (memberDetails || []).forEach(function(d) { detailByID[d.point_id] = d; });
   var sorted = members.slice().sort(function(a, b) { return betaMean(b.success_count, b.failure_count) - betaMean(a.success_count, a.failure_count); });
   return '<div style="display:flex;flex-direction:column;gap:8px">' + sorted.map(function(m) {
     var mean = betaMean(m.success_count, m.failure_count);
     var isCore = !!coreSet[m.point_id];
+    var d = detailByID[m.point_id] || {};
+    var contentHtml = d.content
+      ? '<div style="color:var(--text-1);margin-bottom:4px;line-height:1.5">' + esc(d.content) + '</div>'
+      : '<div style="color:var(--text-3);margin-bottom:4px">(知识点不可用，可能已被删除或降级)</div>';
+    var originParts = [];
+    if (d.unit_center) originParts.push('KU ' + esc(d.unit_center));
+    if (d.source_title) originParts.push('文档 ' + esc(d.source_title));
+    var originHtml = originParts.length
+      ? '<div style="color:var(--text-3);margin-bottom:4px">' + originParts.join(' · ') + '</div>'
+      : '';
     return '<div style="font-size:12px;padding:8px 10px;background:var(--bg-2);border-radius:8px">\
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">\
-        <span style="font-family:monospace;color:var(--text-2)">' + esc(m.point_id) + '</span>\
+        <span style="font-family:monospace;color:var(--text-3);font-size:11px">' + esc(m.point_id) + '</span>\
         <span class="tier-badge ' + (isCore ? 'trusted' : 'exploring') + '">' + (isCore ? '核心' : '路肩') + '</span>\
       </div>\
+      ' + contentHtml + originHtml + '\
       ' + meanBarHtml(mean) + '\
       <div style="color:var(--text-3);margin-top:6px">采纳 ' + (m.success_count||0) + ' / 失败 ' + (m.failure_count||0) + (m.last_seen_at ? ' · 最近 ' + dateStr(m.last_seen_at) : '') + '</div>\
     </div>';
@@ -4188,11 +4201,12 @@ function renderBundleDetail(d) {
   detail.innerHTML = '\
     <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">' + esc(d.representative_terms || '') + '</h2>\
     <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="dcc-status-badge ' + badgeCls + '">' + esc(label) + '</span></span></div>\
-    <div class="detail-row"><span class="dl">触发轴观测条件</span><span class="dv">' + formatObservedConditions(d.observed_conditions) + '</span></div>\
+    ' + convergenceReasonHtml(d.convergence_reason) + '\
+    <div class="detail-row"><span class="dl">触发轴观测条件</span><span class="dv">' + renderConditionsTable(d.conditions) + '</span></div>\
     <div class="detail-row"><span class="dl">采纳/失败</span><span class="dv">' + (d.adopt_count||0) + ' / ' + (d.fail_count||0) + '</span></div>\
     <div class="detail-row"><span class="dl">最近使用</span><span class="dv">' + (d.last_used_at ? dateStr(d.last_used_at) : '-') + '</span></div>\
     <h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">成员置信度（核心/路肩由 tier 派生）</h3>\
-    ' + renderBundleMembersTable(d.members, d.core_member_point_ids) + '\
+    ' + renderBundleMembersTable(d.members, d.core_member_point_ids, d.member_details) + '\
     <div class="modal-actions" style="margin-top:14px;justify-content:flex-start"><button class="btn btn-sm" onclick="closeBundleModal()">关闭</button></div>\
     <div class="lazy-section" id="bundleQuestionsSection">\
       <button type="button" class="lazy-section-head" onclick="toggleBundleQuestionsSection(\'' + esc(d.bundle_id) + '\')">\
@@ -4394,6 +4408,14 @@ function linkReasonLabel(r) {
   return r;
 }
 
+// 积累中原因提示（2026-08-17 新增）：GET /activation-links/:id 与
+// /activation-bundles/:id 响应的 convergence_reason 只在 status=candidate
+// 时非空（后端 activation.convergenceReason 计算），verified/deprecated 不
+// 需要"为什么"这个解释，直接不渲染这一行。
+function convergenceReasonHtml(reason) {
+  if (!reason) return '';
+  return '<div class="detail-row"><span class="dl">积累中原因</span><span class="dv" style="color:var(--text-2)">' + esc(reason) + '</span></div>';
+}
 // 条件明细表（2026-08-13 新增，docs/impl/v1/page.md 步骤 2）：GET
 // /activation-links/:id 响应的 conditions[]，按 mean 降序排列，每行渲染
 // 四元组原文 + success/failure 计数 + mean 进度条 + tier 徽标 +
@@ -4434,6 +4456,7 @@ function renderActivationLinkDetail(d) {
   detail.innerHTML = '\
     <h2 style="font-size:16px;font-weight:700;margin-bottom:14px">' + esc(d.question_terms || '') + '</h2>\
     <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="dcc-status-badge ' + statusBadgeCls + '">' + esc(statusLabel) + '</span></span></div>\
+    ' + convergenceReasonHtml(d.convergence_reason) + '\
     <div class="detail-row"><span class="dl">来源文档</span><span class="dv">' + esc(d.source_title || '-') + '</span></div>\
     <div class="detail-row"><span class="dl">知识点</span>' + kpHtml + '</div>\
     <div id="linkUnitContent"></div>\
@@ -7045,15 +7068,6 @@ function meanBarHtml(mean) {
     <div class="mean-bar"><div class="mean-bar-fill" style="width:' + (pct * 100).toFixed(0) + '%;background:' + color + '"></div></div>\
     <span style="font-size:12px;color:var(--text-2);flex-shrink:0">' + (pct * 100).toFixed(0) + '%</span>\
   </div>';
-}
-function formatObservedConditions(conds) {
-  if (!conds || !conds.length) return '<span style="color:var(--text-3)">暂无（回退 question_terms）</span>';
-  return '<div style="display:flex;flex-direction:column;gap:6px">' + conds.map(function(c, i) {
-    return '<div style="font-size:12px;padding:6px 8px;background:var(--bg-2);border-radius:6px">' +
-      '<div style="color:var(--text-3);margin-bottom:2px">#' + (i + 1) + (c.hit_count ? ' · ' + c.hit_count + '次' : '') + '</div>' +
-      '<div>主体 ' + esc(c.subject || '-') + ' · 意图 ' + esc(c.intent || '-') + '</div>' +
-      '<div>受众 ' + esc(c.audience || '-') + ' · 约束 ' + esc(c.constraint || '-') + '</div></div>';
-  }).join('') + '</div>';
 }
 function dateStr(s) { if (!s) return ''; try { return new Date(s).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}); } catch(e) { return s||''; } }
 function qualityLabel(q) { return {confident:'置信',partial:'部分',gap:'缺口'}[q] || q || '未知'; }

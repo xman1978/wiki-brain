@@ -2,19 +2,27 @@ package activation
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
+	"github.com/jxman78/wiki-brain/internal/source"
+	"github.com/jxman78/wiki-brain/internal/unit"
 )
 
 type Handler struct {
-	svc *Service
+	svc         *Service
+	unitStore   *unit.Store
+	sourceStore *source.Store
 }
 
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+// NewHandler wires unitStore/sourceStore only for read-only enrichment of
+// bundle member point_ids into content/KU/Source display fields (2026-08-17)
+// — activation 本身不依赖 unit/source 做任何判断逻辑，仅详情页展示用。
+func NewHandler(svc *Service, unitStore *unit.Store, sourceStore *source.Store) *Handler {
+	return &Handler{svc: svc, unitStore: unitStore, sourceStore: sourceStore}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
@@ -127,12 +135,49 @@ type conditionResp struct {
 
 type linkDetailResp struct {
 	linkResp
-	Scene       string          `json:"scene,omitempty"`
-	Goal        string          `json:"goal,omitempty"`
-	UnitID      string          `json:"unit_id,omitempty"`
-	SourceTitle string          `json:"source_title,omitempty"`
-	CreatedFrom []string        `json:"created_from"`
-	Conditions  []conditionResp `json:"conditions"`
+	Scene                string          `json:"scene,omitempty"`
+	Goal                 string          `json:"goal,omitempty"`
+	UnitID               string          `json:"unit_id,omitempty"`
+	SourceTitle          string          `json:"source_title,omitempty"`
+	CreatedFrom          []string        `json:"created_from"`
+	Conditions           []conditionResp `json:"conditions"`
+	ServingConfidenceMin float64         `json:"serving_confidence_min"`
+	ConvergenceReason    string          `json:"convergence_reason,omitempty"`
+}
+
+// convergenceReason explains, in plain text, why a candidate link/bundle
+// hasn't reached verified yet (2026-08-17, requested after the "积累中"
+// status badge alone gave no visible reason). Only meaningful for
+// status=candidate — verified/deprecated links don't need a "why not"
+// explanation, so callers should only surface this string when status is
+// candidate. Empty conditions and "conditions exist but all below
+// threshold" are the only two paths deriveStatus can take to land on
+// candidate (see confidence.go deriveStatus), so those are the only two
+// cases explained here.
+func convergenceReason(conds []ObservedCondition, cfg ConfidenceConfig) string {
+	if len(conds) == 0 {
+		return "尚未积累任何命中/未命中记录，还没有可计算置信度的观测条件"
+	}
+	var best ObservedCondition
+	bestMean := -1.0
+	for _, c := range conds {
+		_, mean := conditionTier(c, cfg)
+		if mean > bestMean {
+			bestMean = mean
+			best = c
+		}
+	}
+	return fmt.Sprintf(
+		"当前最高置信度条件（主体 %s）为 %.0f%%，尚未达到收敛阈值 %.0f%%（采纳 %d / 失败 %d），还需更多成功验证积累后自动收敛",
+		orDash(best.Subject), bestMean*100, cfg.ServingConfidenceMin*100, best.SuccessCount, best.FailureCount,
+	)
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
@@ -159,13 +204,17 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := linkDetailResp{
-		linkResp:    toLinkResp(*link, pointContent, unitCenter),
-		Scene:       link.Scene,
-		Goal:        link.Goal,
-		UnitID:      unitID,
-		SourceTitle: sourceTitle,
-		CreatedFrom: createdFrom,
-		Conditions:  toConditionResps(link.ObservedConditions, h.svc.confidenceCfg),
+		linkResp:             toLinkResp(*link, pointContent, unitCenter),
+		Scene:                link.Scene,
+		Goal:                 link.Goal,
+		UnitID:               unitID,
+		SourceTitle:          sourceTitle,
+		CreatedFrom:          createdFrom,
+		Conditions:           toConditionResps(link.ObservedConditions, h.svc.confidenceCfg),
+		ServingConfidenceMin: h.svc.confidenceCfg.ServingConfidenceMin,
+	}
+	if link.Status == StatusCandidate {
+		resp.ConvergenceReason = convergenceReason(link.ObservedConditions, h.svc.confidenceCfg)
 	}
 	foundation.WriteJSON(w, http.StatusOK, resp)
 }

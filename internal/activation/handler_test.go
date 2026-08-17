@@ -13,7 +13,7 @@ func setupHandler(t *testing.T) (*Handler, *Service) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	svc := newTestService(store, NewMatcher(store))
-	return NewHandler(svc), svc
+	return NewHandler(svc, nil, nil), svc
 }
 
 func TestHandler_List(t *testing.T) {

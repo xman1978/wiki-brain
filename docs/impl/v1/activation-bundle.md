@@ -370,6 +370,16 @@ bundle_success/bundle_failure）：
   weakened 之后的恢复路径与窗口统计判定共用同一条（reverify），
     不单独为 lifecycle 触发的降权设一条特殊恢复规则。
 
+**全灭兜底（2026-08-17 补充）**：以上规则只检查核心成员，对"一条熟路里
+全部成员从未攒够核心门槛、清一色是路肩"这种情况没有覆盖——路肩过期不触发
+迁移，于是这条熟路的全部知识点都已经 lifecycle 非 current 时，仍然会一直
+挂着 verified，界面上无法区分它和真正健康的熟路。补一条独立判据，与上面的
+"核心过期"判据并列（不是替换）：一条 verified 熟路的**全部成员**（不分
+核心/路肩）都已 lifecycle 非 current 时，同样立即置 deprecated。触发时机、
+恢复路径（走 reverify）与上面核心过期的处理完全一致，只是判定条件从"任一
+核心过期"换成"全部成员过期"。`internal/study/bundle_scan.go`
+`weakenBundlesWithExpiredCoreMembers` 已实现这条兜底。
+
 熟路成员变化本身**不**触发任何 Wiki 侧动作（不产生页面 needs_recompile
 通知）：页面重编译只认 KP 自身的 lifecycle 变化（见 lifecycle.md 步骤 4a
 「lifecycle 传导」，扫描 published 页面 source_point_ids 命中即触发，

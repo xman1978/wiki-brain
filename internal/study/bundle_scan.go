@@ -211,6 +211,14 @@ func (s *Service) scanActivationBundles() error {
 // 不触发（只有 verified 才会被"降级"）。明确不做：熟路成员变化不触发任何
 // wiki_pages.needs_recompile 通知——那条已经由 lifecycle.md 步骤 4a 独立
 // 覆盖（只认 KP 自身 lifecycle），重复加一条会重复触发同一件事.
+//
+// 全灭兜底（2026-08-17 补充，见 activation-bundle.md 步骤 3 同一节的补记）：
+// 上面的核心/路肩规则对"一条熟路里全部成员都只是路肩、没有任何核心"的情况
+// 无法覆盖——它只检查核心成员，路肩全部过期时按原规则不触发任何迁移，于是
+// 一条已经没有任何可用知识点的熟路会一直挂着 verified。这里补一条独立于
+// 核心/路肩划分的兜底检查：全部成员（不分核心/路肩）都已 lifecycle 非
+// current 时，直接置 deprecated——这条不是对原规则的替换，是并列的第二个
+// 判据，原有的"核心过期立即降权"规则不变。
 func (s *Service) weakenBundlesWithExpiredCoreMembers() error {
 	bundles, err := s.activationSvc.Store().ListBundlesByStatus([]string{activation.BundleStatusVerified}, 500, 0)
 	if err != nil {
@@ -218,7 +226,7 @@ func (s *Service) weakenBundlesWithExpiredCoreMembers() error {
 	}
 	confCfg := s.activationSvc.ConfidenceConfig()
 	for _, b := range bundles {
-		expired := false
+		coreExpired := false
 		for _, pid := range b.CoreMemberPointIDs(confCfg) {
 			current, err := s.store.PointLifecycleCurrent(pid)
 			if err != nil {
@@ -226,15 +234,30 @@ func (s *Service) weakenBundlesWithExpiredCoreMembers() error {
 				continue
 			}
 			if !current {
-				expired = true
+				coreExpired = true
 				break
 			}
 		}
-		if !expired {
+
+		allExpired := len(b.Members) > 0
+		for _, m := range b.Members {
+			current, err := s.store.PointLifecycleCurrent(m.PointID)
+			if err != nil {
+				slog.Error("study: check bundle member lifecycle failed", "bundle_id", b.BundleID, "point_id", m.PointID, "error", err)
+				allExpired = false
+				break
+			}
+			if current {
+				allExpired = false
+				break
+			}
+		}
+
+		if !coreExpired && !allExpired {
 			continue
 		}
 		if err := s.activationSvc.Store().UpdateBundleStatus(b.BundleID, activation.BundleStatusDeprecated); err != nil {
-			slog.Error("study: deprecate bundle on core member lifecycle expiry failed", "bundle_id", b.BundleID, "error", err)
+			slog.Error("study: deprecate bundle on member lifecycle expiry failed", "bundle_id", b.BundleID, "error", err)
 			continue
 		}
 		s.activationSvc.BundleMatcher().InvalidateCache()
