@@ -15,7 +15,7 @@ import (
 
 const (
 	promptVersionBoundaryExtract   = "v3"
-	promptVersionPointExtract      = "v4"
+	promptVersionPointExtract      = "v5"
 	promptVersionPointCoverageFill = "v1"
 	// promptVersionSplitExtract tags candidates produced by the two-step
 	// boundary+point split pipeline — derived from the two prompts' own
@@ -165,7 +165,7 @@ func (s *Service) extractPointsForSplitUnit(ctx context.Context, u llmUnit, unit
 // checks mined content is a real substring of the source; this checks every
 // numeric row/item in the source is mentioned by at least one point.
 func (s *Service) ensurePointsCoverage(ctx context.Context, u llmUnit, unitContent string, points []llmPoint) []llmPoint {
-	rows := detectNumericRowSignatures(unitContent)
+	rows := append(detectNumericRowSignatures(unitContent), detectColumnSignatures(unitContent)...)
 	missing := uncoveredRows(rows, points)
 	if len(missing) == 0 {
 		return points

@@ -9,15 +9,16 @@ package evidence
 // output (one per surviving fragment, or the original item unchanged when
 // mining failed for that candidate — Mined distinguishes the two).
 type EvidenceItem struct {
-	UnitID    string
-	PointID   string
-	SourceID  string
-	LineStart int
-	LineEnd   int
-	Content   string
-	Role      string // "direct" / "supporting" — decides fallback vs. drop on failure
-	Origin    string // passthrough (e.g. "rerank" / "kpn_expansion")
-	Mined     bool
+	UnitID       string
+	PointID      string
+	SourceID     string
+	LineStart    int
+	LineEnd      int
+	Content      string
+	PointContent string // the candidate's own KP's abstracted content — the claim mining is meant to find verbatim support for, not itself part of what's mined
+	Role         string // "direct" / "supporting" — decides fallback vs. drop on failure
+	Origin       string // passthrough (e.g. "rerank" / "kpn_expansion")
+	Mined        bool
 }
 
 const (

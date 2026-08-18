@@ -28,7 +28,7 @@ func TestMine_Disabled_ReturnsInputUnchanged(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", Content: "some KU content", Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
+	out := svc.Mine(context.Background(), "q", "s", "i", "", "", in, false)
 
 	if len(out) != 1 || out[0].Content != "some KU content" || out[0].Mined {
 		t.Fatalf("expected passthrough of input, got %+v", out)
@@ -50,7 +50,7 @@ func TestMine_NormalPath_ProducesFragmentLevelEvidence(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", SourceID: "s1", LineStart: 10, LineEnd: 12, Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
+	out := svc.Mine(context.Background(), "q", "s", "i", "", "", in, false)
 
 	if len(out) != 1 {
 		t.Fatalf("expected 1 fragment, got %d: %+v", len(out), out)
@@ -85,7 +85,7 @@ func TestMine_HallucinatedFragment_Dropped(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", Content: content, Role: RoleSupporting},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
+	out := svc.Mine(context.Background(), "q", "s", "i", "", "", in, false)
 
 	if len(out) != 0 {
 		t.Fatalf("expected hallucinated fragment to be dropped entirely, got %+v", out)
@@ -104,7 +104,7 @@ func TestMine_EmptyFragments_DirectFallsBackWholeSegment(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", LineStart: 1, LineEnd: 3, Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
+	out := svc.Mine(context.Background(), "q", "s", "i", "", "", in, false)
 
 	if len(out) != 1 {
 		t.Fatalf("expected whole-segment fallback item, got %+v", out)
@@ -131,7 +131,7 @@ func TestMine_EmptyFragments_SupportingDropped(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", Content: "supporting content", Role: RoleSupporting},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
+	out := svc.Mine(context.Background(), "q", "s", "i", "", "", in, false)
 
 	if len(out) != 0 {
 		t.Fatalf("expected supporting candidate with no fragments to be dropped, got %+v", out)
@@ -155,7 +155,7 @@ func TestMine_EmptyFragments_SupportingFallsBackWhenLastResort(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", LineStart: 1, LineEnd: 3, Content: content, Role: RoleSupporting},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in, true)
+	out := svc.Mine(context.Background(), "q", "s", "i", "", "", in, true)
 
 	if len(out) != 1 {
 		t.Fatalf("expected whole-segment fallback item, got %+v", out)
@@ -180,7 +180,7 @@ func TestMine_BatchFailure_WholeSegmentFallbackAfterRetries(t *testing.T) {
 		{UnitID: "u1", PointID: "p1", Content: "content one", Role: RoleDirect},
 		{UnitID: "u2", PointID: "p2", Content: "content two", Role: RoleSupporting},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
+	out := svc.Mine(context.Background(), "q", "s", "i", "", "", in, false)
 
 	if len(out) != 2 {
 		t.Fatalf("expected both candidates to whole-segment fallback (batch failure applies regardless of role), got %+v", out)
@@ -212,7 +212,7 @@ func TestMine_MissingCandidateCoverage_TreatedAsBatchFailure(t *testing.T) {
 		{UnitID: "u1", PointID: "p1", Content: "content one", Role: RoleDirect},
 		{UnitID: "u2", PointID: "p2", Content: "content two", Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
+	out := svc.Mine(context.Background(), "q", "s", "i", "", "", in, false)
 
 	if len(out) != 2 {
 		t.Fatalf("expected whole-batch fallback due to incomplete coverage, got %+v", out)
@@ -241,7 +241,7 @@ func TestMine_TruncatesToMaxFragmentsPerKU(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
+	out := svc.Mine(context.Background(), "q", "s", "i", "", "", in, false)
 
 	if len(out) != 2 {
 		t.Fatalf("expected truncation to max_fragments_per_ku=2, got %d: %+v", len(out), out)
@@ -264,7 +264,7 @@ func TestMine_DedupesOverlappingLineRanges(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
+	out := svc.Mine(context.Background(), "q", "s", "i", "", "", in, false)
 
 	if len(out) != 1 {
 		t.Fatalf("expected exact-overlapping duplicate dropped, got %d: %+v", len(out), out)
@@ -285,7 +285,7 @@ func TestMine_MinFragmentChars_DropsShortFragments(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "q", "s", "i", in, false)
+	out := svc.Mine(context.Background(), "q", "s", "i", "", "", in, false)
 
 	if len(out) != 1 {
 		t.Fatalf("expected short fragment 'ok' dropped, got %+v", out)
@@ -318,7 +318,7 @@ func TestMine_TableDataRowFragment_WidensToWholeTable(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", SourceID: "s1", LineStart: 67, LineEnd: 71, Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "福州属于哪一类城市，报销标准是多少？", "出差报销", "查询报销标准", in, false)
+	out := svc.Mine(context.Background(), "福州属于哪一类城市，报销标准是多少？", "出差报销", "查询报销标准", "", "", in, false)
 
 	if len(out) != 1 {
 		t.Fatalf("expected 1 widened fragment, got %d: %+v", len(out), out)
@@ -356,7 +356,7 @@ func TestMine_LeadInSentenceOnly_AttachesFollowingTable(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", SourceID: "s1", LineStart: 111, LineEnd: 117, Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "绩效考核分几个等级、S 级比例多少", "绩效考核", "查询考核等级与比例", in, false)
+	out := svc.Mine(context.Background(), "绩效考核分几个等级、S 级比例多少", "绩效考核", "查询考核等级与比例", "", "", in, false)
 
 	if len(out) != 1 {
 		t.Fatalf("expected 1 widened fragment, got %d: %+v", len(out), out)
@@ -427,7 +427,7 @@ func TestMine_PartialSQL_WidensToCommandBlock(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", SourceID: "s1", LineStart: 10, LineEnd: 14, Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "VKTM CPU 高怎么处理？", "Oracle RAC", "排查", in, false)
+	out := svc.Mine(context.Background(), "VKTM CPU 高怎么处理？", "Oracle RAC", "排查", "", "", in, false)
 	if len(out) != 1 {
 		t.Fatalf("expected 1 widened fragment, got %d: %+v", len(out), out)
 	}
@@ -458,7 +458,7 @@ func TestMine_PartialChmod_WidensToCommandBlock(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", LineStart: 1, LineEnd: 3, Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "TNS-12518 原因？", "Oracle", "排查", in, false)
+	out := svc.Mine(context.Background(), "TNS-12518 原因？", "Oracle", "排查", "", "", in, false)
 	if len(out) != 1 {
 		t.Fatalf("got %d items: %+v", len(out), out)
 	}
@@ -486,7 +486,7 @@ func TestMine_PartialFencedCode_WidensToWholeFence(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", LineStart: 1, LineEnd: 6, Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "BUFFER 怎么配？", "达梦", "查询", in, false)
+	out := svc.Mine(context.Background(), "BUFFER 怎么配？", "达梦", "查询", "", "", in, false)
 	if len(out) != 1 {
 		t.Fatalf("got %d: %+v", len(out), out)
 	}
@@ -517,7 +517,7 @@ func TestMine_ConfigBlockOnly_AttachesPrecedingGuideSentence(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", PointID: "p1", SourceID: "s1", LineStart: 42, LineEnd: 45, Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "Oracle RAC 两个实例必须保持一致的参数有哪些", "Oracle RAC", "查询一致性参数", in, false)
+	out := svc.Mine(context.Background(), "Oracle RAC 两个实例必须保持一致的参数有哪些", "Oracle RAC", "查询一致性参数", "", "", in, false)
 
 	if len(out) != 1 {
 		t.Fatalf("expected 1 widened fragment, got %d: %+v", len(out), out)
@@ -547,7 +547,7 @@ func TestMine_HeadingOnlyFragment_Dropped(t *testing.T) {
 	in := []EvidenceItem{
 		{UnitID: "u1", LineStart: 1, LineEnd: 4, Content: content, Role: RoleDirect},
 	}
-	out := svc.Mine(context.Background(), "有哪些磁盘绑定方式？", "Oracle", "列举", in, false)
+	out := svc.Mine(context.Background(), "有哪些磁盘绑定方式？", "Oracle", "列举", "", "", in, false)
 	if len(out) != 1 {
 		t.Fatalf("expected whole-segment fallback after heading drop, got %d: %+v", len(out), out)
 	}

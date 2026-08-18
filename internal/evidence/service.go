@@ -61,7 +61,7 @@ type mineResponse struct {
 // where the alternative to a noisier supporting fallback is an empty
 // EvidenceSet and a "no evidence found" answer despite rerank having judged
 // the candidate at least topically relevant.
-func (s *Service) Mine(ctx context.Context, question, subject, intent string, candidates []EvidenceItem, lastResort bool) []EvidenceItem {
+func (s *Service) Mine(ctx context.Context, question, subject, intent, audience, constraint string, candidates []EvidenceItem, lastResort bool) []EvidenceItem {
 	if !s.cfg.Enabled || len(candidates) == 0 {
 		return candidates
 	}
@@ -88,7 +88,7 @@ func (s *Service) Mine(ctx context.Context, question, subject, intent string, ca
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			items, fp, df, wf := s.mineBatch(ctx, question, subject, intent, batch, lastResort)
+			items, fp, df, wf := s.mineBatch(ctx, question, subject, intent, audience, constraint, batch, lastResort)
 			results[i] = items
 			counters[i] = [3]int{fp, df, wf}
 		}()
@@ -163,18 +163,24 @@ func batchCandidates(candidates []EvidenceItem, maxChars int) [][]EvidenceItem {
 // the per-KU / batch-level fallback rules. Returns the resulting items plus
 // observability counters (fragments produced, fragments dropped by
 // validation, whole-segment fallbacks).
-func (s *Service) mineBatch(ctx context.Context, question, subject, intent string, batch []EvidenceItem, lastResort bool) ([]EvidenceItem, int, int, int) {
+func (s *Service) mineBatch(ctx context.Context, question, subject, intent, audience, constraint string, batch []EvidenceItem, lastResort bool) ([]EvidenceItem, int, int, int) {
 	ids := make([]string, len(batch))
 	var candidatesText strings.Builder
 	for i, c := range batch {
 		ids[i] = fmt.Sprintf("c%d", i+1)
-		fmt.Fprintf(&candidatesText, "【%s】\n%s\n\n", ids[i], c.Content)
+		if c.PointContent != "" {
+			fmt.Fprintf(&candidatesText, "【%s】\n（该候选对应的知识点结论：%s）\n%s\n\n", ids[i], c.PointContent, c.Content)
+		} else {
+			fmt.Fprintf(&candidatesText, "【%s】\n%s\n\n", ids[i], c.Content)
+		}
 	}
 
 	vars := map[string]string{
 		"question":      question,
 		"subject":       placeholderIfEmpty(subject),
 		"intent":        placeholderIfEmpty(intent),
+		"audience":      placeholderIfEmpty(audience),
+		"constraint":    placeholderIfEmpty(constraint),
 		"candidates":    candidatesText.String(),
 		"max_fragments": strconv.Itoa(s.cfg.MaxFragmentsPerKU),
 	}

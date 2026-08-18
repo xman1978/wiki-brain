@@ -47,9 +47,20 @@ var numberTokenRE = regexp.MustCompile(`[0-9]+(\.[0-9]+)?`)
 // (a markdown table data row or a list item) that carries numeric values —
 // the class of fact observed to get compressed away during point extraction
 // when a category has many sibling sub-items.
+//
+// label is set only for column signatures (see detectColumnSignatures): it
+// names the category the numbers belong to (e.g. a table column header like
+// "D 类城市") when that category's own definition lives elsewhere in the
+// unit (e.g. a numbered list below the table) rather than on the same line
+// as the numbers. A row with a label is only "covered" by a point whose
+// content mentions the label *and* the number together — otherwise a point
+// could satisfy plain numeric coverage by stating the number in an unrelated
+// sentence while the category's definition-only point stays disconnected
+// from it (the "D 类城市: 除...其他所有城市" without "200元" failure mode).
 type rowSignature struct {
 	text    string // original line, for the verbatim-fallback path
 	numbers []string
+	label   string
 }
 
 // detectNumericRowSignatures scans a KU's raw content lines for table data
@@ -92,6 +103,58 @@ func detectNumericRowSignatures(unitContent string) []rowSignature {
 	return rows
 }
 
+func splitTableCells(row string) []string {
+	t := strings.Trim(strings.TrimSpace(row), "|")
+	cells := strings.Split(t, "|")
+	for i, c := range cells {
+		cells[i] = strings.TrimSpace(c)
+	}
+	return cells
+}
+
+// detectColumnSignatures scans a KU's raw content for a markdown table and
+// pairs each non-first header cell (a category label, e.g. "D 类城市") with
+// the corresponding cell in each data row (the category's value, e.g.
+// "200元") by column position. Unlike detectNumericRowSignatures, which
+// treats a whole row/list-item as one unit, this catches the case where a
+// category's numeric value sits in a table cell while the category's own
+// definition is written out separately elsewhere in the unit (commonly a
+// numbered list below the table) — the two never share a line, so neither
+// detectNumericRowSignatures nor a per-line number check would ever notice
+// the definition-only point is missing its number.
+func detectColumnSignatures(unitContent string) []rowSignature {
+	var header []string
+	var signatures []rowSignature
+	for _, line := range strings.Split(unitContent, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !isMarkdownTableRow(trimmed) || isTableSeparatorRow(trimmed) {
+			continue
+		}
+		cells := splitTableCells(trimmed)
+		if header == nil {
+			header = cells
+			continue
+		}
+		for i := 1; i < len(cells) && i < len(header); i++ {
+			label := header[i]
+			value := cells[i]
+			if label == "" || value == "" {
+				continue
+			}
+			nums := numberTokenRE.FindAllString(value, -1)
+			if len(nums) == 0 {
+				continue
+			}
+			signatures = append(signatures, rowSignature{
+				text:    label + "：" + value,
+				numbers: dedupStrings(nums),
+				label:   label,
+			})
+		}
+	}
+	return signatures
+}
+
 func dedupStrings(in []string) []string {
 	seen := make(map[string]bool, len(in))
 	out := make([]string, 0, len(in))
@@ -104,11 +167,15 @@ func dedupStrings(in []string) []string {
 	return out
 }
 
-// uncoveredRows returns the rowSignatures whose numeric tokens are not all
-// present somewhere across the combined point content — i.e. rows whose
-// specific numbers extraction dropped. All of a row's numbers must appear
-// (not just one) so a row isn't marked covered by a partial, coincidental
-// match.
+// uncoveredRows returns the rowSignatures that extraction dropped. For a
+// plain row (no label), all of its numeric tokens must appear somewhere
+// across the combined point content — not just one — so a row isn't marked
+// covered by a partial, coincidental match. For a column signature (label
+// set), the label and every number must appear together in the *same*
+// point's content, since the point that states the number but not the label
+// (or vice versa) doesn't actually let a reader answer "what's the value for
+// this category" — the fact the number exists somewhere in the unit is not
+// the same as the category being self-contained.
 func uncoveredRows(rows []rowSignature, points []llmPoint) []rowSignature {
 	if len(rows) == 0 {
 		return nil
@@ -122,11 +189,16 @@ func uncoveredRows(rows []rowSignature, points []llmPoint) []rowSignature {
 
 	var missing []rowSignature
 	for _, r := range rows {
-		covered := true
-		for _, n := range r.numbers {
-			if !strings.Contains(joined, n) {
-				covered = false
-				break
+		var covered bool
+		if r.label != "" {
+			covered = coveredTogether(points, r.label, r.numbers)
+		} else {
+			covered = true
+			for _, n := range r.numbers {
+				if !strings.Contains(joined, n) {
+					covered = false
+					break
+				}
 			}
 		}
 		if !covered {
@@ -134,6 +206,27 @@ func uncoveredRows(rows []rowSignature, points []llmPoint) []rowSignature {
 		}
 	}
 	return missing
+}
+
+// coveredTogether reports whether some single point's content mentions both
+// label and every number in nums.
+func coveredTogether(points []llmPoint, label string, nums []string) bool {
+	for _, p := range points {
+		if !strings.Contains(p.Content, label) {
+			continue
+		}
+		allPresent := true
+		for _, n := range nums {
+			if !strings.Contains(p.Content, n) {
+				allPresent = false
+				break
+			}
+		}
+		if allPresent {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanRowText strips markdown table pipes/list markers from a row so it

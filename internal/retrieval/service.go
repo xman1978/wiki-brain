@@ -522,6 +522,43 @@ func (s *Service) SlowPathVerifyEnabled() bool {
 // classification/lookup) before the stated rule applies correctly — see
 // fast_verify.md 第三步. needsDeep is only meaningful when sufficient=true.
 func (s *Service) VerifyEvidenceSufficient(ctx context.Context, question string, es *EvidenceSet) (sufficient bool, needsDeep bool, reason string, err error) {
+	sufficient, needsDeep, reason, err = s.verifyEvidenceSufficientOnce(ctx, question, es)
+	if err != nil || sufficient {
+		return sufficient, needsDeep, reason, err
+	}
+
+	// Fallback: a sufficient=false verdict may be an artifact of evidence
+	// mining under-extracting a candidate (see internal/evidence's mining
+	// step) rather than the source material genuinely lacking the answer —
+	// mining picks verbatim fragments per candidate and can drop content a
+	// full read of the same knowledge unit would have kept. Before trusting
+	// the "insufficient" verdict, re-verify once against each evidence
+	// item's full, unmined knowledge-unit text, so a mining gap doesn't
+	// masquerade as a genuine source-material gap. Only evidence items whose
+	// UnitID resolves are widened; anything unresolvable keeps its original
+	// (mined) content and still contributes to the fallback attempt.
+	widened, changed := s.widenEvidenceToFullUnits(es)
+	if !changed {
+		return sufficient, needsDeep, reason, nil
+	}
+	slog.Info("retrieval: evidence verify insufficient, retrying with full KU content", "reason", reason)
+	fbSufficient, fbNeedsDeep, fbReason, fbErr := s.verifyEvidenceSufficientOnce(ctx, question, widened)
+	if fbErr != nil {
+		slog.Warn("retrieval: full-KU evidence verify retry failed, keeping original verdict", "error", fbErr)
+		return sufficient, needsDeep, reason, nil
+	}
+	if fbSufficient {
+		slog.Info("retrieval: full-KU evidence verify retry judged sufficient, mining had dropped needed content", "reason", fbReason)
+		*es = *widened
+		return fbSufficient, fbNeedsDeep, fbReason, nil
+	}
+	return sufficient, needsDeep, reason, nil
+}
+
+// verifyEvidenceSufficientOnce is the single fast_verify.md call — factored
+// out so VerifyEvidenceSufficient can run it twice (mined evidence, then
+// full-KU evidence) without duplicating the prompt-call plumbing.
+func (s *Service) verifyEvidenceSufficientOnce(ctx context.Context, question string, es *EvidenceSet) (sufficient bool, needsDeep bool, reason string, err error) {
 	// Object/scope/theme are included alongside content (not just
 	// SourceTitle+Content) so this independently-framed second pass can
 	// cross-check the direct evidence's stated object/scenario against the
@@ -566,6 +603,53 @@ func (s *Service) VerifyEvidenceSufficient(ctx context.Context, question string,
 		slog.Info("retrieval: evidence verify judged needs_deep", "reason", result.Reason)
 	}
 	return result.Sufficient, result.NeedsDeep, result.Reason, nil
+}
+
+// widenEvidenceToFullUnits returns a copy of es with each DirectEvidence/
+// Supporting item's Content replaced by its owning knowledge unit's full raw
+// text (falling back to the original mined content if the unit or source
+// text can't be read). changed reports whether at least one item was
+// actually widened, so the caller can skip a pointless retry when nothing
+// could be expanded (e.g. all lookups failed).
+func (s *Service) widenEvidenceToFullUnits(es *EvidenceSet) (*EvidenceSet, bool) {
+	widened := *es
+	widened.DirectEvidence = append([]Evidence(nil), es.DirectEvidence...)
+	widened.Supporting = append([]Evidence(nil), es.Supporting...)
+
+	changed := false
+	fullContent := make(map[string]string) // unit_id -> full content, cached across direct+supporting
+	widen := func(items []Evidence) {
+		for i, ev := range items {
+			if ev.UnitID == "" {
+				continue
+			}
+			content, ok := fullContent[ev.UnitID]
+			if !ok {
+				unit, err := s.store.GetUnitByID(ev.UnitID)
+				if err != nil {
+					slog.Debug("retrieval: widen evidence to full unit, unit lookup failed", "unit_id", ev.UnitID, "error", err)
+					fullContent[ev.UnitID] = ""
+					continue
+				}
+				text, err := s.readUnitContent(unit.SourceID, unit.LineStart, unit.LineEnd)
+				if err != nil {
+					slog.Debug("retrieval: widen evidence to full unit, content read failed", "unit_id", ev.UnitID, "error", err)
+					fullContent[ev.UnitID] = ""
+					continue
+				}
+				content = text
+				fullContent[ev.UnitID] = content
+			}
+			if content == "" || content == items[i].Content {
+				continue
+			}
+			items[i].Content = content
+			changed = true
+		}
+	}
+	widen(widened.DirectEvidence)
+	widen(widened.Supporting)
+	return &widened, changed
 }
 
 func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progress ProgressFunc) (*EvidenceSet, error) {
@@ -2238,6 +2322,22 @@ func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, inten
 		sourceTitles[sourceID] = title
 	}
 
+	// Each candidate's own KP content (the abstracted claim retrieval judged
+	// relevant) is looked up so mining can be told what claim it's mining
+	// verbatim support for, alongside the question — mining candidates only
+	// carried the KU's raw text before, so the mining LLM had to guess
+	// unaided how much of that raw text a given claim needs.
+	pointsByUnit, err := s.store.GetPointContentsByUnitIDs(unitIDs)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval: get evidence point contents: %w", err)
+	}
+	pointContent := make(map[string]string)
+	for _, facts := range pointsByUnit {
+		for _, f := range facts {
+			pointContent[f.PointID] = f.Content
+		}
+	}
+
 	var items []evidence.EvidenceItem
 	appendItems := func(cands []candidate, role string) {
 		for _, c := range cands {
@@ -2253,7 +2353,7 @@ func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, inten
 			items = append(items, evidence.EvidenceItem{
 				UnitID: c.unitID, PointID: c.pointID, SourceID: c.sourceID,
 				LineStart: c.lineStart, LineEnd: c.lineEnd,
-				Content: content, Role: role, Origin: origin,
+				Content: content, PointContent: pointContent[c.pointID], Role: role, Origin: origin,
 			})
 		}
 	}
@@ -2264,7 +2364,7 @@ func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, inten
 	evidenceStart := time.Now()
 	mined := items
 	if s.evidenceSvc != nil {
-		mined = s.evidenceSvc.Mine(ctx, question, subject, intent, items, lastResort)
+		mined = s.evidenceSvc.Mine(ctx, question, subject, intent, audience, constraint, items, lastResort)
 	}
 	minedCount := 0
 	for _, item := range mined {
