@@ -29,7 +29,7 @@ V1 的目标是让系统**基本具备学习转化能力**：
 | 证据粒度 | 知识单元整段正文进入回答与引用 | 证据挖掘：Rerank 后逐字摘选片段级证据，程序原文校验 |
 | KPN | 单 Source 内关系 | 跨 Source KP 对齐与关系合并 |
 | 生命周期 | 无 | 完整 3 状态：current / superseded / deprecated |
-| Wiki | 仅报告 Wiki 候选 | 编译初版：主题页 / 概念页，人工确认发布 |
+| Wiki | 仅报告 Wiki 候选 | 编译初版：单层页面，人工指定 entry_id 触发、人工确认发布 |
 | 用户反馈 | 无 | user_correction 通道（补充加速信号，非学习前提） |
 
 ---
@@ -177,17 +177,25 @@ Source 删除 -> 该 source 全部 KU/KP（含已 superseded 的）标记 deprec
 
 candidate / needs_verification / conflicted / historical / retracted 均已从场景倒推评估过，没有找到独立于 current/superseded/deprecated 的必要场景，不引入（详见 `lifecycle.md` 第 2 节）。
 
-### 8. Wiki 编译初版
+### 8. Wiki 编译初版（2026-08-18 单层化改造后）
 
-依据 `wiki.md`。V1 只做两种页面类型的最小闭环：
+依据 `wiki.md`。Wiki 只有一种页面（沿用"主题页"名字/`page_type=topic` 常量），
+编译单层完成，触发方式是人工指定一个或多个 Concept/Fact 词条（entry_id），
+**不存在任何自动候选识别入口**：
 
-- **概念页**：Study 识别的 Wiki 候选（同 Concept 下多个高置信 KP + KPN 连接，沿用 MVP 候选逻辑）经人工在 Page 上确认后，触发 LLM 编译生成页面；主题页候选机制见下方「两层架构（扩展）」——不是同一套逻辑；
+- **触发**：人工从 Concept/Fact 词条列表指定 entry_id 集合，`POST /wiki/compile` 直接触发编译，不经过 Study 候选确认这一步；
+- **编译材料**：围绕 entry_id 集合展开的 Core/Context/Conflict 子图（entry 直属 KP + 一跳 related + 一跳 contradicts，Fact 词条额外带出父 Concept 的 Core 作背景），不是整块塞给 LLM 的扁平列表；
 - 页面要素（防固化最小集）：稳定结论、证据来源（回链 KP / KU / source_ref）、待验证点、最近更新时间、依赖的核心 KU 列表；
-- **重编译**：底层 KU/KP 状态变化或新的 wiki_update_candidate 信号时，Study 标记页面「待重编译」，人工确认后执行；每次编译记录触发来源，可追溯到 Learning Event；
-- **检索接入**：已发布 Wiki 页面建立独立 Bleve 索引，作为快路径的直接命中层——同主题问题可直接引用 Wiki 结论并附证据回链（`study.md` 2.5 节所述正向反馈）。
-- **两层架构（扩展）**：概念页为一阶编译（KP → 页面），主题页为二阶编译（已发布概念页 → 页面）；页面之间由程序从 KPN 派生 `related` / `contradicts` 关系，`contains` 由二阶编译写入，三者构成知识架构。**主题页在检索里的角色是召回骨架而非直答单元**——命中后展开成员概念页进候选，并把成员知识点注入慢路径 Rerank、跳过 Outline 召回（零额外 LLM 调用，这是复杂问题在 V1 唯一的实际收益）。写作出口是页面派生的草稿（`wiki_drafts`，主题页默认组装成员正文 + 只读证据清单），页面正文仍只由编译产生，无回写通道；草稿回流导入要打 `origin='wiki_draft'` 以阻断自体循环。详见 `wiki.md` 步骤 7-10。
+- **重编译**：底层 KU/KP 状态变化、ActivationLink 越过服务门槛时，标记页面「待重编译」，人工确认后执行；每次编译记录触发来源，可追溯到 Learning Event（当前该自动标记链路的接线现状见 `wiki.md`「已知遗留」）；
+- **检索接入**：已发布 Wiki 页面建立独立 Bleve 索引，作为快路径之前的直接命中层；问题先经一次 LLM 做 Concept/Fact 识别，命中已发布页面即进入候选，命中后的 sufficient 判断与 citation 白名单校验不变（`study.md` 2.5 节所述正向反馈）。
 
-方法页 / 经验页 / 问题页 / 决策页已从设计中删除（这四种类型此前只是名义上的分类，从未被接入过具体的编译流程，详见 `docs/design/wiki.md`「Wiki 页面类型」一节），不是推迟到 V3。认知视角差异化页面推迟到 V3。复杂问题的拆解与子结论聚合同样属 V3（深想 / Working Model）——V1 只准备好主题页结构，并记录 `topic_decompose_signal` 供后续使用。
+页面关系只有程序从 KPN 派生的 `related` / `contradicts` 两种（不调 LLM），
+`contains`（原"主题页聚合概念页"关系）已随两层架构一起废弃——一次编译请求
+直接产出一份成品页面，不存在"页面聚合页面"。写作出口是页面派生的草稿
+（`wiki_drafts`，恒为单页模式），页面正文仍只由编译产生，无回写通道；草稿
+回流导入要打 `origin='wiki_draft'` 以阻断自体循环。
+
+方法页 / 经验页 / 问题页 / 决策页已从设计中删除（这四种类型此前只是名义上的分类，从未被接入过具体的编译流程，详见 `docs/design/wiki.md`「Wiki 页面类型」一节），不是推迟到 V3。认知视角差异化页面推迟到 V3。复杂问题的拆解与子结论聚合同样属 V3（深想 / Working Model）——原"主题页展开成员 + 骨架注入慢路径 + `topic_decompose_signal`"这套准备机制已随单层化改造整体删除（不是保留待用，是没有对应物了），V3 若要做复杂问题拆解需要重新设计接入方式。
 
 ### 9. 用户反馈通道
 
@@ -237,17 +245,20 @@ candidate / needs_verification / conflicted / historical / retracted 均已从�
   activation_links        ActivationLink 主体（条件、目标 KP、状态、统计）
   learning_results        Study 学习动作记录（动作、对象、reason、关联事件）
   wiki_pages              Wiki 页面（内容、类型、状态、依赖 KU 列表、修订记录）
-  wiki_page_relations     页面关系（related / contradicts 程序派生、contains 编译写入）
+  wiki_page_relations     页面关系（related / contradicts，程序从 KPN 派生，不调 LLM）
+  wiki_page_entries       页面 ← entry_id 多对多关联（单层化改造新增，migration 057）
   wiki_drafts             写作草稿（来源页面 + 版本，人工自由编辑，不参与检索）
 
 扩展
   knowledge_units / knowledge_points  增加 lifecycle 状态字段
   learning_events                     事件类型增加 activation_*（user_correction 沿用 MVP 通道）
   knowledge_point_relations           增加 scope 字段（intra/cross）与唯一索引
-  traces                              增加 path_type / activation_link_ids /
-                                      skeleton_page_id（主题页提供的召回骨架）
-  wiki_pages                          增加 member_roles（结构化子主题分工）、
-                                      uncovered_points（覆盖度清单，只作字段）
+  traces                              增加 path_type / activation_link_ids
+                                      （skeleton_page_id 已随单层化改造整体
+                                      删除，migration 058 DROP COLUMN）
+  wiki_pages                          增加 uncovered_points（覆盖度清单，
+                                      只作字段；member_roles 列随二阶编译
+                                      废弃，保留列不再写）
   sources                             增加 origin / origin_page_id
                                       （Wiki 草稿回流标记，阻断自体循环）
   EvidenceSet / evidence_snapshot     证据细化为片段级：片段原文 + KU 内位置，

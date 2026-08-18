@@ -79,6 +79,13 @@ type CandidateRow struct {
 	// '[]' otherwise) — RestoreAppliedNewEntry deletes exactly these on
 	// restore.
 	KPNRelationIDs string
+	// ParentEntryID is the concept entry_id a fact candidate was classified
+	// under at generation time (kpn.md 步骤 3 fact 新建 — kpn_orphan_fact_
+	// match.md's matched_concept_id), persisted verbatim through confirm onto
+	// entries.parent_entry_id (docs/impl/v1/fact-entry-parent-concept-task-
+	// brief.md). NULL for concept candidates and any candidate that didn't
+	// come from that fact-grouping path.
+	ParentEntryID sql.NullString
 }
 
 // AddEvidence is the evidence JSON for kind=add candidates.

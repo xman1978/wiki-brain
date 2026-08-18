@@ -79,7 +79,7 @@ func (s *Service) SetKPNRematchNotifier(n KPNRematchNotifier) {
 // new one. Unlike scanAddClusters this has no event/question/overlap
 // threshold — KPN calls it once per cluster per import and it always fires,
 // so a document's orphan KPs never sit unprocessed indefinitely.
-func (s *Service) ProposeAddCandidate(domainID, suggestedName, suggestedDescription, suggestedBoundary, conceptKind, entity string, pointIDs []string, sourceID string) (candidateID string, err error) {
+func (s *Service) ProposeAddCandidate(domainID, suggestedName, suggestedDescription, suggestedBoundary, conceptKind, entity string, pointIDs []string, sourceID, parentEntryID string) (candidateID string, err error) {
 	if domainID == "" || len(pointIDs) == 0 {
 		return "", fmt.Errorf("concept: propose add candidate requires domain_id and point_ids")
 	}
@@ -144,7 +144,11 @@ func (s *Service) ProposeAddCandidate(domainID, suggestedName, suggestedDescript
 
 	evidence := ContentDrivenEvidence{Origin: "content_driven", SourceIDs: []string{sourceID}, Description: suggestedDescription, Boundary: suggestedBoundary, Entity: entity}
 	reason := fmt.Sprintf("跨 Source KPN 匹配发现无概念归属的 KP 聚类：建议概念「%s」", suggestedName)
-	candidateID, err = s.store.InsertAddCandidate(sql.NullString{String: domainID, Valid: true}, suggestedName, conceptKind, pointIDs, nil, evidence, reason)
+	var parentEntry sql.NullString
+	if parentEntryID != "" {
+		parentEntry = sql.NullString{String: parentEntryID, Valid: true}
+	}
+	candidateID, err = s.store.InsertAddCandidate(sql.NullString{String: domainID, Valid: true}, suggestedName, conceptKind, pointIDs, nil, evidence, reason, parentEntry)
 	if err != nil {
 		return "", err
 	}
@@ -199,7 +203,7 @@ func (s *Service) CreateManualCandidate(domainID, suggestedName, description, co
 	// editable description field from there whichever origin, so typing one
 	// on the draft form survives the save-then-reopen-to-confirm gap.
 	evidence := ContentDrivenEvidence{Origin: "manual", Description: description}
-	candidateID, err = s.store.InsertAddCandidate(domain, suggestedName, conceptKind, pointIDs, nil, evidence, "人工手动新增概念候选")
+	candidateID, err = s.store.InsertAddCandidate(domain, suggestedName, conceptKind, pointIDs, nil, evidence, "人工手动新增概念候选", sql.NullString{})
 	if err != nil {
 		return "", err
 	}
@@ -406,7 +410,7 @@ func (s *Service) scanAddClusters(summary *ScanSummary) error {
 		// as the DB column default; kind:fact here would require asserting a
 		// judgment this pipeline never makes, unlike kpn_entry_propose.md's
 		// content-driven clusters.
-		newCandidateID, err := s.store.InsertAddCandidate(domainID, name, EntryKindConcept, pointIDs, eventIDs, evidence, reason)
+		newCandidateID, err := s.store.InsertAddCandidate(domainID, name, EntryKindConcept, pointIDs, eventIDs, evidence, reason, sql.NullString{})
 		if err != nil {
 			return err
 		}
@@ -700,6 +704,7 @@ func (s *Service) confirmAdd(c *CandidateRow, req *ConfirmAddRequest) (*ConfirmR
 			relationIDs := s.kpnNotifier.RematchPoints(req.EntryID, pointIDs)
 			s.recordKPNRelationIDs(c.CandidateID, relationIDs)
 		}
+		s.notifyEntryChanged(req.EntryID, reason)
 		return &ConfirmResult{Candidate: *c, EntryID: req.EntryID, MigratedKUs: migrated}, nil
 	}
 
@@ -747,7 +752,7 @@ func (s *Service) confirmAdd(c *CandidateRow, req *ConfirmAddRequest) (*ConfirmR
 
 	conceptID := uuid.New().String()
 	reason := fmt.Sprintf("人工确认新增概念：%s（领域 %s）", name, domainID)
-	migrated, err := s.store.ConfirmAdd(c.CandidateID, conceptID, domainID, name, description, evidence.Boundary, conceptKind, evidence.Aliases, pointIDs, reason)
+	migrated, err := s.store.ConfirmAdd(c.CandidateID, conceptID, domainID, name, description, evidence.Boundary, conceptKind, evidence.Aliases, pointIDs, reason, c.ParentEntryID)
 	if err != nil {
 		return nil, err
 	}
@@ -801,6 +806,35 @@ func (s *Service) confirmMerge(c *CandidateRow, req *ConfirmMergeRequest) (*Conf
 	flagged := s.flagMergedEntryPages(mergeFrom, reason)
 
 	return &ConfirmResult{Candidate: *c, MigratedKUs: migrated, FlaggedPages: flagged}, nil
+}
+
+// notifyEntryChanged is confirmAdd/AddEntryPoints/RemoveEntryPoint's shared
+// call site for the "entry_id 归属变化" needs_recompile source (docs/impl/v1/
+// wiki.md「重编译标记」, 2026-08-18 单层化收尾重新接线): a single entry_id's
+// Core KP membership just changed by direct assignment (not merge, which
+// keeps its own flagMergedEntryPages below since it touches several
+// entry_ids with a merge-specific reason string). Nil-safe, best-effort —
+// mirrors flagMergedEntryPages's error handling.
+func (s *Service) notifyEntryChanged(entryID, reason string) {
+	if s.wikiSvc == nil || entryID == "" {
+		return
+	}
+	page, err := s.wikiSvc.GetActivePageByEntryID(entryID)
+	if err != nil {
+		slog.Error("concept: get active page by concept failed", "entry_id", entryID, "error", err)
+		return
+	}
+	// GetActivePageByEntryID matches any non-archived status (draft included)
+	// — only a *published* page has readers to protect from staleness, so a
+	// draft compiled from this entry_id is left alone here (unlike
+	// flagMergedEntryPages below, an existing merge path that doesn't apply
+	// this filter — out of scope for this change, not touched).
+	if page == nil || page.Status != wiki.StatusPublished {
+		return
+	}
+	if err := s.wikiSvc.MarkNeedsRecompile(page.PageID, reason); err != nil {
+		slog.Error("concept: mark needs_recompile failed", "page_id", page.PageID, "error", err)
+	}
 }
 
 // flagMergedEntryPages marks needs_recompile on the active Wiki page for
@@ -973,11 +1007,23 @@ func (s *Service) UpdateEntryMeta(conceptID, name, description, kind string) err
 }
 
 func (s *Service) AddEntryPoints(conceptID string, pointIDs []string) (int, error) {
-	return s.store.AddEntryPoints(conceptID, pointIDs)
+	migrated, err := s.store.AddEntryPoints(conceptID, pointIDs)
+	if err != nil {
+		return migrated, err
+	}
+	if migrated > 0 {
+		s.notifyEntryChanged(conceptID, fmt.Sprintf("人工手动向概念 %s 追加 %d 个知识点", conceptID, migrated))
+	}
+	return migrated, nil
 }
 
 func (s *Service) RemoveEntryPoint(conceptID, pointID string) (int, error) {
-	return s.store.RemoveEntryPoint(conceptID, pointID)
+	unitPointCount, err := s.store.RemoveEntryPoint(conceptID, pointID)
+	if err != nil {
+		return unitPointCount, err
+	}
+	s.notifyEntryChanged(conceptID, fmt.Sprintf("人工手动从概念 %s 移除知识点 %s", conceptID, pointID))
+	return unitPointCount, nil
 }
 
 func (s *Service) GetCandidate(candidateID string) (*CandidateRow, error) {

@@ -47,9 +47,6 @@ func TestSetUnitLifecycle_CascadesAndReindexes(t *testing.T) {
 	svc.indexUnit(ku, strings.Split(string(mdBytes), "\n"))
 	svc.indexPoint(kp)
 
-	var notified []string
-	svc.SetWikiNotifier(fakeWikiNotifier{onNotify: func(ids []string) { notified = ids }})
-
 	if err := svc.SetUnitLifecycle([]string{ku.UnitID}, LifecycleSuperseded, "test supersede"); err != nil {
 		t.Fatalf("SetUnitLifecycle: %v", err)
 	}
@@ -78,10 +75,6 @@ func TestSetUnitLifecycle_CascadesAndReindexes(t *testing.T) {
 	}
 	if lc, ok := bleveField(t, svc.pointsIndex, kp.PointID, "lifecycle"); !ok || lc != LifecycleSuperseded {
 		t.Errorf("bleve point lifecycle = %q (ok=%v), want %q", lc, ok, LifecycleSuperseded)
-	}
-
-	if len(notified) != 1 || notified[0] != kp.PointID {
-		t.Errorf("wiki notifier got %v, want [%s]", notified, kp.PointID)
 	}
 }
 
@@ -239,13 +232,82 @@ func TestSetUnitLifecycle_EmptyIDsNoop(t *testing.T) {
 	}
 }
 
-type fakeWikiNotifier struct {
-	onNotify func(pointIDs []string)
+// fakeWikiEntryNotifier stands in for wiki.Service in unit-package tests
+// (docs/impl/v1/wiki.md「重编译标记」2026-08-18 重新接线: unit notifies Wiki
+// when a KU's lifecycle transition or entry_id assignment changes an
+// entry's Core KP composition).
+type fakeWikiEntryNotifier struct {
+	calls []fakeWikiEntryNotifyCall
+	err   error
 }
 
-func (f fakeWikiNotifier) NotifyPointsLifecycleChanged(pointIDs []string) error {
-	if f.onNotify != nil {
-		f.onNotify(pointIDs)
+type fakeWikiEntryNotifyCall struct {
+	entryIDs []string
+	reason   string
+}
+
+func (f *fakeWikiEntryNotifier) NotifyEntriesChanged(entryIDs []string, reason string) error {
+	f.calls = append(f.calls, fakeWikiEntryNotifyCall{entryIDs, reason})
+	return f.err
+}
+
+func TestSetUnitLifecycle_NotifiesWikiOfAffectedEntryIDs(t *testing.T) {
+	svc, _, db := setupTestService(t)
+	tmpDir := t.TempDir()
+	mdPath := writeTestMarkdown(t, tmpDir)
+	insertSource(t, db, "src-1", mdPath)
+
+	if _, err := db.Exec(`INSERT INTO domains (domain_id, name) VALUES ('d-1', 'TestDomain')`); err != nil {
+		t.Fatalf("insert domain: %v", err)
 	}
-	return nil
+	if _, err := db.Exec(`INSERT INTO entries (entry_id, domain_id, name) VALUES ('entry-1', 'd-1', '知识管理')`); err != nil {
+		t.Fatalf("insert entry: %v", err)
+	}
+
+	notifier := &fakeWikiEntryNotifier{}
+	svc.SetWikiEntryNotifier(notifier)
+
+	ku := &KnowledgeUnit{SourceID: "src-1", EntryID: sql.NullString{String: "entry-1", Valid: true},
+		Center: "知识管理", LineStart: 1, LineEnd: 5, Status: "completed", PromptVersion: "v1"}
+	if err := svc.store.InsertUnit(ku); err != nil {
+		t.Fatalf("insert unit: %v", err)
+	}
+
+	if err := svc.SetUnitLifecycle([]string{ku.UnitID}, LifecycleSuperseded, "test supersede"); err != nil {
+		t.Fatalf("SetUnitLifecycle: %v", err)
+	}
+
+	if len(notifier.calls) != 1 {
+		t.Fatalf("expected 1 notify call, got %d", len(notifier.calls))
+	}
+	if got := notifier.calls[0].entryIDs; len(got) != 1 || got[0] != "entry-1" {
+		t.Errorf("notified entry_ids = %v, want [entry-1]", got)
+	}
+	if notifier.calls[0].reason != "test supersede" {
+		t.Errorf("reason = %q, want %q", notifier.calls[0].reason, "test supersede")
+	}
+}
+
+func TestSetUnitLifecycle_NoEntryIDNoNotify(t *testing.T) {
+	svc, _, db := setupTestService(t)
+	tmpDir := t.TempDir()
+	mdPath := writeTestMarkdown(t, tmpDir)
+	insertSource(t, db, "src-1", mdPath)
+
+	notifier := &fakeWikiEntryNotifier{}
+	svc.SetWikiEntryNotifier(notifier)
+
+	ku := &KnowledgeUnit{SourceID: "src-1",
+		Center: "知识管理", LineStart: 1, LineEnd: 5, Status: "completed", PromptVersion: "v1"}
+	if err := svc.store.InsertUnit(ku); err != nil {
+		t.Fatalf("insert unit: %v", err)
+	}
+
+	if err := svc.SetUnitLifecycle([]string{ku.UnitID}, LifecycleSuperseded, "test supersede"); err != nil {
+		t.Fatalf("SetUnitLifecycle: %v", err)
+	}
+
+	if len(notifier.calls) != 0 {
+		t.Fatalf("expected no notify call for a unit with no entry_id, got %d", len(notifier.calls))
+	}
 }

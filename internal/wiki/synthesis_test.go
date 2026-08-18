@@ -45,7 +45,7 @@ func TestStore_RecordSynthesisOutcome_AuditOnly_AdvancesBothCountersTogether(t *
 	_ = svc
 	store := NewStore(db)
 
-	page := &Page{PageID: "pg1", PageType: PageTypeConcept, EntryID: sql.NullString{String: "c1", Valid: true}, Title: "t", Content: "c", PromptVersion: "v1", ModelName: "m1"}
+	page := &Page{PageID: "pg1", PageType: PageTypeTopic, EntryID: sql.NullString{String: "c1", Valid: true}, Title: "t", Content: "c", PromptVersion: "v1", ModelName: "m1"}
 	if err := store.InsertPage(page); err != nil {
 		t.Fatalf("insert page: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestSynthesisAxis_DoesNotAffectRecompileSelfcheckOrIndex(t *testing.T) {
 	svc, _, db, wikiIndex := setupTestService(t)
 	store := NewStore(db)
 
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}

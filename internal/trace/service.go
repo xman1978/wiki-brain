@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"time"
 
@@ -121,7 +120,7 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 
 	pathType := retrieval.PathTypeFull
 	var activationLinkIDs []string
-	var intent, audience, constraintText, skeletonPageID string
+	var intent, audience, constraintText string
 	if r.EvidenceSet != nil {
 		if r.EvidenceSet.PathType != "" {
 			pathType = r.EvidenceSet.PathType
@@ -132,7 +131,6 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 		intent = r.EvidenceSet.Intent
 		audience = r.EvidenceSet.Audience
 		constraintText = r.EvidenceSet.Constraint
-		skeletonPageID = r.EvidenceSet.SkeletonPageID
 	}
 
 	t := &Trace{
@@ -154,7 +152,6 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 		CitedCount:        grade.CitedCount,
 		OutlineCitedCount: grade.OutlineCitedCount,
 		CitedRankSum:      grade.CitedRankSum,
-		SkeletonPageID:    skeletonPageID,
 	}
 
 	if err := s.store.SaveTrace(t); err != nil {
@@ -167,7 +164,6 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 	s.updateCooccurrence(t, r)
 	s.enrichObservedConditions(t)
 	s.generateLearningEvents(t, r)
-	s.generateTopicDecomposeSignal(t, r)
 
 	slog.Debug("trace: process complete",
 		"trace_id", t.TraceID,
@@ -666,83 +662,6 @@ func (s *Service) generateLearningEvents(t *Trace, r *answer.AnswerResult) {
 		}
 	} else {
 		slog.Debug("trace: no learning event needed", "trace_id", t.TraceID, "quality", t.RetrievalQuality)
-	}
-}
-
-// generateTopicDecomposeSignal implements docs/impl/v1/wiki.md 步骤 9 /
-// docs/impl/v1/trace.md's topic_decompose_signal: a topic page hit and
-// expanded into member concept pages, but the answer ended up on the full
-// (慢路径) path — this event only accumulates, it never drives any V1
-// learning action (no page status change, no ActivationLink statistics, no
-// recompile trigger).
-func (s *Service) generateTopicDecomposeSignal(t *Trace, r *answer.AnswerResult) {
-	if t.SkeletonPageID == "" || t.PathType != retrieval.PathTypeFull {
-		return
-	}
-	es := r.EvidenceSet
-	if es == nil {
-		return
-	}
-
-	memberPageIDs := make([]string, 0, len(es.SkeletonMembers))
-	pointToMembers := make(map[string][]string)
-	seenPoint := make(map[string]bool)
-	var skeletonPointIDs []string
-	for _, m := range es.SkeletonMembers {
-		memberPageIDs = append(memberPageIDs, m.PageID)
-		for _, pid := range m.PointIDs {
-			pointToMembers[pid] = append(pointToMembers[pid], m.PageID)
-			if !seenPoint[pid] {
-				seenPoint[pid] = true
-				skeletonPointIDs = append(skeletonPointIDs, pid)
-			}
-		}
-	}
-
-	unresolved := t.RetrievalQuality != QualityConfident || len(t.DirectPointIDs) == 0
-	resolvedMemberSet := make(map[string]bool)
-	outsideCount := 0
-	if !unresolved {
-		for _, pid := range t.DirectPointIDs {
-			if members, ok := pointToMembers[pid]; ok {
-				for _, m := range members {
-					resolvedMemberSet[m] = true
-				}
-			} else {
-				outsideCount++
-			}
-		}
-	}
-	var resolvedMemberIDs []string
-	for m := range resolvedMemberSet {
-		resolvedMemberIDs = append(resolvedMemberIDs, m)
-	}
-	sort.Strings(resolvedMemberIDs)
-
-	payload := map[string]interface{}{
-		"page_id":            t.SkeletonPageID,
-		"question":           t.Question,
-		"member_page_ids":    nonNilStrings(memberPageIDs),
-		"skeleton_point_ids": nonNilStrings(skeletonPointIDs),
-		"unresolved":         unresolved,
-	}
-	if unresolved {
-		payload["resolved_point_ids"] = []string{}
-		payload["resolved_member_page_ids"] = []string{}
-		payload["resolved_outside_count"] = 0
-	} else {
-		payload["resolved_point_ids"] = nonNilStrings(t.DirectPointIDs)
-		payload["resolved_member_page_ids"] = nonNilStrings(resolvedMemberIDs)
-		payload["resolved_outside_count"] = outsideCount
-	}
-
-	data, err := json.Marshal(payload)
-	if err != nil {
-		slog.Error("trace: marshal topic_decompose_signal payload failed", "trace_id", t.TraceID, "error", err)
-		return
-	}
-	if _, err := s.store.SaveLearningEvent(t.TraceID, "topic_decompose_signal", string(data)); err != nil {
-		slog.Error("trace: save topic_decompose_signal event failed", "trace_id", t.TraceID, "error", err)
 	}
 }
 

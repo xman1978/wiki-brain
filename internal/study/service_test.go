@@ -3,7 +3,6 @@ package study
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/activation"
@@ -58,7 +57,7 @@ func testConfidenceConfig() activation.ConfidenceConfig {
 func TestService_Run_Empty(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
+	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, 0)
 
 	result, err := svc.Run()
 	if err != nil {
@@ -93,7 +92,7 @@ func TestService_Run_WithData(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, 0)
 
 	// Seed prerequisite data
 	seedSource(t, db, "src1")
@@ -186,7 +185,7 @@ func TestService_GapThresholdWarning(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.GapHitThreshold = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -218,7 +217,7 @@ func TestService_RecommendationLogic(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -259,228 +258,5 @@ func TestService_RecommendationLogic(t *testing.T) {
 	if c.Recommendation != "strong" {
 		t.Errorf("expected strong, got %s (purity=%.2f breadth=%d spr=%.2f)",
 			c.Recommendation, c.Stats.SignalPurity, c.Stats.ActivationBreadth, c.Stats.ShortPathRate)
-	}
-}
-
-func TestService_WikiCandidates(t *testing.T) {
-	db := setupTestDB(t)
-	store := NewStore(db)
-	cfg := testConfig()
-	cfg.WikiKPMin = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
-
-	seedSource(t, db, "src1")
-	seedDomain(t, db, "dom1", "D")
-	seedEntry(t, db, "con1", "dom1", "TestEntry")
-	seedKU(t, db, "ku1", "src1", "con1")
-	seedKP(t, db, "kp1", "ku1", "src1", "c1")
-	seedKP(t, db, "kp2", "ku1", "src1", "c2")
-	seedKPRelation(t, db, "kp1", "kp2")
-	seedVerifiedActivationLink(t, db, "link1", "kp1")
-	seedVerifiedActivationLink(t, db, "link2", "kp2")
-
-	// Insert candidates with high confident_count
-	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc1', 't1', 'kp1', 10, 12)`)
-	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc2', 't2', 'kp2', 8, 10)`)
-
-	wikis, err := svc.buildWikiCandidates()
-	if err != nil {
-		t.Fatalf("buildWikiCandidates: %v", err)
-	}
-
-	if len(wikis) != 1 {
-		t.Fatalf("expected 1 wiki candidate, got %d", len(wikis))
-	}
-
-	w := wikis[0]
-	if w.EntryID != "con1" {
-		t.Errorf("expected entry_id=con1, got %s", w.EntryID)
-	}
-	if w.Stats.QualifyingKPCount != 2 {
-		t.Errorf("expected 2 qualifying KPs, got %d", w.Stats.QualifyingKPCount)
-	}
-	if w.Stats.KPNConnectionCount != 1 {
-		t.Errorf("expected 1 KPN connection, got %d", w.Stats.KPNConnectionCount)
-	}
-	if w.Stats.RelatedConnectionCount != 1 || w.Stats.ContradictsConnectionCount != 0 {
-		t.Errorf("expected related=1/contradicts=0, got related=%d/contradicts=%d",
-			w.Stats.RelatedConnectionCount, w.Stats.ContradictsConnectionCount)
-	}
-	if w.Recommendation != "ready" {
-		t.Errorf("expected ready, got %s", w.Recommendation)
-	}
-}
-
-// TestService_WikiCandidates_ContradictsDominantNotReady covers
-// docs/design/wiki-compilation.md "ActivationLink 回答'这条管不管用'，Wiki
-// 编译回答'这个主题够不够格立传'": a topic whose KPN connections are mostly
-// contradicts (not settled enough to consolidate) must not be recommended
-// ready, even though qualifying_kp_count and days_active would otherwise pass.
-func TestService_WikiCandidates_ContradictsDominantNotReady(t *testing.T) {
-	db := setupTestDB(t)
-	store := NewStore(db)
-	cfg := testConfig()
-	cfg.WikiKPMin = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
-
-	seedSource(t, db, "src1")
-	seedDomain(t, db, "dom1", "D")
-	seedEntry(t, db, "con1", "dom1", "TestEntry")
-	seedKU(t, db, "ku1", "src1", "con1")
-	seedKP(t, db, "kp1", "ku1", "src1", "c1")
-	seedKP(t, db, "kp2", "ku1", "src1", "c2")
-	seedKP(t, db, "kp3", "ku1", "src1", "c3")
-	// One related connection, two contradicts — contradicts dominates.
-	seedKPRelation(t, db, "kp1", "kp2")
-	if _, err := db.Exec(`INSERT INTO knowledge_point_relations (relation_id, source_point_id, target_point_id, relation_type, prompt_version)
-		VALUES ('rel-c1', 'kp1', 'kp3', 'contradicts', 'v1')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO knowledge_point_relations (relation_id, source_point_id, target_point_id, relation_type, prompt_version)
-		VALUES ('rel-c2', 'kp2', 'kp3', 'contradicts', 'v1')`); err != nil {
-		t.Fatal(err)
-	}
-	seedVerifiedActivationLink(t, db, "link1", "kp1")
-	seedVerifiedActivationLink(t, db, "link2", "kp2")
-	seedVerifiedActivationLink(t, db, "link3", "kp3")
-
-	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc1', 't1', 'kp1', 10, 12)`)
-	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc2', 't2', 'kp2', 8, 10)`)
-	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc3', 't3', 'kp3', 8, 10)`)
-
-	wikis, err := svc.buildWikiCandidates()
-	if err != nil {
-		t.Fatalf("buildWikiCandidates: %v", err)
-	}
-	if len(wikis) != 1 {
-		t.Fatalf("expected 1 wiki candidate, got %d", len(wikis))
-	}
-	w := wikis[0]
-	if w.Stats.RelatedConnectionCount != 1 || w.Stats.ContradictsConnectionCount != 2 {
-		t.Fatalf("expected related=1/contradicts=2, got related=%d/contradicts=%d",
-			w.Stats.RelatedConnectionCount, w.Stats.ContradictsConnectionCount)
-	}
-	if w.Recommendation != "needs_more_data" {
-		t.Errorf("expected needs_more_data when contradicts dominates related, got %s", w.Recommendation)
-	}
-}
-
-// TestService_WikiCandidates_LowCohesionSplitSignal covers docs/design/
-// wiki-compilation.md "连贯性判断还需要第三层" and docs/impl/v1/
-// wiki-generation.md 2.4: a concept whose qualifying KPs form two internally
-// related but mutually disconnected pairs clears breadth/related/stable yet
-// isn't one coherent topic. With the cohesion gate off (CohesionConfig{},
-// what every other test in this file uses) it must still be recommended
-// ready — this is what keeps the gate's addition from silently changing
-// every pre-existing "ready" expectation. With the gate configured on, the
-// same data must flip to needs_more_data and produce a EntrySplitSignalEntry
-// naming both clusters.
-func TestService_WikiCandidates_LowCohesionSplitSignal(t *testing.T) {
-	db := setupTestDB(t)
-	store := NewStore(db)
-	cfg := testConfig()
-	cfg.WikiKPMin = 2
-
-	seedSource(t, db, "src1")
-	seedDomain(t, db, "dom1", "D")
-	seedEntry(t, db, "con1", "dom1", "TestEntry")
-	seedKU(t, db, "ku1", "src1", "con1")
-	seedKP(t, db, "kp1", "ku1", "src1", "c1")
-	seedKP(t, db, "kp2", "ku1", "src1", "c2")
-	seedKP(t, db, "kp3", "ku1", "src1", "c3")
-	seedKP(t, db, "kp4", "ku1", "src1", "c4")
-	// Two internally related pairs, no edge between them at all.
-	seedKPRelation(t, db, "kp1", "kp2")
-	seedKPRelation(t, db, "kp3", "kp4")
-	seedVerifiedActivationLink(t, db, "link1", "kp1")
-	seedVerifiedActivationLink(t, db, "link2", "kp2")
-	seedVerifiedActivationLink(t, db, "link3", "kp3")
-	seedVerifiedActivationLink(t, db, "link4", "kp4")
-	for i, pid := range []string{"kp1", "kp2", "kp3", "kp4"} {
-		if _, err := db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES (?, ?, ?, ?, ?)`,
-			fmt.Sprintf("lc%d", i), fmt.Sprintf("t%d", i), pid, 10, 12); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	svcGateOff := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
-	wikisOff, _, err := svcGateOff.buildWikiCandidatesWithSplitSignals()
-	if err != nil {
-		t.Fatalf("buildWikiCandidatesWithSplitSignals (gate off): %v", err)
-	}
-	if len(wikisOff) != 1 || wikisOff[0].Recommendation != "ready" {
-		t.Fatalf("gate off: expected 1 ready candidate despite low cohesion, got %+v", wikisOff)
-	}
-	if wikisOff[0].Stats.Cohesion >= 0.99 {
-		t.Errorf("gate off: expected Stats.Cohesion to still report the low value (~0.5), got %.2f", wikisOff[0].Stats.Cohesion)
-	}
-
-	svcGateOn := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{Min: 0.6, WRel: 1.0, Gamma: 1.0}, 0, 0, 0)
-	wikisOn, splitSignals, err := svcGateOn.buildWikiCandidatesWithSplitSignals()
-	if err != nil {
-		t.Fatalf("buildWikiCandidatesWithSplitSignals (gate on): %v", err)
-	}
-	if len(wikisOn) != 1 || wikisOn[0].Recommendation != "needs_more_data" {
-		t.Fatalf("gate on: expected 1 needs_more_data candidate, got %+v", wikisOn)
-	}
-	if len(splitSignals) != 1 {
-		t.Fatalf("expected 1 concept split signal, got %d", len(splitSignals))
-	}
-	sig := splitSignals[0]
-	if sig.EntryID != "con1" {
-		t.Errorf("split signal entry_id = %q, want con1", sig.EntryID)
-	}
-	if sig.AspectCount != 2 || len(sig.Communities) != 2 {
-		t.Fatalf("expected 2 communities, got %+v", sig.Communities)
-	}
-	for _, c := range sig.Communities {
-		if len(c.PointIDs) != 2 {
-			t.Errorf("community %+v: expected 2 members, got %d", c, len(c.PointIDs))
-		}
-	}
-}
-
-// TestService_FlagWikiCandidates_RecordsEventIDs covers a P10 audit gap
-// found in V1 testing (见 memory v1-p4-p10-test-findings): every Wiki action's
-// learning_result must carry object_id/reason/event_ids, but flagWikiCandidates
-// left event_ids empty.
-func TestService_FlagWikiCandidates_RecordsEventIDs(t *testing.T) {
-	db := setupTestDB(t)
-	store := NewStore(db)
-	cfg := testConfig()
-	cfg.WikiKPMin = 2
-	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{}, 0, 0, 0)
-
-	seedSource(t, db, "src1")
-	seedDomain(t, db, "dom1", "D")
-	seedEntry(t, db, "con1", "dom1", "TestEntry")
-	seedKU(t, db, "ku1", "src1", "con1")
-	seedKP(t, db, "kp1", "ku1", "src1", "c1")
-	seedKP(t, db, "kp2", "ku1", "src1", "c2")
-	seedKPRelation(t, db, "kp1", "kp2")
-	seedVerifiedActivationLink(t, db, "link1", "kp1")
-	seedVerifiedActivationLink(t, db, "link2", "kp2")
-
-	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc1', 't1', 'kp1', 10, 12)`)
-	db.Exec(`INSERT INTO link_candidates (candidate_id, question_terms, point_id, confident_count, hit_count) VALUES ('lc2', 't2', 'kp2', 8, 10)`)
-
-	if err := svc.flagWikiCandidates(); err != nil {
-		t.Fatalf("flagWikiCandidates: %v", err)
-	}
-
-	results, err := activationSvc.Store().ListLearningResultsByObject("wiki_page", "con1")
-	if err != nil {
-		t.Fatalf("ListLearningResultsByObject: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 learning result, got %d", len(results))
-	}
-	var eventIDs []string
-	if err := json.Unmarshal([]byte(results[0].EventIDs), &eventIDs); err != nil {
-		t.Fatalf("unmarshal event_ids %q: %v", results[0].EventIDs, err)
-	}
-	if len(eventIDs) != 2 {
-		t.Errorf("expected 2 event_ids (kp1, kp2), got %v", eventIDs)
 	}
 }

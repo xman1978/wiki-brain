@@ -6,7 +6,6 @@ package wiki
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // CreateDraft implements docs/impl/v1/wiki.md 步骤 10:
@@ -28,44 +27,19 @@ func (s *Service) CreateDraft(pageID, mode string) (*Draft, error) {
 	}
 	latestRevision := revisions[len(revisions)-1]
 
+	// 单层化（docs/impl/v1/wiki-single-tier-task-brief.md）: 一次编译请求直接
+	// 产出一份成品页面，不再有"主题页聚合成员页面"这回事，assembled 模式随
+	// contains 一起废弃 — 一律按 page 模式取当前页面正文。
 	if mode == "" {
-		if page.PageType == PageTypeTopic {
-			mode = DraftModeAssembled
-		} else {
-			mode = DraftModePage
-		}
+		mode = DraftModePage
 	}
-
-	var sourcePageIDs []string
-	var content string
-	title := page.Title
-
-	switch mode {
-	case DraftModePage:
-		sourcePageIDs = []string{pageID}
-		content = latestRevision.Content
-	case DraftModeAssembled:
-		sourcePageIDs = []string{pageID}
-		var sb strings.Builder
-		sb.WriteString(latestRevision.Content)
-		sb.WriteString("\n\n")
-
-		members, err := s.store.ContainsMembers(pageID)
-		if err != nil {
-			return nil, fmt.Errorf("wiki: assembled draft: list members: %w", err)
-		}
-		for _, m := range members {
-			mp, err := s.store.GetPage(m)
-			if err != nil || mp == nil {
-				continue
-			}
-			sourcePageIDs = append(sourcePageIDs, m)
-			fmt.Fprintf(&sb, "## %s\n\n%s\n\n", mp.Title, mp.Content)
-		}
-		content = sb.String()
-	default:
+	if mode != DraftModePage {
 		return nil, fmt.Errorf("wiki: invalid draft mode %q", mode)
 	}
+
+	sourcePageIDs := []string{pageID}
+	content := latestRevision.Content
+	title := page.Title
 
 	evidenceIndex, err := s.buildEvidenceIndex(sourcePageIDs)
 	if err != nil {

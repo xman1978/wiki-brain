@@ -11,20 +11,10 @@ import (
 	"github.com/jxman78/wiki-brain/internal/session"
 )
 
-// WikiNotifier lets Wiki learn a cited KP's ActivationLink just became
-// verified, so it can mark dependent pages needs_recompile
-// (docs/impl/v1/wiki.md 步骤5 触发(d)) — mirrors unit.WikiNotifier's
-// existing cross-module notification shape. SetWikiNotifier no-ops when
-// unset.
-type WikiNotifier interface {
-	NotifyLinkVerified(pointID string) error
-}
-
 type Service struct {
 	store           *Store
 	matcher         *Matcher
 	bundleMatcher   *BundleMatcher
-	wikiNotifier    WikiNotifier
 	tupleNormalizer *TupleNormalizer
 	confidenceCfg   ConfidenceConfig
 }
@@ -72,10 +62,6 @@ func (s *Service) MatchBundles(ctx context.Context, query session.ExpandedQuery,
 		return nil, nil
 	}
 	return s.bundleMatcher.Match(ctx, query, cfg)
-}
-
-func (s *Service) SetWikiNotifier(n WikiNotifier) {
-	s.wikiNotifier = n
 }
 
 func (s *Service) Store() *Store {
@@ -156,54 +142,22 @@ func (s *Service) AppendObservedCondition(linkID string, add ObservedCondition, 
 	if link.Status == StatusDeprecated {
 		return nil
 	}
-	oldStatus := link.Status
 	if err := s.store.AppendObservedCondition(linkID, add, max); err != nil {
 		return err
 	}
 	if s.matcher != nil {
 		s.matcher.InvalidateCache()
 	}
-	return s.notifyIfNewlyVerified(linkID, oldStatus)
+	return nil
 }
 
 // ReplaceObservedConditions is Study's full rebuild write path.
 func (s *Service) ReplaceObservedConditions(linkID string, conds []ObservedCondition) error {
-	oldStatus := ""
-	if before, err := s.store.GetByID(linkID); err == nil && before != nil {
-		oldStatus = before.Status
-	}
 	if err := s.store.ReplaceObservedConditions(linkID, conds); err != nil {
 		return err
 	}
 	if s.matcher != nil {
 		s.matcher.InvalidateCache()
-	}
-	return s.notifyIfNewlyVerified(linkID, oldStatus)
-}
-
-// notifyIfNewlyVerified fires WikiNotifier.NotifyLinkVerified exactly when a
-// write path flips a link's status to verified for the first time this call
-// (docs/impl/v1/wiki.md 步骤5 触发(d)). Store.ReplaceObservedConditions
-// already derives and persists candidate/verified transitions itself (see
-// its own doc comment), so by the time control returns here the DB row may
-// already reflect the new status — this helper compares against the status
-// captured BEFORE the write (oldStatus) rather than re-deriving, so the
-// notify still fires even though deriveAndPersistStatus's own before/after
-// comparison (called separately for the KP-lifecycle override) would see no
-// change at that point.
-func (s *Service) notifyIfNewlyVerified(linkID, oldStatus string) error {
-	if oldStatus == StatusVerified || s.wikiNotifier == nil {
-		return nil
-	}
-	link, err := s.store.GetByID(linkID)
-	if err != nil {
-		return err
-	}
-	if link == nil || link.Status != StatusVerified {
-		return nil
-	}
-	if err := s.wikiNotifier.NotifyLinkVerified(link.PointID); err != nil {
-		slog.Warn("activation: notify wiki link verified failed", "link_id", linkID, "point_id", link.PointID, "error", err)
 	}
 	return nil
 }
@@ -261,11 +215,6 @@ func (s *Service) deriveAndPersistStatus(link *ActivationLink) error {
 	if err := s.store.UpdateStatus(link.LinkID, newStatus); err != nil {
 		return err
 	}
-	if newStatus == StatusVerified && s.wikiNotifier != nil {
-		if err := s.wikiNotifier.NotifyLinkVerified(link.PointID); err != nil {
-			slog.Warn("activation: notify wiki link verified failed", "link_id", link.LinkID, "point_id", link.PointID, "error", err)
-		}
-	}
 	return nil
 }
 
@@ -280,10 +229,6 @@ func (s *Service) deriveAndPersistStatus(link *ActivationLink) error {
 // operating on a condition Match() just returned a hit for) but must never
 // abort the caller's trace_write task over a bookkeeping miss.
 func (s *Service) RecordOutcome(linkID, subject, intent, audience, constraint string, success bool, questionTerms string) error {
-	oldStatus := ""
-	if before, err := s.store.GetByID(linkID); err == nil && before != nil {
-		oldStatus = before.Status
-	}
 	matched, link, err := s.store.RecordOutcome(linkID, subject, intent, audience, constraint, success, questionTerms)
 	if err != nil {
 		return err
@@ -299,16 +244,12 @@ func (s *Service) RecordOutcome(linkID, subject, intent, audience, constraint st
 	if s.matcher != nil {
 		s.matcher.InvalidateCache()
 	}
-	return s.notifyIfNewlyVerified(linkID, oldStatus)
+	return nil
 }
 
 // RecordAuditOutcome mirrors RecordOutcome for independent-verification
 // results (docs/impl/v1/activation.md 步骤 1).
 func (s *Service) RecordAuditOutcome(linkID, subject, intent, audience, constraint string, agree bool) error {
-	oldStatus := ""
-	if before, err := s.store.GetByID(linkID); err == nil && before != nil {
-		oldStatus = before.Status
-	}
 	matched, link, err := s.store.RecordAuditOutcome(linkID, subject, intent, audience, constraint, agree)
 	if err != nil {
 		return err
@@ -324,7 +265,7 @@ func (s *Service) RecordAuditOutcome(linkID, subject, intent, audience, constrai
 	if s.matcher != nil {
 		s.matcher.InvalidateCache()
 	}
-	return s.notifyIfNewlyVerified(linkID, oldStatus)
+	return nil
 }
 
 // NotifyPointsLifecycleChanged implements the extended unit.ActivationNotifier

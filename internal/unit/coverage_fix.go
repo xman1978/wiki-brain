@@ -164,15 +164,6 @@ func (s *Service) FixCoverageGap(ctx context.Context, sourceID string, lineStart
 	if _, err := s.CrossSourceKPN(ctx, sourceID); err != nil {
 		slog.Warn("unit: fix coverage gap: cross source kpn failed", "source_id", sourceID, "error", err)
 	}
-	if s.wikiNotifier != nil {
-		pointIDs := make([]string, len(kps))
-		for i, p := range kps {
-			pointIDs[i] = p.PointID
-		}
-		if err := s.wikiNotifier.NotifyPointsLifecycleChanged(pointIDs); err != nil {
-			slog.Warn("unit: fix coverage gap: wiki notify failed", "error", err)
-		}
-	}
 	if s.activationNotifier != nil {
 		if err := s.activationNotifier.InvalidateCache(); err != nil {
 			slog.Warn("unit: fix coverage gap: activation notify failed", "error", err)

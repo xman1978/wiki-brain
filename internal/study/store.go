@@ -1130,7 +1130,6 @@ func (s *Store) ListReports() ([]ReportMeta, error) {
 		var report Report
 		if err := json.Unmarshal([]byte(content), &report); err == nil {
 			r.CandidatesCount = len(report.ActivationLinkCandidates)
-			r.WikiCount = len(report.WikiCandidates)
 			r.GapCount = len(report.KnowledgeGaps)
 		}
 		results = append(results, r)
@@ -1319,36 +1318,6 @@ func (s *Store) WikiDraftReflowStats() ([]WikiDraftReflowRow, error) {
 	return out, rows.Err()
 }
 
-// TopicDecomposeSignals backs the "topic_decompose" report item
-// (docs/impl/v1/study.md 步骤 6): every topic_decompose_signal learning_event
-// in the window, decoded. Report-only aggregation — never drives a learning
-// action.
-func (s *Store) TopicDecomposeSignals(windowDays int) ([]TopicDecomposeSignalRow, error) {
-	rows, err := s.db.Query(`
-		SELECT payload FROM learning_events
-		WHERE event_type = 'topic_decompose_signal' AND created_at >= datetime('now', ?)`,
-		fmt.Sprintf("-%d days", windowDays))
-	if err != nil {
-		return nil, fmt.Errorf("study store: topic decompose signals: %w", err)
-	}
-	defer rows.Close()
-
-	var out []TopicDecomposeSignalRow
-	for rows.Next() {
-		var payload string
-		if err := rows.Scan(&payload); err != nil {
-			return nil, fmt.Errorf("study store: scan topic decompose signal: %w", err)
-		}
-		var row TopicDecomposeSignalRow
-		if err := json.Unmarshal([]byte(payload), &row); err != nil {
-			slog.Warn("study store: decode topic_decompose_signal payload failed", "error", err)
-			continue
-		}
-		out = append(out, row)
-	}
-	return out, rows.Err()
-}
-
 // ComplexityTraces backs docs/impl/v1/study.md 步骤 7's "问题复杂度观测量":
 // every trace in the window with the fields needed to group by four-tuple
 // and compute per-group metrics. Grouping itself (and the
@@ -1357,7 +1326,7 @@ func (s *Store) TopicDecomposeSignals(windowDays int) ([]TopicDecomposeSignalRow
 func (s *Store) ComplexityTraces(windowDays int) ([]ComplexityTraceRow, error) {
 	rows, err := s.db.Query(`
 		SELECT trace_id, subject, intent, audience, constraint_text, path_type,
-			json_array_length(direct_point_ids), COALESCE(skeleton_page_id, '')
+			json_array_length(direct_point_ids)
 		FROM traces WHERE created_at >= datetime('now', ?)`,
 		fmt.Sprintf("-%d days", windowDays))
 	if err != nil {
@@ -1369,7 +1338,7 @@ func (s *Store) ComplexityTraces(windowDays int) ([]ComplexityTraceRow, error) {
 	for rows.Next() {
 		var row ComplexityTraceRow
 		if err := rows.Scan(&row.TraceID, &row.Subject, &row.Intent, &row.Audience, &row.Constraint,
-			&row.PathType, &row.DirectPointCount, &row.SkeletonPageID); err != nil {
+			&row.PathType, &row.DirectPointCount); err != nil {
 			return nil, fmt.Errorf("study store: scan complexity trace: %w", err)
 		}
 		out = append(out, row)
@@ -1495,16 +1464,6 @@ type WikiDraftReflowRow struct {
 	SkippedAncestorEdges int
 }
 
-// TopicDecomposeSignalRow mirrors the combined topic_decompose_signal
-// payload shape (docs/impl/v1/trace.md's event payload).
-type TopicDecomposeSignalRow struct {
-	PageID                string   `json:"page_id"`
-	MemberPageIDs         []string `json:"member_page_ids"`
-	ResolvedMemberPageIDs []string `json:"resolved_member_page_ids"`
-	ResolvedOutsideCount  int      `json:"resolved_outside_count"`
-	Unresolved            bool     `json:"unresolved"`
-}
-
 type ComplexityTraceRow struct {
 	TraceID          string
 	Subject          string
@@ -1513,7 +1472,6 @@ type ComplexityTraceRow struct {
 	Constraint       string
 	PathType         string
 	DirectPointCount int
-	SkeletonPageID   string
 }
 
 func init() {

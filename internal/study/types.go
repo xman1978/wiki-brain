@@ -65,34 +65,16 @@ type Report struct {
 
 	Summary                  TraceSummary              `json:"summary"`
 	ActivationLinkCandidates []ActivationLinkCandidate `json:"activation_link_candidates"`
-	WikiCandidates           []WikiCandidate           `json:"wiki_candidates"`
 	KnowledgeGaps            []KnowledgeGapEntry       `json:"knowledge_gaps"`
 	LearningActions          LearningActionsSummary    `json:"learning_actions"`
 	CrossSourceConflicts     []CrossSourceConflict     `json:"cross_source_conflicts"`
 	EntryCandidates          EntryCandidatesSection    `json:"entry_candidates"`
 
-	// 两层架构扩展（docs/impl/v1/study.md 步骤 6「报告提示项」+ 步骤 7）
-	TopicSignalUnderfilled []TopicSignalUnderfilledEntry `json:"topic_signal_underfilled,omitempty"`
-	WikiDraftReflow        []WikiDraftReflowEntry        `json:"wiki_draft_reflow,omitempty"`
-	TopicDecompose         []TopicDecomposeEntry         `json:"topic_decompose,omitempty"`
-	QuestionComplexity     QuestionComplexitySection     `json:"question_complexity"`
-
-	// EntrySplitSignals is report-only, same tier as
-	// OversizedTopicClusters (docs/impl/v1/wiki-generation.md 2.4, 附
-	// docs/design/wiki-compilation.md "连贯性判断还需要第三层"): a concept
-	// whose qualifying KPs otherwise clear the broad/related-connection
-	// gates but split into several unrelated Louvain communities isn't
-	// "needs more data" — it's "the concept boundary itself may need
-	// splitting". Deliberately not a learning_events row: unlike
-	// topic_decompose_signal (written by trace_write, which always has a
-	// concrete trace_id to attach to), this signal comes from Study's
-	// periodic gate computation with no per-question trace behind it, and
-	// learning_events.trace_id is NOT NULL — so it follows the same
-	// report-only precedent as oversized_topic_cluster instead. Only
-	// accumulates; does not create a entry_candidates(kind=split) row —
-	// split candidates remain deferred to V3 (docs/impl/v1/
-	// concept-evolution.md).
-	EntrySplitSignals []EntrySplitSignalEntry `json:"entry_split_signals,omitempty"`
+	// wiki-single-tier-revision.md: 概念页 qualifying 自动标记与主题四元组
+	// 聚类均已删除（改为人工指定 entry_id 触发编译），原 wiki_candidates /
+	// topic_signal_underfilled / entry_split_signals 报告节随之移除。
+	WikiDraftReflow    []WikiDraftReflowEntry    `json:"wiki_draft_reflow,omitempty"`
+	QuestionComplexity QuestionComplexitySection `json:"question_complexity"`
 
 	// Convergence is the 收敛趋势 report section (docs/impl/v1/study.md 步骤
 	// 7, docs/design/activation-convergence.md 第 5 节): this cycle's
@@ -120,38 +102,6 @@ type ConvergenceTrendPoint struct {
 	Stats       ConvergenceStats `json:"stats"`
 }
 
-// EntrySplitSignalEntry is one concept whose qualifying KPs failed the
-// cohesion gate (docs/impl/v1/wiki-generation.md 2.4).
-type EntrySplitSignalEntry struct {
-	EntryID     string                `json:"entry_id"`
-	ConceptName string                `json:"entry_name"`
-	Cohesion    float64               `json:"cohesion"`
-	AspectCount int                   `json:"aspect_count"`
-	Communities []EntrySplitCommunity `json:"communities"`
-}
-
-// EntrySplitCommunity is one Louvain community found within a concept's
-// qualifying KPs (docs/impl/v1/wiki-generation.md 2.3 "切面命名").
-type EntrySplitCommunity struct {
-	PointIDs      []string `json:"point_ids"`
-	SuggestedName string   `json:"suggested_name"`
-}
-
-// TopicSignalUnderfilledEntry is one quadruple cluster that cleared the
-// stable-cluster gate (distinct_question_count/days_active) but whose
-// candidate-range KP retrieval produced zero qualifying KP — "有需求、缺
-// 材料" (docs/impl/v1/wiki.md 步骤 8 第 4 步, 2026-08-03 修订; replaces the
-// old oversized_topic_cluster report item now that candidate detection is no
-// longer connected-component clustering).
-type TopicSignalUnderfilledEntry struct {
-	Subject               string `json:"subject"`
-	Intent                string `json:"intent"`
-	Audience              string `json:"audience"`
-	ConstraintText        string `json:"constraint_text"`
-	DistinctQuestionCount int    `json:"distinct_question_count"`
-	DaysActive            int    `json:"days_active"`
-}
-
 // WikiDraftReflowEntry is one origin=wiki_draft source's reflow footprint
 // (docs/impl/v1/wiki.md 步骤 10「可观测」).
 type WikiDraftReflowEntry struct {
@@ -159,17 +109,6 @@ type WikiDraftReflowEntry struct {
 	OriginPageID         string `json:"origin_page_id"`
 	ProducedKPCount      int    `json:"produced_kp_count"`
 	SkippedAncestorEdges int    `json:"skipped_ancestor_edges"`
-}
-
-// TopicDecomposeEntry aggregates topic_decompose_signal events by the topic
-// page that provided the skeleton (docs/impl/v1/study.md 步骤 6
-// "topic_decompose" 报告提示项). Only accumulates — never drives any V1
-// learning action.
-type TopicDecomposeEntry struct {
-	PageID                 string  `json:"page_id"`
-	SignalCount            int     `json:"signal_count"`
-	AvgResolvedMemberCount float64 `json:"avg_resolved_member_count"`
-	OutsideRatioPositive   float64 `json:"outside_ratio_positive"` // share of signals with resolved_outside_count > 0
 }
 
 // QuestionComplexitySection is docs/impl/v1/study.md 步骤 7's "问题复杂度观测
@@ -188,9 +127,6 @@ type QuestionComplexityGroup struct {
 	PathDistribution    map[string]int `json:"path_distribution"`
 	AvgDirectPointCount float64        `json:"avg_direct_point_count"`
 	WikiSatisfiedRatio  float64        `json:"wiki_satisfied_ratio"`
-	SkeletonUsedCount   int            `json:"skeleton_used_count"`
-	CrossMemberRatio    float64        `json:"cross_member_ratio"`
-	OutsideRatio        float64        `json:"outside_ratio"`
 	// ComplexityHint stays nil until thresholds are calibrated against real
 	// traces (docs/impl/v1/study.md 步骤 7: "阈值不预先拍定").
 	ComplexityHint *string `json:"complexity_hint"`
@@ -272,44 +208,6 @@ type ActivationLinkStats struct {
 	ShortPathRate     float64   `json:"short_path_rate"`
 	HasKPNNeighbors   bool      `json:"has_kpn_neighbors"`
 	LastSeenAt        time.Time `json:"last_seen_at"`
-}
-
-type WikiCandidate struct {
-	EntryID            string                `json:"entry_id"`
-	ConceptName        string                `json:"entry_name"`
-	DomainID           string                `json:"domain_id"`
-	QualifyingPointIDs []string              `json:"qualifying_point_ids"`
-	QualifyingPoints   []WikiQualifyingPoint `json:"qualifying_points"`
-	Stats              WikiCandidateStats    `json:"stats"`
-	Recommendation     string                `json:"recommendation"`
-	Reason             string                `json:"reason"`
-}
-
-type WikiQualifyingPoint struct {
-	PointID        string `json:"point_id"`
-	PointSummary   string `json:"point_summary"`
-	ConfidentCount int    `json:"confident_count"`
-}
-
-type WikiCandidateStats struct {
-	QualifyingKPCount int     `json:"qualifying_kp_count"`
-	AvgConfidentCount float64 `json:"avg_confident_count"`
-	// KPNConnectionCount is related+contradicts, kept for the existing
-	// report/frontend field; RelatedConnectionCount/ContradictsConnectionCount
-	// are the gate's actual inputs (docs/design/wiki-compilation.md
-	// "ActivationLink 回答'这条管不管用'，Wiki 编译回答'这个主题够不够格立传'").
-	KPNConnectionCount         int `json:"kpn_connection_count"`
-	RelatedConnectionCount     int `json:"related_connection_count"`
-	ContradictsConnectionCount int `json:"contradicts_connection_count"`
-	DaysActive                 int `json:"days_active"`
-	// Cohesion is the ready gate's fifth criterion (docs/design/
-	// wiki-compilation.md "连贯性判断还需要第三层"): the largest Louvain
-	// community's share of qualifying KPs, via graph.LargestShare. A low
-	// value means this concept's qualifying material splits into several
-	// unrelated clusters rather than holding together as one topic — see
-	// EntrySplitSignalEntry, written instead of (not in addition to) a
-	// "ready" recommendation when this falls below wiki.entry_cohesion_min.
-	Cohesion float64 `json:"cohesion"`
 }
 
 type KnowledgeGapEntry struct {

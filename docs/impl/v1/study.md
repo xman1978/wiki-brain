@@ -18,8 +18,10 @@ Study 仍然是新增候选链接（`CreateLink`）与新增观测条件（`Upda
 CREATE TABLE learning_results (
     result_id       TEXT PRIMARY KEY,
     action          TEXT NOT NULL,
-    -- create_candidate / prune_condition / gap_flag / wiki_candidate /
-    -- recompile_flag / topic_page_candidate / synonym_candidate
+    -- create_candidate / prune_condition / gap_flag /
+    -- recompile_flag / synonym_candidate
+    -- （wiki_candidate / topic_page_candidate 随 Wiki 单层化改造删除
+    -- Study 自动候选识别一并移除，见 wiki.md「职责」与本文档步骤 6）
     -- （2026-08-13 修订：promote / weaken / reverify / deprecate 四个动作
     -- 随离散状态机一起移除——没有跳变，就没有跳变类动作；deprecate 的
     -- 触发方也不再是 Study，KP lifecycle 变化时由 lifecycle 模块直接写
@@ -202,10 +204,10 @@ study:
   表做免费预过滤，排在步骤 2a（同义词候选聚合，synonym_auto_promote
   默认 true 时本轮新候选会直接 active）之后，能用上本轮刚刷新的同义词表；
 
-挨着步骤 6/7 的理由：显影扫描的分组函数、步骤 6「主题页候选」的四元组
-  聚类、步骤 7「问题复杂度观测量」三处共用同一个归一化+分组实现，位置
-  相邻便于以后接入复用（是否复用见 wiki.md 熟路指针，仍未定案，这里
-  只保证物理位置不妨碍以后接入）；
+挨着步骤 6/7 的理由：显影扫描的分组函数与步骤 7「问题复杂度观测量」共用
+  同一个归一化+分组实现，位置相邻便于以后接入复用（步骤 6 原有的"主题页
+  候选"四元组聚类已随 Wiki 单层化改造删除，不再是共用方之一；是否复用见
+  wiki.md 熟路指针，仍未定案，这里只保证物理位置不妨碍以后接入）；
 
 不占用步骤 6/7 现有编号：两个编号已被 wiki.md/page.md/activation.md/
   CLAUDE.md 多处交叉引用（尤其 wiki_material_confirm 相关说明），插入
@@ -425,7 +427,18 @@ auto_promote = false（保留，灰度回退用）：
     （confirmed_by=manual）；reject 同理置 rejected。
 ```
 
-### 步骤 6：gap 聚合与 Wiki / 重编译信号
+### 步骤 6：gap 聚合与 Wiki 重编译信号
+
+> **2026-08-18 单层化改造重写**：本步骤原描述"Wiki 候选计算"（qualifying
+> 概念/事实写 `wiki_candidate` learning_result）与"主题页候选"（真实提问
+> 四元组聚类，产出 `topic_page_candidate`）两条 Study 自动识别链路，均已
+> 随 `docs/design/wiki-single-tier-revision.md` 定案的单层化改造整体删除
+> （`buildWikiCandidates` 及其调用点、`topic_cluster_min_questions`/
+> `topic_cluster_min_days_active` 配置项均已删除，见
+> `docs/impl/v1/wiki-single-tier-open-questions.md`「落地记录」）。Wiki
+> 编译触发方式改为人工直接指定 entry_id 集合（见 `wiki.md`），Study **不再
+> 产生任何 Wiki 触发相关的 learning_result**，本步骤现在只保留与 Wiki 触发
+> 无关的 gap 聚合。
 
 ```text
 knowledge_gap 聚合逻辑沿用 MVP（UPSERT knowledge_gaps ON CONFLICT(question_terms)，
@@ -437,63 +450,23 @@ knowledge_gap 聚合逻辑沿用 MVP（UPSERT knowledge_gaps ON CONFLICT(questio
   达 gap_hit_threshold 时额外写 learning_results(action=gap_flag,
   object_type=knowledge_gap, reason 含 last_reason)，纳入统一审计；
 
-Wiki 材料确认（2026-08-11 新增的独立人工确认关卡，2026-08-12 整体废弃，
-  见 `docs/design/wiki.md`「2026-08-12 改判」）：本步骤不再执行任何 Wiki
-  材料确认扫描或写入——`learning_results(action=wiki_material_confirm)`
-  这个动作类型、`success_direct_n`/`distinct_n` 门槛统计、
-  `POST /knowledge-points/:id/wiki-material/confirm|reject` API 均已随该
-  关卡一并删除。Study 在 Wiki 相关的职责收拢回 wiki_candidate 计算（见下）
-  与 recompile_flag/主题页候选，不再有单独的"KP 是否够格进 Wiki 材料池"
-  这道人工判断——该判断挪到 Wiki 编译时由编译本来就有的整体判断
-  （广度/连贯/稳定）自然回答。
-
-Wiki 候选计算：qualifying KP 定义见 wiki.md 步骤 3「输入收集」
-  （2026-08-12 修订，取代 2026-08-11 定案：qualifying KP 只要求
-  lifecycle=current 且该 point_id 存在 verified 的 ActivationLink，
-  不再叠加 wiki_material_confirm 的第二道确认；概念级新增连贯性的
-  related/contradicts 区分，不再只看连接总数）；recommendation=ready 的候选写
-  learning_results(action=wiki_candidate, status=pending_confirm,
-  object_type=wiki_page, object_id=entry_id)——Wiki 编译经人工确认触发，
-  见 wiki.md 步骤 2；
-
-已发布 wiki 页面依赖的 KP 出现 lifecycle != current：
-  标记页面 needs_recompile（调 Wiki 模块接口）并写
-  learning_results(action=recompile_flag)。
-
-主题页候选（两层架构，口径见 wiki.md 步骤 8「主题候选识别」；2026-08-03
-  修订：不再从已发布概念页的图连通性事后推导，改为对真实提问的四元组
-  聚类，设计依据 `docs/design/wiki.md`「主题：从真实使用中识别，而不是从
-  已发布词条事后聚类」）：
-  窗口内 traces 按归一化四元组 (subject, intent, audience, constraint_text)
-  分组（口径同本节「问题复杂度观测量」的分组，含 subject 同义词归一化，
-  但不要求 confident——主题候选要回答的是"有没有人反复问"，与答没答上
-  无关）；分组同时满足 distinct_question_count ≥
-  wiki.topic_cluster_min_questions、days_active ≥
-  wiki.topic_cluster_min_days_active 时是一个主题候选；在候选范围内对
-  知识点做语义检索、筛出 qualifying 的部分、按 entry_id 分组（未发布
-  但满足概念级 ready 判定的分组随批写 wiki_candidate）、核验关联与整体
-  可靠度两项二阶准入，满足后建 draft 壳页并写
-  learning_results(action=topic_page_candidate, object_type=wiki_page,
-  object_id=壳页 page_id, status=pending_confirm)——object_id 用页面 id
-  而不是四元组分组指纹，标识天然唯一、人工确认对象即一个具体页面；
-  二阶编译同样经人工确认触发，见 wiki.md 步骤 8。
-
-页面关系重算：跨 Source KPN 新增后重算涉及的页面对关系
-  （纯程序派生，不调 LLM，不产生 learning_results，见 wiki.md 步骤 7b；
-  这批 related / contradicts 关系仍然计算，只是不再用于事后求连通分量
-  产生主题候选，而是用于步骤 8 的「二阶编译准入·关联」核验）。
+Wiki 重编译标记：设计上仍应有"已发布页面依赖的 KP 出现新增 qualifying KP /
+  lifecycle != current 时标记 needs_recompile"这一动作（见 wiki.md「重编译
+  标记」a/b 两条），但截至本次文档重写，Study 侧本步骤未见对应的周期扫描
+  实现——unit/activation → wiki 的跨模块自动通知接线已在本次改造中被拔除
+  （原为支撑已删除的 Wiki 自动候选识别而存在的三个扫描函数一并删除，见
+  `wiki-single-tier-open-questions.md`），Study 侧也没有看到替代实现重新
+  接上。这是需要用户确认的现状落差，已记入 `wiki.md`「已知遗留」与
+  `wiki-single-tier-open-questions.md`，本文档不代为决定是否需要在本步骤
+  补一段新的重编译标记扫描逻辑。
 
 报告提示项（只进报告，不产生 learning_results）：
-  topic_signal_underfilled：四元组分组满足稳定簇判定，但候选范围内没有
-    qualifying KP，或未通过二阶准入（关联 / 整体可靠度）——附四元组摘要、
-    distinct_question_count、days_active、未达标原因，作为内容采集
-    优先级信号；
   wiki_draft_reflow：origin='wiki_draft' 的 Source 及其产出 KP 数、
-    被跳过的自体祖先边数（见 wiki.md 步骤 10「回流的自体循环」），
-    用于发现系统在自己身上打转；
-  topic_decompose：topic_decompose_signal 的聚合——按主题页分组的信号数、
-    resolved_member_page_ids 平均成员数、resolved_outside_count > 0 的
-    占比（后者持续偏高说明该主题页成员边界漏了知识，提示重编译）。
+    被跳过的自体祖先边数（见 wiki.md「写作草稿」回流的自体循环防护），
+    用于发现系统在自己身上打转。
+  （原 topic_signal_underfilled、topic_decompose 两个报告项——分别服务于
+    已删除的主题页候选识别与已删除的骨架注入慢路径——随对应机制一起删除，
+    见 wiki-single-tier-open-questions.md「步骤 5 落地记录」。）
 ```
 
 ### 步骤 7：报告扩展
@@ -531,14 +504,10 @@ Wiki 候选计算：qualifying KP 定义见 wiki.md 步骤 3「输入收集」
   avg_direct_point_count   direct_point_ids 数量均值——
                            「这类问题需要几块知识」最直接的度量；
   wiki_satisfied_ratio     path_type=wiki 占比，即被现成概念页结论
-                           满足过的比例；
-  skeleton_used_count      traces.skeleton_page_id 非空次数
-                           （主题页提供过骨架，见 wiki.md 步骤 8）；
-  cross_member_ratio       该组的 topic_decompose_signal 中
-                           resolved_member_page_ids ≥ 2 的占比——
-                           「必须跨成员拼起来才答得了」的比例；
-  outside_ratio            resolved_outside_count > 0 的占比——
-                           答案落在主题页成员边界之外的比例。
+                           满足过的比例。
+  （skeleton_used_count / cross_member_ratio / outside_ratio 三项——依赖
+   主题页骨架注入与 topic_decompose_signal——已随单层化改造整体删除，见
+   wiki-single-tier-open-questions.md「已拍板（2026-08-18）」。）
 
 派生标签 complexity_hint（只作展示，不参与任何判定）：
   simple     现成结论覆盖得住（wiki_satisfied_ratio 高、
@@ -569,9 +538,6 @@ Wiki 候选计算：qualifying KP 定义见 wiki.md 步骤 3「输入收集」
       "path_distribution": { "wiki": 1, "fast": 2, "full": 4 },
       "avg_direct_point_count": 3.4,
       "wiki_satisfied_ratio": 0.14,
-      "skeleton_used_count": 3,
-      "cross_member_ratio": 0.6,
-      "outside_ratio": 0.2,
       "complexity_hint": null }
   ]
 }

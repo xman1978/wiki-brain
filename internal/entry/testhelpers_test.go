@@ -203,3 +203,30 @@ func insertWikiPage(t *testing.T, db *sql.DB, pageID, conceptID string) {
 		t.Fatalf("insert wiki page: %v", err)
 	}
 }
+
+// insertPublishedWikiPage is insertWikiPage plus wiki_page_entries (needed
+// by wiki.Service.NotifyEntriesChanged's PageIDsByEntryID lookup) and
+// status=published — the notifyEntryChanged call sites added in service.go
+// (2026-08-18 单层化收尾重新接线) only flag published pages, unlike the
+// existing merge path's flagMergedEntryPages which flags any non-archived
+// page (see notifyEntryChanged's comment for why they differ).
+func insertPublishedWikiPage(t *testing.T, db *sql.DB, pageID, conceptID string) {
+	t.Helper()
+	wikiStore := wiki.NewStore(db)
+	page := &wiki.Page{
+		PageID:        pageID,
+		PageType:      wiki.PageTypeConcept,
+		EntryID:       sql.NullString{String: conceptID, Valid: true},
+		Title:         "test page " + pageID,
+		Content:       "## 稳定结论\ntest\n",
+		Status:        wiki.StatusPublished,
+		PromptVersion: "v1",
+		ModelName:     "default",
+	}
+	if err := wikiStore.InsertPageWithEntries(page, []string{conceptID}); err != nil {
+		t.Fatalf("insert wiki page: %v", err)
+	}
+	if err := wikiStore.UpdatePageStatus(pageID, wiki.StatusPublished); err != nil {
+		t.Fatalf("publish wiki page: %v", err)
+	}
+}

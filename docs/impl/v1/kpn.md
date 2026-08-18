@@ -138,6 +138,13 @@ kind 共用同一条链路，仅 page_type 与 Prompt 措辞分岔。
 **未匹配的 fact 不再自动建候选**：与上条一致——无论同 kind 匹配失败，
 还是 concept 维度匹配失败，都不退回裸 entity 命名。
 
+**父概念持久化（`parent_entry_id`，见 `fact-entry-parent-concept-task-brief.md`）**：
+上面「`kpn_orphan_fact_match.md` 匹配到 `matched_concept_id`」这一步算出的
+concept_id，此前只存在于生成过程的内存分组（`factGroupKey`）里，写入
+`entry_candidates`/转正到 `entries` 后即丢失。该任务文档把这个已知值补记为
+`entries.parent_entry_id` / `entry_candidates.parent_entry_id`，纯持久化，
+不改变本节描述的分类、命名、未匹配即 orphan 等既有规则。
+
 **命名必须确定性拼接，不经 LLM 二次改写（2026-08-05 二次修订）**：
 `joinEntityConcept`（Go 函数，非 Prompt）把 entity 和匹配到的 concept 名
 拼成最终 `suggested_name`——如果 concept 名已经完整包含在 entity 里就用

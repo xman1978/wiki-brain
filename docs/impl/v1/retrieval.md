@@ -41,20 +41,22 @@ Wiki 直答层   已发布 Wiki 页面命中 → 直接基于页面回答（见 
 
 ```text
 问题（经 Session 补全，沿用 MVP）
-  ├─ 第 0 层：Wiki 直答候选采集（不调 LLM，三个入口，见 wiki.md 步骤 4）
-  │    a. 词法：wiki index 查询（title/content/aliases/trigger_questions），
+  ├─ 第 0 层：Wiki 直答候选采集（三个入口，见 wiki.md「检索接入」；
+  │    2026-08-18 单层化改造后，其中一个入口改为调用 LLM，不再是"三个入口
+  │    全部不调 LLM"）
+  │    a. Concept/Fact 识别：一次 LLM 判断问题主要涉及哪个/哪些已发布词条
+  │       （matchEntriesByConceptRecognition，取代原四元组精确匹配入口，
+  │       domain 候选列表为空时跳过、不调用）；
+  │    b. 词法：wiki index 查询（title/content/aliases/trigger_questions），
   │       分数 ≥ wiki_min_score；
-  │    b. 概念：问题分词与概念名称词法匹配 → 该概念的 published 页面直接入候选；
-  │    c. 四元组：qc.Subject/Intent/Audience/Constraint 与页面
-  │       observed_conditions 做 conditionGroupMatches（Session 未解析时空转）；
-  │    优先级：四元组命中 > 词法（分数降序）> 仅概念命中；
-  │    命中的主题页不进直答序列，就地展开为其 contains 成员概念页
-  │       （主题页是召回骨架，不是直答单元，见 wiki.md 步骤 8「检索接入」）；
+  │    c. 概念名词法包含：问题字面包含已发布页面的概念名称 → 直接入候选；
+  │    优先级：Concept/Fact 识别命中 > 词法（分数降序）> 仅概念名包含命中；
   │    合并去重取前 wiki_max_candidates 个，按序直答尝试，
   │    某页 sufficient=true → Wiki 直答路径（path_type=wiki）；
-  │    候选耗尽或为空 → 落入第 1 层，并携带 skeleton_point_ids
-  │      （展开成员页面的 source_point_ids 并集）与 skeleton_page_id；
-  │      同时写 topic_decompose_signal（见 wiki.md 步骤 9）
+  │    候选耗尽或为空 → 落入第 1 层
+  │      （单层化改造后 Wiki 不再有"主题页聚合概念页成员"这一层，骨架
+  │      注入慢路径与 topic_decompose_signal 已整体删除，见
+  │      wiki-single-tier-open-questions.md「已拍板（2026-08-18）」）
   ├─ 第 1 层：激活层 Match（四元组精确匹配，纯程序、免费；2026-08-12
   │    改判撤销此前"未命中且有候选组时升级为模型辅助匹配"的第二轮，
   │    Match 全程不调 LLM，见 activation.md 步骤 2）；命中后按该条件
@@ -83,17 +85,6 @@ Wiki 直答层   已发布 Wiki 页面命中 → 直接基于页面回答（见 
        Domain 预过滤 → Source 过滤 → Outline/FTS 召回 → RRF → Rerank
        → KPN 扩展 → 证据挖掘 → 充分性判断 → EvidenceSet(path_type=full)
        → Answer
-
-  骨架注入（第 0 层带下来 skeleton_point_ids 时，两层架构，
-  见 wiki.md 步骤 8「检索接入」）：
-    这批 point_id 反查 KU 后直接作为 Rerank 候选注入，**跳过 Outline/FTS
-    召回与 RRF**（它们本就是为了找到这些 KU；主题页已经给出了经过一阶
-    编译验证的候选集），其余环节不变；
-    注入候选与 rerank_top_n 的关系：注入优先占位，不足则由既有召回补齐
-    （skeleton_point_ids 数 ≥ rerank_top_n 时按所属成员页面在候选序列中的
-    顺序截断）；
-    不增加任何 LLM 调用——这是主题页在 V1 的全部收益来源：
-    同一个复杂问题，命中主题页时慢路径少一轮召回、候选质量更高。
 ```
 
 ## 配置项（config.yml: retrieval 节扩展）
@@ -113,8 +104,6 @@ retrieval:
   wiki_min_score:         2.0    # Wiki 直答的 Bleve 最低分（BM25，需评估集校准）
   wiki_max_candidates:    3      # 直答候选序列长度上限（依次尝试，
                                   # 首个 sufficient=true 即停；设 1 退化为原 top-1 行为）
-                                  # 主题页命中不占候选位——它展开为成员概念页，
-                                  # 占位的是成员（wiki.md 步骤 8）
   # activation_match_model_enabled 已删除（2026-08-12 改判：激活层 Match
   # 第二轮模型辅助匹配整体撤销，见 activation.md 步骤 2；对应的
   # RetrievalConfig.ActivationMatchModelEnabled 字段已从代码移除）
@@ -185,9 +174,12 @@ EvidenceItem 新增：
      的等价判断（不臆测不同受众/条件是一回事）；
   5. 全部未命中：以当前四元组为新的 canonical 记录写入
      `question_tuple_norms`（按 `domain_ids` 逐个域各插入一行）。
-  三个消费入口（`activation.Matcher`/`BundleMatcher`、`wiki.
-  matchFourTupleEntry`）本身仍是纯精确匹配，不受影响——这一层只改变
-  喂给它们的四元组，不改动三处的匹配逻辑。
+  消费入口（`activation.Matcher`/`BundleMatcher`）本身仍是纯精确匹配，
+  不受影响——这一层只改变喂给它们的四元组，不改动匹配逻辑本身。
+  （`wiki.matchFourTupleEntry` 已随 2026-08-18 单层化改造删除，不再是
+  归一化的消费方之一——Wiki 检索侧的 Concept/Fact 识别入口是语义识别，
+  不消费四元组，见 wiki.md「检索接入」；此处归一化机制仅服务于
+  activation.Matcher/BundleMatcher 两个消费方。）
 - **Match 本身（硬性过滤 + 精确匹配）不再有第二轮模型辅助匹配**
   （2026-08-12 改判，撤销 2026-08-11 引入的两级结构，见 activation.md
   步骤 2）；不区分"首次/非首次提问"，一律走同一套纯程序流程；
@@ -443,8 +435,16 @@ POST /answer（既有，见 answer 模块）
                       Tier 1/2 都未命中时才付一次 Tier 3 LLM 调用：多数
                       重复问答仍是 0 次额外调用（Tier 1 命中）或 3 次，
                       Tier 1/2 双未命中时 +1 次 → 4 次。
-Wiki 直答：           answer(1~wiki_max_candidates)          典型 1 次，最坏 3 次
-                      （sufficient=false 换下一候选页重试，见 wiki.md 步骤 4）
+Wiki 直答：           entry_recognize(0~1) + answer(0~wiki_max_candidates)
+                      典型 2 次（识别命中 1 次 + 回答 1 次），最坏 4 次
+                      （sufficient=false 换下一候选页重试）；entry_recognize
+                      是 2026-08-18 单层化改造新增的 Concept/Fact 识别调用
+                      （docs/impl/v1/wiki-single-tier-task-brief.md 步骤 4），
+                      取代原四元组精确匹配（不调用 LLM）的直答入口——当前
+                      域下没有任何候选 entry（如全新领域）时跳过，不产生
+                      这次调用；命中 0 个 entry 或全部 entry 都没有已发布
+                      页面覆盖时，仍会退回 wiki 索引词法匹配 / 概念名词法
+                      匹配两个不调 LLM 的入口，不代表直答整体失败。
 独立核实试验（2026-08-13 新增，见步骤 2c）：
                       不改变已发出回答的调用预算——审计是后台、异步的，
                       不阻塞当前请求，因此上面「快路径 = 3 次」这个数字

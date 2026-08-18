@@ -207,7 +207,7 @@ func TestIntegration_StudyReportFromSeedDB(t *testing.T) {
 	cfg.CreateConfidenceMin = 0.2 // lower thresholds for single-pass data
 	cfg.CreateWidthMax = 1.0
 	cfg.WikiKPMin = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, CohesionConfig{}, 0, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, 0)
 
 	result, err := svc.Run()
 	if err != nil {
@@ -305,47 +305,6 @@ func TestIntegration_StudyReportFromSeedDB(t *testing.T) {
 			t.Logf("  [%s] %s → %s (purity=%.2f breadth=%d spr=%.2f kpn=%v)",
 				c.Recommendation, c.QuestionTerms[:min(20, len(c.QuestionTerms))], c.PointID[:8],
 				c.Stats.SignalPurity, c.Stats.ActivationBreadth, c.Stats.ShortPathRate, c.Stats.HasKPNNeighbors)
-		}
-	})
-
-	// ===== Wiki Candidates validation =====
-	t.Run("WikiCandidates", func(t *testing.T) {
-		t.Logf("Wiki candidates: %d", len(report.WikiCandidates))
-		for _, w := range report.WikiCandidates {
-			if w.EntryID == "" {
-				t.Error("wiki candidate with empty entry_id")
-			}
-			if w.ConceptName == "" {
-				t.Error("wiki candidate with empty entry_name")
-			}
-			if w.DomainID == "" {
-				t.Error("wiki candidate with empty domain_id")
-			}
-			if w.Stats.QualifyingKPCount < cfg.WikiKPMin && w.Recommendation == "ready" {
-				t.Errorf("wiki %s: ready with only %d qualifying KPs (min=%d)",
-					w.ConceptName, w.Stats.QualifyingKPCount, cfg.WikiKPMin)
-			}
-			if w.Recommendation != "ready" && w.Recommendation != "needs_more_data" {
-				t.Errorf("wiki %s: invalid recommendation %q", w.ConceptName, w.Recommendation)
-			}
-
-			// Verify recommendation logic
-			isReady := w.Stats.QualifyingKPCount >= cfg.WikiKPMin &&
-				w.Stats.RelatedConnectionCount >= 1 &&
-				w.Stats.ContradictsConnectionCount < w.Stats.RelatedConnectionCount
-			expectedRec := "needs_more_data"
-			if isReady {
-				expectedRec = "ready"
-			}
-			if w.Recommendation != expectedRec {
-				t.Errorf("wiki %s: recommendation=%s but expected=%s (kp=%d conn=%d)",
-					w.ConceptName, w.Recommendation, expectedRec,
-					w.Stats.QualifyingKPCount, w.Stats.KPNConnectionCount)
-			}
-
-			t.Logf("  [%s] %s: %d KPs, avg_confident=%.1f, kpn_conn=%d, days_active=%d",
-				w.Recommendation, w.ConceptName, w.Stats.QualifyingKPCount,
-				w.Stats.AvgConfidentCount, w.Stats.KPNConnectionCount, w.Stats.DaysActive)
 		}
 	})
 

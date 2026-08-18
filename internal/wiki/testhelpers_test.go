@@ -113,7 +113,6 @@ func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *sql.DB, bleve.I
 	store := NewStore(db)
 	cfg := config.WikiConfig{
 		CompileMaxChars: 20000, RecompileNewKPMin: 2,
-		AspectGamma: 1.0, AspectMinSize: 2, AspectMaxSize: 8, AspectSplitGammaFactor: 1.5,
 	}
 	svc := NewService(store, fake, idxMgr.Wiki, idxMgr.Points, idxMgr.Outlines, cfg)
 

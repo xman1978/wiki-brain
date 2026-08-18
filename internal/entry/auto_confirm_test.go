@@ -70,7 +70,7 @@ func TestProposeAddCandidate_AutoConfirm_AppliesImmediately(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "并发编程", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 
-	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "描述", "边界", EntryKindConcept, "", []string{"p1"}, "s1")
+	candidateID, err := svc.ProposeAddCandidate("d1", "并发编程", "描述", "边界", EntryKindConcept, "", []string{"p1"}, "s1", "")
 	if err != nil {
 		t.Fatalf("ProposeAddCandidate: %v", err)
 	}

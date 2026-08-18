@@ -32,6 +32,11 @@ type EntryInfo struct {
 	Boundary    string
 	Kind        string
 	KPCount     int
+	// ParentEntryID is the concept entry this (typically fact) entry was
+	// classified under at generation time, empty when none (docs/impl/v1/
+	// fact-entry-parent-concept-task-brief.md). Display-only — not consumed
+	// by any matching/confirm logic yet.
+	ParentEntryID string
 }
 
 // ListActiveEntries returns entries with merged_into IS NULL (still a
@@ -43,7 +48,8 @@ func (s *Store) ListActiveEntries(domainID string) ([]EntryInfo, error) {
 		SELECT c.entry_id, c.name, c.domain_id, COALESCE(c.description, ''), COALESCE(c.boundary, ''), c.kind,
 			(SELECT COUNT(*) FROM knowledge_points kp
 			 JOIN knowledge_units ku ON ku.unit_id = kp.unit_id
-			 WHERE ku.entry_id = c.entry_id AND kp.lifecycle = 'current' AND ku.lifecycle = 'current')
+			 WHERE ku.entry_id = c.entry_id AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'),
+			COALESCE(c.parent_entry_id, '')
 		FROM entries c WHERE c.merged_into IS NULL`
 	var args []interface{}
 	if domainID != "" {
@@ -61,7 +67,7 @@ func (s *Store) ListActiveEntries(domainID string) ([]EntryInfo, error) {
 	var results []EntryInfo
 	for rows.Next() {
 		var c EntryInfo
-		if err := rows.Scan(&c.EntryID, &c.Name, &c.DomainID, &c.Description, &c.Boundary, &c.Kind, &c.KPCount); err != nil {
+		if err := rows.Scan(&c.EntryID, &c.Name, &c.DomainID, &c.Description, &c.Boundary, &c.Kind, &c.KPCount, &c.ParentEntryID); err != nil {
 			return nil, fmt.Errorf("concept store: scan concept: %w", err)
 		}
 		results = append(results, c)
@@ -353,7 +359,7 @@ func scanCandidate(row interface{ Scan(...interface{}) error }) (*CandidateRow, 
 	var c CandidateRow
 	if err := row.Scan(&c.CandidateID, &c.Kind, &c.EntryKind, &c.DomainID, &c.SuggestedName, &c.MergeFrom,
 		&c.PointIDs, &c.Evidence, &c.EventIDs, &c.Status, &c.LastSignalAt, &c.CreatedAt, &c.UpdatedAt,
-		&c.ResolvedEntryID, &c.CreatedNewEntry, &c.KPNRelationIDs); err != nil {
+		&c.ResolvedEntryID, &c.CreatedNewEntry, &c.KPNRelationIDs, &c.ParentEntryID); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -361,7 +367,7 @@ func scanCandidate(row interface{ Scan(...interface{}) error }) (*CandidateRow, 
 
 const candidateColumns = `candidate_id, kind, entry_kind, domain_id, suggested_name, merge_from,
 	point_ids, evidence, event_ids, status, last_signal_at, created_at, updated_at,
-	resolved_entry_id, created_new_entry, kpn_relation_ids`
+	resolved_entry_id, created_new_entry, kpn_relation_ids, parent_entry_id`
 
 func (s *Store) ListCandidatesByKindStatus(kind, status string) ([]CandidateRow, error) {
 	rows, err := s.db.Query(`SELECT `+candidateColumns+` FROM entry_candidates
@@ -450,7 +456,7 @@ func (s *Store) GetCandidate(candidateID string) (*CandidateRow, error) {
 // InsertAddCandidate creates a new kind=add row plus its pending_confirm
 // entry_add_candidate learning_result (docs/impl/v1/concept-evolution.md
 // 步骤 2).
-func (s *Store) InsertAddCandidate(domainID sql.NullString, suggestedName, conceptKind string, pointIDs, eventIDs []string, evidence interface{}, reason string) (string, error) {
+func (s *Store) InsertAddCandidate(domainID sql.NullString, suggestedName, conceptKind string, pointIDs, eventIDs []string, evidence interface{}, reason string, parentEntryID sql.NullString) (string, error) {
 	candidateID := uuid.New().String()
 	now := time.Now().UTC()
 
@@ -461,9 +467,9 @@ func (s *Store) InsertAddCandidate(domainID sql.NullString, suggestedName, conce
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(`INSERT INTO entry_candidates
-		(candidate_id, kind, entry_kind, domain_id, suggested_name, merge_from, point_ids, evidence, event_ids, status, last_signal_at)
-		VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?)`,
-		candidateID, KindAdd, conceptKind, domainID, suggestedName, marshal(pointIDs), marshal(evidence), marshal(eventIDs), StatusPendingConfirm, now); err != nil {
+		(candidate_id, kind, entry_kind, domain_id, suggested_name, merge_from, point_ids, evidence, event_ids, status, last_signal_at, parent_entry_id)
+		VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?)`,
+		candidateID, KindAdd, conceptKind, domainID, suggestedName, marshal(pointIDs), marshal(evidence), marshal(eventIDs), StatusPendingConfirm, now, parentEntryID); err != nil {
 		return "", fmt.Errorf("concept store: insert add candidate: %w", err)
 	}
 
@@ -885,7 +891,7 @@ func (s *Store) SetCandidateKPNRelationIDs(candidateID string, relationIDs []str
 // (docs/impl/v1/concept-evolution.md 步骤 3): create the concept
 // (origin=evolved), migrate every entry_id-NULL KU behind pointIDs onto it,
 // and resolve the candidate + its learning_result to applied.
-func (s *Store) ConfirmAdd(candidateID, conceptID, domainID, name, description, boundary, kind string, aliases, pointIDs []string, reason string) (migratedKUs int, err error) {
+func (s *Store) ConfirmAdd(candidateID, conceptID, domainID, name, description, boundary, kind string, aliases, pointIDs []string, reason string, parentEntryID sql.NullString) (migratedKUs int, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("concept store: confirm add: begin: %w", err)
@@ -895,8 +901,8 @@ func (s *Store) ConfirmAdd(candidateID, conceptID, domainID, name, description, 
 	if aliases == nil {
 		aliases = []string{}
 	}
-	if _, err := tx.Exec(`INSERT INTO entries (entry_id, domain_id, name, description, kind, origin, boundary, aliases) VALUES (?, ?, ?, ?, ?, 'evolved', ?, ?)`,
-		conceptID, domainID, name, description, kind, boundary, marshal(aliases)); err != nil {
+	if _, err := tx.Exec(`INSERT INTO entries (entry_id, domain_id, name, description, kind, origin, boundary, aliases, parent_entry_id) VALUES (?, ?, ?, ?, ?, 'evolved', ?, ?, ?)`,
+		conceptID, domainID, name, description, kind, boundary, marshal(aliases), parentEntryID); err != nil {
 		return 0, fmt.Errorf("concept store: confirm add: insert concept: %w", err)
 	}
 

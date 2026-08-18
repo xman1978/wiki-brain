@@ -36,12 +36,12 @@ func (s *Store) SaveTrace(t *Trace) error {
 	_, err = s.db.Exec(`INSERT INTO traces (trace_id, answer_id, question, question_hash, question_terms,
 		retrieval_quality, path, path_type, activation_link_ids, subject, intent, audience, constraint_text,
 		direct_point_ids, kpn_cited_count, cited_count, outline_cited_count, cited_rank_sum,
-		has_feedback, feedback_type, feedback_content, skeleton_page_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		has_feedback, feedback_type, feedback_content)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.TraceID, t.AnswerID, t.Question, t.QuestionHash, t.QuestionTerms,
 		t.RetrievalQuality, t.Path, t.PathType, string(linkIDsJSON), t.Subject, t.Intent, t.Audience, t.ConstraintText,
 		string(pointIDsJSON), t.KPNCitedCount, t.CitedCount, t.OutlineCitedCount, t.CitedRankSum, hasFeedback,
-		nullString(t.FeedbackType), nullString(t.FeedbackContent), nullString(t.SkeletonPageID),
+		nullString(t.FeedbackType), nullString(t.FeedbackContent),
 	)
 	if err != nil {
 		return fmt.Errorf("trace store: insert: %w", err)
@@ -71,8 +71,8 @@ func (s *Store) SaveAuditPlaceholder(question, subject, intent, audience, constr
 	_, err = s.db.Exec(`INSERT INTO traces (trace_id, answer_id, question, question_hash, question_terms,
 		retrieval_quality, path, path_type, activation_link_ids, subject, intent, audience, constraint_text,
 		direct_point_ids, kpn_cited_count, cited_count, outline_cited_count, cited_rank_sum,
-		has_feedback, feedback_type, feedback_content, skeleton_page_id)
-		VALUES (?, ?, ?, '', '', 'unknown', 'audit', 'audit', '[]', ?, ?, ?, ?, '[]', 0, 0, 0, 0, 0, NULL, NULL, NULL)`,
+		has_feedback, feedback_type, feedback_content)
+		VALUES (?, ?, ?, '', '', 'unknown', 'audit', 'audit', '[]', ?, ?, ?, ?, '[]', 0, 0, 0, 0, 0, NULL, NULL)`,
 		traceID, answerID, question, subject, intent, audience, constraint,
 	)
 	if err != nil {
@@ -89,18 +89,17 @@ func (s *Store) GetTrace(traceID string) (*Trace, error) {
 		hasFeedbackInt  int
 		feedbackType    sql.NullString
 		feedbackContent sql.NullString
-		skeletonPageID  sql.NullString
 	)
 	err := s.db.QueryRow(`SELECT trace_id, answer_id, question, question_hash, question_terms,
 		retrieval_quality, path, path_type, activation_link_ids, subject, intent, audience, constraint_text,
 		direct_point_ids, kpn_cited_count, cited_count, outline_cited_count, cited_rank_sum,
 		has_feedback, feedback_type, feedback_content,
-		created_at, updated_at, skeleton_page_id
+		created_at, updated_at
 		FROM traces WHERE trace_id = ?`, traceID).
 		Scan(&t.TraceID, &t.AnswerID, &t.Question, &t.QuestionHash, &t.QuestionTerms,
 			&t.RetrievalQuality, &t.Path, &t.PathType, &linkIDsStr, &t.Subject, &t.Intent, &t.Audience, &t.ConstraintText,
 			&pointIDsStr, &t.KPNCitedCount, &t.CitedCount, &t.OutlineCitedCount, &t.CitedRankSum, &hasFeedbackInt,
-			&feedbackType, &feedbackContent, &t.CreatedAt, &t.UpdatedAt, &skeletonPageID)
+			&feedbackType, &feedbackContent, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -117,7 +116,6 @@ func (s *Store) GetTrace(traceID string) (*Trace, error) {
 	t.HasFeedback = hasFeedbackInt == 1
 	t.FeedbackType = feedbackType.String
 	t.FeedbackContent = feedbackContent.String
-	t.SkeletonPageID = skeletonPageID.String
 	return &t, nil
 }
 

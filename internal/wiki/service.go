@@ -4,18 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"regexp"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
-	"github.com/jxman78/wiki-brain/internal/foundation/graph"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 	"github.com/jxman78/wiki-brain/internal/foundation/text"
 )
@@ -54,127 +52,40 @@ func (s *Service) SetActivationSvc(a *activation.Service) {
 	s.activationSvc = a
 }
 
-// Analyze implements docs/impl/v1/wiki.md 步骤 2: POST /wiki/compile/analyze.
-// Read-only — it changes no state (does not resolve any pending_confirm
-// wiki_candidate) and its result is never persisted. The caller is expected
-// to show it to a human and, on confirmation, send it back as
-// CompileRequest.Claims/Tensions (docs/design/wiki-compilation.md "编译内部
-// 分两步").
+// Analyze implements docs/impl/v1/wiki-single-tier-task-brief.md 步骤 3:
+// POST /wiki/compile/analyze. Read-only — it changes no state and its result
+// is never persisted. The caller is expected to show it to a human and, on
+// confirmation, send it back as CompileRequest.Claims/Tensions
+// (docs/design/wiki-compilation.md "编译内部分两步").
 func (s *Service) Analyze(ctx context.Context, req AnalyzeRequest) (*AnalyzeResult, error) {
-	// page_type=topic is exclusively a second-tier compile output now
-	// (docs/impl/v1/wiki.md 步骤 8, "数据结构" 两层架构扩展): topic pages are
-	// produced only by POST /wiki/pages/:id/topic/analyze|compile, which
-	// takes already-published word pages as material, not KPs. This
-	// KP-based one-tier path only ever produces concept or fact pages
-	// (docs/impl/v1/wiki.md「概念页 / 事实页」，2026-08-03 修订).
-	if req.PageType != "" && req.PageType != PageTypeConcept && req.PageType != PageTypeFact {
-		return nil, fmt.Errorf("wiki: invalid page_type %q (topic pages are compiled via POST /wiki/pages/:id/topic/analyze|compile)", req.PageType)
+	if len(req.EntryIDs) == 0 {
+		return nil, fmt.Errorf("wiki: entry_ids is required")
 	}
 
-	// requireVerified: result_id present means Study already recommended this
-	// concept (verified material is part of that judgment); empty means a
-	// human triggered this directly, and qualifying drops the verified
-	// requirement (docs/impl/v1/wiki.md 步骤 2 "人工指定主题手动编译"
-	// 2026-08-07 修订).
-	requireVerified := req.ResultID != ""
-	in, err := s.gatherAnalyzeInputs(req.EntryID, requireVerified)
+	in, err := s.gatherSubgraphInputs(req.EntryIDs)
 	if err != nil {
 		return nil, err
 	}
-	// page_type is derived from the target entries row's kind, not freely
-	// chosen by the caller (docs/impl/v1/wiki.md「数据结构」page_type 语义).
-	// Callers that don't know the kind ahead of time (e.g. the manual-compile
-	// UI picking a concept off a catalog card) can just omit page_type and
-	// let it be derived; a caller that does supply one is still held to it
-	// matching, as defense against a stale/wrong value.
-	want := pageTypeForKind(in.conceptKind)
-	if req.PageType == "" {
-		req.PageType = want
-	} else if req.PageType != want {
-		return nil, fmt.Errorf("wiki: page_type %q does not match concept %s's kind (expected %q)", req.PageType, req.EntryID, want)
-	}
-	readiness := s.computeReadiness(in)
 
-	claims, tensions, err := s.analyzeClaimsWithInputs(ctx, req.EntryID, in)
+	claims, tensions, err := s.analyzeClaimsWithInputs(ctx, req.EntryIDs, in)
 	if err != nil {
 		return nil, err
 	}
 	return &AnalyzeResult{
-		EntryID:   req.EntryID,
-		PageType:  req.PageType,
-		ResultID:  req.ResultID,
-		Claims:    claims,
-		Tensions:  tensions,
-		Readiness: readiness,
+		EntryIDs: req.EntryIDs,
+		ResultID: req.ResultID,
+		Claims:   claims,
+		Tensions: tensions,
 	}, nil
 }
 
-// computeReadiness builds an informational-only snapshot mirroring Study's
-// own wiki-candidate "ready" criteria (docs/design/wiki-compilation.md
-// "ActivationLink 回答'这条管不管用'，Wiki 编译回答'这个主题够不够格立传'")
-// so a human manually picking a concept to compile (docs/impl/v1/wiki.md 步骤
-// 2 "人工指定主题手动编译") can see the same signals Study would use before
-// deciding a concept is "ready", without waiting for Study to flag it as a
-// wiki_candidate first. This never gates Analyze/Compile — purely additive,
-// same non-breaking precedent as Claim.AspectID.
-//
-// Deliberately NOT expected to be byte-identical to Study's own
-// Stats.Cohesion: Study's cohesion graph only uses KPN relations +
-// cooccurrence (study/store.go PairSignals), while this reuses wiki's own
-// aspect-clustering communities (aspect.go's buildAspects), which
-// additionally fold in intent/unit signals and go through split/merge
-// post-processing. Both are legitimate cohesion estimates for different
-// purposes (Study gates on it; this only informs a human) — the two numbers
-// may reasonably differ slightly, and that's fine since neither number here
-// blocks anything.
-func (s *Service) computeReadiness(in *analyzeInputs) *Readiness {
-	pointIDs := make([]string, len(in.qualifying))
-	for i, p := range in.qualifying {
-		pointIDs[i] = p.PointID
-	}
-
-	related, contradicts, err := s.store.KPNConnectionCountsByType(pointIDs)
-	if err != nil {
-		slog.Warn("wiki: readiness kpn connection counts failed, continuing without them", "error", err)
-	}
-	daysActive, err := s.store.DaysActive(pointIDs)
-	if err != nil {
-		slog.Warn("wiki: readiness days active failed, continuing without it", "error", err)
-	}
-
-	partition := make([][]string, len(in.aspects))
-	for i, a := range in.aspects {
-		partition[i] = a.PointIDs
-	}
-	cohesion := graph.LargestShare(partition)
-
-	return &Readiness{
-		QualifyingKPCount:          len(in.qualifying),
-		RelatedConnectionCount:     related,
-		ContradictsConnectionCount: contradicts,
-		DaysActive:                 daysActive,
-		DaysActiveMin:              s.cfg.QualifyingMinDaysActive,
-		Cohesion:                   cohesion,
-		CohesionMin:                s.cfg.EntryCohesionMin,
-	}
-}
-
-// Compile implements docs/impl/v1/wiki.md 步骤 2-3: POST /wiki/compile.
+// Compile implements docs/impl/v1/wiki-single-tier-task-brief.md 步骤 3:
+// POST /wiki/compile. Single-tier: one call over a human-picked entry_id set
+// produces one finished page directly (no concept-page/topic-page tiering,
+// no second compile step).
 func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error) {
-	if req.PageType != "" && req.PageType != PageTypeConcept && req.PageType != PageTypeFact {
-		return nil, fmt.Errorf("wiki: invalid page_type %q (topic pages are compiled via POST /wiki/pages/:id/topic/analyze|compile)", req.PageType)
-	}
-	_, _, _, conceptKind, err := s.store.GetEntryInfo(req.EntryID)
-	if err != nil {
-		return nil, fmt.Errorf("wiki: get concept info: %w", err)
-	}
-	// See Analyze's identical comment: page_type is derived when omitted,
-	// validated when supplied.
-	want := pageTypeForKind(conceptKind)
-	if req.PageType == "" {
-		req.PageType = want
-	} else if req.PageType != want {
-		return nil, fmt.Errorf("wiki: page_type %q does not match concept %s's kind (expected %q)", req.PageType, req.EntryID, want)
+	if len(req.EntryIDs) == 0 {
+		return nil, fmt.Errorf("wiki: entry_ids is required")
 	}
 
 	if req.ResultID != "" {
@@ -184,35 +95,33 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 			}
 		}
 	} else {
-		slog.Info("wiki: compile triggered without result_id (manual trigger, docs/impl/v1/wiki.md 步骤 2)", "entry_id", req.EntryID)
+		slog.Info("wiki: compile triggered without result_id (manual trigger)", "entry_ids", req.EntryIDs)
 	}
 
-	if existing, err := s.store.GetActivePageByEntryID(req.EntryID); err != nil {
-		return nil, fmt.Errorf("wiki: check existing page: %w", err)
-	} else if existing != nil {
-		return nil, ErrPageAlreadyExists
+	for _, entryID := range req.EntryIDs {
+		existing, err := s.store.GetActivePageByEntryID(entryID)
+		if err != nil {
+			return nil, fmt.Errorf("wiki: check existing page: %w", err)
+		}
+		if existing != nil {
+			return nil, ErrPageAlreadyExists
+		}
 	}
-
-	// requireVerified: see the identical comment in Analyze — result_id
-	// present means Study already recommended this concept on verified
-	// material; empty means a human triggered this directly, and qualifying
-	// drops the verified requirement.
-	requireVerified := req.ResultID != ""
 
 	claims, tensions := req.Claims, req.Tensions
 	if len(claims) == 0 {
-		// No analysis round-tripped back (caller skipped /wiki/compile/analyze
-		// entirely — fine for either the Study-recommended or manual-trigger
-		// path) — run it internally so generation is still constrained to an
-		// analysis result, not raw material access.
+		// No analysis round-tripped back (caller skipped
+		// /wiki/compile/analyze entirely) — run it internally so generation
+		// is still constrained to an analysis result, not raw material
+		// access.
 		var err error
-		claims, tensions, err = s.analyzeClaims(ctx, req.EntryID, requireVerified)
+		claims, tensions, err = s.analyzeClaims(ctx, req.EntryIDs)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	compiled, err := s.compileContent(ctx, req.EntryID, req.PageType, claims, tensions, requireVerified)
+	compiled, err := s.compileSubgraphContent(ctx, req.EntryIDs, claims, tensions)
 	if err != nil {
 		return nil, err
 	}
@@ -220,15 +129,17 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 	compiledFromIDs := nonEmpty(req.ResultID)
 	if len(compiledFromIDs) == 0 {
 		// No Study wiki_candidate result_id round-tripped back — a human
-		// picked this concept directly (docs/impl/v1/wiki.md 步骤 2 "人工指定
-		// 主题手动编译"), not the "debug path" this used to exclusively mean.
-		// Recorded so pages can later be told apart by origin without a new
-		// column (see ManualTriggerSentinel).
+		// picked these entries directly. Recorded so pages can later be told
+		// apart by origin without a new column (see ManualTriggerSentinel).
 		compiledFromIDs = []string{ManualTriggerSentinel}
 	}
 
 	page := &Page{
-		PageType:           req.PageType,
+		// Single-tier Wiki has only one page_type — every compiled page
+		// shares the existing "topic" name/const (docs/impl/v1/
+		// wiki-single-tier-task-brief.md 步骤 3: "所有新编译页面 page_type
+		// 统一写 PageTypeTopic").
+		PageType:           PageTypeTopic,
 		Title:              compiled.title,
 		Content:            compiled.content,
 		Status:             StatusDraft,
@@ -241,30 +152,45 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 		UncoveredPoints:    marshalUncoveredPoints(compiled.uncoveredPoints),
 		CompiledFrom:       marshalIDs(compiledFromIDs),
 		Summary:            compiled.summary,
-		Aspects:            compiled.aspectsJSON,
+		Aspects:            "[]",
 		PromptVersion:      "v1",
 		ModelName:          "reasoning",
 	}
-	page.EntryID = nullableString(req.EntryID)
+	// Page.entry_id remains a single nullable column, storing the first
+	// entry_id as the page's primary identity for catalog's existing
+	// domain-grouped JOIN. The FULL entry_id set is written to
+	// wiki_page_entries in the same transaction (migration 057,
+	// docs/impl/v1/wiki-single-tier-open-questions.md「已拍板（2026-08-18）」
+	// 第 1 条) so Recompile can rebuild the Core/Context/Conflict subgraph
+	// from every entry_id this page was compiled from, not just the primary
+	// one.
+	page.EntryID = nullableString(req.EntryIDs[0])
 
-	if err := s.store.InsertPage(page); err != nil {
+	if err := s.store.InsertPageWithEntries(page, req.EntryIDs); err != nil {
 		return nil, err
 	}
 	rev := &Revision{PageID: page.PageID, Content: page.Content, Reason: "compile"}
 	if err := s.store.InsertRevision(rev); err != nil {
 		slog.Error("wiki: insert initial revision failed", "page_id", page.PageID, "error", err)
 	} else {
-		s.verifyClaims(ctx, page.PageID, rev.RevisionID, req.EntryID, claims, requireVerified)
+		s.verifyClaims(ctx, page.PageID, rev.RevisionID, req.EntryIDs, claims)
 	}
 
-	slog.Info("wiki: compiled draft page", "page_id", page.PageID, "entry_id", req.EntryID,
+	slog.Info("wiki: compiled draft page", "page_id", page.PageID, "entry_ids", req.EntryIDs,
 		"source_point_ids", len(compiled.sourcePointIDs))
 	return s.store.GetPage(page.PageID)
 }
 
-// Recompile implements docs/impl/v1/wiki.md 步骤 5: re-run compilation for an
-// existing (non-archived) page, writing a new revision and resetting it to
-// draft — the caller must publish again.
+// Recompile implements docs/impl/v1/wiki-single-tier-task-brief.md 步骤 3:
+// re-run compilation for an existing (non-archived) page, writing a new
+// revision and resetting it to draft — the caller must publish again.
+//
+// entryIDs to rebuild the subgraph from are read from wiki_page_entries
+// (migration 057, docs/impl/v1/wiki-single-tier-open-questions.md「已拍板
+// （2026-08-18）」第 1 条) — the full set the page was originally compiled
+// from, not just page.EntryID's single primary entry. Falls back to
+// page.EntryID for pages inserted before migration 057 (no
+// wiki_page_entries rows yet).
 func (s *Service) Recompile(ctx context.Context, pageID, reason string, compiledFrom []string) (*Page, error) {
 	page, err := s.store.GetPage(pageID)
 	if err != nil {
@@ -276,31 +202,27 @@ func (s *Service) Recompile(ctx context.Context, pageID, reason string, compiled
 	if page.Status == StatusArchived {
 		return nil, ErrPageArchived
 	}
-	if page.PageType == PageTypeTopic {
-		return s.RecompileTopic(ctx, page, reason, compiledFrom)
-	}
 
-	conceptID := ""
-	if page.EntryID.Valid {
-		conceptID = page.EntryID.String
-	}
-
-	// requireVerified follows the page's own original origin (docs/impl/v1/
-	// wiki.md 步骤 2 2026-08-07 修订) — a page first compiled manually stays
-	// on the not-required-verified qualifying definition across recompiles;
-	// a Study-recommended page keeps requiring verified.
-	requireVerified := !isManualCompiledFrom(page.CompiledFrom)
-
-	// Recompile has no exposed analyze-preview step (docs/impl/v1/wiki.md
-	// 步骤 5): the human confirming "recompile" on the Page is itself the
-	// confirmation of this new analysis round. Always a full page regeneration
-	// (阶段 A→D rerun) — no per-section incremental diffing (docs/impl/v1/
-	// wiki-generation.md 第 8 节, 明确不做).
-	claims, tensions, err := s.analyzeClaims(ctx, conceptID, requireVerified)
+	entryIDs, err := s.store.EntryIDsByPageID(pageID)
 	if err != nil {
 		return nil, err
 	}
-	compiled, err := s.compileContent(ctx, conceptID, page.PageType, claims, tensions, requireVerified)
+	if len(entryIDs) == 0 && page.EntryID.Valid && page.EntryID.String != "" {
+		entryIDs = []string{page.EntryID.String}
+	}
+	if len(entryIDs) == 0 {
+		return nil, fmt.Errorf("wiki: page %s has no entry_id to recompile from", pageID)
+	}
+
+	// Recompile has no exposed analyze-preview step: the human confirming
+	// "recompile" on the Page is itself the confirmation of this new
+	// analysis round. Always a full page regeneration — no per-section
+	// incremental diffing (docs/impl/v1/wiki-generation.md 第 8 节, 明确不做).
+	claims, tensions, err := s.analyzeClaims(ctx, entryIDs)
+	if err != nil {
+		return nil, err
+	}
+	compiled, err := s.compileSubgraphContent(ctx, entryIDs, claims, tensions)
 	if err != nil {
 		return nil, err
 	}
@@ -310,14 +232,14 @@ func (s *Service) Recompile(ctx context.Context, pageID, reason string, compiled
 		marshalConditions(compiled.observedConditions),
 		marshalIDs(compiled.aliases), marshalIDs(compiled.triggerQuestions),
 		marshalUncoveredPoints(compiled.uncoveredPoints),
-		marshalIDs(compiledFrom), compiled.summary, compiled.aspectsJSON, "v1", "reasoning"); err != nil {
+		marshalIDs(compiledFrom), compiled.summary, "[]", "v1", "reasoning"); err != nil {
 		return nil, err
 	}
 	rev := &Revision{PageID: pageID, Content: compiled.content, Reason: reason}
 	if err := s.store.InsertRevision(rev); err != nil {
 		slog.Error("wiki: insert recompile revision failed", "page_id", pageID, "error", err)
 	} else {
-		s.verifyClaims(ctx, pageID, rev.RevisionID, conceptID, claims, requireVerified)
+		s.verifyClaims(ctx, pageID, rev.RevisionID, entryIDs, claims)
 	}
 
 	// A page must not answer directly while it's being recompiled/awaiting
@@ -330,8 +252,10 @@ func (s *Service) Recompile(ctx context.Context, pageID, reason string, compiled
 	return s.store.GetPage(pageID)
 }
 
-// compiledContent is compileContent's output — one fully-assembled page
-// generated in a single LLM call (docs/impl/v1/wiki-generation.md 阶段 D/F).
+// compiledContent is compileSubgraphContent's output — one fully-assembled
+// page generated in a single LLM call (docs/impl/v1/wiki-generation.md 阶段
+// D/F, materials restructured per docs/impl/v1/wiki-single-tier-task-brief.md
+// 步骤 3 to Core/Context/Conflict).
 type compiledContent struct {
 	title              string
 	content            string
@@ -343,13 +267,13 @@ type compiledContent struct {
 	aliases            []string
 	triggerQuestions   []string
 	uncoveredPoints    []UncoveredPoint
-	aspectsJSON        string
 }
 
 // entryKindLabel returns the Chinese page-kind label injected as
-// {{entry_kind_label}} in wiki_analyze / wiki_compile
-// (docs/impl/v1/wiki.md 步骤 3): 概念 or 事实. Unknown/empty kind defaults to
-// 概念, matching ValidateEntryKind / pageTypeForKind.
+// {{entry_kind_label}}: 概念 or 事实. Unknown/empty kind defaults to 概念,
+// matching ValidateEntryKind / pageTypeForKind. For a multi-entry compile
+// this reflects only the first entry_id's kind — a wording nudge only, it
+// does not change page_type (always PageTypeTopic now) or any gate.
 func entryKindLabel(kind string) string {
 	if kind == "fact" {
 		return "事实"
@@ -358,11 +282,7 @@ func entryKindLabel(kind string) string {
 }
 
 // conceptKindHint renders the analyze/compile prompts' {{entry_kind_hint}}
-// var from the concept's kind (docs/impl/v1/wiki.md 步骤 3 entry_kind_hint,
-// docs/impl/v1/kpn.md 步骤 3 "类型标注"): a wording nudge only — it does not
-// change page_type, the required section structure, or any qualifying/ready
-// gate. Unknown/empty kind falls back to the concept-page hint, same as
-// entry.ValidateEntryKind's own empty-defaults-to-concept behavior.
+// var from the (first) entry's kind — a wording nudge only.
 func conceptKindHint(kind string) string {
 	switch kind {
 	case "fact":
@@ -372,219 +292,132 @@ func conceptKindHint(kind string) string {
 	}
 }
 
-// analyzeInputs bundles 阶段 A/B's material-gathering output for the
-// analysis stage (docs/impl/v1/wiki-generation.md 3.1): qualifying KPs
-// grouped by aspect.go's clustering instead of a flat list.
+// analyzeInputs bundles the analysis stage's material-gathering output
+// (docs/impl/v1/wiki-single-tier-task-brief.md 步骤 3): Core/Context/Conflict
+// KP groups instead of aspect-clustering groups.
 type analyzeInputs struct {
-	conceptName    string
-	conceptDesc    string
-	conceptKind    string
-	domainName     string
-	qualifying     []QualifyingPoint
-	aspects        []Aspect          // after budget truncation (whole aspects, not individual KPs)
-	pointAspect    map[string]string // point_id -> aspect_id, for Claim.AspectID fallback correction
-	whitelist      map[string]bool   // union of every kept aspect's point_ids
-	aspectsText    string
-	contradictions string
-	gapsText       string
+	entryIDs      []string
+	entryName     string // joined display names of every compiled entry_id
+	entryDesc     string // first entry_id's description
+	entryKind     string // first entry_id's kind, for entry_kind_label/hint
+	domainName    string
+	core          []QualifyingPoint
+	context       []QualifyingPoint
+	conflict      []QualifyingPoint
+	coreText      string
+	contextText   string
+	conflictText  string
+	whitelist     map[string]bool // union of core/context/conflict point_ids
+	byID          map[string]QualifyingPoint
+	gapsText      string
 }
 
-// gatherAnalyzeInputs clusters aspects, then truncates by whole aspects
-// (largest first) to fit wiki.compile_max_chars — never by individual KP —
-// so whatever survives still forms complete aspects (docs/impl/v1/
-// wiki-generation.md 3.1).
-func (s *Service) gatherAnalyzeInputs(conceptID string, requireVerified bool) (*analyzeInputs, error) {
-	conceptName, conceptDesc, domainID, conceptKind, err := s.store.GetEntryInfo(conceptID)
+// gatherSubgraphInputs implements docs/impl/v1/wiki-single-tier-task-brief.md
+// 步骤 3: build the Core/Context/Conflict subgraph for entryIDs and render it
+// into the analyze/compile prompts' material text. Citation whitelist =
+// every point_id the subgraph covers (Core ∪ Context ∪ Conflict) — no
+// budget truncation (design doc "已拍板" 第 3 条: Core is unbounded, and the
+// one-hop expansion is itself the size control).
+func (s *Service) gatherSubgraphInputs(entryIDs []string) (*analyzeInputs, error) {
+	core, context, conflict, err := s.buildKnowledgeSubgraph(entryIDs)
 	if err != nil {
-		return nil, fmt.Errorf("wiki: get concept info: %w", err)
+		return nil, err
+	}
+
+	var names []string
+	var firstDesc, firstKind, domainID string
+	for i, id := range entryIDs {
+		name, desc, dom, kind, _, err := s.store.GetEntryInfo(id)
+		if err != nil {
+			return nil, fmt.Errorf("wiki: get entry info: %w", err)
+		}
+		names = append(names, name)
+		if i == 0 {
+			firstDesc, firstKind, domainID = desc, kind, dom
+		}
 	}
 	domainName, err := s.store.GetDomainName(domainID)
 	if err != nil {
-		slog.Warn("wiki: get domain name failed, continuing without it", "entry_id", conceptID, "error", err)
+		slog.Warn("wiki: get domain name failed, continuing without it", "entry_ids", entryIDs, "error", err)
 	}
 
-	qualifying, err := s.store.ListQualifyingPoints(conceptID, requireVerified)
-	if err != nil {
-		return nil, fmt.Errorf("wiki: list qualifying points: %w", err)
-	}
-	if len(qualifying) == 0 {
-		return nil, fmt.Errorf("%w: concept %s currently has no qualifying knowledge points (material may have just been replaced by a reupload and hasn't earned verified activation yet)", ErrNoQualifyingPoints, conceptID)
-	}
-	byID := make(map[string]QualifyingPoint, len(qualifying))
-	for _, p := range qualifying {
-		byID[p.PointID] = p
-	}
-
-	aspects, err := s.buildAspects(qualifying)
-	if err != nil {
-		return nil, fmt.Errorf("wiki: build aspects: %w", err)
-	}
-
-	maxChars := s.cfg.CompileMaxChars
-	if maxChars <= 0 {
-		maxChars = 12000
-	}
-	kept := s.selectAspectsWithinBudget(aspects, byID, maxChars)
-
-	pointAspect := make(map[string]string)
 	whitelist := make(map[string]bool)
-	for _, a := range kept {
-		for _, pid := range a.PointIDs {
-			pointAspect[pid] = a.AspectID
-			whitelist[pid] = true
+	byID := make(map[string]QualifyingPoint)
+	for _, group := range [][]QualifyingPoint{core, context, conflict} {
+		for _, p := range group {
+			whitelist[p.PointID] = true
+			byID[p.PointID] = p
 		}
 	}
 
-	aspectsMax := s.cfg.AspectQuestionsMax
-	if aspectsMax <= 0 {
-		aspectsMax = 5
-	}
-	aspectsText := s.renderAspectsText(kept, byID, aspectsMax)
-	contradictionsText, err := s.renderContradictions(kept, whitelist)
+	allPoints := make([]QualifyingPoint, 0, len(core)+len(context)+len(conflict))
+	allPoints = append(allPoints, core...)
+	allPoints = append(allPoints, context...)
+	allPoints = append(allPoints, conflict...)
+	gapsText, err := s.matchingGaps(strings.Join(names, "、"), allPoints)
 	if err != nil {
-		slog.Warn("wiki: render contradictions failed, continuing without them", "entry_id", conceptID, "error", err)
-	}
-	gapsText, err := s.matchingGaps(conceptName, qualifying)
-	if err != nil {
-		slog.Warn("wiki: gather gaps failed, continuing without them", "entry_id", conceptID, "error", err)
+		slog.Warn("wiki: gather gaps failed, continuing without them", "entry_ids", entryIDs, "error", err)
 	}
 
 	return &analyzeInputs{
-		conceptName:    conceptName,
-		conceptDesc:    conceptDesc,
-		conceptKind:    conceptKind,
-		domainName:     domainName,
-		qualifying:     qualifying,
-		aspects:        kept,
-		pointAspect:    pointAspect,
-		whitelist:      whitelist,
-		aspectsText:    aspectsText,
-		contradictions: contradictionsText,
-		gapsText:       gapsText,
+		entryIDs:     entryIDs,
+		entryName:    strings.Join(names, "、"),
+		entryDesc:    firstDesc,
+		entryKind:    firstKind,
+		domainName:   domainName,
+		core:         core,
+		context:      context,
+		conflict:     conflict,
+		coreText:     renderSubgraphGroup(core),
+		contextText:  renderSubgraphGroup(context),
+		conflictText: renderSubgraphGroup(conflict),
+		whitelist:    whitelist,
+		byID:         byID,
+		gapsText:     gapsText,
 	}, nil
 }
 
-// selectAspectsWithinBudget implements 3.1's truncation rule: over budget,
-// cut whole aspects — not individual KPs — largest (by KP count) first, so
-// whatever survives is still structurally complete. Aspect order in the
-// output preserves the input's aspect_id ordering (ClusterAspects already
-// sorted it); only membership is filtered.
-func (s *Service) selectAspectsWithinBudget(aspects []Aspect, byID map[string]QualifyingPoint, maxChars int) []Aspect {
-	ranked := make([]Aspect, len(aspects))
-	copy(ranked, aspects)
-	sort.SliceStable(ranked, func(i, j int) bool { return len(ranked[i].PointIDs) > len(ranked[j].PointIDs) })
-
-	keptIDs := make(map[string]bool, len(aspects))
-	total := 0
-	for _, a := range ranked {
-		n := 0
-		for _, pid := range a.PointIDs {
-			n += len([]rune(byID[pid].Content))
-		}
-		if total+n > maxChars && len(keptIDs) > 0 {
-			continue
-		}
-		keptIDs[a.AspectID] = true
-		total += n
-	}
-
-	var out []Aspect
-	for _, a := range aspects {
-		if keptIDs[a.AspectID] {
-			out = append(out, a)
-		}
-	}
-	return out
-}
-
-// renderAspectsText formats the per-aspect material block for the analyze
-// prompt's {{aspects}} var (3.1): suggested name, each point's content, and
-// up to aspectsMax real confident questions this aspect's KPs were once
-// answered from.
-func (s *Service) renderAspectsText(aspects []Aspect, byID map[string]QualifyingPoint, aspectsMax int) string {
+// renderSubgraphGroup formats one Core/Context/Conflict group's material for
+// the analyze/compile prompts — Core points borrowed from a fact entry's
+// parent Concept are tagged so the model can tell "本页核心" apart from
+// "父概念背景" (docs/impl/v1/wiki-single-tier-task-brief.md 步骤 3 第 2 条).
+func renderSubgraphGroup(points []QualifyingPoint) string {
 	var sb strings.Builder
-	for _, a := range aspects {
-		fmt.Fprintf(&sb, "【切面 %s】建议名称：%s\n", a.AspectID, a.SuggestedName)
-		for _, pid := range a.PointIDs {
-			p := byID[pid]
-			fmt.Fprintf(&sb, "  [%s] %s\n", pid, p.Content)
+	for _, p := range points {
+		tag := ""
+		if p.SubgraphRole == SubgraphRoleCoreParentBackground {
+			tag = "（父概念背景）"
 		}
-		questions, err := s.store.ConfidentQuestionsForPoints(a.PointIDs, aspectsMax)
-		if err != nil {
-			slog.Warn("wiki: fetch aspect confident questions failed, continuing without them", "aspect_id", a.AspectID, "error", err)
-		}
-		if len(questions) > 0 {
-			sb.WriteString("  真实被问过的问题：\n")
-			for _, q := range questions {
-				fmt.Fprintf(&sb, "    - %s\n", q)
-			}
-		}
-		sb.WriteString("\n")
+		fmt.Fprintf(&sb, "  [%s]%s %s\n", p.PointID, tag, p.Content)
 	}
 	return sb.String()
 }
 
-// renderContradictions formats cross-aspect contradicts pairs for the
-// analyze prompt's {{contradictions}} var (3.1) — same-aspect contradicts
-// are already inside that aspect's material (and, per 2.1, contradicts
-// counts as a same-topic signal at clustering time); only pairs that landed
-// in different aspects are worth surfacing here as a page-level tension.
-func (s *Service) renderContradictions(aspects []Aspect, whitelist map[string]bool) (string, error) {
-	pointIDs := make([]string, 0, len(whitelist))
-	aspectOf := make(map[string]string, len(whitelist))
-	for _, a := range aspects {
-		for _, pid := range a.PointIDs {
-			pointIDs = append(pointIDs, pid)
-			aspectOf[pid] = a.AspectID
-		}
-	}
-	rels, err := s.store.RelationsAmong(pointIDs)
-	if err != nil {
-		return "", fmt.Errorf("wiki: contradictions relations: %w", err)
-	}
-
-	var sb strings.Builder
-	for _, r := range rels {
-		if r.RelationType != "contradicts" {
-			continue
-		}
-		aa, ab := aspectOf[r.SourcePointID], aspectOf[r.TargetPointID]
-		if aa == "" || ab == "" || aa == ab {
-			continue
-		}
-		fmt.Fprintf(&sb, "- [%s]（切面 %s） 与 [%s]（切面 %s） 矛盾\n", r.SourcePointID, aa, r.TargetPointID, ab)
-	}
-	return sb.String(), nil
-}
-
 // analyzeClaims implements docs/impl/v1/wiki-generation.md 阶段 C: call the
 // analysis Prompt once (retrying once on validation failure) to get the
-// proposed claim structure, validated against the aspect-scoped material
-// whitelist, then correct each claim's optional AspectID against the
-// aspect set it was actually validated against (3.4). Shared by Analyze,
-// Compile (debug/no-analysis path) and Recompile.
-func (s *Service) analyzeClaims(ctx context.Context, conceptID string, requireVerified bool) ([]Claim, []Tension, error) {
-	in, err := s.gatherAnalyzeInputs(conceptID, requireVerified)
+// proposed claim structure, validated against the subgraph citation
+// whitelist. Shared by Analyze, Compile (no-analysis path) and Recompile.
+func (s *Service) analyzeClaims(ctx context.Context, entryIDs []string) ([]Claim, []Tension, error) {
+	in, err := s.gatherSubgraphInputs(entryIDs)
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.analyzeClaimsWithInputs(ctx, conceptID, in)
+	return s.analyzeClaimsWithInputs(ctx, entryIDs, in)
 }
 
 // analyzeClaimsWithInputs is analyzeClaims split so Analyze() can reuse the
-// same *analyzeInputs it already built for computeReadiness (docs/impl/v1/
-// wiki.md 步骤 2 "人工指定主题手动编译") without deriving aspects/qualifying
-// points twice.
-func (s *Service) analyzeClaimsWithInputs(ctx context.Context, conceptID string, in *analyzeInputs) ([]Claim, []Tension, error) {
+// same *analyzeInputs it already built.
+func (s *Service) analyzeClaimsWithInputs(ctx context.Context, entryIDs []string, in *analyzeInputs) ([]Claim, []Tension, error) {
 	vars := map[string]string{
-		"entry_name":        in.conceptName,
-		"entry_description": in.conceptDesc,
+		"entry_name":        in.entryName,
+		"entry_description": in.entryDesc,
 		"domain_name":       in.domainName,
-		"aspects":           in.aspectsText,
-		"contradictions":    in.contradictions,
+		"core_material":     in.coreText,
+		"context_material":  in.contextText,
+		"conflict_material":  in.conflictText,
 		"gaps":              in.gapsText,
-		"entry_kind_label":  entryKindLabel(in.conceptKind),
-		"entry_kind_hint":   conceptKindHint(in.conceptKind),
+		"entry_kind_label":  entryKindLabel(in.entryKind),
+		"entry_kind_hint":   conceptKindHint(in.entryKind),
 	}
 
 	var lastErr error
@@ -592,7 +425,7 @@ func (s *Service) analyzeClaimsWithInputs(ctx context.Context, conceptID string,
 		raw, err := s.llmClient.CompleteJSON(ctx, "wiki_analyze.md", vars, "reasoning")
 		if err != nil {
 			lastErr = fmt.Errorf("llm call: %w", err)
-			slog.Warn("wiki: analyze llm call failed", "attempt", attempt, "entry_id", conceptID, "error", err)
+			slog.Warn("wiki: analyze llm call failed", "attempt", attempt, "entry_ids", entryIDs, "error", err)
 			continue
 		}
 
@@ -602,119 +435,22 @@ func (s *Service) analyzeClaimsWithInputs(ctx context.Context, conceptID string,
 		}
 		if err := json.Unmarshal(raw, &output); err != nil {
 			lastErr = fmt.Errorf("parse: %w", err)
-			slog.Warn("wiki: analyze parse failed", "attempt", attempt, "entry_id", conceptID, "error", err)
+			slog.Warn("wiki: analyze parse failed", "attempt", attempt, "entry_ids", entryIDs, "error", err)
 			continue
 		}
 
-		claims := filterClaims(output.Claims, in.whitelist, conceptID)
-		tensions := filterTensions(output.Tensions, in.whitelist, conceptID)
+		claims := filterClaims(output.Claims, in.whitelist, entryIDs)
+		tensions := filterTensions(output.Tensions, in.whitelist, entryIDs)
 		if len(claims) == 0 {
 			lastErr = fmt.Errorf("wiki: analysis produced no usable claims")
-			slog.Warn("wiki: analyze produced no usable claims", "attempt", attempt, "entry_id", conceptID)
+			slog.Warn("wiki: analyze produced no usable claims", "attempt", attempt, "entry_ids", entryIDs)
 			continue
 		}
 
-		correctAspectIDs(claims, in.aspects, in.pointAspect)
 		return claims, tensions, nil
 	}
 
 	return nil, nil, fmt.Errorf("wiki: analyze failed after retry: %w", lastErr)
-}
-
-// correctAspectIDs implements 3.4's aspect_id fallback: any claim whose
-// AspectID is empty or doesn't name a known aspect gets corrected from
-// whichever aspect its cited_point_ids mostly belong to (ties or no match
-// fall back to the reserved "misc" bucket). aspect_id never gates citation
-// whitelisting — this only affects how compileContent groups "展开说明".
-func correctAspectIDs(claims []Claim, aspects []Aspect, pointAspect map[string]string) {
-	validIDs := make(map[string]bool, len(aspects))
-	for _, a := range aspects {
-		validIDs[a.AspectID] = true
-	}
-	for i := range claims {
-		if validIDs[claims[i].AspectID] {
-			continue
-		}
-		claims[i].AspectID = fallbackAspectID(claims[i].CitedPointIDs, pointAspect)
-	}
-}
-
-func fallbackAspectID(citedPointIDs []string, pointAspect map[string]string) string {
-	counts := make(map[string]int)
-	for _, pid := range citedPointIDs {
-		if a, ok := pointAspect[pid]; ok {
-			counts[a]++
-		}
-	}
-	keys := make([]string, 0, len(counts))
-	for k := range counts {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	best, bestCount, tie := "", 0, false
-	for _, k := range keys {
-		switch {
-		case counts[k] > bestCount:
-			best, bestCount, tie = k, counts[k], false
-		case counts[k] == bestCount && bestCount > 0:
-			tie = true
-		}
-	}
-	if best == "" || tie {
-		return aspectMiscID
-	}
-	return best
-}
-
-// renderClaimsByAspect formats confirmed claims grouped by their (corrected)
-// AspectID for the compile prompt's {{claims_by_aspect}} var (4.2) — the
-// program-computed organization the compile prompt is told to preserve in
-// "展开说明"'s per-aspect "###" subsections, rather than writing them from a
-// flat claims list. Claims whose AspectID doesn't match a kept aspect (e.g.
-// truncated out of budget at analysis time and never fixed by
-// correctAspectIDs' fallback) land in a trailing "跨切面/未分类" group.
-func renderClaimsByAspect(aspects []Aspect, byID map[string]QualifyingPoint, claims []Claim) string {
-	byAspect := make(map[string][]Claim, len(aspects))
-	var misc []Claim
-	known := make(map[string]bool, len(aspects))
-	for _, a := range aspects {
-		known[a.AspectID] = true
-	}
-	for _, c := range claims {
-		if known[c.AspectID] {
-			byAspect[c.AspectID] = append(byAspect[c.AspectID], c)
-		} else {
-			misc = append(misc, c)
-		}
-	}
-
-	var sb strings.Builder
-	for _, a := range aspects {
-		cs := byAspect[a.AspectID]
-		if len(cs) == 0 {
-			continue
-		}
-		fmt.Fprintf(&sb, "【切面 %s】建议标题：%s\n", a.AspectID, a.SuggestedName)
-		sb.WriteString("材料：\n")
-		for _, pid := range a.PointIDs {
-			p := byID[pid]
-			fmt.Fprintf(&sb, "  [%s] %s\n", pid, p.Content)
-		}
-		sb.WriteString("该切面的稳定结论：\n")
-		for _, c := range cs {
-			fmt.Fprintf(&sb, "  - %s [%s]\n", c.Summary, strings.Join(c.CitedPointIDs, ", "))
-		}
-		sb.WriteString("\n")
-	}
-	if len(misc) > 0 {
-		sb.WriteString("【跨切面/未分类】\n")
-		for _, c := range misc {
-			fmt.Fprintf(&sb, "  - %s [%s]\n", c.Summary, strings.Join(c.CitedPointIDs, ", "))
-		}
-		sb.WriteString("\n")
-	}
-	return sb.String()
 }
 
 // extractSection pulls the text between a "## heading" line and the next
@@ -735,66 +471,30 @@ func extractSection(content, heading string) string {
 	return strings.TrimSpace(rest[:end])
 }
 
-// compileContent implements docs/impl/v1/wiki-generation.md 阶段 D/F: given
-// already-confirmed claims/tensions, call the generation Prompt once
-// (retrying once on validation failure), organizing "展开说明" by the same
-// aspect grouping analysis used, and validate the result. Shared by Compile
-// and Recompile. Aspects are recomputed here rather than threaded through
-// from analyzeClaims, since Compile also accepts a caller-supplied
-// claims/tensions pair that may have skipped analyzeClaims entirely.
-func (s *Service) compileContent(ctx context.Context, conceptID, pageType string, claims []Claim, tensions []Tension, requireVerified bool) (*compiledContent, error) {
+// compileSubgraphContent implements docs/impl/v1/wiki-single-tier-task-brief.md
+// 步骤 3: given already-confirmed claims/tensions, call the generation
+// Prompt once (retrying once on validation failure) over the Core/Context/
+// Conflict subgraph material, and validate the result. Shared by Compile and
+// Recompile.
+func (s *Service) compileSubgraphContent(ctx context.Context, entryIDs []string, claims []Claim, tensions []Tension) (*compiledContent, error) {
 	if len(claims) == 0 {
-		return nil, fmt.Errorf("wiki: no confirmed claims for concept %s", conceptID)
+		return nil, fmt.Errorf("wiki: no confirmed claims for entries %v", entryIDs)
 	}
 
-	qualifying, err := s.store.ListQualifyingPoints(conceptID, requireVerified)
+	in, err := s.gatherSubgraphInputs(entryIDs)
 	if err != nil {
-		return nil, fmt.Errorf("wiki: list qualifying points: %w", err)
-	}
-	if len(qualifying) == 0 {
-		return nil, fmt.Errorf("%w: concept %s currently has no qualifying knowledge points (material may have just been replaced by a reupload and hasn't earned verified activation yet)", ErrNoQualifyingPoints, conceptID)
-	}
-	byID := make(map[string]QualifyingPoint, len(qualifying))
-	for _, p := range qualifying {
-		byID[p.PointID] = p
+		return nil, err
 	}
 
-	conceptName, conceptDesc, _, conceptKind, err := s.store.GetEntryInfo(conceptID)
-	if err != nil {
-		return nil, fmt.Errorf("wiki: get concept info: %w", err)
-	}
+	// Citation whitelist = the entire subgraph (Core ∪ Context ∪ Conflict),
+	// not narrowed to only what confirmed claims already cite — the compile
+	// prompt sees the full subgraph material and may legitimately elaborate
+	// with additional supporting point_ids (docs/design/
+	// wiki-single-tier-revision.md "citation 白名单 = Subgraph 覆盖的全部
+	// point_id").
+	whitelist := in.whitelist
 
-	aspects, err := s.buildAspects(qualifying)
-	if err != nil {
-		return nil, fmt.Errorf("wiki: build aspects: %w", err)
-	}
-	maxChars := s.cfg.CompileMaxChars
-	if maxChars <= 0 {
-		maxChars = 12000
-	}
-	kept := s.selectAspectsWithinBudget(aspects, byID, maxChars)
-
-	// Citation whitelist is every qualifying KP shown in the (budget-kept)
-	// aspect material, same scope the analysis stage validated against — not
-	// narrowed further to only what confirmed claims already cite, since the
-	// compile prompt also sees the full aspect material and may legitimately
-	// elaborate with additional supporting point_ids in "展开说明"
-	// (docs/impl/v1/wiki-generation.md 4.3 "白名单范围不变").
-	whitelist := make(map[string]bool)
-	pointAspect := make(map[string]string)
-	for _, a := range kept {
-		for _, pid := range a.PointIDs {
-			whitelist[pid] = true
-			pointAspect[pid] = a.AspectID
-		}
-	}
-
-	// Claims may arrive here without ever going through analyzeClaims'
-	// correction (e.g. a human-edited round trip via CompileRequest.Claims) —
-	// idempotent to reapply.
-	correctAspectIDs(claims, kept, pointAspect)
-	claimsByAspectText := renderClaimsByAspect(kept, byID, claims)
-
+	claimsJSON, _ := json.Marshal(claims)
 	tensionsJSON := "[]"
 	if len(tensions) > 0 {
 		if b, err := json.Marshal(tensions); err == nil {
@@ -802,19 +502,17 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 		}
 	}
 
-	gapsText, err := s.matchingGaps(conceptName, qualifying)
-	if err != nil {
-		slog.Warn("wiki: gather gaps failed, continuing without them", "entry_id", conceptID, "error", err)
-	}
-
 	vars := map[string]string{
-		"entry_name":        conceptName,
-		"entry_description": conceptDesc,
-		"claims_by_aspect":  claimsByAspectText,
+		"entry_name":        in.entryName,
+		"entry_description": in.entryDesc,
+		"claims":            string(claimsJSON),
 		"tensions":          tensionsJSON,
-		"gaps":              gapsText,
-		"entry_kind_label":  entryKindLabel(conceptKind),
-		"entry_kind_hint":   conceptKindHint(conceptKind),
+		"core_material":     in.coreText,
+		"context_material":  in.contextText,
+		"conflict_material":  in.conflictText,
+		"gaps":              in.gapsText,
+		"entry_kind_label":  entryKindLabel(in.entryKind),
+		"entry_kind_hint":   conceptKindHint(in.entryKind),
 	}
 
 	triggerMax := s.cfg.TriggerQuestionsMax
@@ -826,10 +524,22 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 	// wiki-compilation.md "触发问法取材真实观测，检索匹配复用四元组" 生成侧
 	// 修订): both are retrieval metadata backed by data the system already
 	// has verified, not knowledge expression — best-effort, failure just
-	// means the page stores an empty list for that field.
-	aliases, err := s.store.EntryAliases(conceptName)
-	if err != nil {
-		slog.Warn("wiki: fetch concept aliases failed, storing empty", "entry_id", conceptID, "error", err)
+	// means the page stores an empty list for that field. Multi-entry
+	// compile unions every entry_id's own aliases.
+	var aliases []string
+	seenAlias := make(map[string]bool)
+	for _, name := range strings.Split(in.entryName, "、") {
+		as, err := s.store.EntryAliases(name)
+		if err != nil {
+			slog.Warn("wiki: fetch concept aliases failed, continuing without them", "entry_name", name, "error", err)
+			continue
+		}
+		for _, a := range as {
+			if !seenAlias[a] {
+				seenAlias[a] = true
+				aliases = append(aliases, a)
+			}
+		}
 	}
 
 	var lastErr error
@@ -837,74 +547,67 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 		content, err := s.llmClient.Complete(ctx, "wiki_compile.md", vars, "reasoning")
 		if err != nil {
 			lastErr = fmt.Errorf("llm call: %w", err)
-			slog.Warn("wiki: compile llm call failed", "attempt", attempt, "entry_id", conceptID, "error", err)
+			slog.Warn("wiki: compile llm call failed", "attempt", attempt, "entry_ids", entryIDs, "error", err)
 			continue
 		}
 
 		filteredContent, citedInContent, stripped := filterContentTags(content, whitelist)
 		if len(stripped) > 0 {
-			slog.Warn("wiki: stripped out-of-whitelist point_id tags from content", "entry_id", conceptID, "ids", stripped)
+			slog.Warn("wiki: stripped out-of-whitelist point_id tags from content", "entry_ids", entryIDs, "ids", stripped)
 		}
 
 		if !hasRequiredSections(filteredContent) {
 			lastErr = fmt.Errorf("wiki: compiled content missing required sections")
-			slog.Warn("wiki: compile missing required sections", "attempt", attempt, "entry_id", conceptID)
+			slog.Warn("wiki: compile missing required sections", "attempt", attempt, "entry_ids", entryIDs)
 			continue
 		}
 		if len(citedInContent) == 0 {
 			lastErr = fmt.Errorf("wiki: compiled content has no whitelisted citations")
-			slog.Warn("wiki: compile produced no usable citations", "attempt", attempt, "entry_id", conceptID)
+			slog.Warn("wiki: compile produced no usable citations", "attempt", attempt, "entry_ids", entryIDs)
 			continue
 		}
 
-		sourceUnitIDs := sourceUnitsForPoints(citedInContent, qualifying)
+		allPoints := make([]QualifyingPoint, 0, len(in.byID))
+		for _, p := range in.byID {
+			allPoints = append(allPoints, p)
+		}
+		sourceUnitIDs := sourceUnitsForPoints(citedInContent, allPoints)
 		sourceLinkIDs, err := s.store.VerifiedLinkIDsForPoints(citedInContent)
 		if err != nil {
-			slog.Warn("wiki: lookup verified link ids for cited points failed", "entry_id", conceptID, "error", err)
+			slog.Warn("wiki: lookup verified link ids for cited points failed", "entry_ids", entryIDs, "error", err)
 		}
 		observedConditions, err := s.store.VerifiedLinksObservedConditions(citedInContent)
 		if err != nil {
-			slog.Warn("wiki: lookup observed conditions for cited points failed", "entry_id", conceptID, "error", err)
+			slog.Warn("wiki: lookup observed conditions for cited points failed", "entry_ids", entryIDs, "error", err)
 		}
 		triggerQuestions, err := s.store.ConfidentQuestionsForPoints(citedInContent, triggerMax)
 		if err != nil {
-			slog.Warn("wiki: fetch confident questions failed, storing empty", "entry_id", conceptID, "error", err)
-		}
-		uncoveredPoints, err := s.store.ListUncoveredPoints(conceptID)
-		if err != nil {
-			slog.Warn("wiki: list uncovered points failed, storing empty", "entry_id", conceptID, "error", err)
+			slog.Warn("wiki: fetch confident questions failed, storing empty", "entry_ids", entryIDs, "error", err)
 		}
 
-		aspectQuestionsMax := s.cfg.AspectQuestionsMax
-		if aspectQuestionsMax <= 0 {
-			aspectQuestionsMax = 5
-		}
-		pageAspects := make([]PageAspect, 0, len(kept))
-		for _, a := range kept {
-			questionTypes, err := s.store.ConfidentQuestionsForPoints(a.PointIDs, aspectQuestionsMax)
+		var uncoveredPoints []UncoveredPoint
+		seenUncovered := make(map[string]bool)
+		for _, entryID := range entryIDs {
+			ups, err := s.store.ListUncoveredPoints(entryID)
 			if err != nil {
-				slog.Warn("wiki: fetch aspect question types failed, continuing without them", "aspect_id", a.AspectID, "error", err)
+				slog.Warn("wiki: list uncovered points failed, continuing without them", "entry_id", entryID, "error", err)
+				continue
 			}
-			pageAspects = append(pageAspects, PageAspect{
-				AspectID:      a.AspectID,
-				Heading:       a.SuggestedName,
-				PointIDs:      a.PointIDs,
-				QuestionTypes: questionTypes,
-			})
-		}
-		aspectsJSON, err := json.Marshal(pageAspects)
-		if err != nil {
-			slog.Warn("wiki: marshal page aspects failed, storing empty", "entry_id", conceptID, "error", err)
-			aspectsJSON = []byte("[]")
+			for _, u := range ups {
+				if !seenUncovered[u.PointID] {
+					seenUncovered[u.PointID] = true
+					uncoveredPoints = append(uncoveredPoints, u)
+				}
+			}
 		}
 
 		if len(aliases) == 0 || len(triggerQuestions) == 0 {
 			slog.Info("wiki: no programmatic aliases/trigger_questions available, storing empty",
-				"entry_id", conceptID, "aliases", len(aliases), "trigger_questions", len(triggerQuestions))
+				"entry_ids", entryIDs, "aliases", len(aliases), "trigger_questions", len(triggerQuestions))
 		}
 
 		return &compiledContent{
-			title:              conceptName,
+			title:              in.entryName,
 			content:            filteredContent,
 			summary:            extractSection(filteredContent, "## 摘要"),
 			sourcePointIDs:     citedInContent,
@@ -914,7 +617,6 @@ func (s *Service) compileContent(ctx context.Context, conceptID, pageType string
 			aliases:            truncateStrings(aliases, triggerMax),
 			triggerQuestions:   truncateStrings(triggerQuestions, triggerMax),
 			uncoveredPoints:    uncoveredPoints,
-			aspectsJSON:        string(aspectsJSON),
 		}, nil
 	}
 
@@ -952,7 +654,7 @@ func marshalConditions(conds []activation.ObservedCondition) string {
 // filterClaims drops any cited_point_id outside whitelist (warn), then drops
 // whole claims left with zero citations — an uncited claim can't be enforced
 // by the generation whitelist downstream.
-func filterClaims(claims []Claim, whitelist map[string]bool, conceptID string) []Claim {
+func filterClaims(claims []Claim, whitelist map[string]bool, entryIDs []string) []Claim {
 	var out []Claim
 	var droppedIDs []string
 	droppedClaims := 0
@@ -972,10 +674,10 @@ func filterClaims(claims []Claim, whitelist map[string]bool, conceptID string) [
 		out = append(out, Claim{Summary: c.Summary, CitedPointIDs: kept})
 	}
 	if len(droppedIDs) > 0 {
-		slog.Warn("wiki: dropped out-of-whitelist cited_point_ids in analysis", "entry_id", conceptID, "ids", droppedIDs)
+		slog.Warn("wiki: dropped out-of-whitelist cited_point_ids in analysis", "entry_ids", entryIDs, "ids", droppedIDs)
 	}
 	if droppedClaims > 0 {
-		slog.Warn("wiki: dropped claims with no whitelisted citations after filtering", "entry_id", conceptID, "count", droppedClaims)
+		slog.Warn("wiki: dropped claims with no whitelisted citations after filtering", "entry_ids", entryIDs, "count", droppedClaims)
 	}
 	return out
 }
@@ -983,7 +685,7 @@ func filterClaims(claims []Claim, whitelist map[string]bool, conceptID string) [
 // filterTensions drops any related_point_id outside whitelist (warn); a
 // tension with zero related points is still kept — it can describe a gap
 // with no existing KP to point at.
-func filterTensions(tensions []Tension, whitelist map[string]bool, conceptID string) []Tension {
+func filterTensions(tensions []Tension, whitelist map[string]bool, entryIDs []string) []Tension {
 	var out []Tension
 	var dropped []string
 	for _, t := range tensions {
@@ -998,7 +700,7 @@ func filterTensions(tensions []Tension, whitelist map[string]bool, conceptID str
 		out = append(out, Tension{Description: t.Description, RelatedPointIDs: kept})
 	}
 	if len(dropped) > 0 {
-		slog.Warn("wiki: dropped out-of-whitelist related_point_ids in analysis", "entry_id", conceptID, "ids", dropped)
+		slog.Warn("wiki: dropped out-of-whitelist related_point_ids in analysis", "entry_ids", entryIDs, "ids", dropped)
 	}
 	return out
 }
@@ -1162,19 +864,21 @@ func filterContentTags(content string, whitelist map[string]bool) (filtered stri
 // rows; results only gate Publish, via Selfcheck's
 // UnsupportedClaimCount lookup, separately (so a verify failure never fails
 // the compile itself). No-op when wiki.claim_verify_enabled is off.
-func (s *Service) verifyClaims(ctx context.Context, pageID, revisionID, conceptID string, claims []Claim, requireVerified bool) {
+func (s *Service) verifyClaims(ctx context.Context, pageID, revisionID string, entryIDs []string, claims []Claim) {
 	if !s.cfg.ClaimVerifyEnabled || len(claims) == 0 {
 		return
 	}
 
-	qualifying, err := s.store.ListQualifyingPoints(conceptID, requireVerified)
+	core, context, conflict, err := s.buildKnowledgeSubgraph(entryIDs)
 	if err != nil {
-		slog.Warn("wiki: claim verify list qualifying points failed, skipping", "page_id", pageID, "error", err)
+		slog.Warn("wiki: claim verify build subgraph failed, skipping", "page_id", pageID, "error", err)
 		return
 	}
-	pointContent := make(map[string]string, len(qualifying))
-	for _, p := range qualifying {
-		pointContent[p.PointID] = p.Content
+	pointContent := make(map[string]string)
+	for _, group := range [][]QualifyingPoint{core, context, conflict} {
+		for _, p := range group {
+			pointContent[p.PointID] = p.Content
+		}
 	}
 
 	type claimRef struct {
@@ -1365,7 +1069,10 @@ func (s *Service) Selfcheck(ctx context.Context, pageID string) (*QualityCheck, 
 		metrics.ReplaySufficientRate = 1.0
 	}
 
-	qualifying, err := s.store.ListQualifyingPoints(conceptIDOf(page), !isManualCompiledFrom(page.CompiledFrom))
+	// verified is no longer a qualifying-material gate (docs/design/
+	// wiki-single-tier-revision.md: a human picking the entry_id set is
+	// itself the admission signal) — always false now, regardless of origin.
+	qualifying, err := s.store.ListQualifyingPoints(conceptIDOf(page), false)
 	if err != nil {
 		slog.Warn("wiki: selfcheck list qualifying points failed", "page_id", pageID, "error", err)
 	}
@@ -1484,10 +1191,8 @@ func (s *Service) publish(ctx context.Context, pageID string, force bool) (*Page
 		slog.Error("wiki: index page after publish failed", "page_id", pageID, "error", err)
 	}
 
-	if page.PageType != PageTypeTopic {
-		if err := s.RecomputeRelationsForPage(pageID); err != nil {
-			slog.Error("wiki: recompute relations after publish failed", "page_id", pageID, "error", err)
-		}
+	if err := s.RecomputeRelationsForPage(pageID); err != nil {
+		slog.Error("wiki: recompute relations after publish failed", "page_id", pageID, "error", err)
 	}
 
 	slog.Info("wiki: published page", "page_id", pageID, "entry_id", page.EntryID.String)
@@ -1512,7 +1217,6 @@ func (s *Service) Archive(pageID string) (*Page, error) {
 		slog.Warn("wiki: remove archived page from index failed", "page_id", pageID, "error", err)
 	}
 	s.clearRelationsForPage(pageID)
-	s.cascadeToParentTopics(pageID, "archived")
 
 	slog.Info("wiki: archived page", "page_id", pageID)
 	return s.store.GetPage(pageID)
@@ -1560,33 +1264,7 @@ func (s *Service) MarkNeedsRecompile(pageID, reason string) error {
 	}
 
 	slog.Info("wiki: marked page needs_recompile", "page_id", pageID, "reason", reason)
-	s.cascadeToParentTopics(pageID, reason)
 	return nil
-}
-
-// cascadeToParentTopics implements docs/impl/v1/wiki.md 步骤 9: a concept or
-// fact page entering needs_recompile or archived propagates to its
-// containing topic page(s) (needs_recompile only — topic pages don't
-// propagate further, "只有两层"). No-op for topic pages themselves (contains
-// is only ever concept/fact -> topic in the ContainingTopics lookup
-// direction, so this is naturally a no-op when called with a topic page id,
-// but the page_type check makes the intent explicit and avoids an extra
-// store round-trip).
-func (s *Service) cascadeToParentTopics(memberPageID, memberReason string) {
-	page, err := s.store.GetPage(memberPageID)
-	if err != nil || page == nil || page.PageType == PageTypeTopic {
-		return
-	}
-	topics, err := s.store.ContainingTopics(memberPageID)
-	if err != nil {
-		slog.Warn("wiki: cascade to parent topics: list containing topics failed", "page_id", memberPageID, "error", err)
-		return
-	}
-	for _, topicID := range topics {
-		if err := s.MarkNeedsRecompile(topicID, "member_page_changed:"+memberPageID); err != nil {
-			slog.Error("wiki: cascade needs_recompile to parent topic failed", "topic_page_id", topicID, "member_page_id", memberPageID, "error", err)
-		}
-	}
 }
 
 // GetActivePageByEntryID exposes the store lookup for callers outside this
@@ -1596,126 +1274,55 @@ func (s *Service) GetActivePageByEntryID(conceptID string) (*Page, error) {
 	return s.store.GetActivePageByEntryID(conceptID)
 }
 
-// RecompileFlag is one page ScanForNewQualifyingKP marked needs_recompile,
-// returned so the caller (Study) can write the recompile_flag audit trail
-// (docs/impl/v1/study.md 步骤 6, docs/impl/v1/wiki.md 步骤 5b).
-type RecompileFlag struct {
-	PageID  string
-	EntryID string
-	Reason  string
-}
-
-// ScanForNewQualifyingKP implements docs/impl/v1/wiki.md 步骤 5b: for every
-// published page tied to a concept, compare currentQualifyingCounts (Study's
-// fresh count of qualifying KPs for that concept, same query semantics as
-// this package's own qualifying-KP query) against the
-// count actually compiled into the page — approximated by len(source_point_ids)
-// since the compile-time qualifying count itself isn't a persisted column.
-// A difference >= minNewKP marks the page needs_recompile and reports it.
-func (s *Service) ScanForNewQualifyingKP(currentQualifyingCounts map[string]int, minNewKP int) ([]RecompileFlag, error) {
-	pages, err := s.store.ListPublishedPages()
-	if err != nil {
-		return nil, fmt.Errorf("wiki: list published pages: %w", err)
-	}
-
-	var flagged []RecompileFlag
-	for _, p := range pages {
-		if !p.EntryID.Valid {
+// NotifyEntriesChanged implements unit.WikiEntryNotifier/entry package's
+// equivalent notification point (docs/impl/v1/wiki.md「重编译标记」,
+// 2026-08-18 单层化收尾重新接线): entryIDs is the set of entry_id whose Core
+// KP composition just changed (a KU's lifecycle transition, or a KU getting
+// classified into/out of an entry). For each one, every *published* page
+// compiled from it (wiki_page_entries — Core membership only, no Context/
+// Conflict one-hop expansion) gets flagged needs_recompile via
+// MarkNeedsRecompile, which itself no-ops on archived/already-needs_recompile
+// pages; draft pages are skipped here since they were never live and have
+// nothing stale to protect readers from. Best-effort per page — one failed
+// lookup/mark doesn't stop the rest — errors are collected and returned
+// joined so a caller can log/observe without this call ever partially
+// hanging.
+func (s *Service) NotifyEntriesChanged(entryIDs []string, reason string) error {
+	seenEntry := make(map[string]bool, len(entryIDs))
+	seenPage := make(map[string]bool)
+	var errs []error
+	for _, entryID := range entryIDs {
+		if entryID == "" || seenEntry[entryID] {
 			continue
 		}
-		current, ok := currentQualifyingCounts[p.EntryID.String]
-		if !ok {
-			continue
-		}
-		var sourcePointIDs []string
-		json.Unmarshal([]byte(p.SourcePointIDs), &sourcePointIDs)
-		if current-len(sourcePointIDs) < minNewKP {
-			continue
-		}
-		reason := fmt.Sprintf("概念新增合格知识点 %d 个（当前 %d，编译时 %d）", current-len(sourcePointIDs), current, len(sourcePointIDs))
-		if err := s.MarkNeedsRecompile(p.PageID, reason); err != nil {
-			slog.Error("wiki: mark needs_recompile from new qualifying kp failed", "page_id", p.PageID, "error", err)
-			continue
-		}
-		flagged = append(flagged, RecompileFlag{PageID: p.PageID, EntryID: p.EntryID.String, Reason: reason})
-	}
-	return flagged, nil
-}
+		seenEntry[entryID] = true
 
-// NotifyPointsLifecycleChanged implements unit.ActivationNotifier's sibling
-// interface, unit.WikiNotifier (docs/impl/v1/lifecycle.md 步骤 4): any
-// published page whose source_point_ids intersects pointIDs is marked
-// needs_recompile — a superseded/deprecated KP invalidates the page's
-// "stable conclusions" until it's re-verified.
-func (s *Service) NotifyPointsLifecycleChanged(pointIDs []string) error {
-	if len(pointIDs) == 0 {
-		return nil
-	}
-	changed := make(map[string]bool, len(pointIDs))
-	for _, id := range pointIDs {
-		changed[id] = true
-	}
-
-	pages, err := s.store.ListPublishedPages()
-	if err != nil {
-		return fmt.Errorf("wiki: list published pages: %w", err)
-	}
-
-	for _, p := range pages {
-		var sourcePointIDs []string
-		if err := json.Unmarshal([]byte(p.SourcePointIDs), &sourcePointIDs); err != nil {
+		pageIDs, err := s.store.PageIDsByEntryID(entryID)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("wiki: notify entries changed: page ids by entry %s: %w", entryID, err))
 			continue
 		}
-		affected := false
-		for _, pid := range sourcePointIDs {
-			if changed[pid] {
-				affected = true
-				break
+		for _, pageID := range pageIDs {
+			if seenPage[pageID] {
+				continue
+			}
+			seenPage[pageID] = true
+
+			page, err := s.store.GetPage(pageID)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("wiki: notify entries changed: get page %s: %w", pageID, err))
+				continue
+			}
+			if page == nil || page.Status != StatusPublished {
+				continue
+			}
+			if err := s.MarkNeedsRecompile(pageID, reason); err != nil {
+				errs = append(errs, fmt.Errorf("wiki: notify entries changed: mark needs_recompile %s: %w", pageID, err))
 			}
 		}
-		if !affected {
-			continue
-		}
-		if err := s.MarkNeedsRecompile(p.PageID, "lifecycle_changed"); err != nil {
-			slog.Error("wiki: mark needs_recompile from lifecycle change failed", "page_id", p.PageID, "error", err)
-		}
 	}
-	return nil
-}
-
-// NotifyLinkVerified implements activation.WikiNotifier (docs/impl/v1/wiki.md
-// 步骤5 触发(d)): any published page whose source_point_ids contains pointID
-// is marked needs_recompile, so a stale wiki_pages.observed_conditions
-// (synced from VerifiedLinksObservedConditions only at compile time) picks up
-// the KP's just-verified confirming questions on the next recompile.
-func (s *Service) NotifyLinkVerified(pointID string) error {
-	if pointID == "" {
-		return nil
-	}
-
-	pages, err := s.store.ListPublishedPages()
-	if err != nil {
-		return fmt.Errorf("wiki: list published pages: %w", err)
-	}
-
-	for _, p := range pages {
-		var sourcePointIDs []string
-		if err := json.Unmarshal([]byte(p.SourcePointIDs), &sourcePointIDs); err != nil {
-			continue
-		}
-		affected := false
-		for _, pid := range sourcePointIDs {
-			if pid == pointID {
-				affected = true
-				break
-			}
-		}
-		if !affected {
-			continue
-		}
-		if err := s.MarkNeedsRecompile(p.PageID, "link_verified"); err != nil {
-			slog.Error("wiki: mark needs_recompile from link verified failed", "page_id", p.PageID, "error", err)
-		}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	return nil
 }
@@ -1728,42 +1335,20 @@ func (s *Service) NotifyLinkVerified(pointID string) error {
 // maxCandidates are retrieval.RetrievalConfig.WikiMinScore/WikiMaxCandidates,
 // passed in by the caller since Wiki doesn't depend on the retrieval
 // package's config section. maxCandidates<=0 defaults to 3.
-// SkeletonInfo carries the topic-page recall skeleton
-// (docs/impl/v1/wiki.md 步骤 8「检索接入」): the point_ids of every member
-// concept page a topic-page hit expanded into (including members truncated
-// out of the direct-answer candidate list), plus the topic page id that
-// provided it. Set whenever a topic page was hit during candidate gathering,
-// regardless of whether direct answer ultimately succeeded — traces.
-// skeleton_page_id records it either way (docs/impl/v1/wiki.md 步骤 8:
-// "无论直答是否成功都记录").
-type SkeletonInfo struct {
-	PageID  string
-	Members []SkeletonMember
-}
-
-// SkeletonMember is one expanded topic-page member and its own
-// source_point_ids (not the flat union) — callers that need per-member
-// attribution (docs/impl/v1/trace.md topic_decompose_signal's
-// resolved_member_page_ids) can use this without a second lookup.
-type SkeletonMember struct {
-	PageID   string
-	PointIDs []string
-}
-
-func (s *Service) TryDirectAnswer(ctx context.Context, question, subject, intent, audience, constraint string, minScore float64, maxCandidates int) (*DirectAnswerResult, bool, *SkeletonInfo, error) {
+func (s *Service) TryDirectAnswer(ctx context.Context, question string, domainIDs []string, minScore float64, maxCandidates int) (*DirectAnswerResult, bool, error) {
 	if maxCandidates <= 0 {
 		maxCandidates = 3
 	}
 
-	candidates, skeleton, err := s.gatherDirectAnswerCandidates(question, subject, intent, audience, constraint, minScore, maxCandidates)
+	candidates, err := s.gatherDirectAnswerCandidates(ctx, question, domainIDs, minScore, maxCandidates)
 	if err != nil {
-		return nil, false, nil, err
+		return nil, false, err
 	}
 
 	for _, pageID := range candidates {
 		page, err := s.store.GetPage(pageID)
 		if err != nil {
-			return nil, false, skeleton, fmt.Errorf("wiki: get page: %w", err)
+			return nil, false, fmt.Errorf("wiki: get page: %w", err)
 		}
 		if page == nil || page.Status != StatusPublished {
 			// Index/DB momentarily out of sync (e.g. mid recompile) — skip.
@@ -1772,36 +1357,41 @@ func (s *Service) TryDirectAnswer(ctx context.Context, question, subject, intent
 
 		result, ok, err := s.answerFromPage(ctx, question, page)
 		if err != nil {
-			return nil, false, skeleton, err
+			return nil, false, err
 		}
 		if ok {
-			return result, true, skeleton, nil
+			return result, true, nil
 		}
 	}
-	return nil, false, skeleton, nil
+	return nil, false, nil
 }
 
-// gatherDirectAnswerCandidates implements docs/impl/v1/wiki.md 步骤 4's three
-// direct-answer entries, merged and deduped, in priority order: four-tuple
-// hits (most-verified-specific — precise match against previously confirmed
-// usage) first, then lexical hits (wiki index, including aliases/
-// trigger_questions fields, score >= minScore) ordered by score, then
-// concept-name hits not already present, truncated to maxCandidates. None of
-// the three entries calls the LLM.
-func (s *Service) gatherDirectAnswerCandidates(question, subject, intent, audience, constraint string, minScore float64, maxCandidates int) ([]string, *SkeletonInfo, error) {
+// gatherDirectAnswerCandidates implements docs/impl/v1/wiki-single-tier-
+// task-brief.md 步骤 4's three direct-answer entries, merged and deduped, in
+// priority order: Concept/Fact recognition hits (an LLM judgment against
+// already-published entries — the most semantically targeted signal) first,
+// then lexical hits (wiki index, including aliases/trigger_questions fields,
+// score >= minScore) ordered by score, then concept-name hits not already
+// present, truncated to maxCandidates.
+//
+// Single-tier (docs/impl/v1/wiki-single-tier-task-brief.md 步骤 2/3): Wiki no
+// longer has a separate "topic page aggregates concept-page members" tier, so
+// there is no more topic-page expansion step here — every hit is itself a
+// directly answerable page.
+func (s *Service) gatherDirectAnswerCandidates(ctx context.Context, question string, domainIDs []string, minScore float64, maxCandidates int) ([]string, error) {
 	seen := make(map[string]bool)
-	var rawHits []string // may include topic pages, pre-expansion
+	var candidates []string
 
-	fourTupleHits, err := s.matchFourTupleEntry(subject, intent, audience, constraint)
+	recognizedHits, err := s.matchEntriesByConceptRecognition(ctx, question, domainIDs)
 	if err != nil {
-		slog.Warn("wiki: four-tuple entry lookup failed, continuing without it", "error", err)
+		slog.Warn("wiki: concept/fact recognition lookup failed, continuing without it", "error", err)
 	}
-	for _, pageID := range fourTupleHits {
+	for _, pageID := range recognizedHits {
 		if seen[pageID] {
 			continue
 		}
 		seen[pageID] = true
-		rawHits = append(rawHits, pageID)
+		candidates = append(candidates, pageID)
 	}
 
 	q := bleve.NewMatchQuery(question)
@@ -1810,7 +1400,7 @@ func (s *Service) gatherDirectAnswerCandidates(question, subject, intent, audien
 
 	results, err := s.wikiIndex.Search(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("wiki: search: %w", err)
+		return nil, fmt.Errorf("wiki: search: %w", err)
 	}
 
 	for _, hit := range results.Hits {
@@ -1818,7 +1408,7 @@ func (s *Service) gatherDirectAnswerCandidates(question, subject, intent, audien
 			continue
 		}
 		seen[hit.ID] = true
-		rawHits = append(rawHits, hit.ID)
+		candidates = append(candidates, hit.ID)
 	}
 
 	conceptHits, err := s.matchEntryRow(question)
@@ -1830,177 +1420,106 @@ func (s *Service) gatherDirectAnswerCandidates(question, subject, intent, audien
 			continue
 		}
 		seen[pageID] = true
-		rawHits = append(rawHits, pageID)
-	}
-
-	// Topic-page expansion (docs/impl/v1/wiki.md 步骤 8「检索接入」): a topic
-	// page never enters the direct-answer sequence itself — it's a recall
-	// skeleton, not an answer unit. Expand it into its published contains
-	// members, inserted at the slot the topic page held; a member already
-	// present from another entry keeps its existing (higher-priority) slot.
-	var candidates []string
-	seenEntry := make(map[string]bool)
-	var skeleton *SkeletonInfo
-	for _, pageID := range rawHits {
-		page, err := s.store.GetPage(pageID)
-		if err != nil || page == nil {
-			continue
-		}
-		if page.PageType != PageTypeTopic {
-			if !seenEntry[pageID] {
-				seenEntry[pageID] = true
-				candidates = append(candidates, pageID)
-			}
-			continue
-		}
-
-		orderedMemberIDs, members, err := s.expandTopicMembers(pageID, question)
-		if err != nil {
-			slog.Warn("wiki: expand topic members failed", "page_id", pageID, "error", err)
-			continue
-		}
-		if skeleton == nil {
-			skeleton = &SkeletonInfo{PageID: pageID}
-		}
-		skeleton.Members = append(skeleton.Members, members...)
-		for _, m := range orderedMemberIDs {
-			if !seenEntry[m] {
-				seenEntry[m] = true
-				candidates = append(candidates, m)
-			}
-		}
+		candidates = append(candidates, pageID)
 	}
 
 	if len(candidates) > maxCandidates {
 		candidates = candidates[:maxCandidates]
 	}
-	return candidates, skeleton, nil
+	return candidates, nil
 }
 
-// expandTopicMembers implements docs/impl/v1/wiki.md 步骤 8's member
-// ordering: published contains members ranked by question-term overlap with
-// member_roles.question_types (falling back to source_point_ids count
-// descending when member_roles is empty). Returns the ordered member page
-// ids plus the union of ALL members' source_point_ids — including ones that
-// get truncated out of the direct-answer candidate list — for
-// skeleton_point_ids (docs/impl/v1/wiki.md 步骤 8: "含被截断掉的").
-func (s *Service) expandTopicMembers(topicPageID, question string) (memberIDs []string, members []SkeletonMember, err error) {
-	page, err := s.store.GetPage(topicPageID)
-	if err != nil || page == nil {
-		return nil, nil, err
+// renderEntryCandidateList formats entries into wiki_entry_recognize.md's
+// entry_list text, mirroring unit.renderEntryList's shape (name/description/
+// boundary — unit_entry_match.md's own disambiguation fields) so the two
+// prompts read the same way despite matching different things (a knowledge
+// unit vs. a question).
+func renderEntryCandidateList(entries []EntryCandidate) string {
+	var list strings.Builder
+	for _, e := range entries {
+		line := fmt.Sprintf("[%s] %s：%s", e.EntryID, e.Name, e.Description)
+		if e.Boundary != "" {
+			line += fmt.Sprintf("｜边界：%s", e.Boundary)
+		}
+		list.WriteString(line + "\n")
 	}
-	var roles []MemberRole
-	json.Unmarshal([]byte(page.MemberRoles), &roles)
-	roleByMember := make(map[string]MemberRole, len(roles))
-	for _, r := range roles {
-		roleByMember[r.MemberPageID] = r
-	}
+	return list.String()
+}
 
-	memberPageIDs, err := s.store.ContainsMembers(topicPageID)
+// matchEntriesByConceptRecognition implements docs/impl/v1/wiki-single-tier-
+// task-brief.md 步骤 4: one LLM call judging which already-existing Concept/
+// Fact entries the question is mainly about (config/prompts/
+// wiki_entry_recognize.md, entry_list rendered the same way
+// unit_entry_match.md's is — see renderEntryCandidateList), replacing the
+// old four-tuple exact-match entry (matchFourTupleEntry, removed). domainIDs
+// scopes the candidate entry list the same way the rest of Retrieval's
+// domain pre-filter does (retrieval.QueryContext.DomainIDs); empty means
+// unresolved domain, so every entry across every domain is a candidate
+// (mirrors unit.Store.GetEntriesByDomainID("")'s same fallback). No-ops
+// (skips the LLM call entirely) when there are zero candidate entries to
+// begin with — an empty domain shouldn't waste a call on a list with nothing
+// to match, same reasoning as unit.Service.matchConceptBatches's empty-list
+// guard. A recognized entry_id only becomes a candidate page if it has a
+// currently *published* page (checked via Store.PageIDsByEntryID + GetPage);
+// an entry with no page yet, or only a draft/archived one, is silently
+// dropped rather than erroring — the caller is looking for existing
+// answerable material, not entry existence.
+func (s *Service) matchEntriesByConceptRecognition(ctx context.Context, question string, domainIDs []string) ([]string, error) {
+	entries, err := s.store.ListEntriesForRecognition(domainIDs)
 	if err != nil {
-		return nil, nil, err
+		return nil, fmt.Errorf("wiki: list entries for recognition: %w", err)
+	}
+	if len(entries) == 0 {
+		return nil, nil
 	}
 
-	type scored struct {
-		pageID   string
-		score    int
-		kpN      int
-		pointIDs []string
+	known := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		known[e.EntryID] = true
 	}
-	questionTerms := text.TermSet(question)
-	var published []scored
-	for _, m := range memberPageIDs {
-		mp, err := s.store.GetPage(m)
-		if err != nil || mp == nil || mp.Status != StatusPublished {
+
+	vars := map[string]string{
+		"question":   question,
+		"entry_list": renderEntryCandidateList(entries),
+	}
+	data, err := s.llmClient.CompleteJSON(ctx, "wiki_entry_recognize.md", vars, "extraction")
+	if err != nil {
+		return nil, fmt.Errorf("wiki: entry recognize llm call: %w", err)
+	}
+
+	var output struct {
+		EntryIDs []string `json:"entry_ids"`
+	}
+	if err := json.Unmarshal(data, &output); err != nil {
+		return nil, fmt.Errorf("wiki: entry recognize parse: %w", err)
+	}
+
+	seen := make(map[string]bool)
+	var pageIDs []string
+	for _, entryID := range output.EntryIDs {
+		if entryID == "" || !known[entryID] {
 			continue
 		}
-		var mPointIDs []string
-		json.Unmarshal([]byte(mp.SourcePointIDs), &mPointIDs)
-
-		sc := scored{pageID: m, kpN: len(mPointIDs), pointIDs: mPointIDs}
-		if role, ok := roleByMember[m]; ok {
-			overlap := 0
-			for _, qt := range role.QuestionTypes {
-				qtTerms := text.TermSet(qt)
-				for t := range qtTerms {
-					if _, ok := questionTerms[t]; ok {
-						overlap++
-					}
-				}
-			}
-			sc.score = overlap
+		candidatePageIDs, err := s.store.PageIDsByEntryID(entryID)
+		if err != nil {
+			slog.Warn("wiki: page ids by entry id failed", "entry_id", entryID, "error", err)
+			continue
 		}
-		published = append(published, sc)
-	}
-
-	sort.SliceStable(published, func(i, j int) bool {
-		if published[i].score != published[j].score {
-			return published[i].score > published[j].score
-		}
-		return published[i].kpN > published[j].kpN
-	})
-
-	for _, sc := range published {
-		memberIDs = append(memberIDs, sc.pageID)
-		members = append(members, SkeletonMember{PageID: sc.pageID, PointIDs: sc.pointIDs})
-	}
-	return memberIDs, members, nil
-}
-
-// matchFourTupleEntry implements docs/impl/v1/wiki.md 步骤 4c: match the
-// already-Session-parsed subject/intent/audience/constraint against every
-// published page's aggregated observed_conditions, reusing
-// activation.MatchConditionGroups instead of a second matching
-// implementation (docs/design/wiki-compilation.md "触发问法取材真实观测，
-// 检索匹配复用四元组"). Naturally no-ops when all four fields are empty (the
-// plain POST /answer path that skips Session parsing) — MatchConditionGroups
-// itself guards against an all-empty query. Ties among multiple matching
-// pages break by the matching group's LastSeenAt descending, mirroring
-// Matcher.Match's LastUsedAt-descending sort.
-func (s *Service) matchFourTupleEntry(subject, intent, audience, constraint string) ([]string, error) {
-	if s.activationSvc == nil {
-		return nil, nil
-	}
-	if subject == "" && intent == "" && audience == "" && constraint == "" {
-		return nil, nil
-	}
-
-	querySubject, qi, qa, qc := activation.BuildQueryConditionTerms(subject, intent, audience, constraint)
-
-	pages, err := s.store.ListPublishedPagesWithConditions()
-	if err != nil {
-		return nil, fmt.Errorf("wiki: list published pages with conditions: %w", err)
-	}
-
-	type match struct {
-		pageID     string
-		lastSeenAt time.Time
-	}
-	var matches []match
-	for _, p := range pages {
-		var latest time.Time
-		hit := false
-		for _, cond := range p.Conditions {
-			if !activation.MatchConditionGroups([]activation.ObservedCondition{cond}, querySubject, qi, qa, qc) {
+		for _, pageID := range candidatePageIDs {
+			if seen[pageID] {
 				continue
 			}
-			hit = true
-			if cond.LastSeenAt.After(latest) {
-				latest = cond.LastSeenAt
+			page, err := s.store.GetPage(pageID)
+			if err != nil {
+				slog.Warn("wiki: get page failed during entry recognition", "page_id", pageID, "error", err)
+				continue
 			}
+			if page == nil || page.Status != StatusPublished {
+				continue
+			}
+			seen[pageID] = true
+			pageIDs = append(pageIDs, pageID)
 		}
-		if hit {
-			matches = append(matches, match{pageID: p.PageID, lastSeenAt: latest})
-		}
-	}
-
-	sort.SliceStable(matches, func(i, j int) bool {
-		return matches[i].lastSeenAt.After(matches[j].lastSeenAt)
-	})
-
-	pageIDs := make([]string, len(matches))
-	for i, m := range matches {
-		pageIDs[i] = m.pageID
 	}
 	return pageIDs, nil
 }

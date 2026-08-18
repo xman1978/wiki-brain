@@ -31,9 +31,9 @@ type Service struct {
 	queue              *queue.Queue
 	cfg                *config.Config
 	broadcaster        *progress.Broadcaster
-	wikiNotifier       WikiNotifier
 	activationNotifier ActivationNotifier
 	conceptNotifier    EntryNotifier
+	wikiEntryNotifier  WikiEntryNotifier
 
 	// extracting guards against two Extract runs on the same source at once
 	// (double-triggered queue tasks, a retry racing the original) — the second
@@ -46,13 +46,6 @@ type Service struct {
 // already has an extraction running. The queue handler treats it as "leave
 // units_status alone" — the in-flight run owns that status.
 var ErrExtractionInProgress = errors.New("unit: extraction already in progress")
-
-// WikiNotifier lets the (not yet implemented) Wiki module learn about
-// lifecycle changes so it can mark dependent pages needs_recompile
-// (docs/impl/v1/lifecycle.md 步骤 4). SetUnitLifecycle no-ops when unset.
-type WikiNotifier interface {
-	NotifyPointsLifecycleChanged(pointIDs []string) error
-}
 
 // ActivationNotifier lets the Activation module's Matcher learn about KP
 // lifecycle changes, since its matchable-link cache only holds links whose
@@ -91,7 +84,11 @@ type EntryNotifier interface {
 	// kind=="fact" (empty for concept clusters) — lets the concept module
 	// track/accumulate alias names across merges (docs/impl/v1/kpn.md 步骤
 	// 3, 2026-08-05).
-	ProposeAddCandidate(domainID, suggestedName, suggestedDescription, suggestedBoundary, kind, entity string, pointIDs []string, sourceID string) (candidateID string, err error)
+	// parentEntryID is the concept entry_id a fact candidate was classified
+	// under (kpn.md 步骤 3 fact 新建), empty for concept clusters — persisted
+	// verbatim as entries.parent_entry_id on confirm (fact-entry-parent-
+	// concept-task-brief.md).
+	ProposeAddCandidate(domainID, suggestedName, suggestedDescription, suggestedBoundary, kind, entity string, pointIDs []string, sourceID, parentEntryID string) (candidateID string, err error)
 	// ListActiveEntryReferences returns one formatted "name：description｜
 	// 边界：boundary" line per existing entry in the domain, used as a
 	// granularity/abstraction-level reference (docs/impl/v1/kpn.md 步骤 3) so
@@ -115,8 +112,35 @@ type EntryNotifier interface {
 	ListPendingAddPointIDs(domainID string) ([]string, error)
 }
 
-func (s *Service) SetWikiNotifier(n WikiNotifier) {
-	s.wikiNotifier = n
+// WikiEntryNotifier lets the Wiki module learn that an entry_id's Core KP
+// composition just changed, so it can flag any published page compiled from
+// that entry_id needs_recompile (docs/impl/v1/wiki.md「重编译标记」). This
+// re-wires the two of the design's three automatic sources that don't
+// depend on question-answering confidence accumulation — "a. lifecycle 传导"
+// (a KU's lifecycle flip moves a KP into/out of an entry's Core) and the new
+// "entry_id 归属变化" scenario (a KU gets classified into/out of an entry) —
+// after both were dropped along with the two-tier architecture's automatic
+// candidate identification (2026-08-18 单层化收尾, docs/impl/v1/
+// wiki-single-tier-open-questions.md「已拍板」). The other two design
+// sources ("b. Study 周期扫描新增 qualifying KP" and "d. ActivationLink
+// verified") are deliberately NOT restored — both key off accumulated
+// answer confidence, which conflicts with this revision's "编译准入不再
+// 依赖置信度" direction; see the CLAUDE.md 任务说明 for this decision.
+//
+// Deliberately not the old (deleted) WikiNotifier shape — that interface's
+// two methods were "point_id lifecycle changed" and "link verified" and
+// would silently reintroduce source d if reused verbatim. This one takes
+// entry_id, not point_id/link_id, and only decides "does this entry_id's
+// Core-membership page need re-flagging", nothing about individual
+// links/points. SetWikiEntryNotifier no-ops when unset.
+type WikiEntryNotifier interface {
+	// NotifyEntriesChanged marks needs_recompile on every published page
+	// compiled from any of entryIDs (matched via wiki_page_entries — Core
+	// membership only, no Context/Conflict one-hop expansion, per
+	// docs/impl/v1/wiki-single-tier-open-questions.md「已拍板」: cheap
+	// enough to call on every lifecycle/entry_id event). Duplicate/empty
+	// ids and non-published pages are silently skipped.
+	NotifyEntriesChanged(entryIDs []string, reason string) error
 }
 
 func (s *Service) SetEntryNotifier(n EntryNotifier) {
@@ -125,6 +149,24 @@ func (s *Service) SetEntryNotifier(n EntryNotifier) {
 
 func (s *Service) SetActivationNotifier(n ActivationNotifier) {
 	s.activationNotifier = n
+}
+
+func (s *Service) SetWikiEntryNotifier(n WikiEntryNotifier) {
+	s.wikiEntryNotifier = n
+}
+
+// notifyWikiEntriesChanged is the shared best-effort call site every entry_id
+// mutation (lifecycle transitions, concept (re)matching) funnels through —
+// nil-safe, empty-slice-safe, logs and swallows the error like every other
+// cross-module notifier in this file (ActivationNotifier/EntryNotifier
+// above) so a Wiki-side hiccup never fails the KU/KP write that triggered it.
+func (s *Service) notifyWikiEntriesChanged(entryIDs []string, reason string) {
+	if s.wikiEntryNotifier == nil || len(entryIDs) == 0 {
+		return
+	}
+	if err := s.wikiEntryNotifier.NotifyEntriesChanged(entryIDs, reason); err != nil {
+		slog.Warn("unit: wiki entry notify failed", "error", err)
+	}
 }
 
 func NewService(store *Store, sourceStore *source.Store, llmClient llm.LLMClient, unitsIdx, pointsIdx bleve.Index, q *queue.Queue, cfg *config.Config) *Service {
@@ -688,9 +730,17 @@ type unitKindClassifyOutput struct {
 // with entry_id at all times, not just at initial-extraction time. Intra
 // relations are untouched — those never depended on entry_id.
 func (s *Service) MatchEntries(ctx context.Context, sourceID, domainID string) {
+	// Snapshot the entry_ids this source's current units pointed at before
+	// the clear below wipes them — those entries just lost members too and
+	// need the same needs_recompile notification new matches get further
+	// down (matchConceptBatch), otherwise a rematch that moves a source's
+	// units OUT of an entry never flags that entry's page stale.
+	staleEntryIDs := s.currentEntryIDsBySourceID(sourceID)
+
 	if err := s.store.ClearEntryIDBySourceID(sourceID); err != nil {
 		slog.Warn("unit: clear concept id before rematch failed", "source_id", sourceID, "error", err)
 	}
+	s.notifyWikiEntriesChanged(staleEntryIDs, fmt.Sprintf("source %s 概念重新匹配：原归属概念成员减少", sourceID))
 	var did sql.NullString
 	if domainID != "" {
 		did = sql.NullString{String: domainID, Valid: true}
@@ -712,6 +762,28 @@ func (s *Service) MatchEntries(ctx context.Context, sourceID, domainID string) {
 	if _, err := s.CrossSourceKPN(ctx, sourceID); err != nil {
 		slog.Warn("unit: rebuild cross kpn after entry rematch failed", "source_id", sourceID, "error", err)
 	}
+}
+
+// currentEntryIDsBySourceID returns the deduplicated, non-empty entry_ids
+// that sourceID's current-lifecycle units currently point at — used by
+// MatchEntries to snapshot "who's about to lose a member" before the rematch
+// clears entry_id wholesale (see notifyWikiEntriesChanged call site above).
+func (s *Service) currentEntryIDsBySourceID(sourceID string) []string {
+	units, err := s.store.GetUnitsBySourceIDFiltered(sourceID, LifecycleCurrent)
+	if err != nil {
+		slog.Warn("unit: list current units for entry snapshot failed", "source_id", sourceID, "error", err)
+		return nil
+	}
+	seen := make(map[string]bool, len(units))
+	var ids []string
+	for _, u := range units {
+		if !u.EntryID.Valid || u.EntryID.String == "" || seen[u.EntryID.String] {
+			continue
+		}
+		seen[u.EntryID.String] = true
+		ids = append(ids, u.EntryID.String)
+	}
+	return ids
 }
 
 func (s *Service) matchEntries(ctx context.Context, sourceID string, domainID sql.NullString) {
@@ -906,6 +978,7 @@ func (s *Service) matchConceptBatch(ctx context.Context, units []KnowledgeUnit, 
 		return
 	}
 
+	var matchedEntryIDs []string
 	for _, m := range output.Matches {
 		if !unitIDSet[m.UnitID] {
 			continue
@@ -915,8 +988,14 @@ func (s *Service) matchConceptBatch(ctx context.Context, units []KnowledgeUnit, 
 		}
 		if err := s.store.UpdateUnitEntryID(m.UnitID, &m.EntryID); err != nil {
 			slog.Warn("unit: update entry_id failed", "unit_id", m.UnitID, "error", err)
+			continue
 		}
+		matchedEntryIDs = append(matchedEntryIDs, m.EntryID)
 	}
+	// New Core members for these entry_ids — flag any published page
+	// compiled from them (docs/impl/v1/wiki.md「重编译标记」新增 entry_id
+	// 归属变化场景).
+	s.notifyWikiEntriesChanged(matchedEntryIDs, "知识点新归入概念，Core 成员发生变化")
 }
 
 func (s *Service) indexUnit(ku *KnowledgeUnit, mdLines []string) {
@@ -1017,12 +1096,6 @@ func (s *Service) SetUnitLifecycle(unitIDs []string, lifecycle, reason string) e
 		pointIDs[i] = p.PointID
 	}
 
-	if s.wikiNotifier != nil {
-		if err := s.wikiNotifier.NotifyPointsLifecycleChanged(pointIDs); err != nil {
-			slog.Warn("unit: wiki notify failed", "error", err)
-		}
-	}
-
 	if s.activationNotifier != nil {
 		if err := s.activationNotifier.InvalidateCache(); err != nil {
 			slog.Warn("unit: activation notify failed", "error", err)
@@ -1031,6 +1104,21 @@ func (s *Service) SetUnitLifecycle(unitIDs []string, lifecycle, reason string) e
 			slog.Warn("unit: activation lifecycle notify failed", "error", err)
 		}
 	}
+
+	// Core 归属传导（docs/impl/v1/wiki.md「重编译标记」a. lifecycle 传导，
+	// 2026-08-18 重新接线）：受影响 units 所属的 entry_id 若被某已发布页面
+	// 引用为 Core 成员，标记该页面 needs_recompile——只查 wiki_page_entries
+	// 精确匹配，不展开 Context/Conflict 一跳关系（见 WikiEntryNotifier 注释）。
+	entryIDs := make([]string, 0, len(units))
+	seenEntryIDs := make(map[string]bool, len(units))
+	for _, u := range units {
+		if !u.EntryID.Valid || u.EntryID.String == "" || seenEntryIDs[u.EntryID.String] {
+			continue
+		}
+		seenEntryIDs[u.EntryID.String] = true
+		entryIDs = append(entryIDs, u.EntryID.String)
+	}
+	s.notifyWikiEntriesChanged(entryIDs, reason)
 
 	return nil
 }

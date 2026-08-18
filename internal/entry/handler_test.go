@@ -20,7 +20,7 @@ func TestHandler_ListCandidates(t *testing.T) {
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
-	if _, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{EventCount: 5}, "seed"); err != nil {
+	if _, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{EventCount: 5}, "seed", sql.NullString{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -48,7 +48,7 @@ func TestHandler_Confirm_Add(t *testing.T) {
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
-	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed", sql.NullString{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestHandler_Reject(t *testing.T) {
 	seedSource(t, db, "s1", "d1")
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
-	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed")
+	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept, []string{"p1"}, []string{"evt-1"}, AddEvidence{}, "seed", sql.NullString{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestHandler_Reject(t *testing.T) {
 func TestHandler_ListByDomain(t *testing.T) {
 	h, store, db := setupHandler(t)
 	seedDomain(t, db, "d1")
-	pending, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "pending", EntryKindConcept, nil, nil, AddEvidence{}, "seed")
+	pending, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "pending", EntryKindConcept, nil, nil, AddEvidence{}, "seed", sql.NullString{})
 	if err != nil {
 		t.Fatal(err)
 	}

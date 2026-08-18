@@ -153,7 +153,7 @@ func TestService_ConfirmAdd_DescriptionFromRequest(t *testing.T) {
 	seedKU(t, db, "u1", "s1", "topic", sql.NullString{})
 	seedKP(t, db, "p1", "u1", "s1")
 	candidateID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "topic", EntryKindConcept,
-		[]string{"p1"}, nil, ContentDrivenEvidence{Origin: "content_driven", Description: "原始候选描述"}, "seed")
+		[]string{"p1"}, nil, ContentDrivenEvidence{Origin: "content_driven", Description: "原始候选描述"}, "seed", sql.NullString{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,25 +211,25 @@ func TestStore_ListDomainAddCandidates(t *testing.T) {
 	seedDomain(t, db, "d1")
 	seedDomain(t, db, "d2")
 
-	pending, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "pending one", EntryKindConcept, nil, nil, AddEvidence{}, "seed")
+	pending, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "pending one", EntryKindConcept, nil, nil, AddEvidence{}, "seed", sql.NullString{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rejected, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "rejected one", EntryKindConcept, nil, nil, AddEvidence{}, "seed")
+	rejected, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "rejected one", EntryKindConcept, nil, nil, AddEvidence{}, "seed", sql.NullString{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Reject(rejected); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.InsertAddCandidate(sql.NullString{String: "d2", Valid: true}, "other domain", EntryKindConcept, nil, nil, AddEvidence{}, "seed"); err != nil {
+	if _, err := store.InsertAddCandidate(sql.NullString{String: "d2", Valid: true}, "other domain", EntryKindConcept, nil, nil, AddEvidence{}, "seed", sql.NullString{}); err != nil {
 		t.Fatal(err)
 	}
-	appliedID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "applied one", EntryKindConcept, nil, nil, AddEvidence{}, "seed")
+	appliedID, err := store.InsertAddCandidate(sql.NullString{String: "d1", Valid: true}, "applied one", EntryKindConcept, nil, nil, AddEvidence{}, "seed", sql.NullString{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ConfirmAdd(appliedID, "concept-x", "d1", "applied one", "", "", EntryKindConcept, nil, nil, "seed"); err != nil {
+	if _, err := store.ConfirmAdd(appliedID, "concept-x", "d1", "applied one", "", "", EntryKindConcept, nil, nil, "seed", sql.NullString{}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -16,13 +16,12 @@ type PagePoints struct {
 }
 
 // ListPublishedEntryPagesWithPoints backs relation derivation: every
-// published 词条页 — concept AND fact pages alike (topic pages are never a
-// relation-derivation side — their inter-page structure is contains, not
-// related/contradicts). Name kept for call-site stability; it no longer means
-// "concept-kind pages only".
+// published page (docs/impl/v1/wiki-single-tier-task-brief.md 步骤 2 — Wiki
+// is single-tier now, all pages share page_type=topic, so there is no more
+// "exclude topic pages" filter to apply here). Name kept for call-site
+// stability.
 func (s *Store) ListPublishedEntryPagesWithPoints() ([]PagePoints, error) {
-	rows, err := s.db.Query(`SELECT page_id, source_point_ids FROM wiki_pages WHERE status = ? AND page_type != ?`,
-		StatusPublished, PageTypeTopic)
+	rows, err := s.db.Query(`SELECT page_id, source_point_ids FROM wiki_pages WHERE status = ?`, StatusPublished)
 	if err != nil {
 		return nil, fmt.Errorf("wiki store: list published concept pages with points: %w", err)
 	}
@@ -199,103 +198,3 @@ func (s *Store) ListPageRelations(pageID string) ([]PageRelation, error) {
 	return out, rows.Err()
 }
 
-// ListRelatedEdges returns every wiki_page_relations related-type row among
-// published concept pages — the connected-component graph's edge list for
-// topic-page candidate detection (docs/impl/v1/wiki.md 步骤 8).
-func (s *Store) ListRelatedEdges() ([]PageRelation, error) {
-	rows, err := s.db.Query(`SELECT relation_id, from_page_id, to_page_id, relation_type, derived_from, evidence, created_at, updated_at
-		FROM wiki_page_relations WHERE relation_type = ?`, RelationRelated)
-	if err != nil {
-		return nil, fmt.Errorf("wiki store: list related edges: %w", err)
-	}
-	defer rows.Close()
-
-	var out []PageRelation
-	for rows.Next() {
-		var r PageRelation
-		if err := rows.Scan(&r.RelationID, &r.FromPageID, &r.ToPageID, &r.RelationType, &r.DerivedFrom, &r.Evidence, &r.CreatedAt, &r.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("wiki store: scan related edge: %w", err)
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
-
-// ContainsMembers returns the contains-row targets (member page ids) for a
-// topic page, in insertion order.
-func (s *Store) ContainsMembers(topicPageID string) ([]string, error) {
-	rows, err := s.db.Query(`SELECT to_page_id FROM wiki_page_relations WHERE from_page_id = ? AND relation_type = ? ORDER BY created_at ASC`,
-		topicPageID, RelationContains)
-	if err != nil {
-		return nil, fmt.Errorf("wiki store: contains members: %w", err)
-	}
-	defer rows.Close()
-
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("wiki store: scan contains member: %w", err)
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
-}
-
-// ContainingTopics returns the non-archived topic page(s) that contain
-// memberPageID — used for cascade recompile (docs/impl/v1/wiki.md 步骤 9).
-func (s *Store) ContainingTopics(memberPageID string) ([]string, error) {
-	rows, err := s.db.Query(`
-		SELECT wpr.from_page_id FROM wiki_page_relations wpr
-		JOIN wiki_pages wp ON wp.page_id = wpr.from_page_id
-		WHERE wpr.to_page_id = ? AND wpr.relation_type = ? AND wp.status != ?`,
-		memberPageID, RelationContains, StatusArchived)
-	if err != nil {
-		return nil, fmt.Errorf("wiki store: containing topics: %w", err)
-	}
-	defer rows.Close()
-
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("wiki store: scan containing topic: %w", err)
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
-}
-
-// CountRelationEdgesWithin counts wiki_page_relations rows of relationType
-// whose both endpoints are in pageIDs — used both to size a connected
-// component's related-edge count and its contradicts-edge count
-// (docs/impl/v1/wiki.md 步骤 8 "候选产生").
-func (s *Store) CountRelationEdgesWithin(pageIDs []string, relationType string) (int, error) {
-	if len(pageIDs) == 0 {
-		return 0, nil
-	}
-	ph, args := buildPlaceholders(pageIDs)
-	var allArgs []interface{}
-	allArgs = append(allArgs, relationType)
-	allArgs = append(allArgs, args...)
-	allArgs = append(allArgs, args...)
-	var count int
-	err := s.db.QueryRow(fmt.Sprintf(
-		`SELECT COUNT(*) FROM wiki_page_relations WHERE relation_type = ? AND from_page_id IN (%s) AND to_page_id IN (%s)`,
-		ph, ph), allArgs...).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("wiki store: count relation edges within: %w", err)
-	}
-	return count, nil
-}
-
-// DeleteContainsRow removes one contains edge — used when a topic page's
-// recompile drops an archived member (docs/impl/v1/wiki.md 步骤 9).
-func (s *Store) DeleteContainsRow(topicPageID, memberPageID string) error {
-	_, err := s.db.Exec(`DELETE FROM wiki_page_relations WHERE from_page_id = ? AND to_page_id = ? AND relation_type = ?`,
-		topicPageID, memberPageID, RelationContains)
-	if err != nil {
-		return fmt.Errorf("wiki store: delete contains row: %w", err)
-	}
-	return nil
-}

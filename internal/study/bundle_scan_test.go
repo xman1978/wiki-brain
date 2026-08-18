@@ -38,7 +38,7 @@ func TestScanActivationBundles_ClusterMeetsThreshold_CreatesBundle(t *testing.T)
 	cfg.BundleClusterMinDaysActive = 3
 	cfg.BundleCoreRatioMin = 0.5
 	cfg.BundleCoreSizeMax = 8
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{}, 0, 0, 0)
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -79,7 +79,7 @@ func TestScanActivationBundles_BelowThreshold_NoBundleCreated(t *testing.T) {
 	cfg := testConfig()
 	cfg.BundleClusterMinQuestions = 5
 	cfg.BundleClusterMinDaysActive = 5
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{}, 0, 0, 0)
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -110,7 +110,7 @@ func TestScanActivationBundles_RepeatedSignal_MatchAbsorbsInsteadOfDuplicating(t
 	cfg := testConfig()
 	cfg.BundleClusterMinQuestions = 3
 	cfg.BundleClusterMinDaysActive = 3
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{}, 0, 0, 0)
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -150,7 +150,7 @@ func TestWeakenBundlesWithExpiredCoreMembers_CoreExpired_Weakens(t *testing.T) {
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{}, 0, 0, 0)
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -191,7 +191,7 @@ func TestWeakenBundlesWithExpiredCoreMembers_FringeExpired_NoStateChange(t *test
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{}, 0, 0, 0)
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -235,7 +235,7 @@ func TestWeakenBundlesWithExpiredCoreMembers_CandidateBundle_NoStateChange(t *te
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0, CohesionConfig{}, 0, 0, 0)
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")

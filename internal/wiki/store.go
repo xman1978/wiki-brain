@@ -24,6 +24,16 @@ const pageColumns = `page_id, page_type, entry_id, title, content, status,
 	compiled_at, published_at, created_at, updated_at,
 	synthesis_success_count, synthesis_failure_count, synthesis_audited_success_count, synthesis_audited_failure_count`
 
+// pageColumnsPrefixed is pageColumns qualified with the "p" alias, for
+// queries that JOIN wiki_pages against another table also named page_id/
+// entry_id (e.g. wiki_page_entries) where the bare column list would be
+// ambiguous.
+const pageColumnsPrefixed = `p.page_id, p.page_type, p.entry_id, p.title, p.content, p.status,
+	p.source_point_ids, p.source_unit_ids, p.source_link_ids, p.observed_conditions, p.aliases, p.trigger_questions,
+	p.member_roles, p.uncovered_points, p.compiled_from, p.summary, p.aspects, p.prompt_version, p.model_name,
+	p.compiled_at, p.published_at, p.created_at, p.updated_at,
+	p.synthesis_success_count, p.synthesis_failure_count, p.synthesis_audited_success_count, p.synthesis_audited_failure_count`
+
 func scanPage(row interface{ Scan(...interface{}) error }) (*Page, error) {
 	var p Page
 	err := row.Scan(&p.PageID, &p.PageType, &p.EntryID, &p.Title, &p.Content, &p.Status,
@@ -38,6 +48,17 @@ func scanPage(row interface{ Scan(...interface{}) error }) (*Page, error) {
 }
 
 func (s *Store) InsertPage(p *Page) error {
+	return s.InsertPageWithEntries(p, nil)
+}
+
+// InsertPageWithEntries is InsertPage plus, in the same transaction, writing
+// the full entryIDs set into wiki_page_entries (docs/impl/v1/
+// wiki-single-tier-open-questions.md「已拍板（2026-08-18）」第 1 条:
+// wiki_pages.entry_id 单值列只存主 entry, wiki_page_entries 承载完整集合
+// for Recompile / entry_id -> page_id lookups). entryIDs may be empty (some
+// callers/tests insert pages without a compile request), in which case only
+// wiki_pages is written.
+func (s *Store) InsertPageWithEntries(p *Page, entryIDs []string) error {
 	if p.PageID == "" {
 		p.PageID = uuid.New().String()
 	}
@@ -62,7 +83,14 @@ func (s *Store) InsertPage(p *Page) error {
 	if p.Aspects == "" {
 		p.Aspects = "[]"
 	}
-	_, err := s.db.Exec(`INSERT INTO wiki_pages
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("wiki store: insert page: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`INSERT INTO wiki_pages
 		(page_id, page_type, entry_id, title, content, status, source_point_ids, source_unit_ids,
 		 source_link_ids, observed_conditions, aliases, trigger_questions, member_roles, uncovered_points,
 		 compiled_from, summary, aspects, prompt_version, model_name, compiled_at)
@@ -73,7 +101,67 @@ func (s *Store) InsertPage(p *Page) error {
 	if err != nil {
 		return fmt.Errorf("wiki store: insert page: %w", err)
 	}
+
+	seen := make(map[string]bool, len(entryIDs))
+	for _, entryID := range entryIDs {
+		if entryID == "" || seen[entryID] {
+			continue
+		}
+		seen[entryID] = true
+		if _, err := tx.Exec(`INSERT INTO wiki_page_entries (page_id, entry_id) VALUES (?, ?)`,
+			p.PageID, entryID); err != nil {
+			return fmt.Errorf("wiki store: insert page entry: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("wiki store: insert page: commit: %w", err)
+	}
 	return nil
+}
+
+// EntryIDsByPageID returns the full entry_id set a page was compiled from,
+// read from wiki_page_entries (docs/impl/v1/wiki-single-tier-open-questions.md
+// 已拍板 第 1 条). Falls back to page.EntryID's caller when this returns
+// empty (pages inserted before migration 057, or without entryIDs at all).
+func (s *Store) EntryIDsByPageID(pageID string) ([]string, error) {
+	rows, err := s.db.Query(`SELECT entry_id FROM wiki_page_entries WHERE page_id = ?`, pageID)
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: entry ids by page id: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("wiki store: entry ids by page id: scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// PageIDsByEntryID reverse-looks-up every page (any status) that entryID was
+// compiled into, via wiki_page_entries — supports 步骤 4's entry_id -> page_id
+// lookup (docs/impl/v1/wiki-single-tier-open-questions.md 已拍板 第 1 条).
+// Not yet called by any production path in this task; wired for step 4.
+func (s *Store) PageIDsByEntryID(entryID string) ([]string, error) {
+	rows, err := s.db.Query(`SELECT page_id FROM wiki_page_entries WHERE entry_id = ?`, entryID)
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: page ids by entry id: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("wiki store: page ids by entry id: scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (s *Store) GetPage(pageID string) (*Page, error) {
@@ -88,12 +176,32 @@ func (s *Store) GetPage(pageID string) (*Page, error) {
 	return p, nil
 }
 
-// GetActivePageByEntryID finds a non-archived page for conceptID — used to
-// reject a duplicate POST /wiki/compile (docs/impl/v1/wiki.md 步骤 2).
+// GetActivePageByEntryID finds a non-archived page whose entry set contains
+// conceptID — used to reject a duplicate POST /wiki/compile (docs/impl/v1/
+// wiki.md 步骤 2). Checks wiki_page_entries first (docs/impl/v1/
+// wiki-single-tier-open-questions.md「已拍板（2026-08-18）」第 1 条: a page
+// compiled from multiple entry_ids only has its FIRST one on wiki_pages.
+// entry_id, so a duplicate-compile check against a non-primary entry_id must
+// go through the relation table, not the single column), falling back to the
+// single wiki_pages.entry_id column for pages inserted before migration 057
+// or without any wiki_page_entries rows.
 func (s *Store) GetActivePageByEntryID(conceptID string) (*Page, error) {
-	row := s.db.QueryRow(`SELECT `+pageColumns+` FROM wiki_pages WHERE entry_id = ? AND status != ? LIMIT 1`,
+	row := s.db.QueryRow(`SELECT `+pageColumnsPrefixed+`
+		FROM wiki_page_entries wpe
+		JOIN wiki_pages p ON p.page_id = wpe.page_id
+		WHERE wpe.entry_id = ? AND p.status != ? LIMIT 1`,
 		conceptID, StatusArchived)
 	p, err := scanPage(row)
+	if err == nil {
+		return p, nil
+	}
+	if err != sql.ErrNoRows {
+		return nil, fmt.Errorf("wiki store: get active page by concept (relation): %w", err)
+	}
+
+	row = s.db.QueryRow(`SELECT `+pageColumns+` FROM wiki_pages WHERE entry_id = ? AND status != ? LIMIT 1`,
+		conceptID, StatusArchived)
+	p, err = scanPage(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -145,124 +253,6 @@ func (s *Store) ListPages(status, pageType, conceptID string, limit int) ([]Page
 // and Study's periodic recompile scan (docs/impl/v1/wiki.md 步骤 5).
 func (s *Store) ListPublishedPages() ([]Page, error) {
 	return s.ListPages(StatusPublished, "", "", 100000)
-}
-
-// TopicPageSummary is a topic-type Page plus its live contains-member count,
-// for the 知识地图 page's left rail (docs/impl/v1/page.md 合并页面 — 主题页
-// 列表不看 status，草稿壳页/已发布/待重编译都要能从这里进入).
-type TopicPageSummary struct {
-	Page
-	MemberCount int
-}
-
-// ListTopicPages returns every topic-type page (any status — including
-// never-compiled candidate shells, content=="") with its current member
-// count, newest first.
-func (s *Store) ListTopicPages() ([]TopicPageSummary, error) {
-	rows, err := s.db.Query(`
-		SELECT ` + prefixedPageColumns("p") + `,
-			(SELECT COUNT(*) FROM wiki_page_relations r WHERE r.from_page_id = p.page_id AND r.relation_type = 'contains')
-		FROM wiki_pages p
-		WHERE p.page_type = 'topic'
-		ORDER BY p.updated_at DESC`)
-	if err != nil {
-		return nil, fmt.Errorf("wiki store: list topic pages: %w", err)
-	}
-	defer rows.Close()
-
-	var results []TopicPageSummary
-	for rows.Next() {
-		var t TopicPageSummary
-		if err := rows.Scan(&t.PageID, &t.PageType, &t.EntryID, &t.Title, &t.Content, &t.Status,
-			&t.SourcePointIDs, &t.SourceUnitIDs, &t.SourceLinkIDs, &t.ObservedConditions, &t.Aliases, &t.TriggerQuestions,
-			&t.MemberRoles, &t.UncoveredPoints, &t.CompiledFrom, &t.Summary, &t.Aspects, &t.PromptVersion, &t.ModelName,
-			&t.CompiledAt, &t.PublishedAt, &t.CreatedAt, &t.UpdatedAt,
-			&t.SynthesisSuccessCount, &t.SynthesisFailureCount, &t.SynthesisAuditedSuccessCount, &t.SynthesisAuditedFailureCount,
-			&t.MemberCount); err != nil {
-			return nil, fmt.Errorf("wiki store: scan topic page: %w", err)
-		}
-		results = append(results, t)
-	}
-	return results, rows.Err()
-}
-
-// ListTopicMemberPages returns the full Page rows of a topic's contains
-// members, in the order ContainsMembers already establishes (insertion
-// order), avoiding an N+1 GetPage per member.
-func (s *Store) ListTopicMemberPages(topicPageID string) ([]Page, error) {
-	memberIDs, err := s.ContainsMembers(topicPageID)
-	if err != nil {
-		return nil, err
-	}
-	return s.getPagesByIDsOrdered(memberIDs)
-}
-
-// ListUnassignedEntryPages returns every 词条页 (concept or fact page)
-// not currently a member of any topic page (any status) — the 知识地图 rail's
-// pinned "未归入主题页" bucket. Name kept for call-site stability; it no
-// longer means "concept-kind pages only".
-func (s *Store) ListUnassignedEntryPages() ([]Page, error) {
-	rows, err := s.db.Query(`
-		SELECT ` + pageColumns + ` FROM wiki_pages
-		WHERE page_type != 'topic'
-		AND NOT EXISTS (
-			SELECT 1 FROM wiki_page_relations r WHERE r.relation_type = 'contains' AND r.to_page_id = wiki_pages.page_id
-		)
-		ORDER BY updated_at DESC`)
-	if err != nil {
-		return nil, fmt.Errorf("wiki store: list unassigned concept pages: %w", err)
-	}
-	defer rows.Close()
-
-	var pages []Page
-	for rows.Next() {
-		p, err := scanPage(rows)
-		if err != nil {
-			return nil, fmt.Errorf("wiki store: scan page: %w", err)
-		}
-		pages = append(pages, *p)
-	}
-	return pages, rows.Err()
-}
-
-func (s *Store) getPagesByIDsOrdered(pageIDs []string) ([]Page, error) {
-	if len(pageIDs) == 0 {
-		return nil, nil
-	}
-	ph, args := buildPlaceholders(pageIDs)
-	rows, err := s.db.Query(`SELECT `+pageColumns+` FROM wiki_pages WHERE page_id IN (`+ph+`)`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("wiki store: get pages by ids: %w", err)
-	}
-	defer rows.Close()
-
-	byID := make(map[string]Page, len(pageIDs))
-	for rows.Next() {
-		p, err := scanPage(rows)
-		if err != nil {
-			return nil, fmt.Errorf("wiki store: scan page: %w", err)
-		}
-		byID[p.PageID] = *p
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	pages := make([]Page, 0, len(pageIDs))
-	for _, id := range pageIDs {
-		if p, ok := byID[id]; ok {
-			pages = append(pages, p)
-		}
-	}
-	return pages, nil
-}
-
-func prefixedPageColumns(alias string) string {
-	cols := strings.Split(pageColumns, ",")
-	for i, c := range cols {
-		cols[i] = alias + "." + strings.TrimSpace(c)
-	}
-	return strings.Join(cols, ", ")
 }
 
 func (s *Store) UpdatePageStatus(pageID, status string) error {
@@ -440,6 +430,73 @@ func (s *Store) ListQualifyingPoints(conceptID string, requireVerified bool) ([]
 	return points, rows.Err()
 }
 
+// PointsByIDs resolves an arbitrary point_id list to QualifyingPoint-shaped
+// content (lifecycle=current only), for buildKnowledgeSubgraph's Context/
+// Conflict material (docs/impl/v1/wiki-single-tier-task-brief.md 步骤 3) —
+// unlike ListQualifyingPoints, this isn't scoped to one entry_id (a related/
+// contradicts one-hop can land on a KP under a different entry).
+func (s *Store) PointsByIDs(pointIDs []string) ([]QualifyingPoint, error) {
+	if len(pointIDs) == 0 {
+		return nil, nil
+	}
+	ph, args := buildPlaceholders(pointIDs)
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT kp.point_id, kp.unit_id, kp.source_id, kp.content, ku.center, ku.line_start, ku.line_end,
+			COALESCE(MAX(lc.confident_count), 0) AS max_confident
+		FROM knowledge_points kp
+		JOIN knowledge_units ku ON kp.unit_id = ku.unit_id
+		LEFT JOIN link_candidates lc ON lc.point_id = kp.point_id
+		WHERE kp.point_id IN (%s) AND kp.lifecycle = 'current' AND ku.lifecycle = 'current'
+		GROUP BY kp.point_id`, ph), args...)
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: points by ids: %w", err)
+	}
+	defer rows.Close()
+
+	var points []QualifyingPoint
+	for rows.Next() {
+		var p QualifyingPoint
+		if err := rows.Scan(&p.PointID, &p.UnitID, &p.SourceID, &p.Content, &p.UnitCenter,
+			&p.LineStart, &p.LineEnd, &p.ConfidentCount); err != nil {
+			return nil, fmt.Errorf("wiki store: scan point: %w", err)
+		}
+		points = append(points, p)
+	}
+	return points, rows.Err()
+}
+
+// RelationsFromPoints batches the one-hop KPN expansion buildKnowledgeSubgraph
+// needs for Context/Conflict (docs/impl/v1/wiki-single-tier-task-brief.md 步骤
+// 3): every knowledge_point_relations row of relationType touching any of
+// pointIDs on either side, in one IN-query rather than one query per Core KP
+// (task brief explicitly warns against an N+1 loop here).
+func (s *Store) RelationsFromPoints(pointIDs []string, relationType string) ([]PointRelation, error) {
+	if len(pointIDs) == 0 {
+		return nil, nil
+	}
+	ph, args := buildPlaceholders(pointIDs)
+	allArgs := append([]interface{}{relationType}, args...)
+	allArgs = append(allArgs, args...)
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT source_point_id, target_point_id, relation_type
+		FROM knowledge_point_relations
+		WHERE relation_type = ? AND (source_point_id IN (%s) OR target_point_id IN (%s))`, ph, ph), allArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: relations from points: %w", err)
+	}
+	defer rows.Close()
+
+	var rels []PointRelation
+	for rows.Next() {
+		var r PointRelation
+		if err := rows.Scan(&r.SourcePointID, &r.TargetPointID, &r.RelationType); err != nil {
+			return nil, fmt.Errorf("wiki store: scan relation: %w", err)
+		}
+		rels = append(rels, r)
+	}
+	return rels, rows.Err()
+}
+
 // KPNConnectionCountsByType counts related/contradicts knowledge_point_relations
 // rows among pointIDs — used by computeReadiness (docs/impl/v1/wiki.md 步骤 2
 // "人工指定主题手动编译") for its informational readiness snapshot.
@@ -564,113 +621,6 @@ func (s *Store) UpdateUncoveredPoints(pageID, uncoveredPointsJSON string) error 
 		return fmt.Errorf("wiki store: update uncovered points: %w", err)
 	}
 	return nil
-}
-
-// RelationsAmong returns knowledge_point_relations rows whose both ends are
-// in pointIDs (docs/impl/v1/wiki.md 步骤 3, "KPN 关系" compile input) —
-// includes cross-Source relations, no scope filter.
-func (s *Store) RelationsAmong(pointIDs []string) ([]PointRelation, error) {
-	if len(pointIDs) == 0 {
-		return nil, nil
-	}
-	ph, args := buildPlaceholders(pointIDs)
-	allArgs := append(args, args...)
-	rows, err := s.db.Query(fmt.Sprintf(`
-		SELECT source_point_id, target_point_id, relation_type
-		FROM knowledge_point_relations
-		WHERE source_point_id IN (%s) AND target_point_id IN (%s)`, ph, ph), allArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("wiki store: relations among: %w", err)
-	}
-	defer rows.Close()
-
-	var rels []PointRelation
-	for rows.Next() {
-		var r PointRelation
-		if err := rows.Scan(&r.SourcePointID, &r.TargetPointID, &r.RelationType); err != nil {
-			return nil, fmt.Errorf("wiki store: scan relation: %w", err)
-		}
-		rels = append(rels, r)
-	}
-	return rels, rows.Err()
-}
-
-// CooccurrencePairs implements the aspect-clustering usage-cooccurrence
-// signal (docs/impl/v1/wiki-generation.md 2.1 "使用共现"): for every pair of
-// pointIDs, how many distinct confident questions cited both. Keyed by
-// edgeKeyPair(a,b) so ClusterAspects' edge builder can look it up directly.
-func (s *Store) CooccurrencePairs(pointIDs []string) (map[[2]string]int, error) {
-	out := make(map[[2]string]int)
-	if len(pointIDs) < 2 {
-		return out, nil
-	}
-	ph, args := buildPlaceholders(pointIDs)
-	allArgs := append(append([]interface{}{}, args...), args...)
-	rows, err := s.db.Query(fmt.Sprintf(`
-		SELECT a.point_id, b.point_id, COUNT(DISTINCT a.question_terms) AS n
-		FROM question_kp_cooccurrence a
-		JOIN question_kp_cooccurrence b
-		  ON a.question_terms = b.question_terms AND a.point_id < b.point_id
-		WHERE a.confident_count > 0 AND b.confident_count > 0
-		  AND a.point_id IN (%s) AND b.point_id IN (%s)
-		GROUP BY a.point_id, b.point_id`, ph, ph), allArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("wiki store: cooccurrence pairs: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var a, b string
-		var n int
-		if err := rows.Scan(&a, &b, &n); err != nil {
-			return nil, fmt.Errorf("wiki store: scan cooccurrence pair: %w", err)
-		}
-		out[edgeKeyPair(a, b)] = n
-	}
-	return out, rows.Err()
-}
-
-// PointIntents implements the aspect-clustering usage-condition signal
-// (docs/impl/v1/wiki-generation.md 2.1 "使用条件"): the set of intent values
-// from each point's verified ActivationLink's observed_conditions (point_id
-// is UNIQUE on activation_links, so at most one link per point, but that link
-// can carry several distinct observed conditions accumulated over usage).
-func (s *Store) PointIntents(pointIDs []string) (map[string][]string, error) {
-	out := make(map[string][]string)
-	if len(pointIDs) == 0 {
-		return out, nil
-	}
-	ph, args := buildPlaceholders(pointIDs)
-	rows, err := s.db.Query(fmt.Sprintf(
-		`SELECT point_id, observed_conditions FROM activation_links WHERE status = 'verified' AND point_id IN (%s)`, ph), args...)
-	if err != nil {
-		return nil, fmt.Errorf("wiki store: point intents: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var pointID, raw string
-		if err := rows.Scan(&pointID, &raw); err != nil {
-			return nil, fmt.Errorf("wiki store: scan point intent: %w", err)
-		}
-		if raw == "" {
-			continue
-		}
-		var conds []activation.ObservedCondition
-		if err := json.Unmarshal([]byte(raw), &conds); err != nil {
-			continue
-		}
-		seen := make(map[string]bool, len(conds))
-		var intents []string
-		for _, c := range conds {
-			if c.Intent != "" && !seen[c.Intent] {
-				seen[c.Intent] = true
-				intents = append(intents, c.Intent)
-			}
-		}
-		out[pointID] = intents
-	}
-	return out, rows.Err()
 }
 
 // VerifiedLinkIDsForPoints returns the activation_links.link_id of every
@@ -1074,20 +1024,77 @@ func (s *Store) ListPublishedPagesWithConditions() ([]PageConditions, error) {
 	return out, rows.Err()
 }
 
-// GetEntryInfo also returns kind (concept/fact, docs/impl/v1/kpn.md 步骤
-// 3 "类型标注"): it nudges the analyze/compile prompts' writing register via
-// {{entry_kind_hint}}, and determines the compiled page's page_type
-// (pageTypeForKind) — it does not affect any qualifying/ready gate, citation
-// whitelist, or relation-derivation logic, which are identical for both
-// kinds (docs/impl/v1/wiki.md「概念页 / 事实页」).
-func (s *Store) GetEntryInfo(conceptID string) (name, description, domainID, kind string, err error) {
-	var desc, dom sql.NullString
-	err = s.db.QueryRow(`SELECT name, description, domain_id, kind FROM entries WHERE entry_id = ?`, conceptID).
-		Scan(&name, &desc, &dom, &kind)
-	if err != nil {
-		return "", "", "", "", fmt.Errorf("wiki store: get concept info: %w", err)
+// EntryCandidate is one entries row surfaced as a candidate for
+// matchEntriesByConceptRecognition (docs/impl/v1/wiki-single-tier-task-brief.md
+// 步骤 4) — name/description/boundary are exactly the disambiguation fields
+// unit_entry_match.md already renders into its entry_list, reused here for
+// the same purpose against a different consumer (a question instead of a
+// knowledge unit).
+type EntryCandidate struct {
+	EntryID     string
+	DomainID    string
+	Name        string
+	Description string
+	Boundary    string
+}
+
+// ListEntriesForRecognition lists candidate entries for
+// matchEntriesByConceptRecognition, excluding merged_into non-NULL rows (a
+// merged concept is no longer a valid match target, mirroring
+// unit.Store.GetEntriesByDomainID's same exclusion). domainIDs empty means
+// no domain scoping — every entry across every domain is a candidate, same
+// fallback shape as unit.Store.GetEntriesByDomainID("") for an unresolved
+// domain.
+func (s *Store) ListEntriesForRecognition(domainIDs []string) ([]EntryCandidate, error) {
+	const cols = `entry_id, domain_id, name, description, boundary`
+	var rows *sql.Rows
+	var err error
+	if len(domainIDs) > 0 {
+		ph, args := buildPlaceholders(domainIDs)
+		rows, err = s.db.Query(`SELECT `+cols+` FROM entries WHERE merged_into IS NULL AND domain_id IN (`+ph+`) ORDER BY name`, args...)
+	} else {
+		rows, err = s.db.Query(`SELECT ` + cols + ` FROM entries WHERE merged_into IS NULL ORDER BY name`)
 	}
-	return name, desc.String, dom.String, kind, nil
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: list entries for recognition: %w", err)
+	}
+	defer rows.Close()
+
+	var out []EntryCandidate
+	for rows.Next() {
+		var e EntryCandidate
+		var desc, boundary sql.NullString
+		if err := rows.Scan(&e.EntryID, &e.DomainID, &e.Name, &desc, &boundary); err != nil {
+			return nil, fmt.Errorf("wiki store: scan entry candidate: %w", err)
+		}
+		if desc.Valid {
+			e.Description = desc.String
+		}
+		if boundary.Valid {
+			e.Boundary = boundary.String
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// GetEntryInfo also returns kind (concept/fact, docs/impl/v1/kpn.md 步骤
+// 3 "类型标注") and parentEntryID (entries.parent_entry_id,
+// docs/impl/v1/fact-entry-parent-concept-task-brief.md): kind nudges the
+// analyze/compile prompts' writing register via {{entry_kind_hint}} and
+// determines the compiled page's page_type (pageTypeForKind); parentEntryID
+// feeds buildKnowledgeSubgraph's Core-expansion rule for kind=fact entries
+// (docs/impl/v1/wiki-single-tier-task-brief.md 步骤 3). Neither affects
+// citation whitelist or relation-derivation logic, which are identical
+// regardless of kind/parent.
+func (s *Store) GetEntryInfo(conceptID string) (name, description, domainID, kind, parentEntryID string, err error) {
+	var desc, dom, parent sql.NullString
+	err = s.db.QueryRow(`SELECT name, description, domain_id, kind, parent_entry_id FROM entries WHERE entry_id = ?`, conceptID).
+		Scan(&name, &desc, &dom, &kind, &parent)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("wiki store: get concept info: %w", err)
+	}
+	return name, desc.String, dom.String, kind, parent.String, nil
 }
 
 // GetDomainName resolves a domain_id to its display name for the outline

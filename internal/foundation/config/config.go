@@ -156,13 +156,6 @@ type RetrievalConfig struct {
 	// (docs/impl/v1/wiki.md 步骤 4; <=0 defaults to 3, 1 reproduces the
 	// original top-1-only behavior).
 	WikiMaxCandidates int `yaml:"wiki_max_candidates"`
-	// SkeletonInjectionEnabled gates topic-page skeleton injection into the
-	// slow path (docs/impl/v1/wiki.md 步骤 8「检索接入」, docs/impl/v1/wiki.md
-	// 两层架构扩展): default false — injection stakes recall quality on how
-	// well a topic page's member boundary was drawn, and a too-narrow
-	// boundary silently degrades recall instead of failing loud. Turn on
-	// after observing resolved_outside_count (docs/impl/v1/study.md 步骤 7).
-	SkeletonInjectionEnabled bool `yaml:"skeleton_injection_enabled"`
 	// RerankRelevanceConcise 控制证据过滤阶段（rerank_relevance）要不要求模型
 	// 输出 analysis 分析字段。false（默认，含零值）用 rerank_relevance.md，
 	// 输出结果附一句话依据，便于调试排查；true 用 rerank_relevance_concise.md，
@@ -232,35 +225,12 @@ type WikiConfig struct {
 	QualifyingMinDaysActive int `yaml:"qualifying_min_days_active"`
 
 	// —— 两层架构（docs/impl/v1/wiki.md 步骤 7-9）——
+	// 2026-08-18 单层化收尾清理: TopicMemberMin/TopicCompileMaxChars/
+	// TopicCandidateKPMax/TopicReliabilityMin/TopicRerankBatchMaxChars
+	// (两层架构主题页专属阈值) removed — 已确认代码中无引用
+	// (docs/impl/v1/wiki-single-tier-open-questions.md).
 	RelationKPNMin         int `yaml:"relation_kpn_min"`
 	RelationSharedPointMin int `yaml:"relation_shared_point_min"`
-	// TopicMemberMin is, since the 2026-08-03 revision, ONLY the
-	// recompile-time minimum remaining member gate (RecompileTopic) — it no
-	// longer doubles as a candidate-creation threshold, because candidate
-	// range is now determined by quadruple clustering over real questions,
-	// not by connected-component size (docs/impl/v1/wiki.md 步骤 8).
-	TopicMemberMin       int `yaml:"topic_member_min"`
-	TopicCompileMaxChars int `yaml:"topic_compile_max_chars"`
-
-	// —— 主题候选识别（docs/impl/v1/wiki.md 步骤 8，2026-08-03 修订：四元组
-	// 聚类替代连通分量）——
-	// TopicClusterMinQuestions/TopicClusterMinDaysActive gate "稳定簇判定":
-	// a normalized (subject,intent,audience,constraint_text) trace group must
-	// clear both before it's even considered a topic candidate.
-	TopicClusterMinQuestions  int `yaml:"topic_cluster_min_questions"`
-	TopicClusterMinDaysActive int `yaml:"topic_cluster_min_days_active"`
-	// TopicCandidateKPMax caps the candidate-range semantic KP retrieval
-	// (步骤 8 第 3 步), score-descending.
-	TopicCandidateKPMax int `yaml:"topic_candidate_kp_max"`
-	// TopicReliabilityMin gates 二阶准入的"整体可靠度": the fraction of the
-	// full candidate-range KP set (not just the qualifying subset) that has
-	// a verified ActivationLink.
-	TopicReliabilityMin float64 `yaml:"topic_reliability_min"`
-	// TopicRerankBatchMaxChars caps each LLM relevance-judge batch's total
-	// candidate content size for retrieveAndGroupQualifyingKPs's manual-
-	// trigger candidate search (docs/impl/v1/wiki.md 步骤 8 "人工手动指定
-	// 主题" 2026-08-07 修订). <=0 defaults to 6000.
-	TopicRerankBatchMaxChars int `yaml:"topic_rerank_batch_max_chars"`
 
 	// —— 生成质量（docs/impl/v1/wiki-generation.md 阶段 E/G，P0）——
 	// ClaimVerifyEnabled toggles the post-compile support check (阶段 E):
@@ -285,42 +255,6 @@ type WikiConfig struct {
 	// SelfcheckMaxUncitedRate caps the share of sentences in the stable-
 	// conclusions/expanded-explanation sections that carry no [point_id] tag.
 	SelfcheckMaxUncitedRate float64 `yaml:"selfcheck_max_uncited_rate"`
-
-	// —— 概念内聚度（docs/impl/v1/wiki-generation.md 2.2/2.4，P0/P1 共用的
-	// Louvain 社区检测基础设施；概念级 ready 判定第五项） ——
-	// EntryCohesionMin gates the Study wiki-candidate "ready" recommendation
-	// on the largest Louvain community's share of qualifying KPs — a low
-	// share means the concept's qualifying material splits into several
-	// unrelated clusters rather than one coherent topic
-	// (docs/design/wiki-compilation.md "连贯性判断还需要第三层").
-	EntryCohesionMin float64 `yaml:"entry_cohesion_min"`
-	// AspectWRel/AspectWCooc are edge weights feeding the concept-cohesion
-	// graph: KPN related/contradicts relations (both count positive — see
-	// docs/impl/v1/wiki-generation.md 2.1 "contradicts 计正权") and shared
-	// confident-question co-occurrence, saturating at AspectCoocSat.
-	AspectWRel    float64 `yaml:"aspect_w_rel"`
-	AspectWCooc   float64 `yaml:"aspect_w_cooc"`
-	AspectCoocSat int     `yaml:"aspect_cooc_sat"`
-	AspectGamma   float64 `yaml:"aspect_gamma"`
-
-	// —— 阶段 B 完整切面聚类（P1，docs/impl/v1/wiki-generation.md 2.1/2.2）——
-	// AspectWIntent/AspectWUnit are the two edge signals P0's cohesion-only
-	// PairSignals didn't need: verified-ActivationLink intent Jaccard (usage
-	// condition similarity) and same-unit fallback (material-side, weakest).
-	AspectWIntent float64 `yaml:"aspect_w_intent"`
-	AspectWUnit   float64 `yaml:"aspect_w_unit"`
-	// AspectSplitGammaFactor multiplies AspectGamma when an oversized
-	// community is recursively re-clustered once (2.2 "后处理").
-	AspectSplitGammaFactor float64 `yaml:"aspect_split_gamma_factor"`
-	// AspectMinSize/AspectMaxSize bound a leaf aspect's point count after
-	// Louvain; undersized communities merge into their strongest neighbor or
-	// fall into the reserved "misc" bucket, oversized ones split once.
-	AspectMinSize int `yaml:"aspect_min_size"`
-	AspectMaxSize int `yaml:"aspect_max_size"`
-	// AspectQuestionsMax caps how many real confident question strings ride
-	// along per aspect into the analyze stage, and how many populate
-	// PageAspect.QuestionTypes (<=0 defaults to 5).
-	AspectQuestionsMax int `yaml:"aspect_questions_max"`
 
 	// —— 综合满意度轴（synthesis satisfaction，docs/impl/v1/wiki.md 步骤
 	// 4a，2026-08-13 新增）——

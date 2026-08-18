@@ -1,8 +1,6 @@
 package study
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -12,29 +10,9 @@ import (
 	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/entry"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
-	"github.com/jxman78/wiki-brain/internal/foundation/graph"
 	"github.com/jxman78/wiki-brain/internal/retrieval"
 	"github.com/jxman78/wiki-brain/internal/wiki"
 )
-
-// CohesionConfig bundles the concept-cohesion gate's tunables
-// (docs/impl/v1/wiki-generation.md 2.2/2.4, docs/design/wiki-compilation.md
-// "连贯性判断还需要第三层") — passed as one struct rather than five more
-// positional ints/floats on NewService. Zero value (Min<=0) leaves the gate
-// inert: Stats.Cohesion is still computed and reported, but it never turns
-// an otherwise-ready candidate into a split signal or blocks recommendation
-// — this is what every existing test's `CohesionConfig{}` call gets, so
-// pre-existing "ready" expectations built on synthetic data that doesn't
-// happen to be densely connected are unaffected. Production wiring
-// (cmd/server/main.go) passes real wiki.* config values, turning the gate
-// on.
-type CohesionConfig struct {
-	Min     float64
-	WRel    float64
-	WCooc   float64
-	CoocSat int
-	Gamma   float64
-}
 
 type Service struct {
 	store                   *Store
@@ -43,15 +21,7 @@ type Service struct {
 	wikiSvc                 *wiki.Service
 	recompileNewKPMin       int
 	qualifyingMinDaysActive int
-	// topicClusterMinQuestions/topicClusterMinDaysActive are
-	// wiki.topic_cluster_min_questions/topic_cluster_min_days_active
-	// (docs/impl/v1/wiki.md 步骤 8) — owned by wiki.Config but consumed here
-	// (flagTopicPageCandidates), same precedent as recompileNewKPMin/
-	// qualifyingMinDaysActive above.
-	topicClusterMinQuestions  int
-	topicClusterMinDaysActive int
-	cohesion                  CohesionConfig
-	entrySvc                  *entry.Service
+	entrySvc                *entry.Service
 	// questionTupleNormIdleDays is retrieval.question_tuple_norm_idle_days
 	// (docs/impl/v1/retrieval.md 步骤 2) — owned by RetrievalConfig but
 	// consumed here (evictIdle's question_tuple_norms cleanup), same
@@ -65,7 +35,7 @@ type Service struct {
 	lastRelationScanAt time.Time
 }
 
-func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.Service, wikiSvc *wiki.Service, recompileNewKPMin, qualifyingMinDaysActive int, cohesion CohesionConfig, topicClusterMinQuestions, topicClusterMinDaysActive, questionTupleNormIdleDays int) *Service {
+func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.Service, wikiSvc *wiki.Service, recompileNewKPMin, qualifyingMinDaysActive int, questionTupleNormIdleDays int) *Service {
 	return &Service{
 		store:                     store,
 		cfg:                       cfg,
@@ -73,9 +43,6 @@ func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.
 		wikiSvc:                   wikiSvc,
 		recompileNewKPMin:         recompileNewKPMin,
 		qualifyingMinDaysActive:   qualifyingMinDaysActive,
-		cohesion:                  cohesion,
-		topicClusterMinQuestions:  topicClusterMinQuestions,
-		topicClusterMinDaysActive: topicClusterMinDaysActive,
 		questionTupleNormIdleDays: questionTupleNormIdleDays,
 	}
 }
@@ -130,21 +97,8 @@ func (s *Service) Run() (*RunResult, error) {
 		return nil, fmt.Errorf("study: aggregate gaps: %w", err)
 	}
 
-	if err := s.flagWikiCandidates(); err != nil {
-		slog.Error("study: flag wiki candidates failed", "error", err)
-	}
-
-	if err := s.flagWikiRecompile(); err != nil {
-		slog.Error("study: flag wiki recompile failed", "error", err)
-	}
-
 	if err := s.recomputePageRelations(); err != nil {
 		slog.Error("study: recompute page relations failed", "error", err)
-	}
-
-	underfilled, err := s.flagTopicPageCandidates(&actions)
-	if err != nil {
-		slog.Error("study: flag topic page candidates failed", "error", err)
 	}
 
 	var entryScan entry.ScanSummary
@@ -152,7 +106,7 @@ func (s *Service) Run() (*RunResult, error) {
 		entryScan = s.entrySvc.Scan()
 	}
 
-	report, err := s.generateReport(actions, entryScan, underfilled)
+	report, err := s.generateReport(actions, entryScan)
 	if err != nil {
 		return nil, fmt.Errorf("study: generate report: %w", err)
 	}
@@ -214,7 +168,7 @@ func (s *Service) aggregateGaps() (int, error) {
 	return processed, nil
 }
 
-func (s *Service) generateReport(actions LearningActionsSummary, entryScan entry.ScanSummary, underfilled []wiki.TopicSignalUnderfilled) (*Report, error) {
+func (s *Service) generateReport(actions LearningActionsSummary, entryScan entry.ScanSummary) (*Report, error) {
 	reportID := uuid.New().String()
 	periodDays := s.cfg.ReportPeriodDays
 
@@ -224,11 +178,6 @@ func (s *Service) generateReport(actions LearningActionsSummary, entryScan entry
 	}
 
 	activationCandidates, err := s.buildActivationCandidates(periodDays)
-	if err != nil {
-		return nil, err
-	}
-
-	wikiCandidates, conceptSplitSignals, err := s.buildWikiCandidatesWithSplitSignals()
 	if err != nil {
 		return nil, err
 	}
@@ -248,22 +197,9 @@ func (s *Service) generateReport(actions LearningActionsSummary, entryScan entry
 		return nil, err
 	}
 
-	underfilledEntries := make([]TopicSignalUnderfilledEntry, 0, len(underfilled))
-	for _, u := range underfilled {
-		underfilledEntries = append(underfilledEntries, TopicSignalUnderfilledEntry{
-			Subject: u.Subject, Intent: u.Intent, Audience: u.Audience, ConstraintText: u.ConstraintText,
-			DistinctQuestionCount: u.DistinctQuestionCount, DaysActive: u.DaysActive,
-		})
-	}
-
 	wikiDraftReflow, err := s.buildWikiDraftReflowSection()
 	if err != nil {
 		slog.Error("study: build wiki_draft_reflow report section failed", "error", err)
-	}
-
-	topicDecompose, err := s.buildTopicDecomposeSection(periodDays)
-	if err != nil {
-		slog.Error("study: build topic_decompose report section failed", "error", err)
 	}
 
 	questionComplexity, err := s.buildQuestionComplexitySection(periodDays)
@@ -282,16 +218,12 @@ func (s *Service) generateReport(actions LearningActionsSummary, entryScan entry
 		PeriodDays:               periodDays,
 		Summary:                  *summary,
 		ActivationLinkCandidates: activationCandidates,
-		WikiCandidates:           wikiCandidates,
 		KnowledgeGaps:            gaps,
 		LearningActions:          actions,
 		CrossSourceConflicts:     conflicts,
 		EntryCandidates:          conceptCandidates,
-		TopicSignalUnderfilled:   underfilledEntries,
 		WikiDraftReflow:          wikiDraftReflow,
-		TopicDecompose:           topicDecompose,
 		QuestionComplexity:       questionComplexity,
-		EntrySplitSignals:        conceptSplitSignals,
 		Convergence:              convergence,
 	}
 
@@ -411,169 +343,6 @@ func calcShortPathRate(pointID string, traces []TracePathRow) float64 {
 	return float64(shortCount) / float64(total)
 }
 
-func (s *Service) buildWikiCandidates() ([]WikiCandidate, error) {
-	candidates, _, err := s.buildWikiCandidatesWithSplitSignals()
-	return candidates, err
-}
-
-// buildWikiCandidatesWithSplitSignals is buildWikiCandidates plus the
-// cohesion gate's report-only byproduct (docs/impl/v1/wiki-generation.md
-// 2.4, docs/design/wiki-compilation.md "连贯性判断还需要第三层"): entries
-// that clear every other ready criterion but whose qualifying KPs split into
-// several unrelated Louvain communities get a EntrySplitSignalEntry
-// instead of (not in addition to) a "ready" recommendation.
-func (s *Service) buildWikiCandidatesWithSplitSignals() ([]WikiCandidate, []EntrySplitSignalEntry, error) {
-	qualifyingByConceptMap, err := s.store.QualifyingKPsByEntryFromCandidates()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var results []WikiCandidate
-	var splitSignals []EntrySplitSignalEntry
-	for conceptID, kps := range qualifyingByConceptMap {
-		conceptName, domainID, err := s.store.EntryInfo(conceptID)
-		if err != nil {
-			slog.Warn("study: concept info not found", "entry_id", conceptID, "error", err)
-			continue
-		}
-
-		pointIDs := make([]string, len(kps))
-		qualifyingPoints := make([]WikiQualifyingPoint, len(kps))
-		totalConfident := 0
-		for i, kp := range kps {
-			pointIDs[i] = kp.PointID
-			qualifyingPoints[i] = WikiQualifyingPoint{
-				PointID:        kp.PointID,
-				PointSummary:   kp.PointSummary,
-				ConfidentCount: kp.ConfidentCount,
-			}
-			totalConfident += kp.ConfidentCount
-		}
-
-		avgConfident := 0.0
-		if len(kps) > 0 {
-			avgConfident = float64(totalConfident) / float64(len(kps))
-		}
-
-		related, contradicts, err := s.store.KPNConnectionCountsByType(pointIDs)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		daysActive, err := s.store.DaysActive(pointIDs)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// cohesion (docs/design/wiki-compilation.md "连贯性判断还需要第三层",
-		// docs/impl/v1/wiki-generation.md 2.2/2.4): the largest Louvain
-		// community's share of qualifying KPs. Always computed (it's cheap
-		// and informational on its own via Stats.Cohesion); only gates
-		// recommendation when s.cohesion.Min > 0 is configured — see
-		// CohesionConfig's doc comment for why the zero value must stay
-		// inert.
-		cohesion := 1.0
-		var communities [][]string
-		if len(pointIDs) > 0 {
-			edges, perr := s.store.PairSignals(pointIDs, s.cohesion.WRel, s.cohesion.WCooc, s.cohesion.CoocSat)
-			if perr != nil {
-				slog.Warn("study: pair signals for cohesion failed, treating concept as fully cohesive", "entry_id", conceptID, "error", perr)
-			} else {
-				communities = graph.Communities(pointIDs, edges, s.cohesion.Gamma)
-				cohesion = graph.LargestShare(communities)
-			}
-		}
-
-		// docs/design/wiki-compilation.md "ActivationLink 回答'这条管不管用'，
-		// Wiki 编译回答'这个主题够不够格立传'": 广度（qualifying_kp_count）、
-		// 连贯（related 连接存在、contradicts 不反客为主、且这批 KP 是否围绕
-		// 一个共同中心而非几个互不相干的簇）、稳定（daysActive 衡量的是跨
-		// 时间跨度的持久性，不是问询频率）三者同时满足才 ready；可靠性已经
-		// 由 qualifying KP 定义里的 verified 状态单独回答，这里不再重复检查。
-		breadthOK := len(kps) >= s.cfg.WikiKPMin
-		relatedOK := related >= 1 && contradicts < related
-		stableOK := daysActive >= s.qualifyingMinDaysActive
-		cohesionOK := s.cohesion.Min <= 0 || cohesion >= s.cohesion.Min
-
-		recommendation := "needs_more_data"
-		reason := fmt.Sprintf("%d 个 KP 达到 Wiki 阈值，KPN 连接 related=%d/contradicts=%d，活跃天数 %d 天，内聚度 %.2f",
-			len(kps), related, contradicts, daysActive, cohesion)
-		if breadthOK && relatedOK && stableOK && cohesionOK {
-			recommendation = "ready"
-		} else if breadthOK && relatedOK && stableOK && !cohesionOK {
-			// Every other gate cleared — this isn't "needs more data", it's
-			// "this concept's qualifying material may not be one topic".
-			var entryCommunities []EntrySplitCommunity
-			for _, c := range communities {
-				entryCommunities = append(entryCommunities, EntrySplitCommunity{
-					PointIDs:      c,
-					SuggestedName: suggestAspectName(c, kps),
-				})
-			}
-			splitSignals = append(splitSignals, EntrySplitSignalEntry{
-				EntryID:     conceptID,
-				ConceptName: conceptName,
-				Cohesion:    cohesion,
-				AspectCount: len(communities),
-				Communities: entryCommunities,
-			})
-			reason = fmt.Sprintf("%s（内聚度 %.2f 低于门槛 %.2f，material 疑似分裂为 %d 个互不相干的簇，见 entry_split_signals）",
-				reason, cohesion, s.cohesion.Min, len(communities))
-		}
-
-		results = append(results, WikiCandidate{
-			EntryID:            conceptID,
-			ConceptName:        conceptName,
-			DomainID:           domainID,
-			QualifyingPointIDs: pointIDs,
-			QualifyingPoints:   qualifyingPoints,
-			Stats: WikiCandidateStats{
-				QualifyingKPCount:          len(kps),
-				AvgConfidentCount:          avgConfident,
-				KPNConnectionCount:         related + contradicts,
-				RelatedConnectionCount:     related,
-				ContradictsConnectionCount: contradicts,
-				DaysActive:                 daysActive,
-				Cohesion:                   cohesion,
-			},
-			Recommendation: recommendation,
-			Reason:         reason,
-		})
-	}
-	return results, splitSignals, nil
-}
-
-// suggestAspectName gives a Louvain community a display label for
-// EntrySplitSignalEntry — the highest-confident_count KP's summary in that
-// community, truncated. Not the full aspect-naming scheme of
-// docs/impl/v1/wiki-generation.md 2.3 (which also factors in ActivationLink
-// intent and is part of the deferred outline-generation rewrite); this is
-// just enough for a human skimming the report to recognize which cluster is
-// which.
-func suggestAspectName(pointIDs []string, kps []QualifyingKP) string {
-	bySummary := make(map[string]string, len(kps))
-	byConfidence := make(map[string]int, len(kps))
-	for _, kp := range kps {
-		bySummary[kp.PointID] = kp.PointSummary
-		byConfidence[kp.PointID] = kp.ConfidentCount
-	}
-	best := ""
-	bestScore := -1
-	for _, pid := range pointIDs {
-		if byConfidence[pid] > bestScore {
-			bestScore = byConfidence[pid]
-			best = bySummary[pid]
-		}
-	}
-	if len(best) > 24 {
-		runes := []rune(best)
-		if len(runes) > 24 {
-			best = string(runes[:24]) + "…"
-		}
-	}
-	return best
-}
-
 // buildEntryCandidatesSection folds this cycle's concept.Scan() counts and
 // the currently pending add/merge candidates into the report
 // (docs/impl/v1/concept-evolution.md 步骤 5). No-op (zero section) when
@@ -650,198 +419,6 @@ func gapEntryFromRow(g KnowledgeGapRow) KnowledgeGapEntry {
 	}
 }
 
-// flagWikiCandidates writes a pending_confirm wiki_candidate learning_result
-// for every "ready" Wiki candidate that doesn't already have one pending —
-// Wiki compilation itself stays a human-triggered action (docs/impl/v1/study.md
-// 步骤 6, docs/impl/v1/wiki.md 步骤 2).
-func (s *Service) flagWikiCandidates() error {
-	candidates, err := s.buildWikiCandidates()
-	if err != nil {
-		return err
-	}
-	for _, c := range candidates {
-		if c.Recommendation != "ready" {
-			continue
-		}
-		pending, err := s.store.HasPendingResult(activation.ActionWikiCandidate, activation.ObjectTypeWikiPage, c.EntryID)
-		if err != nil {
-			slog.Error("study: check pending wiki_candidate failed", "entry_id", c.EntryID, "error", err)
-			continue
-		}
-		if pending {
-			continue
-		}
-		lr := &activation.LearningResult{
-			Action:     activation.ActionWikiCandidate,
-			ObjectType: activation.ObjectTypeWikiPage,
-			ObjectID:   c.EntryID,
-			Reason:     c.Reason,
-			EventIDs:   marshalIDs(c.QualifyingPointIDs),
-			Status:     activation.ResultPendingConfirm,
-		}
-		if err := s.activationSvc.Store().InsertLearningResult(lr); err != nil {
-			slog.Error("study: insert wiki_candidate learning result failed", "entry_id", c.EntryID, "error", err)
-		}
-	}
-	return nil
-}
-
-// flagWikiRecompile implements docs/impl/v1/study.md 步骤 6 piece b
-// (docs/impl/v1/wiki.md 步骤 5b): published pages whose concept gained
-// qualifying KPs (same threshold/query as the Wiki candidate scan above)
-// since compile time get marked needs_recompile via the Wiki module, and the
-// action is recorded for audit. No-op until main.go wires a wikiSvc.
-func (s *Service) flagWikiRecompile() error {
-	if s.wikiSvc == nil {
-		return nil
-	}
-
-	qualifyingByEntry, err := s.store.QualifyingKPsByEntryFromCandidates()
-	if err != nil {
-		return err
-	}
-	counts := make(map[string]int, len(qualifyingByEntry))
-	for conceptID, kps := range qualifyingByEntry {
-		counts[conceptID] = len(kps)
-	}
-
-	flagged, err := s.wikiSvc.ScanForNewQualifyingKP(counts, s.recompileNewKPMin)
-	if err != nil {
-		return err
-	}
-	for _, f := range flagged {
-		lr := &activation.LearningResult{
-			Action:     activation.ActionRecompileFlag,
-			ObjectType: activation.ObjectTypeWikiPage,
-			ObjectID:   f.PageID,
-			Reason:     f.Reason,
-			Status:     activation.ResultApplied,
-		}
-		if err := s.activationSvc.Store().InsertLearningResult(lr); err != nil {
-			slog.Error("study: insert recompile_flag learning result failed", "page_id", f.PageID, "error", err)
-		}
-	}
-	return nil
-}
-
-// flagTopicPageCandidates implements docs/impl/v1/study.md 步骤 6's two-tier
-// extension (2026-08-03 修订: 四元组聚类替代连通分量,
-// docs/impl/v1/wiki.md 步骤 8): group the window's traces by normalized
-// (subject,intent,audience,constraint_text), keep groups clearing the
-// stable-cluster gate (distinct_question_count/days_active) and not already
-// covered by a non-rejected topic_page_candidate, then delegate the rest of
-// 步骤 8 (candidate-range retrieval -> qualifying filter -> concept grouping ->
-// admission -> shell creation) to the Wiki module per surviving group. Groups
-// whose candidate range had zero qualifying KP come back as
-// TopicSignalUnderfilled and are passed through to generateReport
-// ("topic_signal_underfilled") rather than recomputed there, since
-// DetectTopicCandidate has a side effect (shell page creation) that must
-// only run once per cycle.
-func (s *Service) flagTopicPageCandidates(actions *LearningActionsSummary) ([]wiki.TopicSignalUnderfilled, error) {
-	if s.wikiSvc == nil || s.activationSvc == nil {
-		return nil, nil
-	}
-
-	rows, err := s.store.TopicClusterTraces(s.cfg.EventWindowDays)
-	if err != nil {
-		return nil, fmt.Errorf("study: topic cluster traces: %w", err)
-	}
-
-	type quadKey struct{ subject, intent, audience, constraint string }
-	type quadAgg struct {
-		questions map[string]bool
-		dates     map[string]bool
-	}
-	groups := make(map[quadKey]*quadAgg)
-	var order []quadKey
-	for _, r := range rows {
-		k := quadKey{r.Subject, r.Intent, r.Audience, r.Constraint}
-		a, ok := groups[k]
-		if !ok {
-			a = &quadAgg{questions: map[string]bool{}, dates: map[string]bool{}}
-			groups[k] = a
-			order = append(order, k)
-		}
-		a.questions[r.Question] = true
-		a.dates[r.CreatedAt.UTC().Format("2006-01-02")] = true
-	}
-
-	minQuestions := s.topicClusterMinQuestions
-	if minQuestions <= 0 {
-		minQuestions = 3
-	}
-	minDaysActive := s.topicClusterMinDaysActive
-	if minDaysActive <= 0 {
-		minDaysActive = 7
-	}
-
-	var underfilled []wiki.TopicSignalUnderfilled
-	for _, k := range order {
-		a := groups[k]
-		distinctQuestionCount := len(a.questions)
-		daysActive := len(a.dates)
-		if distinctQuestionCount < minQuestions || daysActive < minDaysActive {
-			continue
-		}
-
-		fingerprint := topicFingerprint(k.subject, k.intent, k.audience, k.constraint)
-		dup, err := s.store.HasNonRejectedTopicCandidate(fingerprint)
-		if err != nil {
-			slog.Error("study: check topic candidate dedup failed", "error", err)
-			continue
-		}
-		if dup {
-			continue
-		}
-
-		cand, uf, err := s.wikiSvc.DetectTopicCandidate(k.subject, k.intent, k.audience, k.constraint,
-			distinctQuestionCount, daysActive, s.cfg.WikiKPMin)
-		if err != nil {
-			slog.Error("study: detect topic candidate failed", "error", err)
-			continue
-		}
-		if uf != nil {
-			underfilled = append(underfilled, *uf)
-			continue
-		}
-		if cand == nil {
-			// Cleared the stable-cluster gate but failed 步骤 7 二阶准入
-			// (关联不够/整体可靠度不够) or had <2 published members -- Wiki
-			// already logged the specific reason; nothing to persist here
-			// (no page_id was minted to attach a pending_confirm result to).
-			continue
-		}
-
-		lr := &activation.LearningResult{
-			Action:     activation.ActionTopicPageCandidate,
-			ObjectType: activation.ObjectTypeWikiPage,
-			ObjectID:   cand.PageID,
-			Reason:     fmt.Sprintf("[topic_fp:%s] %s", fingerprint, cand.Reason),
-			EventIDs:   marshalIDs(cand.MemberPageIDs),
-			Status:     activation.ResultPendingConfirm,
-		}
-		if err := s.activationSvc.Store().InsertLearningResult(lr); err != nil {
-			slog.Error("study: insert topic_page_candidate learning result failed", "page_id", cand.PageID, "error", err)
-			continue
-		}
-		actions.Actions = append(actions.Actions, LearningActionEntry{
-			ResultID: lr.ResultID, Action: lr.Action, ObjectID: lr.ObjectID, Reason: lr.Reason, Status: lr.Status,
-		})
-	}
-	return underfilled, nil
-}
-
-// topicFingerprint identifies a normalized quadruple for the
-// topic_page_candidate dedup check (docs/impl/v1/wiki.md 步骤 8 "去重"): a
-// short stable hash embedded in learning_results.reason (as "[topic_fp:...]"),
-// since object_id for this action is the shell page_id -- naturally unique
-// per candidate, not per quadruple -- and there's no dedicated quadruple
-// table to key off of instead.
-func topicFingerprint(subject, intent, audience, constraint string) string {
-	h := sha1.Sum([]byte(subject + "\x1f" + intent + "\x1f" + audience + "\x1f" + constraint))
-	return hex.EncodeToString(h[:])
-}
-
 // recomputePageRelations implements docs/impl/v1/wiki.md 步骤 7b: after new
 // cross-Source KPN relations appear, recompute only the page pairs whose
 // published concept pages cite one of the newly-related points — not a full
@@ -883,48 +460,6 @@ func (s *Service) buildWikiDraftReflowSection() ([]WikiDraftReflowEntry, error) 
 	return out, nil
 }
 
-// buildTopicDecomposeSection implements docs/impl/v1/study.md 步骤 6's
-// "topic_decompose" report item: aggregate topic_decompose_signal events by
-// the topic page that provided the skeleton.
-func (s *Service) buildTopicDecomposeSection(windowDays int) ([]TopicDecomposeEntry, error) {
-	rows, err := s.store.TopicDecomposeSignals(windowDays)
-	if err != nil {
-		return nil, err
-	}
-	type agg struct {
-		count            int
-		memberSum        int
-		outsidePositives int
-	}
-	byPage := make(map[string]*agg)
-	var order []string
-	for _, r := range rows {
-		a, ok := byPage[r.PageID]
-		if !ok {
-			a = &agg{}
-			byPage[r.PageID] = a
-			order = append(order, r.PageID)
-		}
-		a.count++
-		a.memberSum += len(r.ResolvedMemberPageIDs)
-		if r.ResolvedOutsideCount > 0 {
-			a.outsidePositives++
-		}
-	}
-
-	out := make([]TopicDecomposeEntry, 0, len(order))
-	for _, pageID := range order {
-		a := byPage[pageID]
-		entry := TopicDecomposeEntry{PageID: pageID, SignalCount: a.count}
-		if a.count > 0 {
-			entry.AvgResolvedMemberCount = float64(a.memberSum) / float64(a.count)
-			entry.OutsideRatioPositive = float64(a.outsidePositives) / float64(a.count)
-		}
-		out = append(out, entry)
-	}
-	return out, nil
-}
-
 // buildQuestionComplexitySection implements docs/impl/v1/study.md 步骤 7's
 // "问题复杂度观测量": group traces by their four-tuple and compute per-group
 // metrics. Report-only — never feeds any online routing decision.
@@ -944,29 +479,6 @@ func (s *Service) buildQuestionComplexitySection(windowDays int) (QuestionComple
 	if err != nil {
 		return QuestionComplexitySection{}, err
 	}
-	decomposeRows, err := s.store.TopicDecomposeSignals(windowDays)
-	if err != nil {
-		slog.Warn("study: fetch topic decompose signals for complexity failed", "error", err)
-	}
-	// topic_decompose_signal payloads don't carry trace_id in the decoded
-	// struct (it's implicit via learning_events.trace_id, not part of the
-	// payload JSON) — cross_member_ratio/outside_ratio are therefore computed
-	// globally across the window rather than joined per group; still useful
-	// as an overall signal, just not sliced by four-tuple in this cut.
-	crossMemberTotal, outsideTotal := 0, 0
-	for _, r := range decomposeRows {
-		if len(r.ResolvedMemberPageIDs) >= 2 {
-			crossMemberTotal++
-		}
-		if r.ResolvedOutsideCount > 0 {
-			outsideTotal++
-		}
-	}
-	var globalCrossMemberRatio, globalOutsideRatio float64
-	if len(decomposeRows) > 0 {
-		globalCrossMemberRatio = float64(crossMemberTotal) / float64(len(decomposeRows))
-		globalOutsideRatio = float64(outsideTotal) / float64(len(decomposeRows))
-	}
 
 	type key struct{ subject, intent, audience, constraint string }
 	type agg struct {
@@ -974,7 +486,6 @@ func (s *Service) buildQuestionComplexitySection(windowDays int) (QuestionComple
 		pathCounts     map[string]int
 		directPointSum int
 		wikiCount      int
-		skeletonUsed   int
 	}
 	groups := make(map[key]*agg)
 	var order []key
@@ -991,9 +502,6 @@ func (s *Service) buildQuestionComplexitySection(windowDays int) (QuestionComple
 		a.directPointSum += r.DirectPointCount
 		if r.PathType == "wiki" {
 			a.wikiCount++
-		}
-		if r.SkeletonPageID != "" {
-			a.skeletonUsed++
 		}
 	}
 
@@ -1014,9 +522,6 @@ func (s *Service) buildQuestionComplexitySection(windowDays int) (QuestionComple
 			PathDistribution:    a.pathCounts,
 			AvgDirectPointCount: float64(a.directPointSum) / float64(a.count),
 			WikiSatisfiedRatio:  float64(a.wikiCount) / float64(a.count),
-			SkeletonUsedCount:   a.skeletonUsed,
-			CrossMemberRatio:    globalCrossMemberRatio,
-			OutsideRatio:        globalOutsideRatio,
 			ComplexityHint:      nil, // thresholds not calibrated yet (docs/impl/v1/study.md 步骤 7)
 		})
 	}

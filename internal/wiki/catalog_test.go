@@ -26,31 +26,23 @@ func TestListCatalog_GroupsByDomain(t *testing.T) {
 	seedEntry(t, db, "c3", "d1", "概念丙")
 
 	now := time.Now().UTC()
+	// Single-tier Wiki (docs/impl/v1/wiki-single-tier-task-brief.md): every
+	// page shares page_type=topic, and there is no more contains relation —
+	// this test dropped the old separate "concept page" / "topic page
+	// spanning two domains via members" fixtures accordingly.
 	mustInsertPage(t, store, &Page{
-		PageID: "p-pub", PageType: PageTypeConcept, EntryID: nullStr("c1"),
+		PageID: "p-pub", PageType: PageTypeTopic, EntryID: nullStr("c1"),
 		Title: "已发布页", Content: "body", Status: StatusPublished, Summary: "发布摘要",
 		CompiledAt: sqlNullTime(now),
 	})
 	mustInsertPage(t, store, &Page{
-		PageID: "p-draft", PageType: PageTypeConcept, EntryID: nullStr("c2"),
+		PageID: "p-draft", PageType: PageTypeTopic, EntryID: nullStr("c2"),
 		Title: "草稿页", Content: "body", Status: StatusDraft, Summary: "",
 	})
 	mustInsertPage(t, store, &Page{
-		PageID: "p-arch", PageType: PageTypeConcept, EntryID: nullStr("c1"),
+		PageID: "p-arch", PageType: PageTypeTopic, EntryID: nullStr("c1"),
 		Title: "归档页", Content: "body", Status: StatusArchived, Summary: "旧摘要",
 	})
-
-	// Topic spanning both domains via members in d1 and d2.
-	mustInsertPage(t, store, &Page{
-		PageID: "p-topic", PageType: PageTypeTopic, Title: "跨领域主题",
-		Content: "topic body", Status: StatusPublished, Summary: "主题摘要",
-	})
-	if err := store.UpsertPageRelation("p-topic", "p-pub", RelationContains, DerivedFromCompile, "{}"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.UpsertPageRelation("p-topic", "p-draft", RelationContains, DerivedFromCompile, "{}"); err != nil {
-		t.Fatal(err)
-	}
 
 	actStore := activation.NewStore(db)
 	if err := actStore.InsertLearningResult(&activation.LearningResult{
@@ -83,9 +75,9 @@ func TestListCatalog_GroupsByDomain(t *testing.T) {
 	}
 
 	d1 := byID["d1"]
-	// d1: candidate c3, published p-pub, archived p-arch, topic p-topic
-	if d1.WikiCount != 4 {
-		t.Fatalf("d1 wiki_count=%d want 4; pages=%+v", d1.WikiCount, d1.Pages)
+	// d1: candidate c3, published p-pub, archived p-arch
+	if d1.WikiCount != 3 {
+		t.Fatalf("d1 wiki_count=%d want 3; pages=%+v", d1.WikiCount, d1.Pages)
 	}
 	if d1.Pages[0].Status != CatalogStatusPendingCompile || d1.Pages[0].Title != "概念丙" {
 		t.Fatalf("d1 first card want pending 概念丙, got %+v", d1.Pages[0])
@@ -94,14 +86,9 @@ func TestListCatalog_GroupsByDomain(t *testing.T) {
 		t.Fatal("candidate description should fall back to concept desc or reason")
 	}
 
-	var sawTopicD1, sawPub, sawArch bool
+	var sawPub, sawArch bool
 	for _, c := range d1.Pages {
 		switch c.PageID {
-		case "p-topic":
-			sawTopicD1 = true
-			if c.Description != "主题摘要" {
-				t.Errorf("topic description=%q", c.Description)
-			}
 		case "p-pub":
 			sawPub = true
 			if c.Description != "发布摘要" {
@@ -111,14 +98,14 @@ func TestListCatalog_GroupsByDomain(t *testing.T) {
 			sawArch = true
 		}
 	}
-	if !sawTopicD1 || !sawPub || !sawArch {
-		t.Fatalf("d1 missing cards: topic=%v pub=%v arch=%v", sawTopicD1, sawPub, sawArch)
+	if !sawPub || !sawArch {
+		t.Fatalf("d1 missing cards: pub=%v arch=%v", sawPub, sawArch)
 	}
 
 	d2 := byID["d2"]
-	// d2: draft p-draft, topic p-topic
-	if d2.WikiCount != 2 {
-		t.Fatalf("d2 wiki_count=%d want 2; pages=%+v", d2.WikiCount, d2.Pages)
+	// d2: draft p-draft
+	if d2.WikiCount != 1 {
+		t.Fatalf("d2 wiki_count=%d want 1; pages=%+v", d2.WikiCount, d2.Pages)
 	}
 	if d2.Pages[0].Status != StatusDraft || d2.Pages[0].PageID != "p-draft" {
 		t.Fatalf("d2 first card want draft p-draft, got %+v", d2.Pages[0])
@@ -126,9 +113,6 @@ func TestListCatalog_GroupsByDomain(t *testing.T) {
 	// Empty summary → concept description.
 	if d2.Pages[0].Description != "概念乙 的描述" {
 		t.Errorf("draft description fallback=%q", d2.Pages[0].Description)
-	}
-	if d2.Pages[1].PageID != "p-topic" {
-		t.Fatalf("d2 second card want topic, got %+v", d2.Pages[1])
 	}
 
 	// HTTP shape
@@ -146,7 +130,7 @@ func TestListCatalog_GroupsByDomain(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if len(resp) != 2 || resp[0].WikiCount != 4 {
+	if len(resp) != 2 || resp[0].WikiCount != 3 {
 		t.Fatalf("http catalog unexpected: %+v", resp)
 	}
 }

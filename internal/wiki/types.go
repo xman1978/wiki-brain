@@ -135,65 +135,37 @@ type Revision struct {
 }
 
 // CompileRequest is POST /wiki/compile's request body
-// (docs/impl/v1/wiki.md 步骤 2). Claims/Tensions are optional: when present
-// (the caller round-tripped an /wiki/compile/analyze response back, possibly
-// human-edited), generation is constrained to them directly; when absent,
-// Compile runs the analysis step internally before generating.
+// (docs/impl/v1/wiki-single-tier-task-brief.md 步骤 3): a human picks one or
+// more Concept/Fact entry_ids and compile produces a single finished page in
+// one shot -- there is no separate concept-page/topic-page tiering anymore.
+// Claims/Tensions are optional: when present (the caller round-tripped an
+// /wiki/compile/analyze response back, possibly human-edited), generation is
+// constrained to them directly; when absent, Compile runs the analysis step
+// internally before generating.
 type CompileRequest struct {
-	EntryID  string    `json:"entry_id"`
-	PageType string    `json:"page_type"`
+	EntryIDs []string  `json:"entry_ids"`
 	ResultID string    `json:"result_id,omitempty"`
 	Claims   []Claim   `json:"claims,omitempty"`
 	Tensions []Tension `json:"tensions,omitempty"`
 }
 
-// AnalyzeRequest is POST /wiki/compile/analyze's request body
-// (docs/impl/v1/wiki.md 步骤 2). Same shape as CompileRequest minus the
-// claims/tensions fields, which this endpoint produces rather than consumes.
+// AnalyzeRequest is POST /wiki/compile/analyze's request body -- same shape
+// as CompileRequest minus the claims/tensions fields, which this endpoint
+// produces rather than consumes.
 type AnalyzeRequest struct {
-	EntryID  string `json:"entry_id"`
-	PageType string `json:"page_type"`
-	ResultID string `json:"result_id,omitempty"`
+	EntryIDs []string `json:"entry_ids"`
+	ResultID string   `json:"result_id,omitempty"`
 }
 
-// AnalyzeResult is POST /wiki/compile/analyze's (and topic/analyze's)
-// response — never persisted (docs/design/wiki-compilation.md "编译内部分
-// 两步"). The caller holds it and, if the human confirms, sends it back
-// (possibly edited) as CompileRequest.Claims/Tensions. Concept and topic
-// pages share this same flat shape (docs/impl/v1/wiki-generation.md 阶段 C,
-// 3.2) — the only concept-page-specific addition is Claim.AspectID, an
-// optional field topic pages simply never populate.
+// AnalyzeResult is POST /wiki/compile/analyze's response -- never persisted
+// (docs/design/wiki-compilation.md "编译内部分两步"). The caller holds it and,
+// if the human confirms, sends it back (possibly edited) as
+// CompileRequest.Claims/Tensions.
 type AnalyzeResult struct {
-	EntryID  string    `json:"entry_id"`
-	PageType string    `json:"page_type"`
+	EntryIDs []string  `json:"entry_ids"`
 	ResultID string    `json:"result_id,omitempty"`
 	Claims   []Claim   `json:"claims"`
 	Tensions []Tension `json:"tensions"`
-	// Readiness is a concept-page-only, informational snapshot of the same
-	// signals Study's wiki_candidate "ready" judgment uses (docs/impl/v1/
-	// wiki.md 步骤 2 "人工指定主题手动编译") — populated whether or not
-	// ResultID came from an actual Study recommendation, so a human picking
-	// any concept directly can see "does this look ready" before confirming
-	// compile. Never gates Analyze/Compile; nil only if computing it failed
-	// outright (analysis itself still proceeds).
-	Readiness *Readiness `json:"readiness,omitempty"`
-}
-
-// Readiness mirrors (not necessarily bit-for-bit — see computeReadiness's
-// doc comment) Study's WikiCandidateStats/ready criteria: breadth
-// (QualifyingKPCount), connectedness (Related/ContradictsConnectionCount),
-// stability (DaysActive vs DaysActiveMin), and cohesion (vs CohesionMin).
-// Deliberately has no single collapsed "recommendation" bool — the human
-// looking at these numbers is the judgment call, not the system (docs/impl/v1/
-// wiki.md 步骤 2 "仅提示，不阻断").
-type Readiness struct {
-	QualifyingKPCount          int     `json:"qualifying_kp_count"`
-	RelatedConnectionCount     int     `json:"related_connection_count"`
-	ContradictsConnectionCount int     `json:"contradicts_connection_count"`
-	DaysActive                 int     `json:"days_active"`
-	DaysActiveMin              int     `json:"days_active_min"`
-	Cohesion                   float64 `json:"cohesion"`
-	CohesionMin                float64 `json:"cohesion_min"`
 }
 
 // Claim is one analysis-stage stable-conclusion candidate: a core idea plus
@@ -231,7 +203,20 @@ type QualifyingPoint struct {
 	LineStart      int
 	LineEnd        int
 	ConfidentCount int
+	// SubgraphRole is buildKnowledgeSubgraph's Core/Context/Conflict
+	// provenance tag (docs/impl/v1/wiki-single-tier-task-brief.md 步骤 3) —
+	// only meaningful within the Core group, distinguishing a point directly
+	// owned by one of the compiled entry_ids (SubgraphRoleCore) from one
+	// borrowed as background from a kind=fact entry's parent Concept
+	// (SubgraphRoleCoreParentBackground). Empty for Context/Conflict points.
+	SubgraphRole string
 }
+
+// buildKnowledgeSubgraph's Core provenance tags (QualifyingPoint.SubgraphRole).
+const (
+	SubgraphRoleCore                 = "core"
+	SubgraphRoleCoreParentBackground = "core_parent_background"
+)
 
 // GapCandidate is a knowledge_gaps row considered for a compile's "待验证点"
 // material (docs/impl/v1/wiki.md 步骤 3).

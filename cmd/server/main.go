@@ -207,8 +207,9 @@ func main() {
 
 	wikiSvc := wiki.NewService(wikiStore, llmClient, idxMgr.Wiki, idxMgr.Points, idxMgr.Outlines, cfg.Wiki)
 	wikiSvc.SetActivationSvc(activationSvc)
-	unitSvc.SetWikiNotifier(wikiSvc)
-	activationSvc.SetWikiNotifier(wikiSvc)
+	// 2026-08-18 单层化收尾重新接线（docs/impl/v1/wiki.md「重编译标记」）：
+	// KP lifecycle 变化、entry_id 归属变化通知 Wiki 标记 needs_recompile。
+	unitSvc.SetWikiEntryNotifier(wikiSvc)
 
 	retrievalSvc := retrieval.NewService(retrievalStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, activationSvc, evidenceSvc, wikiSvc)
 	answerSvc := answer.NewService(answerStore, llmClient, q, retrievalSvc)
@@ -220,13 +221,7 @@ func main() {
 	traceSvc.SetSynthesisOutcomeWriter(wikiSvc)
 	retrievalSvc.SetSynthesisOutcomeWriter(traceSvc)
 	studySvc := study.NewService(studyStore, cfg.Study, activationSvc, wikiSvc, cfg.Wiki.RecompileNewKPMin, cfg.Wiki.QualifyingMinDaysActive,
-		study.CohesionConfig{
-			Min:     cfg.Wiki.EntryCohesionMin,
-			WRel:    cfg.Wiki.AspectWRel,
-			WCooc:   cfg.Wiki.AspectWCooc,
-			CoocSat: cfg.Wiki.AspectCoocSat,
-			Gamma:   cfg.Wiki.AspectGamma,
-		}, cfg.Wiki.TopicClusterMinQuestions, cfg.Wiki.TopicClusterMinDaysActive, cfg.Retrieval.QuestionTupleNormIdleDays)
+		cfg.Retrieval.QuestionTupleNormIdleDays)
 
 	entrySvc := entry.NewService(entryStore, entry.Config{
 		AddEventMin:       cfg.Study.EntryAddEventMin,

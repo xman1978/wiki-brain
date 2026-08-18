@@ -321,7 +321,7 @@ func (s *Service) proposeConceptClustersFromOrphans(ctx context.Context, domainI
 				continue
 			}
 			for srcID, pointIDs := range bySource {
-				if _, err := s.conceptNotifier.ProposeAddCandidate(domainID, cluster.SuggestedName, cluster.SuggestedDescription, cluster.SuggestedBoundary, "concept", "", pointIDs, srcID); err != nil {
+				if _, err := s.conceptNotifier.ProposeAddCandidate(domainID, cluster.SuggestedName, cluster.SuggestedDescription, cluster.SuggestedBoundary, "concept", "", pointIDs, srcID, ""); err != nil {
 					slog.Warn("unit: kpn concept propose candidate write failed", "source_id", srcID, "suggested_name", cluster.SuggestedName, "error", err)
 					continue
 				}
@@ -515,7 +515,7 @@ func (s *Service) writeFactGroupCandidates(ctx context.Context, domainID string,
 		for i, p := range points {
 			pointIDs[i] = p.PointID
 		}
-		if _, err := s.conceptNotifier.ProposeAddCandidate(domainID, name, description, boundary, "fact", entity, pointIDs, key.SourceID); err != nil {
+		if _, err := s.conceptNotifier.ProposeAddCandidate(domainID, name, description, boundary, "fact", entity, pointIDs, key.SourceID, key.ConceptID); err != nil {
 			slog.Warn("unit: kpn fact group candidate write failed", "source_id", key.SourceID, "suggested_name", name, "error", err)
 			continue
 		}

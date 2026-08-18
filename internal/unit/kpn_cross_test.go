@@ -122,15 +122,15 @@ type fakeEntryNotifier struct {
 }
 
 type fakeEntryProposeCall struct {
-	domainID, suggestedName, suggestedDescription, suggestedBoundary, kind, entity, sourceID string
-	pointIDs                                                                                 []string
+	domainID, suggestedName, suggestedDescription, suggestedBoundary, kind, entity, sourceID, parentEntryID string
+	pointIDs                                                                                                []string
 }
 
-func (f *fakeEntryNotifier) ProposeAddCandidate(domainID, suggestedName, suggestedDescription, suggestedBoundary, kind, entity string, pointIDs []string, sourceID string) (string, error) {
+func (f *fakeEntryNotifier) ProposeAddCandidate(domainID, suggestedName, suggestedDescription, suggestedBoundary, kind, entity string, pointIDs []string, sourceID, parentEntryID string) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}
-	f.calls = append(f.calls, fakeEntryProposeCall{domainID, suggestedName, suggestedDescription, suggestedBoundary, kind, entity, sourceID, pointIDs})
+	f.calls = append(f.calls, fakeEntryProposeCall{domainID, suggestedName, suggestedDescription, suggestedBoundary, kind, entity, sourceID, parentEntryID, pointIDs})
 	return "candidate-1", nil
 }
 
@@ -319,6 +319,9 @@ func TestProposeEntriesForOrphans_FactPathCreatesEntityConceptCandidate(t *testi
 	if c.entity != "MySQL" {
 		t.Errorf("entity = %q, want MySQL", c.entity)
 	}
+	if c.parentEntryID != "c-backup" {
+		t.Errorf("parentEntryID = %q, want c-backup (fact-entry-parent-concept-task-brief.md)", c.parentEntryID)
+	}
 }
 
 func TestProposeEntriesForDomainOrphans_MultiSourceClusterSplitsBySource(t *testing.T) {
@@ -370,6 +373,11 @@ func TestProposeEntriesForDomainOrphans_MultiSourceClusterSplitsBySource(t *test
 	}
 	if got := bySource["src-b"]; len(got) != 1 || got[0] != "kp-b" {
 		t.Errorf("src-b call point_ids = %v, want [kp-b]", got)
+	}
+	for _, c := range notifier.calls {
+		if c.parentEntryID != "" {
+			t.Errorf("concept-cluster call parentEntryID = %q, want empty (fact-entry-parent-concept-task-brief.md)", c.parentEntryID)
+		}
 	}
 }
 

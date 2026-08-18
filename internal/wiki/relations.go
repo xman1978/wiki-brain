@@ -20,7 +20,7 @@ func (s *Service) RecomputeRelationsForPage(pageID string) error {
 	if err != nil {
 		return fmt.Errorf("wiki: recompute relations: get page: %w", err)
 	}
-	if page == nil || page.Status != StatusPublished || page.PageType == PageTypeTopic {
+	if page == nil || page.Status != StatusPublished {
 		return nil
 	}
 

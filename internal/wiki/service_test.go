@@ -19,7 +19,7 @@ import (
 func TestCompile_LLMCallCountIsFixedAtTwo(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
 
-	_, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	_, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -40,18 +40,24 @@ func TestCompile_LLMCallCountIsFixedAtTwo(t *testing.T) {
 // 2026-08-03 修订) also determines page_type — a kind=fact concept compiles
 // to page_type="fact", not "concept" (asserted separately by
 // TestCompile_HappyPath for the kind=concept case).
+// TestCompile_ConceptKindHintThreadedToPrompts covers docs/impl/v1/kpn.md
+// 步骤 3's "类型标注" wiki-side wording nudge: the (first) entry's kind
+// (concept/fact) must reach both the analyze and compile prompts as
+// {{entry_kind_hint}}. Single-tier Wiki (docs/impl/v1/
+// wiki-single-tier-task-brief.md 步骤 3) always writes page_type=topic
+// regardless of entry kind.
 func TestCompile_ConceptKindHintThreadedToPrompts(t *testing.T) {
 	svc, fake, db, _ := setupTestService(t)
 	if _, err := db.Exec(`UPDATE entries SET kind = 'fact' WHERE entry_id = 'c1'`); err != nil {
 		t.Fatal(err)
 	}
 
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeFact})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
-	if page.PageType != PageTypeFact {
-		t.Errorf("page_type = %q, want %q", page.PageType, PageTypeFact)
+	if page.PageType != PageTypeTopic {
+		t.Errorf("page_type = %q, want %q", page.PageType, PageTypeTopic)
 	}
 
 	calls := fake.Calls()
@@ -73,60 +79,10 @@ func TestCompile_ConceptKindHintThreadedToPrompts(t *testing.T) {
 	}
 }
 
-// TestCompile_PageTypeDerivedWhenOmitted covers the UI-facing case: the
-// manual-compile picker doesn't know a concept's kind ahead of time, so it
-// omits page_type entirely (web/index.html's analyzeWikiCandidate/
-// compileWikiCandidate calls). Both Analyze and Compile must derive the
-// correct page_type from the concept's kind rather than erroring or silently
-// defaulting to "concept".
-func TestCompile_PageTypeDerivedWhenOmitted(t *testing.T) {
-	svc, _, db, _ := setupTestService(t)
-	if _, err := db.Exec(`UPDATE entries SET kind = 'fact' WHERE entry_id = 'c1'`); err != nil {
-		t.Fatal(err)
-	}
-
-	ar, err := svc.Analyze(context.Background(), AnalyzeRequest{EntryID: "c1"})
-	if err != nil {
-		t.Fatalf("analyze: %v", err)
-	}
-	if ar.PageType != PageTypeFact {
-		t.Errorf("analyze page_type = %q, want %q", ar.PageType, PageTypeFact)
-	}
-
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1"})
-	if err != nil {
-		t.Fatalf("compile: %v", err)
-	}
-	if page.PageType != PageTypeFact {
-		t.Errorf("compile page_type = %q, want %q", page.PageType, PageTypeFact)
-	}
-}
-
-// TestCompile_PageTypeMustMatchConceptKind covers docs/impl/v1/wiki.md「概念页
-// / 事实页」: page_type is not a caller-chosen label, it must match the
-// target concept's kind — a concept-kind concept requested as page_type
-// "fact" (and vice versa) is rejected before any LLM call.
-func TestCompile_PageTypeMustMatchConceptKind(t *testing.T) {
-	svc, fake, _, _ := setupTestService(t)
-
-	_, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeFact})
-	if err == nil {
-		t.Fatal("expected error for page_type=fact against a kind=concept concept, got nil")
-	}
-	if len(fake.Calls()) != 0 {
-		t.Errorf("expected no LLM calls before the page_type/kind mismatch is caught, got %d", len(fake.Calls()))
-	}
-
-	_, err = svc.Analyze(context.Background(), AnalyzeRequest{EntryID: "c1", PageType: PageTypeFact})
-	if err == nil {
-		t.Fatal("expected Analyze to reject page_type=fact against a kind=concept concept, got nil")
-	}
-}
-
 func TestCompile_HappyPath(t *testing.T) {
 	svc, _, _, _ := setupTestService(t)
 
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -155,7 +111,7 @@ func TestCompile_HappyPath(t *testing.T) {
 func TestCompile_RecordsVerifiedLinkIDs(t *testing.T) {
 	svc, _, _, _ := setupTestService(t)
 
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -201,7 +157,7 @@ func TestCompile_ManualTriggerDropsVerifiedRequirement(t *testing.T) {
 		"## 待验证点\n\n暂无。\n\n" +
 		"## 依赖来源\n\n见引用。\n"})
 
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c-unverified", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c-unverified"}})
 	if err != nil {
 		t.Fatalf("expected manual compile to succeed without a verified ActivationLink, got: %v", err)
 	}
@@ -210,33 +166,13 @@ func TestCompile_ManualTriggerDropsVerifiedRequirement(t *testing.T) {
 	}
 }
 
-// TestCompile_StudyTriggerStillRequiresVerified locks the other half of the
-// same 2026-08-07 修订: a Study-recommended trigger (result_id present)
-// keeps the verified requirement unchanged — the same unverified-only
-// concept must still fail to compile.
-func TestCompile_StudyTriggerStillRequiresVerified(t *testing.T) {
-	svc, _, db, _ := setupTestService(t)
-
-	seedEntry(t, db, "c-unverified", "d1", "Unverified Concept")
-	seedKU(t, db, "u-unverified", "s1", "c-unverified", "Topic U", 1, 5)
-	seedKP(t, db, "p-unverified", "u-unverified", "s1", "unverified point content")
-	seedLinkCandidate(t, db, "lc-unverified", "t-u", "p-unverified", 5)
-
-	_, err := svc.Compile(context.Background(), CompileRequest{
-		EntryID: "c-unverified", PageType: PageTypeConcept, ResultID: "fake-result-id",
-	})
-	if err == nil {
-		t.Fatal("expected Study-triggered compile to fail without a verified ActivationLink")
-	}
-}
-
 func TestCompile_DuplicateRejected(t *testing.T) {
 	svc, _, _, _ := setupTestService(t)
 
-	if _, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept}); err != nil {
+	if _, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}}); err != nil {
 		t.Fatalf("first compile: %v", err)
 	}
-	_, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	_, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if !errors.Is(err, ErrPageAlreadyExists) {
 		t.Fatalf("err = %v, want ErrPageAlreadyExists", err)
 	}
@@ -249,7 +185,7 @@ func TestCompile_MissingClaimsFailsAfterRetry(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
 	fake.SetResponse("wiki_analyze.md", llm.FakeResponse{Output: missingClaimsAnalyzeOutput})
 
-	_, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	_, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err == nil {
 		t.Fatal("expected compile to fail when analysis produces no usable claims")
 	}
@@ -277,7 +213,7 @@ func TestCompile_HallucinatedCitationsStripped(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
 	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: hallucinatedCiteCompileOutput})
 
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -297,7 +233,7 @@ func TestCompile_HallucinatedCitationsStripped(t *testing.T) {
 func TestCompile_NoQualifyingPoints(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
 
-	_, err := svc.Compile(context.Background(), CompileRequest{EntryID: "no-such-concept", PageType: PageTypeConcept})
+	_, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"no-such-concept"}})
 	if err == nil {
 		t.Fatal("expected error when concept has no qualifying points")
 	}
@@ -323,7 +259,7 @@ func TestCompile_ResolvesPendingResult(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept, ResultID: lr.ResultID}); err != nil {
+	if _, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}, ResultID: lr.ResultID}); err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 
@@ -338,7 +274,7 @@ func TestCompile_ResolvesPendingResult(t *testing.T) {
 
 func publishedPage(t *testing.T, svc *Service, fake *llm.FakeClient) *Page {
 	t.Helper()
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -436,92 +372,13 @@ func TestRecompile_NewRevisionThenRepublish(t *testing.T) {
 	}
 }
 
-func TestNotifyPointsLifecycleChanged_MarksNeedsRecompile(t *testing.T) {
-	svc, fake, _, idx := setupTestService(t)
-	page := publishedPage(t, svc, fake)
-
-	if err := svc.NotifyPointsLifecycleChanged([]string{"p1"}); err != nil {
-		t.Fatalf("notify: %v", err)
-	}
-
-	got, err := svc.store.GetPage(page.PageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != StatusNeedsRecompile {
-		t.Errorf("status = %q, want needs_recompile", got.Status)
-	}
-	doc, _ := idx.Document(page.PageID)
-	if doc != nil {
-		t.Errorf("expected page to be removed from index after lifecycle change")
-	}
-}
-
-func TestNotifyPointsLifecycleChanged_UnaffectedPageUntouched(t *testing.T) {
-	svc, fake, _, _ := setupTestService(t)
-	page := publishedPage(t, svc, fake)
-
-	if err := svc.NotifyPointsLifecycleChanged([]string{"some-other-point"}); err != nil {
-		t.Fatalf("notify: %v", err)
-	}
-	got, err := svc.store.GetPage(page.PageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != StatusPublished {
-		t.Errorf("status = %q, want unchanged published", got.Status)
-	}
-}
-
-func TestScanForNewQualifyingKP_FlagsAboveThreshold(t *testing.T) {
-	svc, fake, _, _ := setupTestService(t)
-	page := publishedPage(t, svc, fake) // source_point_ids has 2 entries (p1, p2)
-
-	flagged, err := svc.ScanForNewQualifyingKP(map[string]int{"c1": 4}, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(flagged) != 1 || flagged[0].PageID != page.PageID {
-		t.Fatalf("expected page %s flagged, got %+v", page.PageID, flagged)
-	}
-
-	got, err := svc.store.GetPage(page.PageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != StatusNeedsRecompile {
-		t.Errorf("status = %q, want needs_recompile", got.Status)
-	}
-}
-
-func TestScanForNewQualifyingKP_BelowThresholdNotFlagged(t *testing.T) {
-	svc, fake, _, _ := setupTestService(t)
-	page := publishedPage(t, svc, fake) // 2 source_point_ids
-
-	flagged, err := svc.ScanForNewQualifyingKP(map[string]int{"c1": 3}, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(flagged) != 0 {
-		t.Errorf("expected no pages flagged, got %+v", flagged)
-	}
-
-	got, err := svc.store.GetPage(page.PageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != StatusPublished {
-		t.Errorf("status = %q, want still published", got.Status)
-	}
-}
-
 func TestTryDirectAnswer_Sufficient(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
 	publishedPage(t, svc, fake)
 
 	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答内容 [p1]","citations":["p1"],"sufficient":true}`})
 
-	result, ok, _, err := svc.TryDirectAnswer(context.Background(), "point one content", "", "", "", "", 0, 3)
+	result, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", nil, 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -542,7 +399,7 @@ func TestTryDirectAnswer_HallucinatedCitationFiltered(t *testing.T) {
 
 	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答内容","citations":["p1","p999"],"sufficient":true}`})
 
-	result, ok, _, err := svc.TryDirectAnswer(context.Background(), "point one content", "", "", "", "", 0, 3)
+	result, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", nil, 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -562,7 +419,7 @@ func TestTryDirectAnswer_InsufficientFallsBack(t *testing.T) {
 
 	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"","citations":[],"sufficient":false}`})
 
-	_, ok, _, err := svc.TryDirectAnswer(context.Background(), "point one content", "", "", "", "", 0, 3)
+	_, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", nil, 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -575,7 +432,7 @@ func TestTryDirectAnswer_NoHitBelowMinScoreSkipsLLM(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
 	publishedPage(t, svc, fake)
 
-	_, ok, _, err := svc.TryDirectAnswer(context.Background(), "point one content", "", "", "", "", 1000, 3)
+	_, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", nil, 1000, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -591,7 +448,7 @@ func TestTryDirectAnswer_NoHitBelowMinScoreSkipsLLM(t *testing.T) {
 
 func TestTryDirectAnswer_NoPublishedPagesNoHit(t *testing.T) {
 	svc, _, _, _ := setupTestService(t)
-	_, ok, _, err := svc.TryDirectAnswer(context.Background(), "anything", "", "", "", "", 0, 3)
+	_, ok, err := svc.TryDirectAnswer(context.Background(), "anything", nil, 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -613,7 +470,7 @@ func TestCompile_PersistsAliasesAndTriggerQuestions(t *testing.T) {
 	seedSubjectSynonym(t, db, "C1", "Concept One")
 	seedConfidentTrace(t, db, "tr1", "这是一个专属触发问法", []string{"p1"})
 
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -639,7 +496,7 @@ func TestCompile_TruncatesAliasesAndTriggerQuestionsAtMax(t *testing.T) {
 		seedConfidentTrace(t, db, fmt.Sprintf("tr%d", i), fmt.Sprintf("trigger question %d", i), []string{"p1"})
 	}
 
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -658,7 +515,7 @@ func TestCompile_TruncatesAliasesAndTriggerQuestionsAtMax(t *testing.T) {
 func TestTryDirectAnswer_TriggerQuestionRoutesWithoutContentOverlap(t *testing.T) {
 	svc, fake, db, _ := setupTestService(t)
 	seedConfidentTrace(t, db, "tr-trigger", "这是一个专属触发问法", []string{"p1"})
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -671,7 +528,7 @@ func TestTryDirectAnswer_TriggerQuestionRoutesWithoutContentOverlap(t *testing.T
 	// The question exactly echoes the compiled trigger_questions entry, which
 	// shares no vocabulary with the page's title/content — only the trigger
 	// index field can produce a lexical hit here.
-	result, ok, _, err := svc.TryDirectAnswer(context.Background(), "这是一个专属触发问法", "", "", "", "", 0, 3)
+	result, ok, err := svc.TryDirectAnswer(context.Background(), "这是一个专属触发问法", nil, 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -692,7 +549,7 @@ func TestTryDirectAnswer_ConceptEntryBypassesMinScore(t *testing.T) {
 	// minScore is set unreachably high so no lexical hit could clear it; only
 	// the concept entry (question contains the concept name "Concept One",
 	// scored independently of Bleve) should surface this page as a candidate.
-	result, ok, _, err := svc.TryDirectAnswer(context.Background(), "Concept One 该注意什么", "", "", "", "", 1e9, 3)
+	result, ok, err := svc.TryDirectAnswer(context.Background(), "Concept One 该注意什么", nil, 1e9, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -723,7 +580,7 @@ func TestTryDirectAnswer_TopNRetriesNextCandidateOnInsufficient(t *testing.T) {
 		"tensions": []
 	}`})
 	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: "## 摘要\n\n补充概念的一句话定义。\n\n## 稳定结论\n\n内容三的核心结论 [p3]\n\n## 展开说明\n\n### 核心内容\n\n详细说明三。[p3]\n\n## 待验证点\n\n暂无。\n\n## 依赖来源\n\n见引用。\n"})
-	page2, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c2", PageType: PageTypeConcept})
+	page2, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c2"}})
 	if err != nil {
 		t.Fatalf("compile c2: %v", err)
 	}
@@ -739,7 +596,7 @@ func TestTryDirectAnswer_TopNRetriesNextCandidateOnInsufficient(t *testing.T) {
 		{Output: `{"content":"来自第二个候选页的回答","citations":[],"sufficient":true}`},
 	})
 
-	result, ok, _, err := svc.TryDirectAnswer(context.Background(), "Concept One", "", "", "", "", 0, 3)
+	result, ok, err := svc.TryDirectAnswer(context.Background(), "Concept One", nil, 0, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
@@ -773,7 +630,7 @@ func TestCompile_AggregatesObservedConditions(t *testing.T) {
 	setObservedConditions(t, db, "link-p1", []activation.ObservedCondition{cond1})
 	setObservedConditions(t, db, "link-p2", []activation.ObservedCondition{cond2})
 
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -801,7 +658,7 @@ func TestCompile_TriggerQuestionsUseRealObservedQuestions(t *testing.T) {
 
 	seedConfidentTrace(t, db, "tr1", "这个真实问法应该出现在生成素材里", []string{"p1"})
 
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -819,64 +676,48 @@ func TestCompile_TriggerQuestionsUseRealObservedQuestions(t *testing.T) {
 	}
 }
 
-// TestTryDirectAnswer_FourTupleEntry covers docs/impl/v1/wiki.md 步骤 4c: a
-// published page whose observed_conditions match the already-parsed
-// subject/intent/audience/constraint should surface as a direct-answer
-// candidate even when the question text has no lexical overlap with the
-// page (title/content/aliases/trigger_questions) and minScore is
-// unreachably high — only the four-tuple entry can find it.
-func TestTryDirectAnswer_FourTupleEntry(t *testing.T) {
-	svc, fake, db, _ := setupTestService(t)
-	activationSvc := newTestActivationSvc(db)
-	svc.SetActivationSvc(activationSvc)
+// TestTryDirectAnswer_ConceptRecognitionEntry covers docs/impl/v1/
+// wiki-single-tier-task-brief.md 步骤 4: a published page whose entry_id the
+// LLM recognizes as matching the question should surface as a direct-answer
+// candidate even when the question text has no lexical overlap with the page
+// (title/content/aliases/trigger_questions) and minScore is unreachably
+// high — only the Concept/Fact recognition entry can find it.
+func TestTryDirectAnswer_ConceptRecognitionEntry(t *testing.T) {
+	svc, fake, _, _ := setupTestService(t)
+	page := publishedPage(t, svc, fake) // entry_id "c1"
 
-	cond := activation.NormalizeObservedCondition("database performance tuning", "troubleshoot", "dba", "production", "qterm1", time.Now())
-	setObservedConditions(t, db, "link-p1", []activation.ObservedCondition{cond})
-
-	page := publishedPage(t, svc, fake)
-
+	fake.SetResponse("wiki_entry_recognize.md", llm.FakeResponse{Output: `{"entry_ids":["c1"]}`})
 	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"sufficient":true}`})
 
-	result, ok, _, err := svc.TryDirectAnswer(context.Background(),
-		"完全不重合的措辞，既不在标题里也不在正文里",
-		"database performance tuning", "troubleshoot", "dba", "production",
-		1e9, 3)
+	result, ok, err := svc.TryDirectAnswer(context.Background(),
+		"完全不重合的措辞，既不在标题里也不在正文里", nil, 1e9, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
 	if !ok {
-		t.Fatal("expected the four-tuple entry to surface the page despite no lexical overlap and an unreachable min score")
+		t.Fatal("expected the concept recognition entry to surface the page despite no lexical overlap and an unreachable min score")
 	}
 	if result.PageID != page.PageID {
 		t.Errorf("page_id = %q, want %q", result.PageID, page.PageID)
 	}
 }
 
-// TestTryDirectAnswer_FourTupleEmptyQueryNoMatch is the regression test for
-// the empty-query guard added to activation.MatchConditionGroups: a page
-// whose observed_conditions include a group with empty audience/constraint
-// must not match an entirely empty query (subject/intent/audience/constraint
-// all ""), which is what the plain POST /answer path (no Session parsing)
-// looks like.
-func TestTryDirectAnswer_FourTupleEmptyQueryNoMatch(t *testing.T) {
-	svc, fake, db, _ := setupTestService(t)
-	activationSvc := newTestActivationSvc(db)
-	svc.SetActivationSvc(activationSvc)
+// TestTryDirectAnswer_ConceptRecognitionNoMatchSkipsPage is the regression
+// test for an LLM recognition result that names no entry (or an unknown/
+// hallucinated one): the page must not surface as a candidate via this entry.
+func TestTryDirectAnswer_ConceptRecognitionNoMatchSkipsPage(t *testing.T) {
+	svc, fake, _, _ := setupTestService(t)
+	publishedPage(t, svc, fake) // entry_id "c1"
 
-	cond := activation.NormalizeObservedCondition("", "", "", "", "qterm1", time.Now())
-	setObservedConditions(t, db, "link-p1", []activation.ObservedCondition{cond})
+	fake.SetResponse("wiki_entry_recognize.md", llm.FakeResponse{Output: `{"entry_ids":[]}`})
 
-	publishedPage(t, svc, fake)
-
-	_, ok, _, err := svc.TryDirectAnswer(context.Background(),
-		"完全不重合的措辞，既不在标题里也不在正文里",
-		"", "", "", "",
-		1e9, 3)
+	_, ok, err := svc.TryDirectAnswer(context.Background(),
+		"完全不重合的措辞，既不在标题里也不在正文里", nil, 1e9, 3)
 	if err != nil {
 		t.Fatalf("try direct answer: %v", err)
 	}
 	if ok {
-		t.Fatal("expected an entirely empty query not to match via the four-tuple entry, even against an empty-fields condition group")
+		t.Fatal("expected no hit when concept recognition returns no matching entry")
 	}
 }
 
@@ -894,7 +735,7 @@ func TestVerifyClaims_WritesUnsupportedCheck(t *testing.T) {
 		{"claim_id":"claim-2","verdict":"supported","reason":"符合材料"}
 	]}`})
 
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -928,7 +769,7 @@ func TestVerifyClaims_WritesUnsupportedCheck(t *testing.T) {
 func TestVerifyClaims_DisabledByDefaultWritesNoChecks(t *testing.T) {
 	svc, _, _, _ := setupTestService(t)
 
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -962,7 +803,7 @@ func TestPublish_BlockedByFailedSelfcheckThenForceOverrides(t *testing.T) {
 	svc.cfg.SelfcheckEnabled = true
 	fake.SetResponse("wiki_compile.md", llm.FakeResponse{Output: compileOutputCitesOnlyP1})
 
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -1010,7 +851,7 @@ func TestSelfcheck_CachesPerRevision(t *testing.T) {
 	seedConfidentTrace(t, db, "tr1", "问题一", []string{"p1"})
 	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"sufficient":true}`})
 
-	page, err := svc.Compile(context.Background(), CompileRequest{EntryID: "c1", PageType: PageTypeConcept})
+	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
