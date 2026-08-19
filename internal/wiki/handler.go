@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
 )
@@ -18,6 +19,8 @@ func NewHandler(svc *Service) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /wiki/entries/recognize", h.recognizeEntries)
+	mux.HandleFunc("POST /wiki/points/filter", h.filterPoints)
 	mux.HandleFunc("POST /wiki/compile/analyze", h.analyze)
 	mux.HandleFunc("POST /wiki/compile", h.compile)
 	mux.HandleFunc("POST /wiki/pages/{id}/publish", h.publish)
@@ -77,6 +80,44 @@ func (h *Handler) getRelations(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, resp)
 }
 
+// draftResp is the snake_case JSON shape for all three draft endpoints
+// (create/list/get) — the underlying Draft struct (internal/wiki/types.go)
+// has no json tags at all, so serializing it directly (as listDrafts/getDraft
+// used to) produces PascalCase keys (DraftID, Title, ...) the frontend's
+// snake_case reads (d.draft_id, d.title, ...) silently come back undefined
+// against; SourcePageIDs/EvidenceIndex are also stored as raw JSON-encoded
+// strings, not arrays, so a direct pass-through would additionally hand the
+// frontend a string where it expects to .map() over an array (2026-08-19 bug
+// fix — surfaced by the new「编辑标题/摘要」entry point being the first thing
+// to actually round-trip through listDrafts+getDraft together).
+type draftResp struct {
+	DraftID          string               `json:"draft_id"`
+	PageID           string               `json:"page_id"`
+	SourceRevisionID string               `json:"source_revision_id"`
+	SourcePageIDs    []string             `json:"source_page_ids"`
+	EvidenceIndex    []EvidenceIndexEntry `json:"evidence_index"`
+	Title            string               `json:"title"`
+	Content          string               `json:"content"`
+	Note             string               `json:"note"`
+	CreatedAt        string               `json:"created_at"`
+	UpdatedAt        string               `json:"updated_at"`
+	Stale            *bool                `json:"stale,omitempty"`
+}
+
+func toDraftResp(d Draft, stale *bool) draftResp {
+	var sourcePageIDs []string
+	json.Unmarshal([]byte(d.SourcePageIDs), &sourcePageIDs)
+	var evidenceIndex []EvidenceIndexEntry
+	json.Unmarshal([]byte(d.EvidenceIndex), &evidenceIndex)
+	return draftResp{
+		DraftID: d.DraftID, PageID: d.PageID, SourceRevisionID: d.SourceRevisionID,
+		SourcePageIDs: nonNilStrings(sourcePageIDs), EvidenceIndex: evidenceIndex,
+		Title: d.Title, Content: d.Content, Note: d.Note,
+		CreatedAt: d.CreatedAt.Format(time.RFC3339), UpdatedAt: d.UpdatedAt.Format(time.RFC3339),
+		Stale: stale,
+	}
+}
+
 func (h *Handler) createDraft(w http.ResponseWriter, r *http.Request) {
 	pageID := r.PathValue("id")
 	var req struct {
@@ -89,12 +130,7 @@ func (h *Handler) createDraft(w http.ResponseWriter, r *http.Request) {
 		writePageError(w, err)
 		return
 	}
-	var sourcePageIDs []string
-	json.Unmarshal([]byte(draft.SourcePageIDs), &sourcePageIDs)
-	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"draft_id": draft.DraftID, "page_id": draft.PageID, "mode": req.Mode,
-		"source_page_ids": nonNilStrings(sourcePageIDs), "title": draft.Title,
-	})
+	foundation.WriteJSON(w, http.StatusOK, toDraftResp(*draft, nil))
 }
 
 func (h *Handler) listDrafts(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +141,11 @@ func (h *Handler) listDrafts(w http.ResponseWriter, r *http.Request) {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	foundation.WriteJSON(w, http.StatusOK, drafts)
+	resp := make([]draftResp, 0, len(drafts))
+	for _, d := range drafts {
+		resp = append(resp, toDraftResp(d, nil))
+	}
+	foundation.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) getDraft(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +159,7 @@ func (h *Handler) getDraft(w http.ResponseWriter, r *http.Request) {
 		foundation.WriteError(w, http.StatusNotFound, "draft not found")
 		return
 	}
-	foundation.WriteJSON(w, http.StatusOK, d)
+	foundation.WriteJSON(w, http.StatusOK, toDraftResp(d.Draft, &d.Stale))
 }
 
 func (h *Handler) patchDraft(w http.ResponseWriter, r *http.Request) {
@@ -143,11 +183,84 @@ func (h *Handler) patchDraft(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) deleteDraft(w http.ResponseWriter, r *http.Request) {
 	draftID := r.PathValue("id")
-	if err := h.svc.store.DeleteDraft(draftID); err != nil {
+	if err := h.svc.DeleteDraft(draftID); err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	foundation.WriteJSON(w, http.StatusOK, map[string]string{"draft_id": draftID, "status": "deleted"})
+}
+
+// recognizeEntries is POST /wiki/entries/recognize — the Wiki 生成弹窗的词条
+// 匹配入口，复用 Retrieval 直答路径同一个 LLM 词条识别核心（Service.
+// RecognizeEntries），而不是前端本地按文本重合度打分：按设计，Concept/Fact
+// 词条匹配统一走模型判断（docs/impl/v1/wiki-single-tier-task-brief.md 步骤
+// 4），不应该在 Wiki 生成入口另开一套纯文本启发式。
+func (h *Handler) recognizeEntries(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TopicName        string `json:"topic_name"`
+		TopicDescription string `json:"topic_description"`
+		DomainID         string `json:"domain_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.TopicName == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "topic_name is required")
+		return
+	}
+
+	var domainIDs []string
+	if req.DomainID != "" {
+		domainIDs = []string{req.DomainID}
+	}
+	text := req.TopicName
+	if req.TopicDescription != "" {
+		text += "\n" + req.TopicDescription
+	}
+
+	entryIDs, err := h.svc.RecognizeEntries(r.Context(), text, domainIDs)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{"entry_ids": nonNilStrings(entryIDs)})
+}
+
+// filterPoints is POST /wiki/points/filter — the KP-review screen in the
+// Wiki 生成弹窗的模型筛选入口，与 recognizeEntries 同一批「匹配统一走模型
+// 判断」的设计（用户 2026-08-19 要求：不是所有匹配到的词条下的 KP 都符合
+// 主题，应该让模型按主题筛出相关的一部分，仅供页面预勾选，人工仍可调整）。
+func (h *Handler) filterPoints(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TopicName        string                 `json:"topic_name"`
+		TopicDescription string                 `json:"topic_description"`
+		Points           []FilterPointCandidate `json:"points"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.TopicName == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "topic_name is required")
+		return
+	}
+	if len(req.Points) == 0 {
+		foundation.WriteError(w, http.StatusBadRequest, "points is required")
+		return
+	}
+
+	text := req.TopicName
+	if req.TopicDescription != "" {
+		text += "\n" + req.TopicDescription
+	}
+
+	pointIDs, err := h.svc.FilterPoints(r.Context(), text, req.Points)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{"point_ids": nonNilStrings(pointIDs)})
 }
 
 func (h *Handler) analyze(w http.ResponseWriter, r *http.Request) {
@@ -326,6 +439,11 @@ func (h *Handler) listCatalog(w http.ResponseWriter, r *http.Request) {
 
 type pageDetailResp struct {
 	pageListResp
+	// EntryIDs (2026-08-19 新增，用户要求标题下展示"wiki 关联的词条") is the
+	// full entry set this page was compiled from (wiki_page_entries, migration
+	// 057) — pageListResp.EntryID is only the primary one used for catalog's
+	// domain-grouped JOIN, not every entry a multi-entry compile drew from.
+	EntryIDs        []string         `json:"entry_ids"`
 	Content         string           `json:"content"`
 	Summary         string           `json:"summary"`
 	Aspects         []PageAspect     `json:"aspects"`
@@ -352,6 +470,7 @@ type pageDetailResp struct {
 
 type revisionMeta struct {
 	RevisionID string `json:"revision_id"`
+	Title      string `json:"title"`
 	Reason     string `json:"reason"`
 	CreatedAt  string `json:"created_at"`
 }
@@ -380,6 +499,18 @@ func (h *Handler) getPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	entryIDs, err := h.svc.store.EntryIDsByPageID(pageID)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(entryIDs) == 0 && page.EntryID.Valid && page.EntryID.String != "" {
+		// Pages inserted before migration 057 (wiki_page_entries) have no rows
+		// there yet — fall back to the single primary entry_id, same fallback
+		// Recompile already uses.
+		entryIDs = []string{page.EntryID.String}
+	}
+
 	revisions, err := h.svc.store.ListRevisions(pageID)
 	if err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
@@ -402,6 +533,7 @@ func (h *Handler) getPage(w http.ResponseWriter, r *http.Request) {
 	for _, rev := range revisions {
 		revMeta = append(revMeta, revisionMeta{
 			RevisionID: rev.RevisionID,
+			Title:      rev.Title,
 			Reason:     rev.Reason,
 			CreatedAt:  rev.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		})
@@ -435,6 +567,7 @@ func (h *Handler) getPage(w http.ResponseWriter, r *http.Request) {
 
 	resp := pageDetailResp{
 		pageListResp:    toPageListResp(*page),
+		EntryIDs:        nonNilStrings(entryIDs),
 		Content:         page.Content,
 		Summary:         page.Summary,
 		Aspects:         aspects,
@@ -474,6 +607,7 @@ func (h *Handler) getRevision(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, map[string]string{
 		"revision_id": rev.RevisionID,
 		"content":     rev.Content,
+		"title":       rev.Title,
 		"reason":      rev.Reason,
 		"created_at":  rev.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	})

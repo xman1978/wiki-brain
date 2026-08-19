@@ -24,14 +24,16 @@ Wiki 直答层   已发布 Wiki 页面命中 → 直接基于页面回答（见 
 > routing 表述，应理解为"self_graded/trusted 直接服务、exploring 按小概率
 > 试探服务，三档命中都会记 activation_hits"。
 
-> **熟路指针（2026-08-11，设计层面，非实现变更）**：`docs/impl/v1/activation-bundle.md`
-> 提出的 ActivationBundle（熟路）预期会在 Wiki 直答层和上面的激活层之间插入一层——
-> 命中优先级预期是 Wiki 直答 → 熟路 Match → 单链接 ActivationLink Match → 慢路径，
-> 服务的是"一个问题需要综合多个知识点才能回答"这类当前激活层覆盖不到的场景（单
-> 链接 Match 命中多个不同 unit 时会被视为歧义、回落慢路径，见下方步骤 2）。这是
-> ActivationBundle 文档「阶段 2」的范围，本文档尚未据此改动，具体接入点、命中后
-> 的候选构建方式、是否影响 LLM 调用次数预算，都还没有定案，需要单独评估后再回来
-> 修订本文档，见 activation-bundle.md 步骤 4「匹配器契约」。
+> **熟路指针（2026-08-11，设计层面，非实现变更；2026-08-19 更正优先级表述**
+> **以匹配下方"并行 + ActivationLink 优先"改判**）：`docs/impl/v1/activation-bundle.md`
+> 提出的 ActivationBundle（熟路）目前已在实现中作为 ActivationLink 单链接 Match
+> 遇到跨 unit 歧义时的仲裁层（见下方步骤 2），不是独立并行的第三层，因此当前
+> 命中优先级是 ActivationLink/熟路（激活层，二者合一次判定）> Wiki 直答 > 慢
+> 路径——不再是旧版"Wiki 直答 → 熟路 → 单链接"的顺序。熟路服务的是"一个问题
+> 需要综合多个知识点才能回答"这类场景。ActivationBundle 文档「阶段 2」中
+> `bundle_hits[]` 独立字段、Trace `bundle_success`/`bundle_failure` 事件等仍未
+> 实现，具体接入点、是否影响 LLM 调用次数预算，还没有定案，需要单独评估后再
+> 回来修订本文档，见 activation-bundle.md 步骤 4「匹配器契约」。
 
 所有路径在 Rerank（或快路径的证据组装）之后统一经过证据挖掘（见 `evidence.md`），再进入充分性判断与 EvidenceSet 构建。
 
@@ -39,9 +41,22 @@ Wiki 直答层   已发布 Wiki 页面命中 → 直接基于页面回答（见 
 
 ## 检索总流程（V1）
 
+> **2026-08-19 改判**：以下第 0 层（Wiki 直答）与第 1 层（激活层 Match）此
+> 前是串行——先等 Wiki 直答出结果，未命中才跑激活层。Wiki 直答的
+> Concept/Fact 识别要调 LLM，比纯程序、免费的 ActivationLink Match 慢得
+> 多，串行会让本该被激活层秒回的问题被 Wiki 的 LLM 调用拖慢。改为**两层
+> 并行发起**，都返回后按优先级挑选结果：**ActivationLink 命中优先于 Wiki
+> 直答**（同时命中时激活层更快、更可信；命中 Wiki 而激活层未命中则用 Wiki
+> 直答结果；都未命中落入第 2 层慢路径）。这意味着即便本轮最终命中/使用的
+> 是 ActivationLink，Wiki 直答的 LLM 调用仍然会发生（并被丢弃）——用一次
+> 可能浪费的调用换取延迟下限，是本次改判的核心权衡。见
+> `internal/retrieval/service.go` `RetrieveWithProgress`。
+
 ```text
 问题（经 Session 补全，沿用 MVP）
-  ├─ 第 0 层：Wiki 直答候选采集（三个入口，见 wiki.md「检索接入」；
+  ├─ 第 0 层与第 1 层并行发起（2026-08-19 改判，见上方编注）：
+  │
+  │  第 0 层：Wiki 直答候选采集（三个入口，见 wiki.md「检索接入」；
   │    2026-08-18 单层化改造后，其中一个入口改为调用 LLM，不再是"三个入口
   │    全部不调 LLM"）
   │    a. Concept/Fact 识别：一次 LLM 判断问题主要涉及哪个/哪些已发布词条
@@ -52,12 +67,13 @@ Wiki 直答层   已发布 Wiki 页面命中 → 直接基于页面回答（见 
   │    c. 概念名词法包含：问题字面包含已发布页面的概念名称 → 直接入候选；
   │    优先级：Concept/Fact 识别命中 > 词法（分数降序）> 仅概念名包含命中；
   │    合并去重取前 wiki_max_candidates 个，按序直答尝试，
-  │    某页 sufficient=true → Wiki 直答路径（path_type=wiki）；
-  │    候选耗尽或为空 → 落入第 1 层
+  │    某页 sufficient=true → Wiki 直答路径（path_type=wiki）候选就绪；
+  │    候选耗尽或为空 → 本层判定为未命中
   │      （单层化改造后 Wiki 不再有"主题页聚合概念页成员"这一层，骨架
   │      注入慢路径与 topic_decompose_signal 已整体删除，见
   │      wiki-single-tier-open-questions.md「已拍板（2026-08-18）」）
-  ├─ 第 1 层：激活层 Match（四元组精确匹配，纯程序、免费；2026-08-12
+  │
+  │  第 1 层：激活层 Match（四元组精确匹配，纯程序、免费；2026-08-12
   │    改判撤销此前"未命中且有候选组时升级为模型辅助匹配"的第二轮，
   │    Match 全程不调 LLM，见 activation.md 步骤 2）；命中后按该条件
   │    当前的服务分档（tier，见 activation.md「状态机」）决定本轮走向
@@ -81,6 +97,12 @@ Wiki 直答层   已发布 Wiki 页面命中 → 直接基于页面回答（见 
   │        概率抽样，见 activation.md「服务分档」），在快路径答案已经
   │        返回给用户之后，异步触发一次独立核实试验（见步骤 2c）——
   │        不阻塞、不延迟本次已经返回的回答
+  │
+  │  两层都返回后合并（2026-08-19 改判，见上方编注）：
+  │    激活层判定为命中（含 exploring 中选）→ 用激活层结果，Wiki 直答结果
+  │      即便也命中也一并丢弃；
+  │    激活层未命中、Wiki 直答判定为命中 → 用 Wiki 直答结果；
+  │    两层都未命中 → 落入未命中分支
   └─ 未命中 → 慢路径（MVP 完整链路）：
        Domain 预过滤 → Source 过滤 → Outline/FTS 召回 → RRF → Rerank
        → KPN 扩展 → 证据挖掘 → 充分性判断 → EvidenceSet(path_type=full)

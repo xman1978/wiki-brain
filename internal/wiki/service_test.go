@@ -230,6 +230,51 @@ func TestCompile_HallucinatedCitationsStripped(t *testing.T) {
 	}
 }
 
+// TestCompile_PointIDsRestrictsCoreMaterial covers the 2026-08-19 KP-picker
+// feature: CompileRequest.PointIDs, when set, must narrow Core (and thus the
+// material actually sent to the analyze/compile prompts) to only the given
+// point_ids — c1 has two qualifying points (p1, p2); restricting to just p1
+// must mean p2's content never reaches wiki_analyze.md's core_material var.
+func TestCompile_PointIDsRestrictsCoreMaterial(t *testing.T) {
+	svc, fake, _, _ := setupTestService(t)
+
+	_, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}, PointIDs: []string{"p1"}})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	calls := fake.Calls()
+	if len(calls) == 0 {
+		t.Fatal("expected at least one LLM call")
+	}
+	core := calls[0].Vars["core_material"]
+	if !strings.Contains(core, "point one content") {
+		t.Errorf("core_material missing p1's content: %q", core)
+	}
+	if strings.Contains(core, "point two content") {
+		t.Errorf("core_material should exclude p2's content when point_ids=[p1], got: %q", core)
+	}
+}
+
+// TestCompile_PointIDsAllFilteredOutErrors covers the edge where every
+// point_id given doesn't belong to any of the entries — Core ends up empty,
+// which must fail the same way "entry has no qualifying points at all" does
+// (ErrNoQualifyingPoints), without spending an LLM call.
+func TestCompile_PointIDsAllFilteredOutErrors(t *testing.T) {
+	svc, fake, _, _ := setupTestService(t)
+
+	_, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}, PointIDs: []string{"p-does-not-belong-to-c1"}})
+	if err == nil {
+		t.Fatal("expected error when point_ids filters Core down to empty")
+	}
+	if !errors.Is(err, ErrNoQualifyingPoints) {
+		t.Errorf("expected ErrNoQualifyingPoints, got: %v", err)
+	}
+	if len(fake.Calls()) != 0 {
+		t.Errorf("expected no LLM call when point_ids filters Core to empty, got %d", len(fake.Calls()))
+	}
+}
+
 func TestCompile_NoQualifyingPoints(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
 
@@ -359,8 +404,8 @@ func TestRecompile_NewRevisionThenRepublish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(revs) != 2 || revs[1].Reason != "manual_recompile" {
-		t.Errorf("expected 2 revisions (compile, manual_recompile), got %+v", revs)
+	if len(revs) != 3 || revs[2].Reason != "manual_recompile" {
+		t.Errorf("expected 3 revisions (compile, publish, manual_recompile), got %+v", revs)
 	}
 
 	page, err = svc.Publish(page.PageID)

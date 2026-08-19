@@ -112,22 +112,42 @@ func (s *Service) Retrieve(ctx context.Context, question string) (*EvidenceSet, 
 	return s.RetrieveWithProgress(ctx, QueryContext{Question: question}, nil)
 }
 
-// RetrieveWithProgress dispatches to the activation fast path
-// (docs/impl/v1/retrieval.md 步骤 2) unless ForceFull is set or fast_path is
-// disabled, falling back to the full MVP pipeline whenever the fast path
-// can't be built or Match finds nothing. When fast_path=false the match is
-// still performed and its activation_hits are merged into the slow-path
-// result — "记录命中日志后仍走慢路径" — so gated rollout can compare hit
-// quality without changing behavior.
+// RetrieveWithProgress dispatches to the Wiki 直答 and activation fast path
+// (docs/impl/v1/retrieval.md 第 0/1 层) unless ForceFull is set or fast_path
+// is disabled, falling back to the full MVP pipeline whenever neither path
+// produces a usable result. 2026-08-19 改判：Wiki 直答的 Concept/Fact 识别要
+// 调 LLM，比纯程序的 ActivationLink Match 慢得多；串行等 Wiki 先出结果拖慢
+// 了本该走激活层就能秒回的问题。两层改为并行发起，都返回后按优先级挑选：
+// ActivationLink 命中优先于 Wiki 直答（同时命中时激活层更快、更可信，Wiki
+// 直答的额外 LLM 调用视为为了不阻塞激活层而接受的浪费成本）。When
+// fast_path=false the match is still performed and its activation_hits are
+// merged into the slow-path result — "记录命中日志后仍走慢路径" — so gated
+// rollout can compare hit quality without changing behavior.
 func (s *Service) RetrieveWithProgress(ctx context.Context, qc QueryContext, progress ProgressFunc) (*EvidenceSet, error) {
 	if !qc.ForceFull {
-		wikiES, ok := s.tryWikiAnswer(ctx, qc)
-		if ok {
-			return wikiES, nil
-		}
-		fastES, hits, ok := s.tryFastPath(ctx, qc)
-		if ok {
+		var wikiES *EvidenceSet
+		var wikiOK bool
+		var fastES *EvidenceSet
+		var hits []ActivationHit
+		var fastOK bool
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			wikiES, wikiOK = s.tryWikiAnswer(ctx, qc)
+		}()
+		go func() {
+			defer wg.Done()
+			fastES, hits, fastOK = s.tryFastPath(ctx, qc)
+		}()
+		wg.Wait()
+
+		if fastOK {
 			return fastES, nil
+		}
+		if wikiOK {
+			return wikiES, nil
 		}
 		if len(hits) > 0 {
 			slowES, err := s.retrieveSlowPath(ctx, qc, progress)
@@ -437,28 +457,14 @@ func (s *Service) finishFastPath(ctx context.Context, workQC QueryContext, hits 
 		})
 	}
 
-	allCandidates, conflictCandidates, err := s.kpnExpand(direct)
-	if err != nil {
-		slog.Warn("retrieval: fast path kpn expand failed, falling back to slow path", "error", err)
-		return nil, activationHits, false
-	}
-	allCandidates, _, err = s.judgeKPNExpansion(ctx, workQC, allCandidates)
-	if err != nil {
-		slog.Warn("retrieval: fast path judge kpn expansion failed, falling back to slow path", "error", err)
-		return nil, activationHits, false
-	}
-
-	var directCands, supportingCands []candidate
-	for _, c := range allCandidates {
-		switch c.sourcePaths[0] {
-		case "direct":
-			directCands = append(directCands, c)
-		case "supporting":
-			supportingCands = append(supportingCands, c)
-		}
-	}
-
-	es, err := s.buildEvidenceSet(ctx, workQC.Question, workQC.Subject, workQC.Intent, workQC.Audience, workQC.Constraint, "short", directCands, supportingCands, conflictCandidates, nil, false)
+	// 快路径不做 KPN 邻居扩展（kpnExpand）：ActivationLink/Bundle 关联的
+	// point_id 本身就是历史验证过的、与问题相关的 KP，机制上已经保证了相关
+	// 性——如果某个 KPN 邻居真的和问题相关，它应当自己也命中/沉淀出一条
+	// ActivationLink，而不是靠快路径临时按图关系扩展进来。也因此不再需要
+	// judgeKPNExpansion（KPN 相关性判定，rerank_relevance.md）这道过滤。
+	// buildEvidenceSet 内的证据挖掘（evidence_mine.md）也一并跳过，证据内容
+	// 退化为整段落（mined=false），是"挖掘失败时的整段兜底"已有语义路径。
+	es, err := s.buildEvidenceSet(ctx, workQC.Question, workQC.Subject, workQC.Intent, workQC.Audience, workQC.Constraint, "short", direct, nil, nil, nil, false, true)
 	if err != nil {
 		slog.Warn("retrieval: fast path build evidence set failed, falling back to slow path", "error", err)
 		return nil, activationHits, false
@@ -896,7 +902,7 @@ func (s *Service) rerankAndBuildEvidenceSet(ctx context.Context, qc QueryContext
 	}
 
 	// Step 10: Build EvidenceSet
-	es, err := s.buildEvidenceSet(ctx, question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, path, direct, supporting, conflictCandidates, progress, lastResort)
+	es, err := s.buildEvidenceSet(ctx, question, qc.Subject, qc.Intent, qc.Audience, qc.Constraint, path, direct, supporting, conflictCandidates, progress, lastResort, false)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: build evidence set: %w", err)
 	}
@@ -2275,7 +2281,7 @@ func (s *Service) judgeKPNExpansion(ctx context.Context, qc QueryContext, candid
 // final EvidenceSet (docs/impl/v1/retrieval.md 步骤 3-4). Mining runs once
 // here for both the fast and slow paths, since both funnel through this
 // function.
-func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, intent, audience, constraint, path string, direct, supporting, conflicts []candidate, progress ProgressFunc, lastResort bool) (*EvidenceSet, error) {
+func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, intent, audience, constraint, path string, direct, supporting, conflicts []candidate, progress ProgressFunc, lastResort bool, skipMining bool) (*EvidenceSet, error) {
 	emit := func(phase, status, detail string, dur int64) {
 		if progress != nil {
 			progress(ProgressEvent{Phase: phase, Status: status, Detail: detail, Duration: dur})
@@ -2363,7 +2369,7 @@ func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, inten
 	emit("evidence", "start", fmt.Sprintf("%d 条候选", len(items)), 0)
 	evidenceStart := time.Now()
 	mined := items
-	if s.evidenceSvc != nil {
+	if !skipMining && s.evidenceSvc != nil {
 		mined = s.evidenceSvc.Mine(ctx, question, subject, intent, audience, constraint, items, lastResort)
 	}
 	minedCount := 0

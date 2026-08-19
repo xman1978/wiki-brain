@@ -32,7 +32,7 @@ func TestBuildEvidenceSet_WithMining_ProducesFragmentLevelEvidence(t *testing.T)
 		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25},
 	}
 
-	es, err := svc.buildEvidenceSet(context.Background(), "what is a linear equation", "", "", "", "", "short", direct, nil, nil, nil, false)
+	es, err := svc.buildEvidenceSet(context.Background(), "what is a linear equation", "", "", "", "", "short", direct, nil, nil, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestBuildEvidenceSet_MiningDisabled_WholeSegmentUnchanged(t *testing.T) {
 		{unitID: "u1", pointID: "p1", sourceID: "s1", lineStart: 1, lineEnd: 25},
 	}
 
-	es, err := svc.buildEvidenceSet(context.Background(), "q", "", "", "", "", "short", direct, nil, nil, nil, false)
+	es, err := svc.buildEvidenceSet(context.Background(), "q", "", "", "", "", "short", direct, nil, nil, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,26 +73,23 @@ func TestBuildEvidenceSet_MiningDisabled_WholeSegmentUnchanged(t *testing.T) {
 	}
 }
 
-func TestRetrieve_FastPath_WithMining(t *testing.T) {
+// TestRetrieve_FastPath_SkipsMining covers the fast-path latency cut:
+// evidence mining (evidence_mine.md) is skipped on the fast path (docs/impl/
+// v1/retrieval.md) — ActivationLink's direct hit is already history-verified
+// and the extra LLM round trip was one of the dominant costs in a fast-path
+// answer. DirectEvidence degrades to whole-segment (mined=false), the same
+// fallback shape already used when mining fails, not a new degrade mode. No
+// fake response is registered for evidence_mine.md, so the test would fail
+// loudly (fake client error) if the fast path ever called it again. KPN
+// expansion being skipped entirely on the fast path is covered separately by
+// TestRetrieve_FastPath_NoKPNExpansion (fastpath_test.go).
+func TestRetrieve_FastPath_SkipsMining(t *testing.T) {
 	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
 	svc.evidenceSvc = evidence.NewService(fake, evidenceTestConfig())
 
 	question := "什么是线性方程"
 	qTerms := text.Terms(text.Normalize(question))
 	seedVerifiedLink(t, activationSvc, qTerms, "p1")
-
-	// The matched link's KP (p1) has KPN neighbors (p2, p3 — see seedTestData),
-	// which must now clear the rerank judge (judgeKPNExpansion) before being
-	// trusted as supporting candidates; cover all of them so the coverage
-	// check doesn't treat this as a batch failure.
-	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "kpn neighbor"}, {"candidate_id": "c2", "relevant": true, "analysis": "kpn neighbor"}]}`})
-	fake.SetResponse("evidence_mine.md", llm.FakeResponse{
-		Output: `{"results": [
-			{"candidate_id": "c1", "fragments": ["Linear equations ax+b=0"]},
-			{"candidate_id": "c2", "fragments": []},
-			{"candidate_id": "c3", "fragments": []}
-		]}`,
-	})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -101,10 +98,7 @@ func TestRetrieve_FastPath_WithMining(t *testing.T) {
 	if es.PathType != PathTypeFast {
 		t.Fatalf("path_type = %q, want fast", es.PathType)
 	}
-	if len(es.DirectEvidence) != 1 || !es.DirectEvidence[0].Mined {
-		t.Fatalf("expected 1 mined direct evidence item, got %+v", es.DirectEvidence)
-	}
-	if es.DirectEvidence[0].Content != "Linear equations ax+b=0" {
-		t.Errorf("content = %q", es.DirectEvidence[0].Content)
+	if len(es.DirectEvidence) != 1 || es.DirectEvidence[0].Mined {
+		t.Fatalf("expected 1 whole-segment (mined=false) direct evidence item, got %+v", es.DirectEvidence)
 	}
 }

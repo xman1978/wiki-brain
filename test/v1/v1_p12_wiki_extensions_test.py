@@ -1,49 +1,50 @@
 #!/usr/bin/env python3
 """
-V1 验收测试方案（test/v1/v1-acceptance-test-plan.md）P12：Wiki 两层架构扩展
-（docs/impl/v1/wiki.md 步骤 7-10，页面关系 / 主题页候选 / 二阶编译 /
-检索骨架注入 / 写作草稿 / 回流防护）。
+V1 验收测试方案（test/v1/v1-acceptance-test-plan.md）P12：Wiki 页面关系 /
+写作草稿 / 回流防护（单层架构下 P8 编译产物之上的扩展能力）。
 
-前提：依赖 P8 已经跑过并各产出一个 published 的一阶页（concept 或 fact，
-制度域「销售回款管理」、技术域「Oracle RAC」）——本阶段从 test/v1/results/
-里读取最近一次 v1_p8_wiki_*.jsonl 拿 entry_id/page_id，不重新培养信号。
-若找不到，提示先跑 P8，非致命错误直接退出。
+**2026-08-19 全文重写**：`docs/impl/v1/wiki.md` 已于 2026-08-18 整体改判为
+单层架构（`docs/design/wiki-single-tier-revision.md`），"两层架构"（一阶
+概念/事实页 + 二阶主题页）本身已不存在，本脚本原标题"两层架构扩展"随之
+失效。本次重写：
 
-同 P8/P11 的既有拆分方式，本阶段也分两条轴：
+  - **整体删除**：`page_type=topic` 拒绝校验（一阶端点不再有 page_type
+    区分，`page_type` 恒为 `topic`，请求体里传这个字段也不会被特殊处理）；
+    `topic_page_candidate` 观测（Study 主题聚类、`POST /wiki/topics` 均已
+    随两层架构删除，没有对应产物可观测）。
+  - **保留、按新契约调整**：`GET /wiki/pages/:id/relations`
+    （`related`/`contradicts` 两种，`contains` 已删除，机制不变——单层化后
+    对所有已发布页面一视同仁派生，不再有"跳过主题页"的 early return）；
+    写作草稿全生命周期（`source_page_ids` 单层化后恒为 `[page_id]`，"组装
+    模式"随两层架构一起删除，`mode` 请求字段仍被接受但只有 page 语义有
+    意义）；回流来源标记（`sources.origin`/`origin_page_id`，机制不变）；
+    Study 报告 `question_complexity` 板块（与 Wiki 架构无关，机制不变）。
 
-  轴一（确定性，必过）：两层架构新增端点/字段的契约行为——
-    - POST /wiki/compile、/wiki/compile/analyze 传 page_type=topic 必须被拒绝
-      （docs/impl/v1/wiki.md：一阶端点只接受 concept|fact，主题页只能走
-      topic/analyze|compile）；
-    - GET /wiki/pages/:id/relations 结构正确（可为空——P8 的制度/技术两页
-      分属不同领域，天然不会有 KPN 关系，为空是预期，不是失败）；
-    - 写作草稿全生命周期：POST drafts → GET（evidence_index 非空）→
-      PATCH 内容 → 页面正文不受影响（无 draft → page 写回路径）→ DELETE；
-    - 回流来源标记：POST /sources 带 origin=wiki_draft + origin_page_id 时，
-      DB 里 sources.origin/origin_page_id 正确落库（自体祖先排除本身的行为
-      已由 Go 单测 internal/unit/kpn_reflow_test.go 覆盖，本阶段只验证 API
-      入口把字段正确透传落库）；
-    - GET /study/reports/latest 响应包含 question_complexity 板块（结构
-      本身，不要求 groups 非空）。
+前提：依赖 P8 已经跑过并各产出一个 published 页面（制度域「销售回款管理」、
+技术域「Oracle RAC」）——本阶段从 test/v1/results/ 里读取最近一次
+v1_p8_wiki_*.jsonl 拿 page_id，不重新培养信号。若找不到，提示先跑 P8，
+非致命错误直接退出。
 
-  轴二（观测性，不要求达标）：真实数据下页面关系/主题候选是否自然形成——
-    - 检查 knowledge_point_relations 里是否已有可供页面关系派生的行
-      （P7 阶段的跨 Source fixture 可能已产生）、对应 wiki_page_relations
-      是否已派生；
-    - 检查 learning_results 里是否已出现 topic_page_candidate。主题候选现
-      按真实提问四元组聚类（docs/design/wiki.md），不再从已发布页面求连通
-      分量；单次 P8 后问答样本通常不够 topic_cluster_min_*，大概率为 0，
-      属预期观测性缺口，不判失败。人工指定主题走 POST /wiki/topics，本阶
-      段不强制验收二阶全文编译（成本同 P8 days_active 轴二）。
+轴一（确定性，必过）：
+  - `GET /wiki/pages/:id/relations` 结构正确（可为空——P8 的制度/技术两页
+    分属不同领域，天然不会有 KPN 关系，为空是预期，不是失败）；
+  - 写作草稿全生命周期：POST drafts → GET（evidence_index 非空）→
+    PATCH 内容 → 页面正文不受影响（无 draft → page 写回路径）→ DELETE；
+  - 回流来源标记：POST /sources 带 origin=wiki_draft + origin_page_id 时，
+    DB 里 sources.origin/origin_page_id 正确落库；
+  - GET /study/reports/latest 响应包含 question_complexity 板块。
+
+轴二（观测性，不要求达标）：
+  - knowledge_point_relations / wiki_page_relations 行数，仅记录不判定
+    （P7 阶段的跨 Source fixture 可能已产生可供派生的关系）。
 
 用法：
-  python3 test/v1/v1_p12_two_tier_test.py
+  python3 test/v1/v1_p12_wiki_extensions_test.py
 """
 import argparse
 import glob
 import json
 import sys
-import time
 from pathlib import Path
 
 import v1_common as c
@@ -60,17 +61,6 @@ def load_latest_p8_result():
     return lines[-1] if lines else None
 
 
-def axis1_reject_topic_page_type(base_url):
-    """POST /wiki/compile(/analyze) 必须拒绝 page_type=topic（docs/impl/v1/wiki.md：
-    一阶端点只接受 concept|fact，主题页只能走 topic/analyze|compile）。"""
-    results = {}
-    for path in ("/wiki/compile/analyze", "/wiki/compile"):
-        resp, status = c.http_post_json(base_url, path, {"entry_id": "nonexistent", "page_type": "topic"})
-        results[path] = {"status": status, "rejected": status != 200}
-        print(f"  {path} page_type=topic: HTTP {status} rejected={status != 200} resp={resp}")
-    return results
-
-
 def axis1_relations(base_url, page_id, label):
     resp = c.http_get_json(base_url, f"/wiki/pages/{page_id}/relations")
     ok = isinstance(resp, list)
@@ -79,12 +69,16 @@ def axis1_relations(base_url, page_id, label):
             for key in ("relation_type", "other_page_id", "derived_from"):
                 if key not in row:
                     ok = False
+            if row.get("relation_type") not in ("related", "contradicts"):
+                ok = False
     print(f"  {label} page_id={page_id} relations: {len(resp) if isinstance(resp, list) else 'N/A'} 行, 结构校验={'PASS' if ok else 'FAIL'}")
     return {"count": len(resp) if isinstance(resp, list) else None, "structure_ok": ok, "rows": resp}
 
 
 def axis1_draft_lifecycle(base_url, page_id, label):
-    """草稿全生命周期 + 写回防护核对（docs/impl/v1/wiki.md 步骤 10）。"""
+    """草稿全生命周期 + 写回防护核对（docs/impl/v1/wiki.md「写作草稿」）。
+    source_page_ids 单层化后恒为 [page_id]，本脚本不再核对"组装模式"（已
+    随两层架构删除）。"""
     page_before = c.http_get_json(base_url, f"/wiki/pages/{page_id}")
     content_before = page_before.get("content", "")
     title_before = page_before.get("title", "")
@@ -97,11 +91,11 @@ def axis1_draft_lifecycle(base_url, page_id, label):
 
     draft = c.http_get_json(base_url, f"/wiki/drafts/{draft_id}")
     has_evidence = bool(draft.get("evidence_index"))
-    print(f"  {label} draft_id={draft_id} evidence_index 非空={has_evidence} stale={draft.get('stale')}")
+    source_page_ids = draft.get("source_page_ids")
+    print(f"  {label} draft_id={draft_id} evidence_index 非空={has_evidence} stale={draft.get('stale')} source_page_ids={source_page_ids}")
 
     new_content = content_before + "\n\n（人工改写追加内容，仅存在于草稿）"
     new_title = title_before + "（草稿改写）"
-    # v1_common 的 http_post_json 固定 POST，这里手写一次 PATCH。
     import urllib.request
 
     req = urllib.request.Request(
@@ -125,6 +119,8 @@ def axis1_draft_lifecycle(base_url, page_id, label):
     return {
         "draft_id": draft_id,
         "evidence_index_present": has_evidence,
+        "source_page_ids": source_page_ids,
+        "source_page_ids_ok": source_page_ids == [page_id],
         "patch_status": patch_status,
         "page_unaffected_by_draft_edit": unaffected,
         "delete_status": del_status,
@@ -132,10 +128,10 @@ def axis1_draft_lifecycle(base_url, page_id, label):
 
 
 def axis1_reflow_origin_tagging(base_url, conn, origin_page_id):
-    """回流来源标记（docs/impl/v1/wiki.md 步骤 10「回流的自体循环必须挡住」）：
-    验证 POST /sources 的 origin/origin_page_id 字段被正确透传落库——自体祖先
-    排除本身的行为由 Go 单测覆盖（internal/unit/kpn_reflow_test.go），这里只测
-    API 入口。"""
+    """回流来源标记（docs/impl/v1/wiki.md「写作草稿」防自指部分）：验证
+    POST /sources 的 origin/origin_page_id 字段被正确透传落库——自体祖先
+    排除本身的行为由 Go 单测覆盖（internal/unit/kpn_reflow_test.go），
+    这里只测 API 入口。"""
     SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
     draft_export = SCRATCH_DIR / "reflow_draft_export.md"
     draft_export.write_text("# 回流草稿导出\n\n这是 P12 测试用的最小回流内容，仅验证 origin 字段落库。\n", encoding="utf-8")
@@ -162,18 +158,13 @@ def axis1_question_complexity_section(base_url):
     return {"has_section": has_section, "groups_count": len(report.get("question_complexity", {}).get("groups", []))}
 
 
-def axis2_relation_and_topic_candidate_observation(conn, base_url):
+def axis2_relation_observation(conn):
     kpn_rows = c.db_kp_relations(conn)
     wpr_rows = conn.execute("SELECT COUNT(*) AS n FROM wiki_page_relations").fetchone()["n"]
     print(f"  [观测] knowledge_point_relations 总行数={len(kpn_rows)}, wiki_page_relations 总行数={wpr_rows}")
-
-    topic_candidates = c.http_get_json(base_url, "/study/results?action=topic_page_candidate&status=pending_confirm&limit=50")
-    print(f"  [观测] topic_page_candidate pending_confirm 数={len(topic_candidates)}"
-          f"（主题候选按提问四元组聚类，P8 后样本通常不够 topic_cluster_min_*，大概率为 0，属预期观测性缺口）")
     return {
         "kpn_relation_count": len(kpn_rows),
         "wiki_page_relation_count": wpr_rows,
-        "topic_page_candidate_pending": len(topic_candidates),
     }
 
 
@@ -205,9 +196,6 @@ def main():
 
     conn = c.open_db(args.db_path)
 
-    print("\n--- 轴一（确定性，必过）：page_type=topic 必须被一阶编译端点拒绝 ---")
-    reject_report = axis1_reject_topic_page_type(args.base_url)
-
     print("\n--- 轴一：GET /wiki/pages/:id/relations 结构校验 ---")
     relations_report = {}
     for label, info in published.items():
@@ -225,26 +213,23 @@ def main():
     print("\n--- 轴一：study 报告 question_complexity 板块 ---")
     complexity_report = axis1_question_complexity_section(args.base_url)
 
-    print("\n--- 轴二（观测性，不要求达标）：页面关系 / 主题页候选自然形成情况 ---")
-    axis2_report = axis2_relation_and_topic_candidate_observation(conn, args.base_url)
+    print("\n--- 轴二（观测性，不要求达标）：页面关系自然形成情况 ---")
+    axis2_report = axis2_relation_observation(conn)
 
     conn.close()
 
     print("\n========== P12 通过标准核对 ==========")
     axis1_pass = (
-        all(r["rejected"] for r in reject_report.values())
-        and all(r["structure_ok"] for r in relations_report.values())
-        and all(not d.get("error") and d.get("page_unaffected_by_draft_edit") for d in draft_report.values())
+        all(r["structure_ok"] for r in relations_report.values())
+        and all(not d.get("error") and d.get("page_unaffected_by_draft_edit") and d.get("source_page_ids_ok") for d in draft_report.values())
         and reflow_report.get("origin_tagged_correctly")
         and complexity_report.get("has_section")
     )
     print(f"轴一（确定性，必过）: {'PASS' if axis1_pass else 'FAIL'}")
     print(f"轴二（观测性，仅记录）: kpn_relations={axis2_report['kpn_relation_count']}, "
-          f"wiki_page_relations={axis2_report['wiki_page_relation_count']}, "
-          f"topic_page_candidate_pending={axis2_report['topic_page_candidate_pending']}")
+          f"wiki_page_relations={axis2_report['wiki_page_relation_count']}")
 
     record = {
-        "reject_topic_page_type": reject_report,
         "relations": relations_report,
         "drafts": draft_report,
         "reflow": reflow_report,
@@ -252,7 +237,7 @@ def main():
         "axis2_observation": axis2_report,
         "axis1_pass": axis1_pass,
     }
-    jsonl_path = c.write_jsonl([record], Path(args.out), "v1_p12_two_tier")
+    jsonl_path = c.write_jsonl([record], Path(args.out), "v1_p12_wiki_extensions")
     print(f"\n详细结果: {jsonl_path}")
 
     if not axis1_pass:

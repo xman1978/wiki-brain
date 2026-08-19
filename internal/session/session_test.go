@@ -444,7 +444,7 @@ func TestHTTPTurnStandaloneQuestion(t *testing.T) {
 	store := NewStore(db)
 	fake := llm.NewFakeClient()
 	fake.SetResponse("session_parse.md", llm.FakeResponse{
-		Output: `{"intent":"查询住宿标准","subject":"出差住宿","audience":"","constraint":"漠河","standalone_question":"出差漠河的住宿标准是多少？"}`,
+		Output: `{"intent":"查询住宿标准","subject":"出差住宿","audience":"","constraint":"咸阳","standalone_question":"出差咸阳的住宿标准是多少？"}`,
 	})
 	h := NewHandler(store, NewParser(fake))
 
@@ -456,6 +456,18 @@ func TestHTTPTurnStandaloneQuestion(t *testing.T) {
 	mux.ServeHTTP(w, req)
 	var created SessionInfo
 	json.NewDecoder(w.Body).Decode(&created)
+
+	// First turn establishes LastQuestion so the follow-up below has real
+	// context to expand from — "漠河呢？" alone (no prior question) is not
+	// a realistic follow-up scenario.
+	firstBody := `{"session_id":"` + created.SessionID + `","user_input":"出差咸阳的住宿标准是多少？"}`
+	req = httptest.NewRequest("POST", "/session/turn", strings.NewReader(firstBody))
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	fake.SetResponse("session_parse.md", llm.FakeResponse{
+		Output: `{"intent":"查询住宿标准","subject":"出差住宿","audience":"","constraint":"漠河","standalone_question":"出差漠河的住宿标准是多少？"}`,
+	})
 
 	body := `{"session_id":"` + created.SessionID + `","user_input":"漠河呢？"}`
 	req = httptest.NewRequest("POST", "/session/turn", strings.NewReader(body))

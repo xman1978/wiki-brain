@@ -320,8 +320,8 @@ func (s *Store) InsertRevision(r *Revision) error {
 	if r.RevisionID == "" {
 		r.RevisionID = uuid.New().String()
 	}
-	_, err := s.db.Exec(`INSERT INTO wiki_revisions (revision_id, page_id, content, reason) VALUES (?, ?, ?, ?)`,
-		r.RevisionID, r.PageID, r.Content, r.Reason)
+	_, err := s.db.Exec(`INSERT INTO wiki_revisions (revision_id, page_id, content, title, reason, draft_id) VALUES (?, ?, ?, ?, ?, ?)`,
+		r.RevisionID, r.PageID, r.Content, r.Title, r.Reason, nullableString(r.DraftID))
 	if err != nil {
 		return fmt.Errorf("wiki store: insert revision: %w", err)
 	}
@@ -346,7 +346,7 @@ func (s *Store) LatestRevisionID(pageID string) (string, error) {
 }
 
 func (s *Store) ListRevisions(pageID string) ([]Revision, error) {
-	rows, err := s.db.Query(`SELECT revision_id, page_id, content, reason, created_at
+	rows, err := s.db.Query(`SELECT revision_id, page_id, content, title, reason, draft_id, created_at
 		FROM wiki_revisions WHERE page_id = ? ORDER BY created_at ASC`, pageID)
 	if err != nil {
 		return nil, fmt.Errorf("wiki store: list revisions: %w", err)
@@ -356,25 +356,58 @@ func (s *Store) ListRevisions(pageID string) ([]Revision, error) {
 	var revs []Revision
 	for rows.Next() {
 		var r Revision
-		if err := rows.Scan(&r.RevisionID, &r.PageID, &r.Content, &r.Reason, &r.CreatedAt); err != nil {
+		var draftID sql.NullString
+		if err := rows.Scan(&r.RevisionID, &r.PageID, &r.Content, &r.Title, &r.Reason, &draftID, &r.CreatedAt); err != nil {
 			return nil, fmt.Errorf("wiki store: scan revision: %w", err)
 		}
+		r.DraftID = draftID.String
 		revs = append(revs, r)
 	}
 	return revs, rows.Err()
 }
 
+// DeleteRevisionsByDraft removes every revision a draft's own saves wrote
+// (reason=draft_sync, draft_id=draftID) — a draft saved N times has written
+// N revisions (SyncDraftToPage inserts a new one each time; only the latest
+// is tracked by wiki_drafts.source_revision_id), so deleting a draft must
+// sweep all of them, not just the latest.
+func (s *Store) DeleteRevisionsByDraft(draftID string) error {
+	_, err := s.db.Exec(`DELETE FROM wiki_revisions WHERE draft_id = ?`, draftID)
+	if err != nil {
+		return fmt.Errorf("wiki store: delete revisions by draft: %w", err)
+	}
+	return nil
+}
+
+// DeleteLegacyDraftSyncRevisions removes draft_sync revisions written before
+// migration 060 added draft_id (they have draft_id NULL/'', so
+// DeleteRevisionsByDraft can never match them) — a one-time cleanup path so
+// deleting today's draft also sweeps the orphaned trail it left under the
+// old code, which only ever tracked the latest revision. Since a page has
+// only one live draft at a time (docs/impl/v1/wiki.md 步骤 10, "同一个页面
+// 任意时刻只有一份当前在改的草稿"), every untagged draft_sync row for this
+// page_id belongs to the draft being deleted now.
+func (s *Store) DeleteLegacyDraftSyncRevisions(pageID string) error {
+	_, err := s.db.Exec(`DELETE FROM wiki_revisions WHERE page_id = ? AND reason = 'draft_sync' AND (draft_id IS NULL OR draft_id = '')`, pageID)
+	if err != nil {
+		return fmt.Errorf("wiki store: delete legacy draft_sync revisions: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) GetRevision(pageID, revisionID string) (*Revision, error) {
 	var r Revision
-	err := s.db.QueryRow(`SELECT revision_id, page_id, content, reason, created_at
+	var draftID sql.NullString
+	err := s.db.QueryRow(`SELECT revision_id, page_id, content, title, reason, draft_id, created_at
 		FROM wiki_revisions WHERE page_id = ? AND revision_id = ?`, pageID, revisionID).
-		Scan(&r.RevisionID, &r.PageID, &r.Content, &r.Reason, &r.CreatedAt)
+		Scan(&r.RevisionID, &r.PageID, &r.Content, &r.Title, &r.Reason, &draftID, &r.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("wiki store: get revision: %w", err)
 	}
+	r.DraftID = draftID.String
 	return &r, nil
 }
 
@@ -1226,6 +1259,21 @@ func (s *Store) UpdateDraft(d *Draft) error {
 		d.Title, d.Content, d.Note, d.DraftID)
 	if err != nil {
 		return fmt.Errorf("wiki store: update draft: %w", err)
+	}
+	return nil
+}
+
+// UpdateDraftSourceRevision (2026-08-19, SyncDraftToPage) repoints a draft at
+// the revision its own save just created — without this, GetDraftWithStale's
+// staleness check (source_revision_id != page's latest revision) would mark
+// a draft "落后于最新页面版本" immediately after the draft's own save wrote
+// that very revision, which is backwards: the draft IS the source of the
+// current content, it isn't behind it.
+func (s *Store) UpdateDraftSourceRevision(draftID, revisionID string) error {
+	_, err := s.db.Exec(`UPDATE wiki_drafts SET source_revision_id = ?, updated_at = CURRENT_TIMESTAMP WHERE draft_id = ?`,
+		revisionID, draftID)
+	if err != nil {
+		return fmt.Errorf("wiki store: update draft source revision: %w", err)
 	}
 	return nil
 }

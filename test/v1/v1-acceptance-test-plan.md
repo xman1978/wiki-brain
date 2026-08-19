@@ -12,12 +12,12 @@
 | 4 | 引用精确（片段级引用，幻构被原文校验拦截，回退可观察） | P1、P4 |
 | 5 | 自我修正（人为制造失败 → repeated_failure → 降权 → 快路径回落） | P5 |
 | 6 | 生命周期生效（Source 更新/删除后旧 KU/KP 退出回答） | P5、P6 |
-| 7 | Wiki 初版（候选→确认→编译→检索命中→底层变化→待重编译） | P8 |
+| 7 | Wiki 单层编译（人工指定 entry_ids→编译→检索命中→底层变化→待重编译） | P8 |
 | 8 | 反馈生效（user_correction 加速链接信号） | P9 |
 
 另覆盖三项不在成功标准列表但属 V1 交付范围的能力：跨 Source KPN（P7）、激活条件的对象/约束硬性守门（F 组，`activation.md` 步骤 2——技术域"同问法不同产品"是守门失效最容易暴露的场景）、subject 同义词归一化（P11，2026-07-24 新增——P3 M3 当时记录的"覆盖靠积累，不靠模糊匹配"观测项，现已在 Match 侧落地为 `subject_synonyms` 表 + `SynonymResolver`，见 `activation.md` 附属表与步骤 3a）。
 
-第四项：Wiki 两层架构扩展（P12，2026-07-30 新增，设计/实现见 `docs/impl/v1/wiki.md` 步骤 7-10）——页面关系派生、主题页候选（按真实提问四元组聚类，另可 `POST /wiki/topics` 人工指定范围）与二阶编译、检索骨架注入、写作草稿、回流防护，均为 P8 一阶闭环之上的扩展能力，不改变标准 7 本身的判定口径。无 Wiki 预览 / cold-start 路径。
+第四项：Wiki 页面关系 / 写作草稿 / 回流防护（P12，2026-08-19 重写，取代此前"两层架构扩展"，设计/实现见 `docs/impl/v1/wiki.md`）——页面关系派生（`related`/`contradicts` 两种）、写作草稿、回流防护，均为 P8 编译闭环之上的扩展能力，不改变标准 7 本身的判定口径。单层架构下不再有主题页候选/二阶编译/检索骨架注入这些能力，无 Wiki 预览 / cold-start 路径。
 
 第五项：问题四元组归一化（P13，2026-08-12 新增，config-gated 默认关闭，见 `internal/activation/tuplenorm.go`、`docs/impl/v1/retrieval.md` 步骤 2）——`tryFastPath` 里、送入 Matcher/BundleMatcher/Wiki 四元组直答入口之前的归一化层，吸收 LLM 抽取的措辞抖动，不改变这三处入口本身"纯精确匹配"的判据。
 
@@ -95,10 +95,8 @@ evidence:
   enabled:                 true
 wiki:
   synthesis_audit_rate:    0.05    # 默认值，纯观测性（不进 needs_recompile/selfcheck/publish 判据）
-  # P8 冒烟时可临时压低 days_active；正式验收以默认值为准，轴二不强制达标
-  # qualifying_min_days_active: 1
-  # 主题候选（P12 轴二观测）按提问四元组聚类，见 docs/impl/v1/wiki.md 步骤 8
-  # topic_cluster_min_questions / topic_cluster_min_days_active 保持配置默认即可
+  # 2026-08-19：单层架构下 qualifying_min_days_active / topic_cluster_min_*
+  # 等两层架构专属配置项已随改造删除，无需再调
 ```
 
 `explore_rate_low` 测试期建议临时调到 `1.0`：连续置信度机制下，即使一条链接的某个条件已跨过 `serving_confidence_min` 进入 `exploring`（等等——`exploring` 档是"未跨过"`serving_confidence_min` 的档，本身就概率抽样服务，见下方术语说明），是否本轮真的走快路径仍按 `explore_rate_*` 概率抽样，默认 `0.15` 会让 M1/M2 这类"重复同一问法应稳定命中"的测试引入不必要的随机噪声；调到 `1.0` 消除这层噪声，不改变被测的匹配/服务逻辑本身。
@@ -438,33 +436,36 @@ M3 不设通过标准；V1 并入快路径正向样本观测。
 4. B1、B2、B4、B5 重问：KPN 扩展应把跨 Source 邻居带入 supporting 证据（B4 的 direct 在一篇 RAC 文档时，另一篇应经 cross 关系进入 supporting）；
 5. 通过标准：cross 关系类型只出现 related/contradicts 两种，direction 均为 bidirectional；技术域的 related 不得跨产品乱连（达梦 BUFFER ↔ 神通 BUF_DATA_BUFFER_PAGES 语义对应算对，达梦 BUFFER ↔ Docker 端口算错，抽查 10 条 cross 关系人工判定合理率 ≥80%）。
 
-### P8 Wiki 初版闭环（标准 7，两域各一个主题）
+### P8 Wiki 单层编译闭环（标准 7，两域各一个主题）
 
-**前提说明（2026-07-29 修订，qualifying KP 口径变更，见 `docs/design/wiki.md`；2026-08-13 编注更新产生机制，判据本身不变）**：qualifying KP 同时要求 (a) `confident_count ≥ wiki_confident_min`（不变）、(b) 对应 ActivationLink 已 `status=verified`（复用同一个 `status` 字段读取，**不**是另立次数口径）、(c) 词条级还额外要求 `days_active ≥ wiki.qualifying_min_days_active`（默认 7，衡量"持续采用"）。`status=verified` 现在由连续置信度收敛自动产生（见第 3 节术语对照），**不再有任何人工确认步骤**——旧版本节曾要求脚本对每个 point_id 显式调 `POST /activation-links/:id/confirm`，该端点已不存在，第 2 步已重写为"靠重复问答让链接自然收敛"。参照 P11 的既有拆分方式，本阶段也拆成两半：**轴一是确定性的（verified 判据按代码逻辑生效，可直接验收），轴二是观测性的（days_active 门槛能否在单次脚本运行的自然日窗口内自然达标）**，不要求轴二必须达标才算通过——脚本单次运行大概率仍停在 `needs_more_data`（仅因 days_active 不够），这不算失败，只要能证明"verified 判据生效 + 判据逻辑本身正确"即可。真正要观测 days_active 生效，需要跨真实自然日多次运行（`--skip-cultivate` 续跑）或临时调低 `config.yml` 的 `qualifying_min_days_active` 冒烟测试，两者都不在本阶段的必过范围内。
+**2026-08-19 全文重写，取代此前"qualifying KP（confident_count/verified/days_active 三项门槛）+ wiki_candidate 自动候选 + 一阶 concept/fact 二阶 topic 两层架构"的全部口径**：`docs/impl/v1/wiki.md` 已于 2026-08-18 整体改判为单层架构（`docs/design/wiki-single-tier-revision.md`）。核心变化：
 
-编译流程也改为两步（`docs/impl/v1/wiki.md` 步骤 2）：`POST /wiki/compile/analyze` 先产出拟采用的论断结构（claims/tensions，不落库），人工确认后把该结构原样（或编辑后）带回 `POST /wiki/compile`；跳过 analyze 直接调用 compile 时服务端会自动内部跑一遍分析，效果等价，仍应验收。
+- Wiki 只有一种页面（`page_type` 恒为 `topic`），一次编译请求直接对人工指定的 `entry_ids`（数组，可跨多个 entry）产出成品页面，**不存在"页面聚合页面"**，两层架构下的一阶/二阶区分整体消失（原 P12 覆盖的二阶编译不再有实现对象，见下方 P12 章节改写）。
+- **不存在任何自动候选识别入口**——没有 Study 主题聚类、没有 qualifying KP 自动标记、没有 `wiki_candidate` learning_result 生产方。因此本阶段不再有"轴一 verified 收敛 / 轴二 days_active"这套拆分，**不再需要任何培养到置信度门槛的步骤**。
+- 材料准入判据收敛为一条：Core 展开只读取「entry 直属 KP 且 `lifecycle=current`」，**不要求 verified ActivationLink**——人工指定 entry_id 这个动作本身就是准入信号。编译材料从"整块塞给 LLM 的 qualifying KP 列表 + 切面聚类分组"换成 Core/Context/Conflict 子图（`buildKnowledgeSubgraph`，见 `docs/impl/v1/wiki.md`「编译材料」）：Core = entry 直属 current KP；Context = Core 中 KP 的一跳 related；Conflict = Core 中 KP 的一跳 contradicts；citation 白名单 = Core∪Context∪Conflict 覆盖的全部 point_id。
+- 编译请求体是 `{"entry_ids": ["...", ...]}`（数组），**不再有 `page_type` 请求参数**——服务端不区分 concept/fact/topic。`POST /wiki/compile/analyze` → `POST /wiki/compile` 两步分析-生成链路本身不变（analyze 产出 claims/tensions 供人工确认，跳过 analyze 直接调 compile 时服务端内部自动跑一遍分析，效果等价）。
 
-**生成质量链路新增核验（2026-07-31，`docs/impl/v1/wiki-generation.md` 简化版，P0 已实现 + P1 切面聚类已实现）**：概念页编译内部现在会先把 qualifying KP 按「切面」分组（Louvain 社区检测，程序计算、不调 LLM）、生成后做支持度核验（判断每条结论是否真被引用材料支持，不只是引用的 point_id 合法）、发布前跑质量门回放（用该页 KP 曾被慢路径答对过的真实问法重新考一遍页面）；`aliases`/`trigger_questions` 不再由 LLM 生成，改为程序查 `subject_synonyms` 表与真实 confident 问法取样。这些都不改变 `analyze`/`compile` 的外部契约（仍是扁平 `claims[]`/`tensions[]`，只是 claim 可能带一个可选的 `aspect_id`），因此不新增编译步骤，但本阶段核验范围要新增：
-- 正文结构：应含"## 摘要"一节，且"## 展开说明"下按切面出现多个"### "三级标题（不强制断言具体切分数量，真实 LLM 输出允许合理浮动）；
+**生成质量链路（`docs/impl/v1/wiki-generation.md`，单层化不影响其机制，仅材料来源从"切面分组"换成"Core/Context/Conflict 分组"）**：
+- 正文结构：五节标题齐全（"## 摘要"/"## 稳定结论"/"## 展开说明"/"## 待验证点"/"## 依赖来源"）——**不再核验"展开说明"下的切面三级标题**，Core/Context/Conflict 是材料组织方式，不是正文强制排版要求；
 - 支持度核验：`wiki_claim_checks` 表应有与 claims 数量匹配的核验行，`verdict` 落在 supported/partial/unsupported 三者之一；
 - `aliases`/`trigger_questions`：`aliases` 应能在 `subject_synonyms`（`status='active'`）表里查到来源，`trigger_questions` 每一条都应是 `traces.question` 里真实出现过的原文，不应有 LLM 现编的问法；
 - 发布前质量门：先显式调 `POST /wiki/pages/:id/selfcheck` 看 `metrics`/`passed`，再走 `publish`；若质量门未过（真实 LLM 生成的页面大概率直接过闸，未过属观测性结果不算失败）会返回 409，用 `force=true` 覆盖后核对 `wiki_quality_checks` 最新一行 `forced=1`；
-- 词条级"ready"判定新增第五项内聚度门槛（`wiki_candidate` 的 `reason` 字段文本会带上"内聚度 X.XX"，观测记录即可，不设通过/失败判定——本阶段两个测试话题都是"围绕同一批文档密集问答"构造出来的，天然应该内聚，不预期触发 `entry_split_signals`）。
+- 内聚度五项 ready 判据（`wiki_candidate.reason` 带"内聚度"字样）随自动候选识别一并删除，**不再核验**。
 
-以上几项里，正文结构、支持度核验落库、aliases/trigger 真实性三项计入本阶段通过标准（结构性核验，"机制是否运行"，不是"LLM 写得好不好"）；质量门 passed/force 与内聚度数值仅供观测记录，不设通过/失败判定（与既有"轴一/轴二"拆分惯例一致）。
+以上正文结构、支持度核验落库、aliases/trigger 真实性三项计入本阶段通过标准；质量门 passed/force 仅供观测记录，不设通过/失败判定。
 
-**口径说明（已按现有代码定稿，`docs/impl/v1/wiki-generation.md` 第 7.4/11 节已同步改写，非待确认落差）**：`GET /wiki/pages/:id` 只返回 `summary`/`aspects`，不返回 `aliases`/`trigger_questions`/`claim_checks[]`/`latest_quality_check`——这几项和 `learning_events` 一样，属于"API 之外的观察面"，本阶段改为直接读 `wiki_pages`/`wiki_claim_checks`/`wiki_quality_checks` 表核验（脚本已按此方式实现，见 `v1_common.py` 的 `db_wiki_page_row`/`db_wiki_claim_checks`/`db_wiki_quality_checks`）。同理，`force=true` 覆盖发布只把 `wiki_quality_checks.forced` 置 1，不写 `learning_results` 事件、不进学习报告——force 是编译/发布链路内部的一次性人工决定，不是 Study 要追踪的学习动作，本阶段只核对 `forced=1`。
+**口径说明**：`GET /wiki/pages/:id` 只返回 `summary`/`aspects`（`aspects` 单层化后恒 `'[]'`，遗留字段），不返回 `aliases`/`trigger_questions`/`claim_checks[]`/`latest_quality_check`，本阶段改为直接读 `wiki_pages`/`wiki_claim_checks`/`wiki_quality_checks` 表核验（`v1_common.py` 的 `db_wiki_page_row`/`db_wiki_claim_checks`/`db_wiki_quality_checks`）。`force=true` 覆盖发布只把 `wiki_quality_checks.forced` 置 1，不写 `learning_results` 事件、不进学习报告。
 
-**一阶 page_type 与生成路径（`docs/impl/v1/wiki.md`「概念页 / 事实页」，2026-08-03）**：`POST /wiki/compile`、`POST /wiki/compile/analyze` 的 `page_type` **只接受 `concept` | `fact`**（可省略，由目标 `entries.kind` 派生；传入时必须与 kind 一致，否则 400）。主题页（`page_type=topic`）只能由二阶端点 `POST /wiki/pages/:id/topic/analyze`、`POST /wiki/pages/:id/topic/compile` 产出（详见 P12）。正式 Wiki 生成只有两条路径：① Study 问答积累 → `wiki_candidate` → 人工确认后一阶编译；② 人工指定词条直接编译（可无 `result_id`）。**不存在预览 / cold-start 路径**。本阶段每个领域培养的仍是单一词条（一个业务话题对应一个 KP 聚簇挂在同一 `entry_id` 上），脚本按 `entries.kind` 传匹配的 `page_type`。
+**needs_recompile 自动标记（`docs/impl/v1/wiki.md`「重编译标记」，2026-08-18 收尾重新接线）**：来源只剩两条——a. lifecycle 传导（`SetUnitLifecycle` 影响 Core 归属的 entry）；新增 entry_id 归属变化（KU 被重新分类进/出某 entry）。原设计的 b（Study 周期扫描新增 qualifying KP）与 d（ActivationLink 越过服务门槛）已明确拍板不恢复（依赖问答置信度积累，与"编译准入不再依赖置信度"的方向冲突）。本阶段仍通过 (a) 触发 reupload 换血验证。
 
-1. 制度域主题「销售回款管理」：围绕应收账款文档密集问答（A9、A10、A11 及其变体，凑足 wiki_confident_min 与 wiki_kp_min）；技术域主题「Oracle RAC」：围绕 T10、T11、T18、B4 密集问答（11g/19c/问题汇总三篇文档的 KP 同 entry 聚簇，天然满足多 KU 依赖，比单文档主题更能检验编译的综合能力）；
-2. `POST /study/run` → 对每个被密集问答覆盖的 point_id，`GET /activation-links?point_id=...&status=candidate` 应能找到候选链接 → **不再有人工确认步骤**：对每个候选 point_id 追加数轮重复问答（不同变体，目标是让其观测条件的 `mean` 跨过 `serving_confidence_min`），再 `POST /study/run` 使其自然收敛为 `status=verified`（轴一，必过：这一步验证 qualifying 判据确实复用了 `status` 字段本身，而 `status` 现在完全由置信度自动派生，不存在另一套次数口径，也不存在人工晋升动作）；
-3. 再次 `POST /study/run` → 验证两域各出现 `action=wiki_candidate, status=pending_confirm, object_id=<entry_id>`（若因 days_active 未达标仍是 `needs_more_data`，按前提说明记为观测性缺口，不判失败，但要核实 `Reason`/`Stats` 中 `qualifying_kp_count`、`kpn_connection_count` 已经达标，只差 `days_active`）；
-4. 若拿到 `pending_confirm`：`POST /wiki/compile/analyze`（`entry_id` + `result_id`，`page_type` 与 `entries.kind` 一致）→ 核对返回的 claims 均引用白名单内 point_id、tensions 结构合理；Page 确认后把该结构带回 `POST /wiki/compile` → 页面 draft：验证要素齐全（稳定结论、KP/KU/source_ref 回链、待验证点、更新时间、依赖 KU 列表），正文引用通过白名单校验（不引用 analyze 阶段未确认的 point_id），且落库 `page_type` ∈ {concept, fact} 与 kind 一致；
-5. `POST /wiki/pages/:id/publish` → 重问该主题问题：`path_type=wiki`，回答基于页面并附证据回链，且不产生激活类事件（wiki 直答不经激活层）；
-6. 底层变化：制度页对应收账款 source、技术页对 19c RAC source 各做一次 reupload 换血（微改任一数值）→ `POST /study/run` → 对应页面被标记 `needs_recompile`（不得自动重编译）；
-7. 人工 `POST /wiki/pages/:id/recompile` → 新版本生成（内部自动走分析→生成两步，不额外暴露 analyze 预览接口），revisions 可查旧版，编译记录可追溯到触发的 Learning Event。
-8. 通过标准：readme 描述的完整生命周期「候选→确认→编译→检索命中→底层变化→待重编译」逐环节成立，任何环节自动越过人工确认即为失败；verified 链接门槛（轴一）必须验证到位，days_active 门槛（轴二）达标与否不影响通过判定；新增（生成质量链路）：正文五节+切面三级标题结构齐全、`wiki_claim_checks` 落库行数与 claims 数匹配且 verdict 合法、`aliases`/`trigger_questions` 均可溯源到 `subject_synonyms`/真实 `traces.question`（不得是 LLM 现编）——三项均为必过；quality gate 的 passed/force 与内聚度数值仅记录，不影响本阶段通过判定。
+流程（对应 `test/v1/v1_p8_wiki_test.py`）：
+1. 制度域主题「销售回款管理」：围绕应收账款文档密集问答（A9、A10、A11 及其变体）；技术域主题「Oracle RAC」：围绕 T10、T11、T18、B4 密集问答（11g/19c/问题汇总三篇文档的 KP 同 entry 聚簇）——问答目的只是产出足够的 current KP 内容供编译，**不追求任何置信度/次数门槛**；
+2. 直接 `POST /wiki/compile/analyze`（`entry_ids` = 该域命中的全部 entry_id，无 `result_id`）→ 核对返回的 claims 均引用 Core/Context/Conflict 白名单内 point_id、tensions 结构合理 → 原样带回 `POST /wiki/compile` → 页面 draft：验证要素齐全（稳定结论、KP/KU/source_ref 回链、待验证点、更新时间、依赖 KU 列表），正文引用通过白名单校验，`page_type=topic`；
+3. `POST /wiki/pages/:id/selfcheck` → `POST /wiki/pages/:id/publish`（未过质量门则 `force=true` 覆盖）；
+4. 重问该主题问题：`path_type=wiki`，回答基于页面并附证据回链，且不产生激活类事件（wiki 直答不经激活层）；
+5. 底层变化：制度页对应收账款 source、技术页对 19c RAC source 各做一次 reupload 换血（微改任一数值）→ 对应页面经 lifecycle 传导被标记 `needs_recompile`（不得自动重编译）；
+6. 人工 `POST /wiki/pages/:id/recompile` → 新版本生成，revisions 可查旧版。
+7. 通过标准：`compile → draft → selfcheck/publish → 检索命中 → reupload 触发 needs_recompile → recompile` 逐环节成立，任何环节自动越过人工确认即为失败；生成质量链路三项（正文五节结构、`wiki_claim_checks` 落库行数与 claims 数匹配且 verdict 合法、`aliases`/`trigger_questions` 可溯源）均为必过；quality gate 的 passed/force 仅记录，不影响本阶段通过判定。
 
 ### P9 用户反馈通道（标准 8）
 
@@ -506,28 +507,28 @@ M3 不设通过标准；V1 并入快路径正向样本观测。
 9. 若第 2 步多轮后仍未自然产生候选（Session Parser 把 intent 也解析漂移，导致条件组根本对不上），改为直接在测试库里手工插入一条满足阈值的 `subject_synonym_gap` 事件集（仅用于验证轴一步骤 3-7 的状态机本身，不代表真实收敛概率），并在报告中如实注明"轴一验收改走人工造数据路径"；
 10. 结果写入报告供后续判断 `synonym_gap_min`/`synonym_gap_distinct_min` 默认值是否需要调整，**本步骤不设通过/失败判定**。
 
-### P12 Wiki 两层架构扩展（2026-07-30 新增；主题候选口径 2026-08-03 修订，见 `docs/impl/v1/wiki.md` 步骤 7-10）
+### P12 Wiki 页面关系 / 写作草稿 / 回流防护（2026-08-19 全文重写，取代"两层架构扩展"）
 
-**前提**：依赖 P8 已跑通并至少一个领域 publish 成功（脚本从 `test/v1/results/v1_p8_wiki_*.jsonl` 读取最近一次结果里的 `page_id`/`entry_id`，不重新培养信号）。
+**改判说明**：`docs/impl/v1/wiki.md` 已于 2026-08-18 整体改判为单层架构，本阶段原标题"两层架构扩展"（一阶概念/事实页 + 二阶主题页）随之失效，**整体删除**以下两项：`page_type=topic` 拒绝校验（单层化后 `page_type` 恒为 `topic`，不再有一阶端点拒绝该值这回事）；`topic_page_candidate` 主题候选观测（`POST /wiki/topics`、Study 主题四元组聚类均已随两层架构删除，没有对应产物）。本阶段保留、按新契约调整的是 P8 编译产物之上仍然成立的能力：页面关系派生、写作草稿、回流防护、Study 报告板块。
 
-**范围边界（对照 `docs/impl/v1/wiki.md` 硬约束，逐条不越界）**：页面关系只有 `related`/`contradicts`/`contains` 三种，不引入 broader/narrower；主题页命中后不产生 `answer_wiki` 调用（展开 `contains` 成员一阶页进入候选）；主题页只聚合一阶页（concept/fact），不聚合主题页；`uncovered_points` 只作字段不进正文；`member_roles` 必须结构化落库；`wiki_pages.content` 只由编译产生，不存在任何 draft → page 写回接口；回流三条防护（来源标记/祖先关系跳过/统计排除）缺一不可；无预览路径。
+**前提**：依赖 P8 已跑通并至少一个领域 publish 成功（脚本从 `test/v1/results/v1_p8_wiki_*.jsonl` 读取最近一次结果里的 `page_id`，不重新培养信号）。
+
+**范围边界（对照 `docs/impl/v1/wiki.md` 现行约束）**：页面关系只有 `related`/`contradicts` 两种（`contains` 已随二阶编译删除）；单层化后**所有已发布页面都参与关系派生**，不再有"跳过主题页"的例外；`wiki_pages.content` 只由编译产生，不存在任何 draft → page 写回接口；`wiki_drafts.source_page_ids` 单层化后恒为 `[page_id]`（原"组装模式"随 `contains` 一起废弃）；回流防护（来源标记/祖先关系跳过/统计排除）不受影响。
 
 同 P8/P11 的既有拆分方式，本阶段也分两条轴，**只有轴一计入通过/失败判定**：
 
-**轴一（确定性，必过）：新增端点/字段的契约行为**
+**轴一（确定性，必过）：现有端点/字段的契约行为**
 
-1. `POST /wiki/compile`、`POST /wiki/compile/analyze` 传 `page_type=topic`（请求体用 `entry_id`）必须被拒绝（非 200）——一阶端点只接受 `concept`|`fact`，主题页只能走二阶编译端点（`docs/impl/v1/wiki.md` 步骤 8）；
-2. `GET /wiki/pages/:id/relations` 对 P8 已发布的两个页面各查一次，响应结构含 `relation_type`/`other_page_id`/`derived_from`/`evidence`（P8 制度/技术两页分属不同领域，天然不会有 KPN 关系，返回空列表是预期，不是失败——本步骤只验证接口契约，不验证是否非空）；
-3. 写作草稿全生命周期：`POST /wiki/pages/:id/drafts`（mode=page）→ `GET /wiki/drafts/:id`（`evidence_index` 非空、`stale` 字段存在）→ `PATCH /wiki/drafts/:id` 改写标题与正文 → 重新 `GET /wiki/pages/:id` 核对页面正文与标题**完全不变**（代码中不存在 draft → page 写回路径的行为化验收）→ `DELETE /wiki/drafts/:id`；
-4. 回流来源标记：`POST /sources` 附带 `origin=wiki_draft`、`origin_page_id=<P8 页面 id>`（multipart form 字段）导入一份最小文件，DB 直接核对 `sources.origin`/`sources.origin_page_id` 落库正确（自体祖先排除本身的匹配逻辑已由 Go 单测 `internal/unit/kpn_reflow_test.go::TestCrossSourceKPN_SkipsSelfAncestorEdges` 覆盖，本步骤只测 API 入口的字段透传）；
-5. `POST /study/run` 后 `GET /study/reports/latest` 响应包含 `question_complexity` 板块（`{"groups": [...]}` 结构本身，不要求 `groups` 非空——阈值未定标前 `complexity_hint` 恒为 `null`，见 `docs/impl/v1/study.md` 步骤 7）。
+1. `GET /wiki/pages/:id/relations` 对 P8 已发布的两个页面各查一次，响应结构含 `relation_type`（只能是 `related`/`contradicts`）/`other_page_id`/`derived_from`/`evidence`（P8 制度/技术两页分属不同领域，天然不会有 KPN 关系，返回空列表是预期，不是失败——本步骤只验证接口契约，不验证是否非空）；
+2. 写作草稿全生命周期：`POST /wiki/pages/:id/drafts`（`mode=page`）→ `GET /wiki/drafts/:id`（`evidence_index` 非空、`stale` 字段存在、`source_page_ids` 恒为 `[page_id]`）→ `PATCH /wiki/drafts/:id` 改写标题与正文 → 重新 `GET /wiki/pages/:id` 核对页面正文与标题**完全不变**（代码中不存在 draft → page 写回路径）→ `DELETE /wiki/drafts/:id`；
+3. 回流来源标记：`POST /sources` 附带 `origin=wiki_draft`、`origin_page_id=<P8 页面 id>`（multipart form 字段）导入一份最小文件，DB 直接核对 `sources.origin`/`sources.origin_page_id` 落库正确（自体祖先排除本身的匹配逻辑已由 Go 单测 `internal/unit/kpn_reflow_test.go::TestCrossSourceKPN_SkipsSelfAncestorEdges` 覆盖，本步骤只测 API 入口的字段透传）；
+4. `POST /study/run` 后 `GET /study/reports/latest` 响应包含 `question_complexity` 板块（`{"groups": [...]}` 结构本身，不要求 `groups` 非空）。
 
-**轴二（观测性，只记录，不判定）：页面关系与主题候选的自然形成情况**
+**轴二（观测性，只记录，不判定）：页面关系自然形成情况**
 
-6. 读 `knowledge_point_relations`/`wiki_page_relations` 总行数（P7 阶段的跨 Source fixture 可能已产生可供派生的关系）；
-7. `GET /study/results?action=topic_page_candidate&status=pending_confirm` 数量——主题候选现按真实提问四元组 `(subject, intent, audience, constraint_text)` 聚类（需满足 `wiki.topic_cluster_min_questions` / `wiki.topic_cluster_min_days_active`），**不再**从已发布一阶页求连通分量、也不再依赖旧的 `topic_member_min` 成员数硬性区间；P8 后单次运行的问答样本通常不够，大概率为 0，属预期观测性缺口。真正观测自然形成需要跨日、多问法积累，或走 `POST /wiki/topics` 人工指定主题范围；二阶全文编译不在本阶段自动化范围内（成本模型同 P8 的 `days_active` 轴二）。
+5. 读 `knowledge_point_relations`/`wiki_page_relations` 总行数（P7 阶段的跨 Source fixture 可能已产生可供派生的关系）。
 
-**通过标准**：轴一 1-5 步全部成立（`page_type=topic` 被拒绝、relations 接口结构正确、草稿生命周期与写回防护、回流字段落库、报告新板块存在）即判 PASS；轴二 6-7 步仅记录数字，不影响判定。
+**通过标准**：轴一 1-4 步全部成立（relations 接口结构正确、草稿生命周期与写回防护、回流字段落库、报告新板块存在）即判 PASS；轴二第 5 步仅记录数字，不影响判定。
 
 ### P13 问题四元组归一化（2026-08-12 新增，config-gated，见 `internal/activation/tuplenorm.go`、`docs/impl/v1/retrieval.md` 步骤 2）
 
@@ -575,8 +576,8 @@ M3 不设通过标准；V1 并入快路径正向样本观测。
 | 跨 Source 关系合理率 | 抽查 ≥80%，类型仅 related/contradicts | P7 |
 | 状态迁移审计完整率 | 100%（迁移必有 result+reason+events） | P10 |
 | 缺口题幻构率 | 0（C 组不得编造引用，技术域 C3/C4 重点盯） | P1 |
-| 两层架构契约行为通过率 | 100%（`page_type=topic` 被一阶端点拒绝、relations 结构、草稿生命周期与写回防护、回流字段落库、report 新板块，5 项全过） | P12 |
-| Wiki 生成质量链路结构通过率 | 100%（正文五节+切面三级标题结构、`wiki_claim_checks` 落库匹配、aliases/trigger_questions 可溯源三项全过；质量门 passed/force、内聚度数值仅记录不判定） | P8 |
+| Wiki 页面关系/草稿/回流契约行为通过率 | 100%（relations 结构、草稿生命周期与写回防护、回流字段落库、report 新板块，4 项全过） | P12 |
+| Wiki 生成质量链路结构通过率 | 100%（正文五节结构、`wiki_claim_checks` 落库匹配、aliases/trigger_questions 可溯源三项全过；质量门 passed/force 仅记录不判定） | P8 |
 
 ## 7. 执行注意事项
 

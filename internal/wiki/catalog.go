@@ -12,9 +12,8 @@ import (
 
 // Catalog card kinds / display statuses for GET /wiki/catalog.
 const (
-	CatalogKindPage       = "page"
-	CatalogKindCandidate  = "candidate"
-	CatalogKindWizardTask = "wizard_task"
+	CatalogKindPage      = "page"
+	CatalogKindCandidate = "candidate"
 
 	// CatalogStatusPendingCompile is a pending_confirm wiki_candidate that
 	// has not produced a wiki_pages row yet. UI label: 待编译.
@@ -35,12 +34,11 @@ type CatalogDomain struct {
 // pending Study wiki_candidate. Topic pages may appear under every member
 // concept's domain (same page_id, multiple domain buckets).
 type CatalogCard struct {
-	Kind        string `json:"kind"`                // page | candidate | wizard_task
+	Kind        string `json:"kind"`                // page | candidate
 	PageID      string `json:"page_id,omitempty"`   // kind=page
 	PageType    string `json:"page_type,omitempty"` // concept | fact | topic
 	EntryID     string `json:"entry_id,omitempty"`  // concept pages / candidates
 	ResultID    string `json:"result_id,omitempty"` // kind=candidate
-	TaskID      string `json:"task_id,omitempty"`   // kind=wizard_task
 	Title       string `json:"title"`               // 主题
 	Description string `json:"description"`         // 说明
 	Status      string `json:"status"`              // pending_compile|draft|needs_recompile|published|archived|candidates_loading|candidates_ready|error

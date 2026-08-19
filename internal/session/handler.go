@@ -152,7 +152,7 @@ func (h *Handler) postTurn(w http.ResponseWriter, r *http.Request) {
 	switch plan.Action {
 	case PlanRetrieve:
 		eq := Expand(state, plan, input.UserInput)
-		if parsed.StandaloneQuestion != "" {
+		if followUp && parsed.StandaloneQuestion != "" {
 			eq.ExpandedQuestion = parsed.StandaloneQuestion
 		}
 		eq.DomainIDs = parsed.DomainIDs
@@ -190,7 +190,7 @@ func (h *Handler) postTurn(w http.ResponseWriter, r *http.Request) {
 
 	case PlanSkip:
 		eq := Expand(state, plan, input.UserInput)
-		if parsed.StandaloneQuestion != "" {
+		if followUp && parsed.StandaloneQuestion != "" {
 			eq.ExpandedQuestion = parsed.StandaloneQuestion
 		}
 		eq.DomainIDs = parsed.DomainIDs

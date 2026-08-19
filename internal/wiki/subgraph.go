@@ -25,7 +25,15 @@ import (
 // (docs/design/wiki-single-tier-revision.md「已拍板」第 3 条: a parent
 // Concept's own KP count is already bounded by entry-assignment judgment,
 // not an unbounded graph walk).
-func (s *Service) buildKnowledgeSubgraph(entryIDs []string) (core, context, conflict []QualifyingPoint, err error) {
+// pointFilter, when non-empty, restricts Core to only the given point_ids
+// (2026-08-19 新增，人工在生成 Wiki 前逐条勾选相关 KP——见
+// docs/impl/v1/wiki.md 步骤 3 附近的分析/编译流程): applied to Core *before*
+// the one-hop related/contradicts expansion, so Context/Conflict are derived
+// only from the KP the human actually kept, not from material they explicitly
+// excluded as off-topic. nil/empty means "no restriction" (every existing
+// caller — Recompile, verifyClaims, the Study-candidate compile path that
+// never sends point_ids), preserving current behavior exactly.
+func (s *Service) buildKnowledgeSubgraph(entryIDs []string, pointFilter map[string]bool) (core, context, conflict []QualifyingPoint, err error) {
 	if len(entryIDs) == 0 {
 		return nil, nil, nil, fmt.Errorf("wiki: buildKnowledgeSubgraph: entryIDs is empty")
 	}
@@ -67,6 +75,14 @@ func (s *Service) buildKnowledgeSubgraph(entryIDs []string) (core, context, conf
 				continue
 			}
 			addCore(parentPoints, SubgraphRoleCoreParentBackground)
+		}
+	}
+
+	if len(pointFilter) > 0 {
+		for id := range coreByID {
+			if !pointFilter[id] {
+				delete(coreByID, id)
+			}
 		}
 	}
 

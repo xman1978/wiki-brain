@@ -130,8 +130,17 @@ type Revision struct {
 	RevisionID string
 	PageID     string
 	Content    string
-	Reason     string
-	CreatedAt  time.Time
+	// Title is the page title as of this revision (migration 059) — title
+	// changes on every draft save just like content does, so a revision
+	// list can't fall back to reading the page's *current* title for
+	// historical rows without lying about what the title was then.
+	Title     string
+	Reason    string
+	// DraftID is set only for reason=draft_sync rows (migration 060) — the
+	// draft whose save produced this revision, so deleting that draft can
+	// find and remove every revision it ever wrote, not just the latest one.
+	DraftID   string
+	CreatedAt time.Time
 }
 
 // CompileRequest is POST /wiki/compile's request body
@@ -142,11 +151,19 @@ type Revision struct {
 // /wiki/compile/analyze response back, possibly human-edited), generation is
 // constrained to them directly; when absent, Compile runs the analysis step
 // internally before generating.
+// PointIDs (2026-08-19 新增) is an optional human-picked KP whitelist: when
+// non-empty, restricts the entries' Core material to only these point_ids
+// before Context/Conflict one-hop expansion (buildKnowledgeSubgraph) — lets a
+// human exclude off-topic KP a matched entry happens to carry, instead of
+// compiling against everything the entry owns. Empty means "no restriction",
+// the pre-existing behavior (every other caller — Study-candidate compile,
+// Recompile — never sends this field).
 type CompileRequest struct {
 	EntryIDs []string  `json:"entry_ids"`
 	ResultID string    `json:"result_id,omitempty"`
 	Claims   []Claim   `json:"claims,omitempty"`
 	Tensions []Tension `json:"tensions,omitempty"`
+	PointIDs []string  `json:"point_ids,omitempty"`
 }
 
 // AnalyzeRequest is POST /wiki/compile/analyze's request body -- same shape
@@ -155,6 +172,7 @@ type CompileRequest struct {
 type AnalyzeRequest struct {
 	EntryIDs []string `json:"entry_ids"`
 	ResultID string   `json:"result_id,omitempty"`
+	PointIDs []string `json:"point_ids,omitempty"`
 }
 
 // AnalyzeResult is POST /wiki/compile/analyze's response -- never persisted

@@ -72,34 +72,29 @@ func TestRetrieve_FastPath_Hit(t *testing.T) {
 	}
 }
 
-// TestRetrieve_FastPath_KPNExpansion_SkipsClassify confirms
-// judgeKPNExpansion's optimization: a KPN neighbor's role is always coerced
-// to "supporting" regardless of what classify would say, so it should only
-// ever go through rerank_relevance.md — rerank_classify.md must never be
-// called for it.
-func TestRetrieve_FastPath_KPNExpansion_SkipsClassify(t *testing.T) {
+// TestRetrieve_FastPath_NoKPNExpansion confirms the fast path no longer
+// expands into a matched point's KPN neighbors at all (docs/impl/v1/
+// retrieval.md): ActivationLink/Bundle's point_id is itself the
+// history-verified relevant KP, so a KPN "related" neighbor is trusted only
+// if it earns its own ActivationLink — not pulled in ad hoc via the graph on
+// every fast-path answer. Neither rerank_relevance.md nor rerank_classify.md
+// should be called, and Supporting must be empty.
+func TestRetrieve_FastPath_NoKPNExpansion(t *testing.T) {
 	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
 	question := "什么是线性方程"
 	qTerms := text.Terms(text.Normalize(question))
 	seedVerifiedLink(t, activationSvc, qTerms, "p1")
 
-	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "kpn neighbor"}, {"candidate_id": "c2", "relevant": true, "analysis": "kpn neighbor"}]}`})
-
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// p1's KPN neighbors are p2 (related/bidirectional) and p3 (supplements/directed).
-	supportingUnits := make(map[string]bool)
-	for _, e := range es.Supporting {
-		supportingUnits[e.UnitID] = true
-	}
-	if !supportingUnits["u2"] || !supportingUnits["u3"] {
-		t.Errorf("expected u2 and u3 as KPN supporting evidence, got %+v", es.Supporting)
+	if len(es.Supporting) != 0 {
+		t.Errorf("expected no KPN supporting evidence on fast path, got %+v", es.Supporting)
 	}
 	for _, c := range fake.Calls() {
-		if c.PromptFile == "rerank_classify.md" {
-			t.Errorf("KPN expansion must only call rerank_relevance.md, saw %q", c.PromptFile)
+		if c.PromptFile == "rerank_classify.md" || c.PromptFile == "rerank_relevance.md" {
+			t.Errorf("fast path must not call KPN judge prompts, saw %q", c.PromptFile)
 		}
 	}
 }

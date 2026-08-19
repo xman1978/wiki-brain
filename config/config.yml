@@ -104,7 +104,7 @@ retrieval:
   rerank_relevance_concise: false    # true 时证据过滤阶段用 rerank_relevance_concise.md（不输出 analysis，响应更短，但排查判断依据不便）
 
   # 问题四元组归一化（2026-08-12 新增，默认关闭，见 docs/impl/v1/retrieval.md 步骤 2）
-  question_tuple_norm_enabled:      false  # 总开关，关闭时 tryFastPath 行为与改动前完全一致
+  question_tuple_norm_enabled:      true  # 总开关，关闭时 tryFastPath 行为与改动前完全一致
   question_tuple_norm_local_sim_min: 0.8   # Tier2 本地词集 Jaccard 相似度命中阈值（0-1）
   question_tuple_norm_idle_days:    90     # question_tuple_norms 行超过该天数未命中由 Study 周期清理
   vector_match_enabled:             false  # Tier2.5 向量早筛开关，独立于总开关，二者都为 true 才生效
