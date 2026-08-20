@@ -294,7 +294,39 @@ path_type == "wiki" 的问答不产生激活类事件（Wiki 直答不经过激�
 见 wiki.md）；knowledge_gap / user_correction 事件规则不变。
 ```
 
-### 步骤 3b：产生审计核实事件（2026-08-13 新增）
+**Bundle 命中的对称处理（2026-08-20 新增，`trace.generateBundleActivationEvents`）**：上面整段是 ActivationLink（`EvidenceSet.ActivationHits`）的判定逻辑；`EvidenceSet.BundleHits`（新增字段，镜像 `ActivationHits`，`docs/impl/v1/retrieval.md` 步骤 2）走一套并列但独立的判定，紧接在上面的 hits 循环之后执行，同样在 trace 写入后、共现更新前：
+
+```text
+对 bundle_hits 中的每条 (bundle_id, subject, intent, audience,
+constraint, member_point_ids, match_score)：
+
+  对 member_point_ids 中的每个 point_id，按上面同一份"是否被 direct/
+  supporting 引用"判定（复用同一个 citedFactIDsByEvidence 结果，不重新
+  计算）：
+    被引用 → 调用 activation.RecordMemberOutcome(bundle_id, point_id,
+      success=true)；
+    未被引用 → 调用 activation.RecordMemberOutcome(bundle_id, point_id,
+      success=false)；
+
+  这条 bundle 本身的触发轴判定：member_point_ids 中只要有至少一个被引用
+  （不是引用比例阈值，见 docs/impl/v1/activation-bundle.md 步骤 5
+  2026-08-20 编注的理由）→ bundle_success=true；一个都没有 → false；
+
+  写入事件：**不新增 bundle_success/bundle_failure 事件类型**，复用
+  activation_success/activation_failure（event_type 相同，payload 换成
+  bundle_id + member_point_ids，取代 link_id）；bundle_success=true 时
+  写 activation_success，否则写 activation_failure（reason 判定与上面
+  Link 的三段式 answer_error/answer_gap/not_cited 相同）；
+  同步调用 activation.RecordBundleOutcome(bundle_id, subject, intent,
+  audience, constraint, bundle_success)；
+
+  RecordBundleOutcome/RecordMemberOutcome 调用失败同 RecordOutcome 的
+  处理方式：记 warn，不中断 trace_write 其余步骤。
+
+bundle_hits 为空时不产生任何事件、不触发 activation_gap——activation_gap
+是 Link 侧"完整链路找到了被采用的知识但没有激活路径"这一信号，Bundle
+是否命中不影响这个判定，两者不共享 gap 语义。
+```
 
 独立核实试验复用本模块既有的事件产生管线（learning_events 写入 + processed 标记），不新起一套队列或存储——这正是 `docs/design/activation-convergence.md` 第 4 节"打破自证循环"要求的机制，本质上只是给 Trace 新增一种"谁触发、什么时候触发、写什么 payload"的事件类型，架构上和 `activation_success`/`activation_failure` 完全对等。
 

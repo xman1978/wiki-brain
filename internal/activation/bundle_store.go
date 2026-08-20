@@ -179,14 +179,11 @@ func (s *Store) UpdateBundleMembers(bundleID string, members []BundleMember, con
 
 // RecordMemberOutcome updates a single member's success_count/failure_count
 // within a bundle's member axis (docs/impl/v1/activation-bundle.md「成员
-// 置信度：Bundle 独有的第二根轴」/ 步骤 5 2026-08-13 编注's
-// "bundle.RecordMemberOutcome"). No caller exists yet in this phase — Bundle's
-// own bundle_success/bundle_failure trigger-axis signal writing (阶段 2) is
-// out of scope — this is scaffolding for that future consumer, written
-// complete and correct even though currently unreferenced. A pointID not
-// found among the bundle's Members is a no-op (not an error): a member may
-// have already been filtered out of a later显影扫描 pass before this outcome
-// was recorded.
+// 置信度：Bundle 独有的第二根轴」). Called from trace.recordBundleHitOutcome
+// (2026-08-20 阶段 2「验证」接线) once per member point actually used to serve
+// a Bundle hit. A pointID not found among the bundle's Members is a no-op
+// (not an error): a member may have already been filtered out of a later
+// 显影扫描 pass before this outcome was recorded.
 func (s *Store) RecordMemberOutcome(bundleID, pointID string, success bool) error {
 	b, err := s.GetBundleByID(bundleID)
 	if err != nil {
@@ -223,6 +220,124 @@ func (s *Store) RecordMemberOutcome(bundleID, pointID string, success bool) erro
 		return fmt.Errorf("activation store: record member outcome: %w", err)
 	}
 	return nil
+}
+
+// RecordBundleOutcome mirrors Store.RecordOutcome for a Bundle's trigger-axis
+// condition (docs/impl/v1/activation-bundle.md「验证」, 2026-08-20 阶段 2
+// 接线): locates the ObservedCondition matching (subject, intent, audience,
+// constraint) exactly — a Bundle only ever carries one such condition in
+// practice, since buildBundleObservedConditionsAndMembers always filters
+// history down to a single canonical tuple before merging, but the lookup is
+// written generically like Link's rather than assuming index 0 — and
+// increments its success_count or failure_count. matched=false (no error)
+// when no condition matches, mirroring RecordOutcome's contract.
+func (s *Store) RecordBundleOutcome(bundleID, subject, intent, audience, constraint string, success bool) (bool, *ActivationBundle, error) {
+	b, err := s.GetBundleByID(bundleID)
+	if err != nil {
+		return false, nil, err
+	}
+	if b == nil {
+		return false, nil, fmt.Errorf("activation store: record bundle outcome: bundle not found: %s", bundleID)
+	}
+	conds := append([]ObservedCondition(nil), b.ObservedConditions...)
+	idx := findConditionIndex(conds, subject, intent, audience, constraint)
+	if idx < 0 {
+		return false, b, nil
+	}
+	if success {
+		conds[idx].SuccessCount++
+	} else {
+		conds[idx].FailureCount++
+	}
+	conds[idx].LastSeenAt = time.Now().UTC()
+	if err := s.UpdateBundleMembers(bundleID, b.Members, conds); err != nil {
+		return false, nil, err
+	}
+	adoptDelta, failDelta := 0, 0
+	if success {
+		adoptDelta = 1
+	} else {
+		failDelta = 1
+	}
+	if err := s.UpdateBundleStats(bundleID, adoptDelta, failDelta); err != nil {
+		return false, nil, err
+	}
+	updated, err := s.GetBundleByID(bundleID)
+	if err != nil {
+		return false, nil, err
+	}
+	return true, updated, nil
+}
+
+// UpdateBundleStats mirrors Store.UpdateStats for ActivationLink — cosmetic
+// display counters (bundleResp.AdoptCount/FailCount), not consulted by Match
+// or deriveAndPersistBundleStatus, which read ObservedConditions directly.
+func (s *Store) UpdateBundleStats(bundleID string, adoptDelta, failDelta int) error {
+	_, err := s.db.Exec(`UPDATE activation_bundles
+		SET adopt_count = adopt_count + ?, fail_count = fail_count + ?, updated_at = CURRENT_TIMESTAMP
+		WHERE bundle_id = ?`, adoptDelta, failDelta, bundleID)
+	if err != nil {
+		return fmt.Errorf("activation store: update bundle stats: %w", err)
+	}
+	return nil
+}
+
+// RefreshBundleMembers merges Study's periodically recomputed candidate
+// members/conditions into a bundle's existing state without discarding any
+// live-accumulated RecordBundleOutcome/RecordMemberOutcome counts
+// (docs/impl/v1/activation-bundle.md「验证」, 2026-08-20 改判 — replaces the
+// prior direct UpdateBundleMembers(matched.BundleID, members, conds) call in
+// study/bundle_scan.go, which unconditionally overwrote both axes every
+// Study tick and so could never let live serving feedback accumulate). A
+// candidate member/condition that already exists keeps its stored
+// success_count/failure_count — only LastSeenAt (and, for conditions,
+// KnownQuestionTerms) refresh; a brand-new candidate is inserted with the
+// recomputed seed values from this rebuild; an existing member the rebuild no
+// longer surfaces is left in place — removal is lifecycle-driven
+// (weakenBundlesWithExpiredCoreMembers), not a side effect of a quiet rebuild.
+// UpdateBundleMembers itself is untouched and keeps doing a raw overwrite —
+// AppendBundleObservedCondition already computes the exact final state it
+// wants written and calling through another merge pass would double-count.
+func (s *Store) RefreshBundleMembers(bundleID string, candidateMembers []BundleMember, candidateConds []ObservedCondition) error {
+	b, err := s.GetBundleByID(bundleID)
+	if err != nil {
+		return err
+	}
+	if b == nil {
+		return fmt.Errorf("activation store: refresh bundle members: not found: %s", bundleID)
+	}
+
+	members := append([]BundleMember(nil), b.Members...)
+	existingByPoint := make(map[string]int, len(members))
+	for i, m := range members {
+		existingByPoint[m.PointID] = i
+	}
+	for _, cand := range candidateMembers {
+		if idx, ok := existingByPoint[cand.PointID]; ok {
+			members[idx].LastSeenAt = cand.LastSeenAt
+			continue
+		}
+		members = append(members, cand)
+		existingByPoint[cand.PointID] = len(members) - 1
+	}
+
+	conds := append([]ObservedCondition(nil), b.ObservedConditions...)
+	existingByKey := make(map[string]int, len(conds))
+	for i, c := range conds {
+		existingByKey[conditionKey(c)] = i
+	}
+	for _, cand := range candidateConds {
+		k := conditionKey(cand)
+		if idx, ok := existingByKey[k]; ok {
+			conds[idx].LastSeenAt = cand.LastSeenAt
+			conds[idx].KnownQuestionTerms = mergeKnownQuestionTerms(conds[idx].KnownQuestionTerms, cand.QuestionTerms)
+			continue
+		}
+		conds = append(conds, cand)
+		existingByKey[k] = len(conds) - 1
+	}
+
+	return s.UpdateBundleMembers(bundleID, members, conds)
 }
 
 // AppendBundleObservedCondition merges one quadruple into an existing bundle

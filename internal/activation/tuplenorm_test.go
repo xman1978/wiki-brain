@@ -101,10 +101,10 @@ func TestTupleNormalizer_Tier2LocalSimilarity_AboveAndBelowThreshold(t *testing.
 	}
 }
 
-func TestTupleNormalizer_VectorDisabled_FallsThroughToLLMTier(t *testing.T) {
+func TestTupleNormalizer_NoLocalSimMatch_FallsThroughToLLMTier(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	n := NewTupleNormalizer(store, TupleNormConfig{LocalSimMin: 0.99, VectorMatchEnabled: false})
+	n := NewTupleNormalizer(store, TupleNormConfig{LocalSimMin: 0.99})
 	fake := llm.NewFakeClient()
 	fake.SetResponse("tuple_norm_match.md", llm.FakeResponse{Output: `{"matched":true,"candidate_index":0}`})
 	n.SetLLMClient(fake)
@@ -114,8 +114,6 @@ func TestTupleNormalizer_VectorDisabled_FallsThroughToLLMTier(t *testing.T) {
 		t.Fatalf("seed normalize: %v", err)
 	}
 
-	// Embedder left nil (VectorMatchEnabled=false anyway) — tier 2.5 must
-	// no-op and control must still reach the LLM tier.
 	s2, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "差旅费报销规定", "咨询", "在职人员", "")
 	if err != nil {
 		t.Fatalf("second normalize: %v", err)

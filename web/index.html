@@ -1445,8 +1445,18 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
               } else if (p.status === 'error') {
                 updateProcessStep('verify', 'done', null, p.duration_ms, '校验出错，按证据充分处理');
               } else if (p.status === 'skipped') {
-                updateProcessStep('verify', 'done', null, 0, '不适用（快路径/Wiki）');
+                updateProcessStep('verify', 'done', null, 0, '不适用（快路径）');
               }
+            } else if (p.phase === 'answer' && p.status === 'wiki_direct') {
+              // Wiki 直答命中：answer/service.go 的 wiki 分支直接返回，从不
+              // 经过 activation/outline/fts/.../verify 这些阶段事件，之前
+              // 处理过程面板对此完全没有对应分支，这些步骤会停留在最后一次
+              // 更新的状态（甚至从未更新），看不出这次回答走的是 Wiki。
+              ['activation','outline','fts','screen','rerank','evidence','verify'].forEach(function(id) {
+                if (!PP_STATE[id] || PP_STATE[id].state !== 'done') updateProcessStep(id, 'done', null, 0, '不适用（Wiki 直答）');
+              });
+              updateProcessStep('generation', 'done', '生成回答', 0, 'Wiki 直答');
+              updateProcessStep('total', 'done', '总计', p.total_ms || (Date.now() - totalStart));
             } else if (p.phase === 'answer' && p.status === 'no_evidence') {
               // 只补齐尚未完成的阶段（如快路径下没有逐阶段事件），已完成阶段保留
               // 实时流入的真实耗时与结果，不得清零覆盖为"无证据"。

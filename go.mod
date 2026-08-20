@@ -3,7 +3,6 @@ module github.com/jxman78/wiki-brain
 go 1.26.4
 
 require (
-	github.com/MichaelAyles/goformer v0.1.0
 	github.com/blevesearch/bleve/v2 v2.6.0
 	github.com/go-ego/gse v1.0.2
 	github.com/google/uuid v1.6.0

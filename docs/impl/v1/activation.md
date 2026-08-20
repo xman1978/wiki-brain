@@ -330,6 +330,17 @@ TouchLastUsed(linkIDs)：Retrieval 命中后异步更新 last_used_at（不变�
 
 **匹配语义：观测条件组（组内精确、组间 OR）**。激活链接是"精确命中的缓存"：每组是历史上一起出现过的 `(subject,intent,audience,constraint)`；禁止跨问法并集交叉拼接。详见 `docs/superpowers/specs/2026-07-22-activation-observed-conditions-design.md`。
 
+**条件身份的来源（2026-08-20 补记）**：本节的精确匹配算法本身不改——一条
+`ObservedCondition` 现在代表的是"一组语义等价的问法"而不是"一段字面完全相
+同的四元组文本"，是因为 Study 构建/刷新 `observed_conditions` 时（`study.
+md`「归一化接入构建阶段」）已经用 `activation.TupleNormalizer` 把语义等价
+的问法折叠成同一个 canonical 四元组，条件合并（`MergeObservedConditions`）
+才在这个 canonical 空间里按精确相等分组；查询侧四元组在 `retrieval.md` 步
+骤 2 的 `tryFastPath` 里同样先过这套归一化。两侧共享同一张 `question_
+tuple_norms` 表、同一个 canonical 空间，所以匹配算法维持精确相等即可对
+齐，不需要为此放宽为模糊匹配。该机制默认关闭（`retrieval.question_tuple_
+norm_enabled`），关闭时条件身份仍是原始四元组文本，与本节描述完全一致。
+
 ```text
 Match(query ExpandedQuery, cfg MatchConfig) →
   []LinkMatch{link, score, matchedBy, tier, mean, auditSampled}

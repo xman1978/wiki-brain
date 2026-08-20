@@ -27,7 +27,7 @@ func setupHandler(t *testing.T) (*Handler, *Service) {
 		PruneIdleDays:       30,
 		PruneStaleDays:      90,
 	}
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, 0)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, 0, false)
 	handler := NewHandler(svc)
 	return handler, svc
 }

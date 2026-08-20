@@ -453,3 +453,118 @@ type sentinelErr string
 func (e sentinelErr) Error() string { return string(e) }
 
 var errRecordOutcome = sentinelErr("record outcome failed")
+
+// TestGenerateBundleActivationEvents_MemberCited_SuccessOnBothAxes covers
+// the 2026-08-20「验证」接线: a Bundle hit whose member point ends up cited
+// direct calls RecordBundleOutcome(success=true) using the hit's own stored
+// quadruple, and RecordMemberOutcome(success=true) for each of the hit's
+// MemberPointIDs — mirroring generateActivationEvents' Link behavior, just
+// keyed on bundle/member instead of link.
+func TestGenerateBundleActivationEvents_MemberCited_SuccessOnBothAxes(t *testing.T) {
+	svc, store, db := setupService(t)
+	insertTestAnswer(t, db, "a-bo-1")
+	insertTestKP(t, db, "p1")
+	insertTestKP(t, db, "p2")
+
+	fake := &fakeSynonymEnricher{}
+	svc.SetObservedConditionEnricher(fake, 50)
+
+	r := &answer.AnswerResult{
+		AnswerID:  "a-bo-1",
+		Question:  "绩效考核怎么算",
+		Citations: []string{"f1"},
+		HasAnswer: true,
+		Path:      "short",
+		EvidenceSet: &retrieval.EvidenceSet{
+			PathType: retrieval.PathTypeFast,
+			BundleHits: []retrieval.BundleHit{
+				{BundleID: "bundle1", MatchScore: 0.9,
+					Subject: "绩效考核", Intent: "怎么算", Audience: "全员", Constraint: "",
+					MemberPointIDs: []string{"p1", "p2"}},
+			},
+			DirectEvidence: []retrieval.Evidence{{FactID: "f1", PointID: "p1"}},
+		},
+	}
+	svc.ProcessTrace(r)
+
+	successEvents, _ := store.ListLearningEvents("activation_success", 0, 20)
+	if len(successEvents) != 1 {
+		t.Fatalf("expected 1 activation_success event, got %d", len(successEvents))
+	}
+	payload := decodePayload(t, successEvents[0].Payload)
+	if payload["bundle_id"] != "bundle1" {
+		t.Errorf("unexpected payload: %+v", payload)
+	}
+
+	if len(fake.recordBundleOutcomeCalls) != 1 {
+		t.Fatalf("expected 1 RecordBundleOutcome call, got %d: %+v", len(fake.recordBundleOutcomeCalls), fake.recordBundleOutcomeCalls)
+	}
+	bc := fake.recordBundleOutcomeCalls[0]
+	if bc.bundleID != "bundle1" || !bc.success {
+		t.Errorf("expected RecordBundleOutcome(bundle1, success=true), got %+v", bc)
+	}
+	if bc.subject != "绩效考核" || bc.intent != "怎么算" || bc.audience != "全员" {
+		t.Errorf("expected the hit's own stored quadruple, got %+v", bc)
+	}
+
+	if len(fake.recordMemberOutcomeCalls) != 2 {
+		t.Fatalf("expected 2 RecordMemberOutcome calls (one per member), got %d: %+v",
+			len(fake.recordMemberOutcomeCalls), fake.recordMemberOutcomeCalls)
+	}
+	byPoint := make(map[string]bool)
+	for _, c := range fake.recordMemberOutcomeCalls {
+		if c.bundleID != "bundle1" {
+			t.Errorf("expected bundle1, got %+v", c)
+		}
+		byPoint[c.pointID] = c.success
+	}
+	if !byPoint["p1"] {
+		t.Errorf("expected p1 (cited direct) recorded as success=true, got %+v", fake.recordMemberOutcomeCalls)
+	}
+	if byPoint["p2"] {
+		t.Errorf("expected p2 (not cited) recorded as success=false, got %+v", fake.recordMemberOutcomeCalls)
+	}
+}
+
+// TestGenerateBundleActivationEvents_NoMemberCited_FailureOnBundleAxis
+// covers the all-members-missed case: the Bundle's own trigger-axis outcome
+// is failure, and every member is individually recorded as failure too.
+func TestGenerateBundleActivationEvents_NoMemberCited_FailureOnBundleAxis(t *testing.T) {
+	svc, store, db := setupService(t)
+	insertTestAnswer(t, db, "a-bo-2")
+	insertTestKP(t, db, "p1")
+
+	fake := &fakeSynonymEnricher{}
+	svc.SetObservedConditionEnricher(fake, 50)
+
+	r := &answer.AnswerResult{
+		AnswerID:  "a-bo-2",
+		Question:  "绩效考核怎么算",
+		Citations: []string{"f9"},
+		HasAnswer: true,
+		Path:      "short",
+		EvidenceSet: &retrieval.EvidenceSet{
+			PathType: retrieval.PathTypeFast,
+			BundleHits: []retrieval.BundleHit{
+				{BundleID: "bundle1", MatchScore: 0.9, MemberPointIDs: []string{"p1"}},
+			},
+			DirectEvidence: []retrieval.Evidence{
+				{FactID: "f9", PointID: "p9"},
+				{FactID: "f1", PointID: "p1"},
+			},
+		},
+	}
+	svc.ProcessTrace(r)
+
+	failureEvents, _ := store.ListLearningEvents("activation_failure", 0, 20)
+	if len(failureEvents) != 1 {
+		t.Fatalf("expected 1 activation_failure event, got %d", len(failureEvents))
+	}
+
+	if len(fake.recordBundleOutcomeCalls) != 1 || fake.recordBundleOutcomeCalls[0].success {
+		t.Fatalf("expected RecordBundleOutcome(success=false), got %+v", fake.recordBundleOutcomeCalls)
+	}
+	if len(fake.recordMemberOutcomeCalls) != 1 || fake.recordMemberOutcomeCalls[0].success {
+		t.Fatalf("expected RecordMemberOutcome(p1, success=false), got %+v", fake.recordMemberOutcomeCalls)
+	}
+}

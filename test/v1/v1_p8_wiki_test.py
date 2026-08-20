@@ -30,6 +30,25 @@ V1 验收测试方案（test/v1/v1-acceptance-test-plan.md）P8：Wiki 单层编
     新增 qualifying KP（b）与 ActivationLink 越过服务门槛（d）明确拍板不
     恢复。本脚本的 reupload 微改仍然通过 (a) 触发。
 
+**2026-08-20 追加改判（检索接入 + answer_wiki.md）**：真实提问排查发现三处
+缺陷并已修复，本脚本步骤 4 同步补了核验（此前版本只看 `path_type`/事件，
+不会捕捉到这三处任何一处）：
+  - Wiki 直答候选匹配（`gatherDirectAnswerCandidates` 入口 1/3）改判判断
+    依据从 entries 表的 name/description 换成已发布页面自身的
+    title/summary/aliases/trigger_questions（`matchPagesByRecognition`，
+    prompt 换成 `config/prompts/wiki_page_recognize.md`）——entry 是编译时
+    的材料导航，跟编译产出后页面自己的样子会脱节，用词条身份匹配会让本该
+    命中的页面匹配不上；
+  - `answer_wiki.md` 从单一 `sufficient` 布尔位改为先判断 `coverage`
+    （full/partial/none），只有 full 才生成内容，partial/none 一律打回换
+    下一候选或最终落慢路径——避免"页面只覆盖问题一部分方面，仍被当作完整
+    答案"；
+  - Wiki 路径的 `DirectEvidence`/`Supporting` 此前恒为空数组，`answer_wiki.md`
+    也只要求把引用塞进 `citations` 数组、不要求正文内联标注，两者叠加导致
+    点击"证据X"抽屉空白。新增 `buildWikiEvidence`（`FactID` 直接是 point_id
+    本身）+ prompt 补了"正文句末标注 [point_id]"的规则；`answer_short.md`/
+    `answer_deep.md` 也同步补了正文内联引用规则（结构性缺口相同）。
+
 流程（对应方案 P8 步骤 1-6）：
   1. 探测 A9/A10/A11（制度域「销售回款管理」）与 T10/T11/T18/B4（技术域
      「Oracle RAC」）各自命中的 KP 及其 entry_id，围绕这些词条密集问答，
@@ -40,7 +59,12 @@ V1 验收测试方案（test/v1/v1-acceptance-test-plan.md）P8：Wiki 单层编
      → 核对 draft 页面要素齐全（五节结构、citation 不越界）；
   3. `POST /wiki/pages/:id/selfcheck` → `POST /wiki/pages/:id/publish`
      （未过质量门则 force=true 覆盖，核对 wiki_quality_checks.forced=1）；
-  4. 重问主题问题，核对 `path_type=wiki` 且不产生激活类事件；
+  4. 重问主题问题，核对 `path_type=wiki` 且不产生激活类事件；**2026-08-20
+     改判后新增**：还核对 `evidence_snapshot.direct_evidence` 能把
+     `citations` 里的每个 point_id 解析成带 `source_ref` 的可展示证据（对应
+     检索侧 `buildWikiEvidence`——此前这里恒为空数组，前端点击"证据X"抽屉
+     会空白），以及 `content` 正文里出现内联 `[point_id]` 标注、覆盖
+     `citations`（对应 `answer_wiki.md` 新增的正文内联引用规则）；
   5. 对底层 source 各做一次微改 reupload（制度域改应收账款、技术域改
      19c RAC）→ 核对页面 `status=needs_recompile`（lifecycle 传导触发，
      不得自动重编译）；
@@ -339,8 +363,23 @@ def main():
             "forced_override_used": publish_info["forced_override_used"],
         }
 
-    print("\n--- 重问主题问题，核对 path_type=wiki 且无激活类事件 ---")
+    print("\n--- 重问主题问题，核对 path_type=wiki、无激活类事件、证据可回链、正文内联引用 ---")
+    # 2026-08-20 改判后新增三项核验（此前的版本只看 path_type/events，曾经
+    # 完全没有捕捉到三个实际发生过的缺陷：候选匹配靠 entries 身份而非页面
+    # 自身内容导致压根匹配不上、answer_wiki.md 只判"能不能答"导致宽泛问题
+    # 只答一个子话题就收尾、DirectEvidence 恒为空导致点击"证据X"抽屉空白）：
+    #   1. citations 非空——候选匹配 + 覆盖度判断真的走通了，不是掉回慢路径
+    #      之后又恰好也叫 wiki（理论上不会，但 path_type 本身不足以证明证据
+    #      链路也正常）；
+    #   2. evidence_snapshot.direct_evidence 每条都有 fact_id、point_id、
+    #      source_ref 三要素，且 fact_id 集合覆盖 citations 全部值——对应
+    #      answer/service.go buildWikiEvidence 现在必须把 CitedPointIDs 解析
+    #      成可展示证据，FactID 直接是 point_id 本身；
+    #   3. content 正文里出现的 UUID 形态内联标注（FACT_ID_RE 同构的正则）
+    #      至少覆盖 citations 的一部分——对应 answer_wiki.md 新增的"正文句末
+    #      标注 [point_id]"规则，不能只把引用塞进 citations 数组。
     reask_report = {}
+    fact_id_re = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
     for label, bank in (("policy", policy_bank), ("tech", tech_bank)):
         info = domain_pages.get(label) or {}
         if info.get("error"):
@@ -355,12 +394,34 @@ def main():
             continue
         trace = c.poll_until(lambda: c.db_trace_by_answer_id(conn, result.get("answer_id")), 15, 0.5)
         events = c.db_learning_events_for_trace(conn, trace["trace_id"]) if trace else []
-        print(f"  {label} 重问「{question}」: path_type={result.get('path_type')} events={[e['event_type'] for e in events]}")
+
+        citations = result.get("citations") or []
+        content = result.get("content") or ""
+        evidence_snapshot = result.get("evidence_snapshot") or {}
+        direct_evidence = evidence_snapshot.get("direct_evidence") or []
+        direct_fact_ids = {e.get("fact_id") for e in direct_evidence if e.get("fact_id")}
+        evidence_resolvable = bool(direct_evidence) and all(
+            e.get("fact_id") and e.get("point_id") and e.get("source_ref") for e in direct_evidence
+        )
+        citations_covered_by_evidence = bool(citations) and set(citations) <= direct_fact_ids
+        inline_ids = set(fact_id_re.findall(content))
+        inline_citation_ok = bool(citations) and bool(inline_ids & set(citations))
+
+        print(
+            f"  {label} 重问「{question}」: path_type={result.get('path_type')} "
+            f"events={[e['event_type'] for e in events]} citations={len(citations)} "
+            f"direct_evidence={len(direct_evidence)} 内联引用命中={len(inline_ids & set(citations))}/{len(citations)}"
+        )
         reask_report[label] = {
             "question": question,
             "path_type": result.get("path_type"),
             "latency_s": round(latency, 2),
             "event_types": [e["event_type"] for e in events],
+            "citation_count": len(citations),
+            "direct_evidence_count": len(direct_evidence),
+            "evidence_resolvable": evidence_resolvable,
+            "citations_covered_by_evidence": citations_covered_by_evidence,
+            "inline_citation_ok": inline_citation_ok,
         }
 
     print("\n--- 底层变化：reupload 微改触发 needs_recompile（lifecycle 传导） ---")
@@ -434,6 +495,8 @@ def main():
         quality = info.get("generation_quality") or {}
         structure_ok = not quality.get("missing_sections")
         claim_check_ok = quality.get("claim_check_count", 0) >= quality.get("claim_count", 0) and not quality.get("claim_check_bad_verdicts")
+        evidence_ok = r.get("evidence_resolvable") and r.get("citations_covered_by_evidence")
+        inline_ok = r.get("inline_citation_ok")
         print(
             f"{label}: compile+publish={'PASS' if publish_ok else 'FAIL'}"
             f"{'（force 覆盖）' if info.get('forced_override_used') else ''}, "
@@ -441,6 +504,8 @@ def main():
             f"支持度核验落库={'PASS' if claim_check_ok else 'FAIL/观察'}, "
             f"aliases/trigger 疑似编造={'PASS（无）' if not (quality.get('aliases_off_subject_synonyms_table') or quality.get('fabricated_trigger_questions')) else 'FAIL/观察'}, "
             f"重问 path_type=wiki={'PASS' if wiki_ok else 'FAIL'}, "
+            f"证据可回链（direct_evidence 覆盖 citations）={'PASS' if evidence_ok else 'FAIL'}, "
+            f"正文内联 [point_id] 标注={'PASS' if inline_ok else 'FAIL'}, "
             f"needs_recompile 触发={'PASS' if recompile_report.get(label, {}).get('status_after_reupload') == 'needs_recompile' else 'FAIL/未测'}"
         )
 

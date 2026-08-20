@@ -137,7 +137,7 @@ func TestSynthesisAuditTrial_ViaFullWikiDirectAnswer_Fires(t *testing.T) {
 	svc.SetSynthesisOutcomeWriter(writer)
 	svc.cfg.Wiki.SynthesisAuditRate = 1.0
 	svc.synthesisRandFloat = func() float64 { return 0 }
-	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答：ax+b=0 是线性方程 [p1]","citations":["p1"],"sufficient":true}`})
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答：ax+b=0 是线性方程 [p1]","citations":["p1"],"coverage":"full"}`})
 	setResponsesForFullSlowPathSuccess(fake)
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: "linear equations"}, nil)

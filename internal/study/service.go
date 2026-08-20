@@ -1,6 +1,7 @@
 package study
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -29,13 +30,19 @@ type Service struct {
 	// table isn't owned by Study, but Study is this codebase's existing
 	// periodic-housekeeping owner (docs/impl/v1/study.md 步骤 4 idle 清理惯例).
 	questionTupleNormIdleDays int
+	// questionTupleNormEnabled mirrors retrieval.question_tuple_norm_enabled
+	// (docs/impl/v1/retrieval.md 步骤 2) — reused as-is rather than adding a
+	// second config key, since buildObservedConditions and Retrieval's
+	// tryFastPath share the same question_tuple_norms canonical space
+	// (docs/impl/v1/study.md「归一化接入构建阶段」).
+	questionTupleNormEnabled bool
 	// lastRelationScanAt is the in-process watermark for
 	// recomputePageRelations (docs/impl/v1/wiki.md 步骤 7b) — zero value on
 	// first Run scans the whole history once.
 	lastRelationScanAt time.Time
 }
 
-func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.Service, wikiSvc *wiki.Service, recompileNewKPMin, qualifyingMinDaysActive int, questionTupleNormIdleDays int) *Service {
+func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.Service, wikiSvc *wiki.Service, recompileNewKPMin, qualifyingMinDaysActive int, questionTupleNormIdleDays int, questionTupleNormEnabled bool) *Service {
 	return &Service{
 		store:                     store,
 		cfg:                       cfg,
@@ -44,6 +51,7 @@ func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.
 		recompileNewKPMin:         recompileNewKPMin,
 		qualifyingMinDaysActive:   qualifyingMinDaysActive,
 		questionTupleNormIdleDays: questionTupleNormIdleDays,
+		questionTupleNormEnabled:  questionTupleNormEnabled,
 	}
 }
 
@@ -685,6 +693,16 @@ func (s *Service) tryCreateLink(questionTerms, pointID string, createdFrom []str
 
 // buildObservedConditions turns every confident citing trace into an observed
 // condition group (no keyword intersection / whitelist union).
+//
+// 2026-08-20: when questionTupleNormEnabled, each quad's four-tuple is first
+// run through the same activation.TupleNormalizer Retrieval's tryFastPath
+// uses (docs/impl/v1/study.md「归一化接入构建阶段」) — wording variants of
+// the same underlying question collapse into the same canonical tuple before
+// MergeObservedConditions groups by it, instead of each phrasing opening its
+// own low-sample ObservedCondition. Disabled (default) or no domain found for
+// the point ⇒ falls straight through to the pre-existing raw-quad behavior,
+// byte-for-byte unchanged. Normalization failures (e.g. LLM tier error) are
+// logged and the raw quad is used instead — never fails the whole build.
 func (s *Service) buildObservedConditions(pointID string) ([]activation.ObservedCondition, error) {
 	quads, err := s.store.ConfidentTraceQuadruples(pointID)
 	if err != nil {
@@ -697,9 +715,28 @@ func (s *Service) buildObservedConditions(pointID string) ([]activation.Observed
 	if max <= 0 {
 		max = 50
 	}
+
+	var domainIDs []string
+	if s.questionTupleNormEnabled && s.activationSvc != nil {
+		domainIDs, err = s.store.DomainIDsForPoint(pointID)
+		if err != nil {
+			slog.Warn("study: domain ids for point lookup failed, skipping tuple normalization", "point_id", pointID, "error", err)
+			domainIDs = nil
+		}
+	}
+
 	var conds []activation.ObservedCondition
 	for _, q := range quads {
-		add := activation.NormalizeObservedCondition(q.Subject, q.Intent, q.Audience, q.Constraint, q.QuestionTerms, q.CreatedAt)
+		subject, intent, audience, constraint := q.Subject, q.Intent, q.Audience, q.Constraint
+		if len(domainIDs) > 0 {
+			ns, ni, na, nc, nerr := s.activationSvc.NormalizeTuple(context.Background(), domainIDs, subject, intent, audience, constraint)
+			if nerr != nil {
+				slog.Warn("study: tuple normalization failed, using raw quad", "point_id", pointID, "error", nerr)
+			} else {
+				subject, intent, audience, constraint = ns, ni, na, nc
+			}
+		}
+		add := activation.NormalizeObservedCondition(subject, intent, audience, constraint, q.QuestionTerms, q.CreatedAt)
 		conds = activation.MergeObservedConditions(conds, add, max)
 	}
 	return conds, nil

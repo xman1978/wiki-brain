@@ -1392,13 +1392,22 @@ func (s *Service) TryDirectAnswer(ctx context.Context, question string, domainID
 	return nil, false, nil
 }
 
-// gatherDirectAnswerCandidates implements docs/impl/v1/wiki-single-tier-
-// task-brief.md 步骤 4's three direct-answer entries, merged and deduped, in
-// priority order: Concept/Fact recognition hits (an LLM judgment against
-// already-published entries — the most semantically targeted signal) first,
-// then lexical hits (wiki index, including aliases/trigger_questions fields,
-// score >= minScore) ordered by score, then concept-name hits not already
-// present, truncated to maxCandidates.
+// gatherDirectAnswerCandidates implements docs/impl/v1/wiki.md 检索接入's
+// three direct-answer entries, merged and deduped, in priority order: page
+// recognition hits (an LLM judgment against already-published pages' own
+// title/summary/aliases/trigger_questions — the compiled page's emergent
+// identity, not the entry it was compiled from; the most semantically
+// targeted signal) first, then lexical hits (wiki index, including aliases/
+// trigger_questions fields, score >= minScore) ordered by score, then
+// page-title containment hits not already present, truncated to
+// maxCandidates.
+//
+// 2026-08-20 改判: 原先第一路和第三路都是拿 entries 表的 name/description
+// 给 LLM/子串匹配判断，但 entries 是编译时用来挑选材料的词条导航，跟编译
+// 产出后页面自己的 title/summary 经常脱节（同一篇材料，entry 叫"考勤管理
+// 制度审批流程"，编译出的页面标题却是"出差注意事项"）——用词条身份去匹配
+// 一个已经沉淀成另一副面貌的页面，两路信号都会系统性地失效。改为直接对
+// 已发布页面自身的 title/summary/aliases/trigger_questions 做判断。
 //
 // Single-tier (docs/impl/v1/wiki-single-tier-task-brief.md 步骤 2/3): Wiki no
 // longer has a separate "topic page aggregates concept-page members" tier, so
@@ -1408,9 +1417,9 @@ func (s *Service) gatherDirectAnswerCandidates(ctx context.Context, question str
 	seen := make(map[string]bool)
 	var candidates []string
 
-	recognizedHits, err := s.matchEntriesByConceptRecognition(ctx, question, domainIDs)
+	recognizedHits, err := s.matchPagesByRecognition(ctx, question, domainIDs)
 	if err != nil {
-		slog.Warn("wiki: concept/fact recognition lookup failed, continuing without it", "error", err)
+		slog.Warn("wiki: page recognition lookup failed, continuing without it", "error", err)
 	}
 	for _, pageID := range recognizedHits {
 		if seen[pageID] {
@@ -1437,11 +1446,11 @@ func (s *Service) gatherDirectAnswerCandidates(ctx context.Context, question str
 		candidates = append(candidates, hit.ID)
 	}
 
-	conceptHits, err := s.matchEntryRow(question)
+	titleHits, err := s.matchPageTitle(question)
 	if err != nil {
-		slog.Warn("wiki: concept entry lookup failed, continuing with lexical candidates only", "error", err)
+		slog.Warn("wiki: page title containment lookup failed, continuing with lexical candidates only", "error", err)
 	}
-	for _, pageID := range conceptHits {
+	for _, pageID := range titleHits {
 		if seen[pageID] {
 			continue
 		}
@@ -1593,69 +1602,87 @@ func (s *Service) FilterPoints(ctx context.Context, topicText string, candidates
 	return pointIDs, nil
 }
 
-// matchEntriesByConceptRecognition implements docs/impl/v1/wiki-single-tier-
-// task-brief.md 步骤 4: one LLM call judging which already-existing Concept/
-// Fact entries the question is mainly about (config/prompts/
-// wiki_entry_recognize.md, entry_list rendered the same way
-// unit_entry_match.md's is — see renderEntryCandidateList), replacing the
-// old four-tuple exact-match entry (matchFourTupleEntry, removed). domainIDs
-// scopes the candidate entry list the same way the rest of Retrieval's
-// domain pre-filter does (retrieval.QueryContext.DomainIDs); empty means
-// unresolved domain, so every entry across every domain is a candidate
-// (mirrors unit.Store.GetEntriesByDomainID("")'s same fallback). No-ops
-// (skips the LLM call entirely) when there are zero candidate entries to
-// begin with — an empty domain shouldn't waste a call on a list with nothing
-// to match, same reasoning as unit.Service.matchConceptBatches's empty-list
-// guard. A recognized entry_id only becomes a candidate page if it has a
-// currently *published* page (checked via Store.PageIDsByEntryID + GetPage);
-// an entry with no page yet, or only a draft/archived one, is silently
-// dropped rather than erroring — the caller is looking for existing
-// answerable material, not entry existence.
-func (s *Service) matchEntriesByConceptRecognition(ctx context.Context, question string, domainIDs []string) ([]string, error) {
-	entryIDs, err := s.RecognizeEntries(ctx, question, domainIDs)
+// matchPagesByRecognition implements docs/impl/v1/wiki.md 检索接入
+// (2026-08-20 改判): one LLM call judging which already-published pages the
+// question is mainly about, based on each page's own title/summary/aliases/
+// trigger_questions (config/prompts/wiki_page_recognize.md,
+// renderPageCandidateList) — the page's compiled-out identity, not the entry
+// it was compiled from (that mapping can diverge; see the comment on
+// gatherDirectAnswerCandidates). domainIDs scopes the candidate page list via
+// each page's entry's domain_id, same convention as the rest of Retrieval's
+// domain pre-filter (retrieval.QueryContext.DomainIDs); empty means
+// unresolved domain, so every published page across every domain is a
+// candidate. No-ops (skips the LLM call entirely) when there are zero
+// candidate pages to begin with.
+func (s *Service) matchPagesByRecognition(ctx context.Context, question string, domainIDs []string) ([]string, error) {
+	pages, err := s.store.ListPublishedPagesForRecognition(domainIDs)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("wiki: list published pages for recognition: %w", err)
 	}
-	if len(entryIDs) == 0 {
+	if len(pages) == 0 {
 		return nil, nil
 	}
 
-	seen := make(map[string]bool)
+	known := make(map[string]bool, len(pages))
+	for _, p := range pages {
+		known[p.PageID] = true
+	}
+
+	vars := map[string]string{
+		"question":  question,
+		"page_list": renderPageCandidateList(pages),
+	}
+	data, err := s.llmClient.CompleteJSON(ctx, "wiki_page_recognize.md", vars, "extraction")
+	if err != nil {
+		return nil, fmt.Errorf("wiki: page recognize llm call: %w", err)
+	}
+
+	var output struct {
+		PageIDs []string `json:"page_ids"`
+	}
+	if err := json.Unmarshal(data, &output); err != nil {
+		return nil, fmt.Errorf("wiki: page recognize parse: %w", err)
+	}
+
+	seen := make(map[string]bool, len(output.PageIDs))
 	var pageIDs []string
-	for _, entryID := range entryIDs {
-		candidatePageIDs, err := s.store.PageIDsByEntryID(entryID)
-		if err != nil {
-			slog.Warn("wiki: page ids by entry id failed", "entry_id", entryID, "error", err)
+	for _, pageID := range output.PageIDs {
+		if pageID == "" || !known[pageID] || seen[pageID] {
 			continue
 		}
-		for _, pageID := range candidatePageIDs {
-			if seen[pageID] {
-				continue
-			}
-			page, err := s.store.GetPage(pageID)
-			if err != nil {
-				slog.Warn("wiki: get page failed during entry recognition", "page_id", pageID, "error", err)
-				continue
-			}
-			if page == nil || page.Status != StatusPublished {
-				continue
-			}
-			seen[pageID] = true
-			pageIDs = append(pageIDs, pageID)
-		}
+		seen[pageID] = true
+		pageIDs = append(pageIDs, pageID)
 	}
 	return pageIDs, nil
 }
 
-// matchEntryRow implements docs/impl/v1/wiki.md 步骤 4's concept入口:
-// word-lexical containment (not embedding, not LLM) between the question and
-// every published page's concept name, so a question mentioning the concept
-// but not the page's wording (or the wiki index's aliases/trigger_questions)
-// still finds the page.
-func (s *Service) matchEntryRow(question string) ([]string, error) {
-	pages, err := s.store.ListPublishedEntryPages()
+// renderPageCandidateList formats published pages into
+// wiki_page_recognize.md's page_list text.
+func renderPageCandidateList(pages []PageCandidate) string {
+	var list strings.Builder
+	for _, p := range pages {
+		line := fmt.Sprintf("[%s] %s：%s", p.PageID, p.Title, p.Summary)
+		if len(p.Aliases) > 0 {
+			line += fmt.Sprintf("｜别名：%s", strings.Join(p.Aliases, "、"))
+		}
+		if len(p.TriggerQuestions) > 0 {
+			line += fmt.Sprintf("｜常见问法：%s", strings.Join(p.TriggerQuestions, "、"))
+		}
+		list.WriteString(line + "\n")
+	}
+	return list.String()
+}
+
+// matchPageTitle implements docs/impl/v1/wiki.md 检索接入's 概念入口
+// (2026-08-20 改判): word-lexical containment (not embedding, not LLM)
+// between the question and every published page's own title — not the entry
+// it was compiled from (see gatherDirectAnswerCandidates comment) — so a
+// question mentioning the page's subject but not its exact wording (or the
+// wiki index's aliases/trigger_questions) still finds the page.
+func (s *Service) matchPageTitle(question string) ([]string, error) {
+	pages, err := s.store.ListPublishedPagesForRecognition(nil)
 	if err != nil {
-		return nil, fmt.Errorf("wiki: list published concept pages: %w", err)
+		return nil, fmt.Errorf("wiki: list published pages for title match: %w", err)
 	}
 	if len(pages) == 0 {
 		return nil, nil
@@ -1664,8 +1691,8 @@ func (s *Service) matchEntryRow(question string) ([]string, error) {
 	qCompact := text.NormalizeCompact(question)
 	var pageIDs []string
 	for _, p := range pages {
-		nameCompact := text.NormalizeCompact(p.Name)
-		if nameCompact == "" || !strings.Contains(qCompact, nameCompact) {
+		titleCompact := text.NormalizeCompact(p.Title)
+		if titleCompact == "" || !strings.Contains(qCompact, titleCompact) {
 			continue
 		}
 		pageIDs = append(pageIDs, p.PageID)
@@ -1674,8 +1701,18 @@ func (s *Service) matchEntryRow(question string) ([]string, error) {
 }
 
 // answerFromPage implements docs/impl/v1/wiki.md 步骤 4's per-candidate direct
-// answer: ask the page whether it can answer the question, and if so,
-// citation-whitelist the result against the page's source_point_ids.
+// answer: ask the page how fully it covers the question, and if fully, ask it
+// to extract and synthesize the relevant parts, then citation-whitelist the
+// result against the page's source_point_ids.
+//
+// 2026-08-20 改判: 原先只有一个 sufficient 布尔位，模型只要判断"能不能答"
+// 就会倾向于只答上它抓到的第一个相关片段、然后判 true——即便正文其实还有
+// 其他相关小节完全没被覆盖，用户看到的答案会显得"这就是全部"，但其实只是
+// 部分覆盖。改为让模型先显式判断 coverage（full/partial/none），程序端只
+// 认 full 为足够——partial 跟 none 一样一律打回，交回上层继续走完整检索
+// 流程重新找证据，而不是拿一个只覆盖部分的 Wiki 页面拼凑答案。sufficient
+// 本身不再是模型输出的一部分，改为程序根据 coverage 派生，不直接信任模型
+// 自己给的意图不一致的组合（比如模型嘴上说 partial 却仍然填了 content）。
 func (s *Service) answerFromPage(ctx context.Context, question string, page *Page) (*DirectAnswerResult, bool, error) {
 	vars := map[string]string{
 		"question": question,
@@ -1688,14 +1725,14 @@ func (s *Service) answerFromPage(ctx context.Context, question string, page *Pag
 	}
 
 	var output struct {
-		Content    string   `json:"content"`
-		Citations  []string `json:"citations"`
-		Sufficient bool     `json:"sufficient"`
+		Coverage  string   `json:"coverage"`
+		Content   string   `json:"content"`
+		Citations []string `json:"citations"`
 	}
 	if err := json.Unmarshal(raw, &output); err != nil {
 		return nil, false, fmt.Errorf("wiki: answer parse: %w", err)
 	}
-	if !output.Sufficient {
+	if output.Coverage != "full" {
 		return nil, false, nil
 	}
 

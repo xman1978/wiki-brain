@@ -21,7 +21,7 @@
 
 第五项：问题四元组归一化（P13，2026-08-12 新增，config-gated 默认关闭，见 `internal/activation/tuplenorm.go`、`docs/impl/v1/retrieval.md` 步骤 2）——`tryFastPath` 里、送入 Matcher/BundleMatcher/Wiki 四元组直答入口之前的归一化层，吸收 LLM 抽取的措辞抖动，不改变这三处入口本身"纯精确匹配"的判据。
 
-第六项：ActivationBundle 跨 unit 歧义仲裁（P14，2026-08-12 部分落地，见 `internal/retrieval/fastpath_helpers.go`）——ActivationLink 快路径命中跨多个 knowledge_unit 时，先 consult ActivationBundle（不冲突则合并核心成员继续快路径，无覆盖则实时新建/加强 candidate Bundle），是"阶段 2"里率先接通的一个入口，不是完整阶段 2（`bundle_hits[]`、Trace 的 `bundle_success`/`bundle_failure`、成员置信度随线上流量自然收敛仍未接线，P14 轴二用人工种子验证仲裁分支本身）。
+第六项：ActivationBundle 生成、匹配与验证闭环（P14，2026-08-20 重设计+当天晚些时候补记，取代此前"跨 unit 歧义仲裁"口径，见 `docs/design/activation-bundle.md`「10. 改判」「11. 验证环节的实际接线」、`internal/study/bundle_scan.go`、`internal/retrieval/fastpath_helpers.go`）——Bundle 身份从"四元组聚类簇/point 集合"改为"归一化四元组"，生成门槛复用 ActivationLink 同一套 Beta 均值/宽度公式（不再按问法多样性判断），唯一可信的生成证据是同一条 confident trace 里的直接联合引用；匹配从"Link 歧义时被动 consult"改为"跟 Link 并行主动匹配"，命中优先级按连续置信度比较。**验证环节已补齐**：`EvidenceSet.BundleHits`、`RecordBundleOutcome`（触发轴新增）、`RecordMemberOutcome` 接入真实 Trace 回写均已实现（复用 `activation_success`/`activation_failure` 事件类型，不新增独立事件），且 Study 重算路径已从整体覆盖改为合并写（`RefreshBundleMembers`），不再冲掉实时累积的验证结果；P14 轴三用人工种子把 Bundle 推到能服务的置信度后，验证真实命中是否正确写回、且撑得过下一次 Study 重算。
 
 ## 2. 测试数据画像
 
@@ -462,7 +462,7 @@ M3 不设通过标准；V1 并入快路径正向样本观测。
 1. 制度域主题「销售回款管理」：围绕应收账款文档密集问答（A9、A10、A11 及其变体）；技术域主题「Oracle RAC」：围绕 T10、T11、T18、B4 密集问答（11g/19c/问题汇总三篇文档的 KP 同 entry 聚簇）——问答目的只是产出足够的 current KP 内容供编译，**不追求任何置信度/次数门槛**；
 2. 直接 `POST /wiki/compile/analyze`（`entry_ids` = 该域命中的全部 entry_id，无 `result_id`）→ 核对返回的 claims 均引用 Core/Context/Conflict 白名单内 point_id、tensions 结构合理 → 原样带回 `POST /wiki/compile` → 页面 draft：验证要素齐全（稳定结论、KP/KU/source_ref 回链、待验证点、更新时间、依赖 KU 列表），正文引用通过白名单校验，`page_type=topic`；
 3. `POST /wiki/pages/:id/selfcheck` → `POST /wiki/pages/:id/publish`（未过质量门则 `force=true` 覆盖）；
-4. 重问该主题问题：`path_type=wiki`，回答基于页面并附证据回链，且不产生激活类事件（wiki 直答不经激活层）；
+4. 重问该主题问题：`path_type=wiki`，回答基于页面并附证据回链，且不产生激活类事件（wiki 直答不经激活层）；**2026-08-20 改判后新增核验**（真实提问排查发现的三处缺陷，此前版本的"附证据回链"只是文字描述、脚本从未真正核对过）：`evidence_snapshot.direct_evidence` 必须能把 `citations` 里每个 point_id 解析成带 `source_ref` 的可展示证据（`buildWikiEvidence`，`FactID` 直接是 point_id 本身，此前恒为空数组，前端点击"证据X"抽屉会空白）；`content` 正文里必须出现内联 `[point_id]` 标注并覆盖 `citations`（`answer_wiki.md` 新增规则，此前引用只进 `citations` 数组、正文看不出引用位置）；候选匹配（`gatherDirectAnswerCandidates` 入口 1/3）改判依据从 entries 表换成已发布页面自身的 title/summary/aliases/trigger_questions（`matchPagesByRecognition`，prompt 为 `config/prompts/wiki_page_recognize.md`），reask 若匹配不上应判为候选匹配失败而非笼统的"path_type≠wiki"；`answer_wiki.md` 从单一 `sufficient` 布尔位改为先判 `coverage`（full/partial/none），只有 full 才生成内容；
 5. 底层变化：制度页对应收账款 source、技术页对 19c RAC source 各做一次 reupload 换血（微改任一数值）→ 对应页面经 lifecycle 传导被标记 `needs_recompile`（不得自动重编译）；
 6. 人工 `POST /wiki/pages/:id/recompile` → 新版本生成，revisions 可查旧版。
 7. 通过标准：`compile → draft → selfcheck/publish → 检索命中 → reupload 触发 needs_recompile → recompile` 逐环节成立，任何环节自动越过人工确认即为失败；生成质量链路三项（正文五节结构、`wiki_claim_checks` 落库行数与 claims 数匹配且 verdict 合法、`aliases`/`trigger_questions` 可溯源）均为必过；quality gate 的 passed/force 仅记录，不影响本阶段通过判定。
@@ -532,34 +532,43 @@ M3 不设通过标准；V1 并入快路径正向样本观测。
 
 ### P13 问题四元组归一化（2026-08-12 新增，config-gated，见 `internal/activation/tuplenorm.go`、`docs/impl/v1/retrieval.md` 步骤 2）
 
-**前提说明**：`question_tuple_norm_enabled`（及子开关 `vector_match_enabled`）默认 `false`，本阶段临时改写 `config/config.yml` 并 `run.sh restart` 使其生效（同 P3 `set_fast_path_verify`/`restart_server` 的既有做法），跑完必须恢复默认值并再次重启——不应该在验收结束后把这两个开关遗留为打开状态。脚本 `test/v1/v1_p13_tuplenorm_test.py` 已实现该开-跑-关三段式，异常路径也会执行恢复。
+**前提说明**：`question_tuple_norm_enabled` 默认 `false`，本阶段临时改写 `config/config.yml` 并 `run.sh restart` 使其生效（同 P3 `set_fast_path_verify`/`restart_server` 的既有做法），跑完必须恢复默认值并再次重启——不应该在验收结束后把这个开关遗留为打开状态。脚本 `test/v1/v1_p13_tuplenorm_test.py` 已实现该开-跑-关三段式，异常路径也会执行恢复。**2026-08-20 改判**：Tier2.5 向量早筛（goformer embedding）整体移除，只剩 Tier1/2/3 三层。
 
-1. 打开 `question_tuple_norm_enabled=true`（可选加 `--enable-vector` 同时打开 `vector_match_enabled`，需要 `config.yml` 的 `vector_model_dir` 指向真实已下载的 goformer 权重目录，否则 Tier2.5 优雅降级为跳过，不影响其余判定）；
+1. 打开 `question_tuple_norm_enabled=true`；
 2. 用同一潜在问题的两种不同措辞（`--variants-file` 提供，默认内置一对示例）分别通过独立 session 提问；
 3. 核对第一次问法后 `question_tuple_norms` 表按 `domain_id` 各插入一行新的 canonical 记录（Tier4：全部未命中）；
-4. 核对第二次问法后 `question_tuple_norms` **没有**新增行（说明 Tier1/2/2.5/3 之一命中了第一次的 canonical，四元组被替换后再送入 Matcher）；
+4. 核对第二次问法后 `question_tuple_norms` **没有**新增行（说明 Tier1/2/3 之一命中了第一次的 canonical，四元组被替换后再送入 Matcher）；
 5. 核对两次问法命中的 `knowledge_points` 存在交集，且交集里每个 point 在 `question_kp_cooccurrence` 上体现为**同一 `question_terms` 分组的 `hit_count` 增长**，而不是分裂出一个新分组——这是归一化要解决的"抖动导致学习信号碎片化"问题（同 MEMORY.md「V1 test root causes」记录的现象）本身是否被吸收的直接证据。
 
 **通过标准**：3/4/5 三步全部成立即判 PASS。不直接断言 `path_type=fast`——归一化命中只解决"落到同一 canonical 四元组"，是否已经收敛到能服务快路径是 ActivationLink 自身的置信度收敛曲线（P2 覆盖），本阶段不重复验证。
 
-### P14 ActivationBundle 跨 unit 歧义仲裁（2026-08-12 部分落地，见 `internal/retrieval/fastpath_helpers.go` `resolveBundleForAmbiguousHits`/`formCandidateBundle`）
+### P14 ActivationBundle 生成、匹配与验证闭环（2026-08-20 重设计+当天晚些时候补记，见 `internal/study/bundle_scan.go` `scanActivationBundles`、`internal/retrieval/fastpath_helpers.go` `resolveBundleCandidate`、`internal/activation/bundle_store.go` `RecordBundleOutcome`/`RecordMemberOutcome`/`RefreshBundleMembers`）
 
-**前提**：需要两条已达到 self_graded/trusted 服务档的 ActivationLink（`--link-id-a`/`--link-id-b`），分属不同 `knowledge_unit`，且在同一探测问法（`--probe-question`）上都能被 Tier1 精确匹配命中——可从 P2/P3 已培养的链接中挑选语义相近但归属不同文档/单元的一对（如「两篇 RAC 部署文档」场景，见 `test/v1/v1_common.py` `SOURCE_ABBREV_TO_TITLES` 的 `两篇 rac`），或专门为本阶段培养一对。
+**前提**：需要一个真实需要联合引用两个知识点才能完整回答的探测问法（`--probe-question`），以及这两个知识点各自的 `point_id`（`--point-a`/`--point-b`），要求分属不同 `knowledge_unit`——可挑选「两篇 RAC 部署文档」这类跨文档对比场景（见 `test/v1/v1_common.py` `SOURCE_ABBREV_TO_TITLES` 的 `两篇 rac`），或专门为本阶段准备一对。
 
-**已知实现现状（决定了轴二只能用人工种子验证）**：Bundle 成员的 `RecordMemberOutcome` 尚未接入真实 Trace 回写路径（`grep RecordMemberOutcome` 只命中方法定义与其自身单测），即"成员置信度随线上使用继续收敛"这条闭环写了原语、还没接线，无法端到端自然培养到 serving 阈值。
+**实现现状（决定了轴二/轴三仍需人工种子加速置信度，但验证回路本身已经是真实代码路径，不是占位）**：触发轴 `observed_conditions` 与成员轴 `member_point_ids` 由 `scanActivationBundles` 每轮从真实历史 confident trace 重新算出，只要反复问同一个联合问题、反复 `POST /study/run`，两根轴的置信度会随样本量自然增长；自然收敛到 `serving_confidence_min`（默认 0.7）以上通常需要较多样本量，验收阶段用人工种子加速到能服务的水平。种子只负责"越过服务门槛"这一步——一旦越过，后续的命中判定、`RecordBundleOutcome`/`RecordMemberOutcome` 写回、`RefreshBundleMembers` 抗重算覆盖，走的都是和自然收敛完全相同的真实代码路径，不是被跳过或 mock 的。
 
 **轴一（确定性，直接验收，端到端可跑）**：
 
-1. 用 `--probe-question` 提问，验证 `direct_point_ids` 同时包含两条链接各自的 `point_id`（说明真的触发了跨 unit 歧义，而不是被别的分支提前拦截）；
-2. 验证本轮 `path_type != fast`（没有 verified Bundle 覆盖，正确回落慢路径）；
-3. 验证 `activation_bundles` 表出现（或被追加了 observed condition 的已有）一条 `status=candidate`、`member_point_ids` 同时覆盖两个 point_id 的行。
+1. 用 `--probe-question` 反复提问 `--repeat` 次（默认 3），逐次核对 `direct_point_ids` 是否同时包含 `point_a`/`point_b`（说明这次回答确实联合引用了两点，而不是只命中其中一个）；
+2. 每次提问后 `POST /study/run`；
+3. 核对 `bundle_trigger_cooccurrence` 表按归一化四元组累积了这些联合引用（`hit_count`/`confident_count` 增长，不是分裂出多个分组——同一问题即使措辞略有不同，只要归一化后落到同一 canonical 四元组就应该累积在同一行）；
+4. 核对 `activation_bundles` 出现（或被刷新的已有）一条 `member_point_ids` 覆盖 `{point_a, point_b}` 的行，`status=candidate`（新建的 Bundle 预期停留在 candidate，直到验证信号把它推过服务门槛）。
 
-**轴二（人工种子，只验证仲裁分支本身，不代表真实收敛概率，`--seed-member-confidence` 触发）**：
+**轴二（人工种子，验证命中生效分支本身，不代表真实收敛概率，`--seed-confidence` 触发）**：
 
-4. 若两个 point 之间已存在 KPN `contradicts` 关系：把轴一形成的 candidate Bundle 全部成员 `success_count` 人工摆到远超 `retrieval.serving_confidence_min`（默认 0.7）对应阈值的水平后重问，验证仍然 `path_type != fast`（冲突不应被仲裁合并）；
-5. 若不存在 `contradicts`：同样人工摆高成员置信度后重问，验证 `path_type=fast` 且 `direct_point_ids` 仍同时包含两点（`bundlesConflict` 判空、`CoreMemberPointIDs` 正确合并）。
+5. 把轴一生成的 Bundle 的触发轴 `observed_conditions` 与成员轴 `member_point_ids` 全部成员的 `success_count` 人工摆到远超 `retrieval.serving_confidence_min` 对应阈值的水平后重问，验证 `path_type=fast` 且 `direct_point_ids` 仍同时包含两点（说明 Bundle 候选在与 Link 侧的优先级比较中胜出并生效）。
 
-**通过标准**：轴一 1-3 步全部成立即判 PASS（可独立于轴二判定）；轴二 4/5（二选一，取决于两点间是否已有 `contradicts` 关系）作为附加判定，用于确认仲裁分支代码路径本身正确，不计入"真实收敛"相关的任何量化指标。
+**轴三（2026-08-20 新增，衔接轴二，`--seed-confidence` 时自动跟进，验证本次改动补上的"验证"环节）**：
+
+6. 在轴二已经 `path_type=fast` 的基础上，再真实问一次，核对这次命中的 trace 下确实写入了恰好一条 `activation_success` 事件（payload 含 `bundle_id`/`member_point_ids`，复用既有事件类型，不是新表）；
+7. 核对触发轴 `success_count` 相比轴三提问前 **+1**（`RecordBundleOutcome` 被正确调用并定位到了匹配的条件）；
+8. 核对成员轴里 `point_a`/`point_b` 各自的 `success_count` 相比提问前 **+1**（`RecordMemberOutcome` 对每个实际用到的成员各调用一次）；
+9. 再跑一次 `POST /study/run`，核对第 7/8 步刚写入的计数**没有**被这次重算冲回去——这是本次改动修的核心 bug：旧版 `UpdateBundleMembers` 会在每轮重算时整体覆盖，任何实时累积的验证结果撑不过下一次 Study tick；新版 `RefreshBundleMembers` 改为合并写，已有条目的计数只增不因重算而被重置。
+
+跨 Bundle 的 `contradicts` 冲突拒绝分支（`bundlesConflict`，仅在同一次查询命中 ≥2 个不同 Bundle 时触发，单个 Bundle 内部两个成员互相冲突不会触发这条判定）不在本脚本覆盖范围——端到端构造两条独立生成、核心成员互相冲突、且命中同一归一化四元组的 Bundle 过于刻意，该分支已有 Go 单测覆盖（`internal/retrieval/fastpath_test.go` `TestRetrieve_FastPath_ConflictingVerifiedBundles_FallsBackToSlowPath`），不重复验证。
+
+**通过标准**：轴一 1-4 步全部成立即判 PASS（可独立于轴二/轴三判定）；轴二第 5 步、轴三第 6-9 步作为附加判定（需 `--seed-confidence`），用于确认命中生效分支与验证回写/抗重算覆盖代码路径本身正确，不计入"真实收敛"相关的任何量化指标。
 
 ## 6. 量化验收指标汇总
 
@@ -585,7 +594,7 @@ M3 不设通过标准；V1 并入快路径正向样本观测。
 - **变体问法是硬要求（共现侧）**：Study 创建候选链接看的是 `question_kp_cooccurrence` 换算出的 `mean_pre`/`width_pre`（`create_confidence_min`/`create_width_max`），同一字面重复问只累计同一 `question_hash` 下的计数，对 `mean_pre` 的抬升有限；P2 培养清单必须备 ≥2 问法。但自四元组精确匹配起，变体**不保证**命中同一 ActivationLink——P2 的收敛硬门槛只要求至少跑通 1 条归属链接自然到达 `self_graded`/`trusted` 档（见 P2 步骤 4），其余观测条件的 `mean`/`tier` 分布作观测；
 - **P2 链接归属**：确认/驳回/对照组按题号独占归属，勿用「题的 direct point_id 并集」做多题共享判定（A9↔A11、T12↔F1_PRE 邻近簇会误伤）；
 - **阶段间不清库**：P2-P12 依赖 P1 积累的事件；靶子文档已按域错开（P5 删报销规定+RAC 归档、P6 改培训积分+神通、P7 新增两份 contradicts fixture、P8 改应收账款+19c RAC、P11 复用 F1_PRE 且不得在 P11 前调整其四元组字段、P12 直接读 P8 落盘结果不重新培养信号），执行时勿调换；P12 必须排在 P8 之后。
-- **P13/P14 排序与库依赖**：两者都是纯增量能力（config-gated 开关 + 新表 + 新的仲裁分支），不依赖也不破坏 P1-P12 的既有信号，理论上可在 P2（已有 verified/self_graded 链接可复用）之后的任意时点插入,不要求清库或重新导入文档。惟一的硬顺序要求是各自内部：P13 必须先把 `question_tuple_norm_enabled` 改回 `true` 并重启（脚本自动做，见 P13 说明），跑完必须恢复默认值再重启，避免污染后续阶段（P13 之后如果还要跑别的阶段，务必确认脚本的 `finally` 块确实执行了恢复，非正常中断——如 kill -9——需要人工核对 `config.yml` 是否被卡在 `true`）；P14 轴二依赖轴一先产出 candidate Bundle 的 `bundle_id`，不能单独跑。两阶段之间无先后依赖，可按任意顺序执行，也可以反复重跑（P13 每次都会重新走一遍开-测-关，P14 的 `formCandidateBundle` 对同一核心成员集合是幂等追加，不会因重跑而产生重复行）。
+- **P13/P14 排序与库依赖**：两者都是纯增量能力（config-gated 开关 + 新表 + 新的生成/匹配路径），不依赖也不破坏 P1-P12 的既有信号，理论上可在 P2（已有 verified/self_graded 链接可复用）之后的任意时点插入,不要求清库或重新导入文档。惟一的硬顺序要求是各自内部：P13 必须先把 `question_tuple_norm_enabled` 改回 `true` 并重启（脚本自动做，见 P13 说明），跑完必须恢复默认值再重启，避免污染后续阶段（P13 之后如果还要跑别的阶段，务必确认脚本的 `finally` 块确实执行了恢复，非正常中断——如 kill -9——需要人工核对 `config.yml` 是否被卡在 `true`）；P14 轴二依赖轴一先产出 Bundle 的 `bundle_id`，轴三依赖轴二先把 Bundle 种子到 `path_type=fast` 生效，三轴都不能单独跑（脚本内部已经按这个依赖顺序串联，`--seed-confidence` 缺失时轴二/轴三自动跳过，不会报错退出）。两阶段之间无先后依赖，可按任意顺序执行，也可以反复重跑（P13 每次都会重新走一遍开-测-关，P14 反复问同一个联合问题 + 反复 `POST /study/run` 是幂等刷新——`scanActivationBundles` 每轮全量重算成员/观测条件，`RefreshBundleMembers` 合并写不会丢弃已累积的验证计数，也不会因重跑而产生重复 Bundle 行）。
 - **真实 LLM 的波动**：正确率类指标按题判要点命中而非逐字比对（技术域例外：命令与参数名必须逐字对）；单题失败先重跑一次排除 LLM 抖动，复现两次才计为缺陷；
 - **缺陷归因**：每个失败点先区分「提取期缺陷（KU/KP 就没有该事实）」与「检索/回答期缺陷」，前者不属于 V1 目标范围但需记录；
 - **技术文档的特有风险**：代码块/长表格密集，KU 按行切片可能把命令截断（导入完成后应抽查 K8S、达梦、AlwaysOn 三篇长文档各 2 个 KU 的 `line_start/line_end` 切片是否对应原文完整片段，重点看代码块/表格是否被切断）；LLM 对通用技术知识有强先验，容易"不看文档也答对"或"用先验覆盖文档细节"——凡技术题必须核验引用片段确实来自对应文档，答对但引用为空/错源一律计缺陷；

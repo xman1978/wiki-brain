@@ -421,7 +421,7 @@ func TestTryDirectAnswer_Sufficient(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
 	publishedPage(t, svc, fake)
 
-	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答内容 [p1]","citations":["p1"],"sufficient":true}`})
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答内容 [p1]","citations":["p1"],"coverage":"full"}`})
 
 	result, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", nil, 0, 3)
 	if err != nil {
@@ -442,7 +442,7 @@ func TestTryDirectAnswer_HallucinatedCitationFiltered(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
 	publishedPage(t, svc, fake)
 
-	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答内容","citations":["p1","p999"],"sufficient":true}`})
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答内容","citations":["p1","p999"],"coverage":"full"}`})
 
 	result, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", nil, 0, 3)
 	if err != nil {
@@ -462,7 +462,7 @@ func TestTryDirectAnswer_InsufficientFallsBack(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
 	publishedPage(t, svc, fake)
 
-	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"","citations":[],"sufficient":false}`})
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"","citations":[],"coverage":"none"}`})
 
 	_, ok, err := svc.TryDirectAnswer(context.Background(), "point one content", nil, 0, 3)
 	if err != nil {
@@ -568,7 +568,7 @@ func TestTryDirectAnswer_TriggerQuestionRoutesWithoutContentOverlap(t *testing.T
 		t.Fatalf("publish: %v", err)
 	}
 
-	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"sufficient":true}`})
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"coverage":"full"}`})
 
 	// The question exactly echoes the compiled trigger_questions entry, which
 	// shares no vocabulary with the page's title/content — only the trigger
@@ -589,7 +589,7 @@ func TestTryDirectAnswer_ConceptEntryBypassesMinScore(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
 	page := publishedPage(t, svc, fake) // title == concept name "Concept One"
 
-	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"sufficient":true}`})
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"coverage":"full"}`})
 
 	// minScore is set unreachably high so no lexical hit could clear it; only
 	// the concept entry (question contains the concept name "Concept One",
@@ -637,8 +637,8 @@ func TestTryDirectAnswer_TopNRetriesNextCandidateOnInsufficient(t *testing.T) {
 	// concept name verbatim), so a question built from that phrase lexically
 	// hits both, giving TryDirectAnswer two candidates to try in order.
 	fake.SetResponseSequence("answer_wiki.md", []llm.FakeResponse{
-		{Output: `{"content":"","citations":[],"sufficient":false}`},
-		{Output: `{"content":"来自第二个候选页的回答","citations":[],"sufficient":true}`},
+		{Output: `{"content":"","citations":[],"coverage":"none"}`},
+		{Output: `{"content":"来自第二个候选页的回答","citations":[],"coverage":"full"}`},
 	})
 
 	result, ok, err := svc.TryDirectAnswer(context.Background(), "Concept One", nil, 0, 3)
@@ -721,18 +721,19 @@ func TestCompile_TriggerQuestionsUseRealObservedQuestions(t *testing.T) {
 	}
 }
 
-// TestTryDirectAnswer_ConceptRecognitionEntry covers docs/impl/v1/
-// wiki-single-tier-task-brief.md 步骤 4: a published page whose entry_id the
-// LLM recognizes as matching the question should surface as a direct-answer
-// candidate even when the question text has no lexical overlap with the page
-// (title/content/aliases/trigger_questions) and minScore is unreachably
-// high — only the Concept/Fact recognition entry can find it.
-func TestTryDirectAnswer_ConceptRecognitionEntry(t *testing.T) {
+// TestTryDirectAnswer_PageRecognitionEntry covers docs/impl/v1/wiki.md
+// 检索接入 (2026-08-20 改判): a published page the LLM recognizes as
+// matching the question, judged against the page's own title/summary/
+// aliases/trigger_questions (not the entry it was compiled from), should
+// surface as a direct-answer candidate even when the question text has no
+// lexical overlap with the page and minScore is unreachably high — only the
+// page recognition entry can find it.
+func TestTryDirectAnswer_PageRecognitionEntry(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
-	page := publishedPage(t, svc, fake) // entry_id "c1"
+	page := publishedPage(t, svc, fake)
 
-	fake.SetResponse("wiki_entry_recognize.md", llm.FakeResponse{Output: `{"entry_ids":["c1"]}`})
-	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"sufficient":true}`})
+	fake.SetResponse("wiki_page_recognize.md", llm.FakeResponse{Output: fmt.Sprintf(`{"page_ids":["%s"]}`, page.PageID)})
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"coverage":"full"}`})
 
 	result, ok, err := svc.TryDirectAnswer(context.Background(),
 		"完全不重合的措辞，既不在标题里也不在正文里", nil, 1e9, 3)
@@ -740,21 +741,21 @@ func TestTryDirectAnswer_ConceptRecognitionEntry(t *testing.T) {
 		t.Fatalf("try direct answer: %v", err)
 	}
 	if !ok {
-		t.Fatal("expected the concept recognition entry to surface the page despite no lexical overlap and an unreachable min score")
+		t.Fatal("expected the page recognition entry to surface the page despite no lexical overlap and an unreachable min score")
 	}
 	if result.PageID != page.PageID {
 		t.Errorf("page_id = %q, want %q", result.PageID, page.PageID)
 	}
 }
 
-// TestTryDirectAnswer_ConceptRecognitionNoMatchSkipsPage is the regression
-// test for an LLM recognition result that names no entry (or an unknown/
+// TestTryDirectAnswer_PageRecognitionNoMatchSkipsPage is the regression test
+// for an LLM recognition result that names no page (or an unknown/
 // hallucinated one): the page must not surface as a candidate via this entry.
-func TestTryDirectAnswer_ConceptRecognitionNoMatchSkipsPage(t *testing.T) {
+func TestTryDirectAnswer_PageRecognitionNoMatchSkipsPage(t *testing.T) {
 	svc, fake, _, _ := setupTestService(t)
-	publishedPage(t, svc, fake) // entry_id "c1"
+	publishedPage(t, svc, fake)
 
-	fake.SetResponse("wiki_entry_recognize.md", llm.FakeResponse{Output: `{"entry_ids":[]}`})
+	fake.SetResponse("wiki_page_recognize.md", llm.FakeResponse{Output: `{"page_ids":[]}`})
 
 	_, ok, err := svc.TryDirectAnswer(context.Background(),
 		"完全不重合的措辞，既不在标题里也不在正文里", nil, 1e9, 3)
@@ -762,7 +763,7 @@ func TestTryDirectAnswer_ConceptRecognitionNoMatchSkipsPage(t *testing.T) {
 		t.Fatalf("try direct answer: %v", err)
 	}
 	if ok {
-		t.Fatal("expected no hit when concept recognition returns no matching entry")
+		t.Fatal("expected no hit when page recognition returns no matching page")
 	}
 }
 
@@ -894,7 +895,7 @@ func TestSelfcheck_CachesPerRevision(t *testing.T) {
 	svc, fake, db, _ := setupTestService(t)
 	svc.cfg.SelfcheckEnabled = true
 	seedConfidentTrace(t, db, "tr1", "问题一", []string{"p1"})
-	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"sufficient":true}`})
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"coverage":"full"}`})
 
 	page, err := svc.Compile(context.Background(), CompileRequest{EntryIDs: []string{"c1"}})
 	if err != nil {

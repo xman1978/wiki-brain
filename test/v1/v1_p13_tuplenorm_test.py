@@ -7,9 +7,9 @@ V1 验收测试方案（test/v1/v1-acceptance-test-plan.md）P13：问题四元�
 背景（务必先读）：`activation.Matcher`/`BundleMatcher`/`wiki.matchFourTupleEntry`
 三处四元组消费入口本身已经定案为纯精确匹配（2026-08-12 改判，不含任何模糊/模型
 辅助），LLM 抽取的措辞抖动交给 Retrieval `tryFastPath` 里、送入这三处之前的
-`TupleNormalizer.Normalize` 单独处理：同一意思的问题第二次问出来，四层递进
+`TupleNormalizer.Normalize` 单独处理：同一意思的问题第二次问出来，三层递进
 （Tier1 精确匹配 `question_tuple_norms` 表 → Tier2 本地词集 Jaccard →
-Tier2.5 向量早筛（只拒绝不确认）→ Tier3 LLM 批量判断）把新抽取的四元组替换成
+Tier3 LLM 批量判断，2026-08-20 已移除 Tier2.5 向量早筛）把新抽取的四元组替换成
 第一次见到的 canonical 四元组，再送去 Matcher 等处。
 
 本脚本验证的是这条归一化本身是否生效，观察面选 `question_kp_cooccurrence`
@@ -29,17 +29,9 @@ Tier2.5 向量早筛（只拒绝不确认）→ Tier3 LLM 批量判断）把新�
     # variants-file: {"variants": ["问法1", "问法2", ...]}（≥2 条，同一潜在问题
     # 的不同措辞，理想情况下第一条已在 P1/P2 培养过、有稳定的 KU/KP 归属）
 
-  # 只想验证 Tier1/2（本地）而不启用向量早筛（默认）：
-  python3 test/v1/v1_p13_tuplenorm_test.py --variants-file ...
-
-  # 同时打开向量早筛（Tier2.5，要求 config.yml 的 vector_model_dir 指向真实
-  # 已下载的 goformer 模型权重，否则该 tier 优雅降级为跳过）：
-  python3 test/v1/v1_p13_tuplenorm_test.py --variants-file ... --enable-vector
-
-注意：脚本会临时改写 config/config.yml 的 question_tuple_norm_enabled（及
---enable-vector 时的 vector_match_enabled）为 true 并重启服务以生效，结束时
-（含异常路径）恢复为改动前的值并重启——这两个开关默认 false，不应该在测试脚本
-跑完后遗留在 config.yml 里。
+注意：脚本会临时改写 config/config.yml 的 question_tuple_norm_enabled 为 true
+并重启服务以生效，结束时（含异常路径）恢复为改动前的值并重启——这个开关默认
+false，不应该在测试脚本跑完后遗留在 config.yml 里。
 """
 import argparse
 import json
@@ -139,8 +131,6 @@ def main():
     parser.add_argument("--base-url", default="http://127.0.0.1:8800")
     parser.add_argument("--db-path", default=None)
     parser.add_argument("--variants-file", default=None)
-    parser.add_argument("--enable-vector", action="store_true",
-                         help="同时打开 vector_match_enabled（Tier2.5）；默认只测 Tier1/2/3")
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--delay", type=float, default=1.0)
     parser.add_argument("--no-restore", action="store_true",
@@ -150,15 +140,12 @@ def main():
     variants = load_variants(args.variants_file)
 
     prev_tuple_norm = read_config_bool("question_tuple_norm_enabled")
-    prev_vector = read_config_bool("vector_match_enabled")
 
     conn = c.open_db(args.db_path)
-    results = {"variants": variants, "enable_vector": args.enable_vector}
+    results = {"variants": variants}
 
     try:
         set_config_bool("question_tuple_norm_enabled", True)
-        if args.enable_vector:
-            set_config_bool("vector_match_enabled", True)
         restart_server(args.base_url)
 
         watermark_norms = None
@@ -189,7 +176,7 @@ def main():
         norms_after_2 = c.db_question_tuple_norms(conn, since_created_at=watermark_norms)
         no_new_canonical = len(norms_after_2) == len(norms_after_1)
         print(f"  累计新增 question_tuple_norms 行数: {len(norms_after_2)}（期望与第一次问法后相同 {len(norms_after_1)}，"
-              f"即第二次问法没有再插入新 canonical 行，而是命中了 Tier1/2/2.5+3 之一）")
+              f"即第二次问法没有再插入新 canonical 行，而是命中了 Tier1/2/3 之一）")
 
         shared_points = sorted(set(points1) & set(points2))
         print(f"\n  两次问法共同命中的 point_id: {shared_points}（期望非空——变体应指向同一 KP）")
@@ -243,7 +230,6 @@ def main():
         if not args.no_restore:
             try:
                 set_config_bool("question_tuple_norm_enabled", prev_tuple_norm)
-                set_config_bool("vector_match_enabled", prev_vector)
                 restart_server(args.base_url)
             except Exception as e:
                 print(f"! 恢复 config.yml 失败，请手工检查: {e}", file=sys.stderr)

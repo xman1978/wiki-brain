@@ -188,19 +188,9 @@ func main() {
 	// 总是构造 TupleNormalizer 并挂上 LLM 客户端，是否实际生效由
 	// cfg.Retrieval.QuestionTupleNormEnabled 在 Retrieval 侧门控（默认关闭）。
 	tupleNormalizer := activation.NewTupleNormalizer(activationStore, activation.TupleNormConfig{
-		LocalSimMin:        cfg.Retrieval.QuestionTupleNormLocalSimMin,
-		VectorMatchEnabled: cfg.Retrieval.VectorMatchEnabled,
-		VectorSimMin:       cfg.Retrieval.VectorMatchSimMin,
+		LocalSimMin: cfg.Retrieval.QuestionTupleNormLocalSimMin,
 	})
 	tupleNormalizer.SetLLMClient(llmClient)
-	if cfg.Retrieval.VectorMatchEnabled && cfg.Retrieval.VectorModelDir != "" {
-		embedder, err := activation.NewGoformerEmbedder(cfg.Retrieval.VectorModelDir)
-		if err != nil {
-			slog.Warn("main: vector embedder load failed, tuple normalization tier 2.5 disabled", "error", err)
-		} else {
-			tupleNormalizer.SetEmbedder(embedder)
-		}
-	}
 	activationSvc.SetTupleNormalizer(tupleNormalizer)
 
 	evidenceSvc := evidence.NewService(llmClient, cfg.Evidence)
@@ -221,7 +211,7 @@ func main() {
 	traceSvc.SetSynthesisOutcomeWriter(wikiSvc)
 	retrievalSvc.SetSynthesisOutcomeWriter(traceSvc)
 	studySvc := study.NewService(studyStore, cfg.Study, activationSvc, wikiSvc, cfg.Wiki.RecompileNewKPMin, cfg.Wiki.QualifyingMinDaysActive,
-		cfg.Retrieval.QuestionTupleNormIdleDays)
+		cfg.Retrieval.QuestionTupleNormIdleDays, cfg.Retrieval.QuestionTupleNormEnabled)
 
 	entrySvc := entry.NewService(entryStore, entry.Config{
 		AddEventMin:       cfg.Study.EntryAddEventMin,

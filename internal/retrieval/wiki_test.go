@@ -55,7 +55,7 @@ func setupTestServiceWithWiki(t *testing.T) (*Service, *llm.FakeClient, *wiki.Se
 
 func TestRetrieveWithProgress_WikiHit(t *testing.T) {
 	svc, fake, _ := setupTestServiceWithWiki(t)
-	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答：ax+b=0 是线性方程 [p1]","citations":["p1"],"sufficient":true}`})
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答：ax+b=0 是线性方程 [p1]","citations":["p1"],"coverage":"full"}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: "linear equations"}, nil)
 	if err != nil {
@@ -73,14 +73,24 @@ func TestRetrieveWithProgress_WikiHit(t *testing.T) {
 	if es.WikiAnswerContent == "" {
 		t.Error("expected WikiAnswerContent to be populated")
 	}
-	if len(es.DirectEvidence) != 0 || len(es.Supporting) != 0 {
-		t.Errorf("expected wiki path to carry no direct/supporting evidence, got %d/%d", len(es.DirectEvidence), len(es.Supporting))
+	// 2026-08-20 改判: 之前这里断言 DirectEvidence/Supporting 恒为空——那正是
+	// 缺陷本身（点击"证据X"打开的抽屉靠 DirectEvidence 渲染，永远为空导致
+	// 抽屉空白）。buildWikiEvidence 把 CitedPointIDs 解析成可展示的 Evidence，
+	// FactID 就是 point_id 本身（跟答案正文里内联的 [point_id] 对上）。
+	if len(es.DirectEvidence) != 1 {
+		t.Fatalf("expected wiki path to resolve its cited point into displayable evidence, got %d direct", len(es.DirectEvidence))
+	}
+	if es.DirectEvidence[0].FactID != "p1" || es.DirectEvidence[0].PointID != "p1" {
+		t.Errorf("wiki evidence fact_id/point_id = %q/%q, want p1/p1 (fact_id must match the inline [point_id] citation)", es.DirectEvidence[0].FactID, es.DirectEvidence[0].PointID)
+	}
+	if len(es.Supporting) != 0 {
+		t.Errorf("expected wiki path to carry no supporting evidence, got %d", len(es.Supporting))
 	}
 }
 
 func TestRetrieveWithProgress_WikiInsufficientFallsThrough(t *testing.T) {
 	svc, fake, _ := setupTestServiceWithWiki(t)
-	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"","citations":[],"sufficient":false}`})
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"","citations":[],"coverage":"none"}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: "linear equations"}, nil)
 	if err != nil {
@@ -93,7 +103,7 @@ func TestRetrieveWithProgress_WikiInsufficientFallsThrough(t *testing.T) {
 
 func TestRetrieveWithProgress_ForceFullSkipsWiki(t *testing.T) {
 	svc, fake, _ := setupTestServiceWithWiki(t)
-	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"sufficient":true}`})
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答","citations":["p1"],"coverage":"full"}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: "linear equations", ForceFull: true}, nil)
 	if err != nil {

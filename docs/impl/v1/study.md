@@ -194,6 +194,17 @@ study:
 
 完整规格见 `docs/impl/v1/activation-bundle.md` 步骤 2「显影扫描」、步骤 3「巩固与状态迁移」，本节不重复展开，只记录它在调度顺序里的位置与理由：
 
+**归一化四元组累积（2026-08-20 重设计要点，完整机制见 activation-bundle.md
+步骤 2）**：显影扫描不再按 `distinct_question_count`/`days_active` 判断
+"问法够不够多样"，改为跟本节步骤 1（ActivationLink 创建）同一套 Beta 均值/
+宽度公式（复用 `create_confidence_min`/`create_width_max`，不新增配置），
+计算对象是"归一化四元组本身积累了多少置信证据"——`scanActivationBundles`
+（`internal/study/bundle_scan.go`）先把每条新的 confident 多点 trace 归一化
+后累加进新表 `bundle_trigger_cooccurrence`（跟 `question_kp_cooccurrence`
+同构，键从 point_id 换成归一化四元组），再对累积结果做门槛判定；越过门槛
+的每个归一化四元组，成员名单是历史上匹配到这个四元组的全部 trace 的
+`direct_point_ids` 并集，不是创建时写死的固定集合。
+
 ```text
 位置：步骤 5（晋升确认流）之后、步骤 6（gap 聚合与 Wiki/重编译信号）之前。
 
@@ -280,6 +291,29 @@ computeLinkCondition → buildObservedConditions(pointID) → []ObservedConditio
   上限 study.observed_conditions_max（默认 50），超限按 last_seen_at 淘汰最旧；
   **不再** LabelTermIntersection / 并集白名单 / 代表标签 fallback。
   空结果 → 跳过创建。
+
+**归一化接入构建阶段（2026-08-20 新增，config-gated，复用
+`retrieval.question_tuple_norm_enabled`，不新增配置项）**：此前
+`activation.TupleNormalizer`（`retrieval.md` 步骤 2 的 Tier1 精确匹配 →
+Tier2 本地 Jaccard → Tier3 LLM 判断）只在 Retrieval `tryFastPath` 查询侧生
+效，`buildObservedConditions` 按四元组**字面字符串精确相等**分组——同一个
+KP 被措辞不同但语义等价的问法命中时，每种问法各开一条独立的
+`ObservedCondition`，每条都从 `success_count=0` 起步，观测样本被打散，置
+信度长期收敛不上去（命中率/复用率低的根因，不是生成门槛本身；生成门槛
+`create_confidence_min`/`create_width_max` 保持不变，不做调整）。开启后，
+`buildObservedConditions` 先用 `store.DomainIDsForPoint(pointID)`（经
+`knowledge_points.source_id → sources.domain_id` 反查）取该 point 所属
+domain，再对 `ConfidentTraceQuadruples` 返回的每条四元组调用
+`activationSvc.NormalizeTuple`（同一套 Tier1-3，同一张 `question_tuple_
+norms` 表，与查询侧共享 canonical 空间）替换后再分组合并——语义等价的问法
+折叠进同一条 `ObservedCondition`，观测量才能真正攒起来。domain 查不到
+（source 未配置 domain_id）或归一化调用出错 → 跳过归一化，回退为原始四元
+组，不影响构建本身成功；查询侧 `Matcher.Match` 的精确匹配算法不受影响
+——因为查询侧四元组同样先过这套归一化，两边落在同一个 canonical 空间里，
+精确匹配自然对齐。允许时序竞态：构建某个问法当时若还没被查询侧写入过
+`question_tuple_norms`，本轮就归一化不到、条件没能合并，不做额外协调，
+下一轮自然收敛。默认关闭，关闭时 `buildObservedConditions` 与改动前逐字
+节一致。
 
 创建：CreateLink(..., ObservedConditions=conds, ...)；
 刷新：ReplaceObservedConditions（全量重建）；集合相等则跳过。

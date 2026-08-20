@@ -195,12 +195,56 @@ func (s *Service) tryWikiAnswer(ctx context.Context, qc QueryContext) (*Evidence
 		Path:              "direct",
 		PathType:          PathTypeWiki,
 		ActivationHits:    []ActivationHit{},
-		DirectEvidence:    []Evidence{},
+		DirectEvidence:    s.buildWikiEvidence(result.CitedPointIDs),
 		Supporting:        []Evidence{},
 		WikiPageID:        result.PageID,
 		CitedPointIDs:     result.CitedPointIDs,
 		WikiAnswerContent: result.Content,
 	}, true
+}
+
+// buildWikiEvidence resolves a Wiki direct answer's cited point_ids into
+// displayable Evidence (docs/impl/v1/wiki.md 检索接入) so the "证据X" links
+// embedded in a Wiki answer's content — which cite the compiled page's own
+// point_ids verbatim (config/prompts/answer_wiki.md), not a freshly-minted
+// Evidence.FactID like the mined pipeline does — resolve to something the
+// evidence drawer can actually show. FactID is deliberately set to the
+// point_id itself (not a random uuid.New()) so it lines up with what's
+// literally embedded as `[point_id]` in the answer content; best-effort per
+// point — a point whose KU/source lookup fails is silently dropped rather
+// than failing the whole answer, since the answer text and citations list
+// are already finalized by this point.
+func (s *Service) buildWikiEvidence(pointIDs []string) []Evidence {
+	if len(pointIDs) == 0 {
+		return []Evidence{}
+	}
+	hits, err := s.store.GetCurrentUnitsByPointIDs(pointIDs)
+	if err != nil {
+		slog.Warn("retrieval: wiki evidence unit lookup failed", "error", err)
+		return []Evidence{}
+	}
+	contents, err := s.store.GetPointContentsByPointIDs(pointIDs)
+	if err != nil {
+		slog.Warn("retrieval: wiki evidence content lookup failed", "error", err)
+		contents = map[string]string{}
+	}
+
+	out := make([]Evidence, 0, len(hits))
+	for _, h := range hits {
+		ref := SourceRef{SourceID: h.SourceID, LineStart: h.LineStart, LineEnd: h.LineEnd}
+		refJSON, _ := json.Marshal(ref)
+		out = append(out, Evidence{
+			FactID:    h.PointID,
+			UnitID:    h.UnitID,
+			PointID:   h.PointID,
+			Content:   contents[h.PointID],
+			SourceRef: refJSON,
+			Role:      evidence.RoleDirect,
+			Origin:    OriginWiki,
+			Mined:     false,
+		})
+	}
+	return out
 }
 
 // RetrieveSlowPathWithProgress forces the full MVP pipeline, used by Answer's
@@ -251,44 +295,91 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 		Audience:         workQC.Audience,
 		Constraint:       workQC.Constraint,
 	}
-	matches, err := s.activationSvc.Match(ctx, expandedQuery, matchCfg)
-	if err != nil {
-		slog.Warn("retrieval: activation match failed, falling back to slow path", "error", err)
-		return nil, nil, false
-	}
-	matches = s.filterMatchesByDomain(matches, workQC)
-	if len(matches) == 0 {
-		return nil, nil, false
-	}
-
-	activationHits, verified, ok := classifyActivationMatches(matches)
-	if !ok {
-		return nil, activationHits, false
-	}
-
-	linkIDs, pointIDs := verifiedIDs(verified)
-
-	hits, unitStatus := s.resolveUnitsForPoints(pointIDs, linkIDs)
-	switch unitStatus {
-	case unitResolutionFailed:
-		return nil, activationHits, false
-	case unitResolutionAmbiguous:
-		bundleHits, bundleOK := s.resolveBundleForAmbiguousHits(ctx, workQC, expandedQuery, matchCfg, linkIDs, pointIDs)
-		if !bundleOK {
-			return nil, activationHits, false
-		}
-		hits = bundleHits
-	}
-
-	// Async, non-blocking — touch every verified link that contributed to the
-	// resolved hit (same KU, or Bundle-resolved across units).
+	// 2026-08-20 重设计：Bundle Match 不再等 Link 出现跨 unit 歧义才被
+	// consult，而是跟 Link Match 并行主动跑（docs/impl/v1/retrieval.md
+	// 步骤 2「命中优先级」，同 RetrieveWithProgress 里 Wiki∥ActivationLink
+	// 已有的并行写法）；两边都返回后按连续置信度（tier/mean）择一，不是写死
+	// 的层级顺序。
+	var linkMatches []activation.LinkMatch
+	var linkErr error
+	var bundleCand bundleCandidate
+	var bundleOK bool
+	var wg sync.WaitGroup
+	wg.Add(2)
 	go func() {
-		if err := s.activationSvc.TouchLastUsed(linkIDs); err != nil {
-			slog.Warn("retrieval: touch last used failed", "error", err)
+		defer wg.Done()
+		linkMatches, linkErr = s.activationSvc.Match(ctx, expandedQuery, matchCfg)
+	}()
+	go func() {
+		defer wg.Done()
+		bundleCand, bundleOK = s.resolveBundleCandidate(ctx, expandedQuery, matchCfg)
+	}()
+	wg.Wait()
+
+	if linkErr != nil {
+		slog.Warn("retrieval: activation match failed", "error", linkErr)
+		linkMatches = nil
+	}
+	linkMatches = s.filterMatchesByDomain(linkMatches, workQC)
+
+	var activationHits []ActivationHit
+	var verified []activation.LinkMatch
+	linkClassified := false
+	if len(linkMatches) > 0 {
+		activationHits, verified, linkClassified = classifyActivationMatches(linkMatches)
+	}
+
+	var linkIDs, pointIDs []string
+	var linkHits []DirectHit
+	linkResolved := false
+	if linkClassified {
+		linkIDs, pointIDs = verifiedIDs(verified)
+		var unitStatus unitResolutionStatus
+		linkHits, unitStatus = s.resolveUnitsForPoints(pointIDs, linkIDs)
+		linkResolved = unitStatus == unitResolutionOK
+	}
+
+	var hits []DirectHit
+	var usedLinkIDs []string
+	var usedBundleIDs []string
+	var usedBundleHits []BundleHit
+	switch {
+	case linkResolved && bundleOK:
+		linkTier, linkMean := bestLinkTierMean(verified)
+		if tierRank(bundleCand.tier) > tierRank(linkTier) || (tierRank(bundleCand.tier) == tierRank(linkTier) && bundleCand.mean > linkMean) {
+			hits = bundleCand.hits
+			usedBundleIDs = bundleCand.bundleIDs
+			usedBundleHits = bundleCand.hitInfo
+		} else {
+			hits = linkHits
+			usedLinkIDs = linkIDs
+		}
+	case linkResolved:
+		hits = linkHits
+		usedLinkIDs = linkIDs
+	case bundleOK:
+		hits = bundleCand.hits
+		usedBundleIDs = bundleCand.bundleIDs
+		usedBundleHits = bundleCand.hitInfo
+	default:
+		return nil, activationHits, false
+	}
+
+	// Async, non-blocking — touch whichever side actually resolved this hit.
+	go func() {
+		if len(usedLinkIDs) > 0 {
+			if err := s.activationSvc.TouchLastUsed(usedLinkIDs); err != nil {
+				slog.Warn("retrieval: touch last used failed", "error", err)
+			}
+		}
+		for _, bundleID := range usedBundleIDs {
+			if err := s.activationSvc.Store().TouchBundleLastUsed(bundleID); err != nil {
+				slog.Warn("retrieval: touch bundle last used failed", "bundle_id", bundleID, "error", err)
+			}
 		}
 	}()
 
-	es, resultHits, ok := s.finishFastPath(ctx, workQC, hits, linkIDs, activationHits)
+	es, resultHits, ok := s.finishFastPath(ctx, workQC, hits, usedLinkIDs, activationHits, usedBundleHits)
 	if ok {
 		// docs/impl/v1/retrieval.md 步骤 2c: fire after the fast-path answer is
 		// fully assembled and about to be handed back — non-blocking, same
@@ -435,7 +526,7 @@ func (s *Service) runSynthesisAuditTrial(qc QueryContext, pageID string) {
 // multi-unit) hit path — this block never assumed single-unit internally, it
 // only ever received a single-unit hits list because the caller gated on it
 // upstream.
-func (s *Service) finishFastPath(ctx context.Context, workQC QueryContext, hits []DirectHit, linkIDs []string, activationHits []ActivationHit) (*EvidenceSet, []ActivationHit, bool) {
+func (s *Service) finishFastPath(ctx context.Context, workQC QueryContext, hits []DirectHit, linkIDs []string, activationHits []ActivationHit, bundleHits []BundleHit) (*EvidenceSet, []ActivationHit, bool) {
 	if !s.cfg.Retrieval.FastPath {
 		return nil, activationHits, false
 	}
@@ -503,6 +594,7 @@ func (s *Service) finishFastPath(ctx context.Context, workQC QueryContext, hits 
 
 	es.PathType = PathTypeFast
 	es.ActivationHits = activationHits
+	es.BundleHits = bundleHits
 	slog.Info("retrieval: fast path evidence built",
 		"direct", len(es.DirectEvidence), "supporting", len(es.Supporting), "link_ids", linkIDs)
 	return es, activationHits, true

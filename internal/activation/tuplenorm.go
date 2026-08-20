@@ -15,17 +15,12 @@ import (
 // RetrievalConfig's question-tuple-normalization knobs TupleNormalizer
 // actually reads (docs/impl/v1/retrieval.md 步骤 2).
 type TupleNormConfig struct {
-	LocalSimMin        float64
-	VectorMatchEnabled bool
-	VectorSimMin       float64
+	LocalSimMin float64
 }
 
 func (c TupleNormConfig) withDefaults() TupleNormConfig {
 	if c.LocalSimMin <= 0 {
 		c.LocalSimMin = 0.8
-	}
-	if c.VectorSimMin <= 0 {
-		c.VectorSimMin = 0.75
 	}
 	return c
 }
@@ -41,7 +36,6 @@ func (c TupleNormConfig) withDefaults() TupleNormConfig {
 type TupleNormalizer struct {
 	store     *Store
 	llmClient llm.LLMClient
-	embedder  VectorEmbedder
 	cfg       TupleNormConfig
 }
 
@@ -53,11 +47,7 @@ func (n *TupleNormalizer) SetLLMClient(c llm.LLMClient) {
 	n.llmClient = c
 }
 
-func (n *TupleNormalizer) SetEmbedder(e VectorEmbedder) {
-	n.embedder = e
-}
-
-// Normalize runs the four tiers in order and returns as soon as one hits.
+// Normalize runs the tiers in order and returns as soon as one hits.
 // domainIDs empty ⇒ no tiers can run (nothing to scope the lookup to);
 // callers should skip calling Normalize entirely in that case (mirrors the
 // qc.DomainResolved guard in Retrieval's tryFastPath) but Normalize itself
@@ -114,44 +104,13 @@ func (n *TupleNormalizer) Normalize(ctx context.Context, domainIDs []string, sub
 		}
 	}
 
-	// Tier 2.5: vector early-reject. Only ever narrows the LLM candidate
-	// pool by rejecting outright — never confirms a match on its own
-	// (asymmetric design, docs/impl/v1/retrieval.md 步骤 2). Vector
-	// similarity below VectorSimMin ⇒ treat as no match at all, skip LLM.
-	llmCandidates := candidates
-	if n.cfg.VectorMatchEnabled && n.embedder != nil && len(candidates) > 0 {
-		queryVec, err := n.embedder.Embed(tupleEmbedText(qSubject, qIntent, qAudience, qConstraint))
-		if err != nil {
-			slog.Warn("activation: tuple norm embed query failed, skipping vector tier", "error", err)
-		} else {
-			bestSim := 0.0
-			for _, c := range candidates {
-				candVec, err := n.embedder.Embed(tupleEmbedText(c.Subject, c.Intent, c.Audience, c.ConstraintText))
-				if err != nil {
-					continue
-				}
-				if sim := cosineSimilarity(queryVec, candVec); sim > bestSim {
-					bestSim = sim
-				}
-			}
-			if bestSim < n.cfg.VectorSimMin {
-				// Clearly not a match — record as a new canonical tuple,
-				// never reaching the LLM tier.
-				return n.insertNew(domainIDs, qSubject, qIntent, qAudience, qConstraint)
-			}
-			// >= threshold: proceed to LLM with the full candidate set —
-			// vector never single-handedly confirms a match.
-		}
-	}
-
-	// Tier 3: LLM batch judgment over the (possibly vector-surviving)
-	// candidate set.
-	if n.llmClient != nil && len(llmCandidates) > 0 {
-		matched, idx, err := n.judgeLLM(ctx, qSubject, qIntent, qAudience, qConstraint, llmCandidates)
+	// Tier 3: LLM batch judgment over the candidate set.
+	if n.llmClient != nil && len(candidates) > 0 {
+		matched, idx, err := n.judgeLLM(ctx, qSubject, qIntent, qAudience, qConstraint, candidates)
 		if err != nil {
 			slog.Warn("activation: tuple norm LLM tier failed, falling through to new record", "error", err)
-		} else if matched && idx >= 0 && idx < len(llmCandidates) {
-			match := llmCandidates[idx]
+		} else if matched && idx >= 0 && idx < len(candidates) {
+			match := candidates[idx]
 			if err := n.store.TouchLastHit(match.NormID); err != nil {
 				slog.Warn("activation: tuple norm touch last hit failed", "norm_id", match.NormID, "error", err)
 			}
@@ -216,12 +175,6 @@ func jaccard(a, b string) float64 {
 		return 0
 	}
 	return float64(inter) / float64(union)
-}
-
-// tupleEmbedText concatenates the four fields into one embedding input,
-// separated by " | " so the embedding model still sees field boundaries.
-func tupleEmbedText(subject, intent, audience, constraint string) string {
-	return subject + " | " + intent + " | " + audience + " | " + constraint
 }
 
 type tupleNormLLMCandidate struct {

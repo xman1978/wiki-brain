@@ -268,6 +268,48 @@ func (s *Service) RecordAuditOutcome(linkID, subject, intent, audience, constrai
 	return nil
 }
 
+// RecordBundleOutcome mirrors RecordOutcome for a Bundle's trigger-axis
+// condition (docs/impl/v1/activation-bundle.md「验证」, 2026-08-20 阶段 2
+// 接线) — trace.recordBundleHitOutcome calls this once per Bundle hit.
+// Store.RecordBundleOutcome already re-derives and persists the trigger-axis
+// status as part of its write (via UpdateBundleMembers →
+// deriveAndPersistBundleStatus), unlike Link's Service.RecordOutcome there's
+// no separate lifecycle re-check here — Bundle deprecation stays
+// lifecycle-sweep-driven (study.weakenBundlesWithExpiredCoreMembers), not a
+// per-write concern. matched=false (no error) logs a warning and returns nil,
+// same non-fatal contract as RecordOutcome.
+func (s *Service) RecordBundleOutcome(bundleID, subject, intent, audience, constraint string, success bool) error {
+	matched, _, err := s.store.RecordBundleOutcome(bundleID, subject, intent, audience, constraint, success)
+	if err != nil {
+		return err
+	}
+	if !matched {
+		slog.Warn("activation: record bundle outcome found no matching condition", "bundle_id", bundleID,
+			"subject", subject, "intent", intent, "audience", audience, "constraint", constraint)
+		return nil
+	}
+	if s.bundleMatcher != nil {
+		s.bundleMatcher.InvalidateCache()
+	}
+	return nil
+}
+
+// RecordMemberOutcome mirrors RecordBundleOutcome for a Bundle's member axis
+// (docs/impl/v1/activation-bundle.md「成员置信度」) — trace.recordBundleHitOutcome
+// calls this once per member point actually used to serve a Bundle hit.
+// Store.RecordMemberOutcome no-ops (not an error) when pointID isn't among
+// the bundle's current members, so this passthrough has nothing extra to
+// check before invalidating the match cache.
+func (s *Service) RecordMemberOutcome(bundleID, pointID string, success bool) error {
+	if err := s.store.RecordMemberOutcome(bundleID, pointID, success); err != nil {
+		return err
+	}
+	if s.bundleMatcher != nil {
+		s.bundleMatcher.InvalidateCache()
+	}
+	return nil
+}
+
 // NotifyPointsLifecycleChanged implements the extended unit.ActivationNotifier
 // interface (docs/impl/v1/activation.md「依赖」Lifecycle): for each pointID
 // with a non-deprecated existing link, re-derive status — deriveAndPersistStatus's

@@ -212,7 +212,80 @@ UpdateStats(bundleID, adoptDelta, failDelta)；
 TouchLastUsed(bundleIDs)。
 ```
 
+**2026-08-20 新增两张表（迁移 061），支撑步骤 2 的生成重设计**：
+
+```sql
+bundle_trigger_cooccurrence(trigger_id, domain_id, subject, intent, audience,
+  constraint_text, hit_count, confident_count, last_seen_at,
+  UNIQUE(domain_id, subject, intent, audience, constraint_text))
+  -- 跟 question_kp_cooccurrence 是同一种簿记，键从 point_id 换成归一化
+  -- 四元组；Study 每轮 GROUP BY 求和后用 Beta 均值/宽度公式判定创建门槛。
+
+cooccurrence_bundle_dedup(trace_id PRIMARY KEY, first_seen_at)
+  -- 镜像 cooccurrence_question_dedup，防止同一条 trace 被重复计入
+  -- bundle_trigger_cooccurrence。
+```
+
 ### 步骤 2：显影扫描（Study 侧，周期调度新增一步；2026-08-12 定案排入 `study.md` 步骤 5b，位于步骤 5「晋升确认流」之后、步骤 6「gap 聚合与 Wiki/重编译信号」之前，理由见该文档步骤 5b 说明）
+
+> **2026-08-20 改判，取代本步骤以下全部内容（分组函数聚类、
+> `distinct_question_count`/`days_active` 创建门槛、出现比例种子化 member/
+> fringe 等），以 `docs/design/activation-bundle.md`「10. 身份从四元组聚类
+> 簇/point 集合改为归一化四元组」为设计依据**：根因是 `distinct_question_
+> count`/`days_active` 衡量的是"问法多不多样"，不是"这个组合被反复确证
+> 得够不够可靠"——同一句话原样重复问 N 次，`distinct_question_count`
+> 完全不增长，永远建不出熟路。新机制（实现见 `internal/study/bundle_scan.
+> go` `scanActivationBundles`）分两步，分别对称于 `activation_links` 的
+> `question_kp_cooccurrence` 累积 / `ScanCandidates`：
+>
+> 1. **增量累积**：每条尚未计入的 confident 且 `direct_point_ids ≥2`
+>    的 trace（`Store.NewMultiPointConfidentTraces`，按 `cooccurrence_
+>    bundle_dedup` 表去重，持久累积语义，不是滚动时间窗口），归一化其
+>    四元组（`activationSvc.NormalizeTuple`，domain 经
+>    `Store.DomainIDsForPoints` 反查所引用 point 的并集）后累加进新表
+>    `bundle_trigger_cooccurrence`（`hit_count`/`confident_count`，键是
+>    `(domain_id, subject, intent, audience, constraint_text)`，跟
+>    `question_kp_cooccurrence` 是同一种簿记，只是键从 point_id 换成
+>    归一化四元组）。
+> 2. **门槛判定**：`Store.ScanBundleTriggerCandidates` 对
+>    `bundle_trigger_cooccurrence` 按 `(domain, canonical tuple)`
+>    `GROUP BY` 求 `SUM(confident_count)`/`SUM(hit_count)`，用
+>    `activation.ConditionMean`/`conditionWidth`——**跟
+>    `activation_links` 创建门槛完全同一套 Beta 均值/宽度公式，复用
+>    `study.create_confidence_min`/`create_width_max`，不新增配置**——
+>    判断是否越过创建门槛。越过门槛的每个 `(domain, canonical tuple)`：
+>    - `Service.buildBundleObservedConditionsAndMembers` 拉取全部历史
+>      多点 confident trace，各自归一化后跟目标 canonical tuple 精确
+>      比对，取匹配上的 trace 的 `direct_point_ids` **并集**作为成员
+>      名单（`SuccessCount`=该点出现次数，`FailureCount`=匹配 trace
+>      总数-出现次数，跟旧版出现比例种子化的折算方式一致，只是分组
+>      依据从四元组文本换成归一化四元组）；
+>    - 用 `activation.MatchConditionGroups` 检查现有非 deprecated 熟路
+>      是否已有覆盖该 canonical tuple 的 `ObservedCondition`——命中则
+>      `UpdateBundleMembers` 刷新（成员名单/观测条件整体重算写回，语义
+>      同 Link 的 `buildObservedConditions` 每次全量重算，不做增量缓存）；
+>      未命中则 `CreateBundle`，`status=candidate`（阶段 1 不产生
+>      `bundle_success`/`bundle_failure` 事件，因此新建的熟路仍会停留在
+>      candidate，预期行为，见步骤 6）。
+>
+> **身份判断的核心变化**：一条熟路的身份不再是"一组固定的知识点集合"，
+> 而是"这是同一类真实问题"（归一化四元组）——`{p1,p2}` 与
+> `{p1,p2,p3}` 若在同一个归一化四元组下都出现过，会合并成同一条熟路
+> （成员名单是并集），不再各自独立成条；语义不同、碰巧共享部分成员的
+> 情况，因为归一化四元组不相等，自然保持独立熟路，不需要额外的子集/
+> 超集判断规则。
+>
+> **实时形成路径整体废弃**：步骤 4「匹配器契约」原先描述的
+> `resolveBundleForAmbiguousHits`/`formCandidateBundle`——ActivationLink
+> 匹配出现跨 unit 歧义、且没有已有熟路覆盖时，从这次观测直接新建候选
+> 熟路——已删除。"两条 Link 各自独立命中同一问题、但从未在同一条 trace
+> 里共同出现过"是比"直接联合引用"更弱的信号（可能是互相替代关系，不是
+> 联合必需），不再直接采信为合并证据；这种歧义现在只是单纯落回慢路径，
+> 真正的联合引用证据留给慢路径产生的真实 confident trace 通过上面的
+> 「增量累积」步骤自然沉淀。详见步骤 4 的改判说明与 `docs/impl/v1/
+> retrieval.md` 步骤 2。
+>
+> 以下原文保留作对照历史演进，不代表当前实现。
 
 **身份判断方式（2026-08-11 修订，取代此前"先按四元组分组、分组指纹即身份"的口径）**：这类问题该不该算作同一条已有熟路，不再靠两次算出来的归一化四元组分组指纹是否相等来判断——四元组解析本身会漂移（同一个问题措辞不同可能解析出不同的四元组，这在 `subject_jitter_v1_disposition` 等既有记录里已确认），拿它当身份判断标准，会重蹈 `activation_links` 早年 `UNIQUE(question_terms, point_id)` 因问法抖动无法收敛的覆辙。改为逐条 trace 先尝试匹配已有熟路，匹配不上的才走分组去发现全新熟路：
 
@@ -423,7 +496,21 @@ ActivationLink 偶然同时命中、临时拼接的场景；bundle 的成员组�
 
 本步骤是**契约**，不是实现指令——retrieval.md 的检索总流程、优先级顺序、`EvidenceSet.path_type` 取值范围等实际改动，留给 retrieval.md 自己的修订去做，本文档不代为修改该文档。
 
-**2026-08-12 部分实现，修正上面的命中优先级预期**：实际接入点不是"Wiki 直答 → 熟路 Match → 单链接 Match → 慢路径"这个独立优先级层，而是**只在 ActivationLink 的 Match 结果出现跨 unit 歧义时才 consult Bundle**（`retrieval/fastpath_helpers.go` `resolveBundleForAmbiguousHits`，见 `retrieval.md` 步骤 2 对应记录）——Bundle 不是一个独立于单链接之前、优先尝试的命中层，而是单链接歧义时的兜底/仲裁：多个 verified Bundle 同时命中时用 KPN `contradicts` 判冲突（冲突就还是回落慢路径，不合并），不冲突则合并核心成员继续走快路径；一个 verified Bundle 都没覆盖时，从这次观测实时新建/加强一条 candidate Bundle（不是等 Study 离线聚类），仍回落慢路径。这个范围比本步骤原先设想的"Bundle 优先于单链接"要窄，只解决了"多链接歧义时怎么办"这一个入口，不是完整的阶段 2——`bundle_hits[]` 独立字段、Trace 的 `bundle_success`/`bundle_failure`、Bundle 自己的 `adopt_count`/`known_question_terms`/`auto_promote`（本文档步骤 5/6 契约）仍未实现，命中优先级的完整口径待这些补齐后再回来核对是否需要采纳"Bundle 优先于单链接"这个原始设想。
+**2026-08-12 部分实现，修正上面的命中优先级预期（历史记录，已被下方 2026-08-20 改判取代）**：实际接入点不是"Wiki 直答 → 熟路 Match → 单链接 Match → 慢路径"这个独立优先级层，而是**只在 ActivationLink 的 Match 结果出现跨 unit 歧义时才 consult Bundle**（`retrieval/fastpath_helpers.go` `resolveBundleForAmbiguousHits`，见 `retrieval.md` 步骤 2 对应记录）——Bundle 不是一个独立于单链接之前、优先尝试的命中层，而是单链接歧义时的兜底/仲裁：多个 verified Bundle 同时命中时用 KPN `contradicts` 判冲突（冲突就还是回落慢路径，不合并），不冲突则合并核心成员继续走快路径；一个 verified Bundle 都没覆盖时，从这次观测实时新建/加强一条 candidate Bundle（不是等 Study 离线聚类），仍回落慢路径。这个范围比本步骤原先设想的"Bundle 优先于单链接"要窄，只解决了"多链接歧义时怎么办"这一个入口，不是完整的阶段 2——`bundle_hits[]` 独立字段、Trace 的 `bundle_success`/`bundle_failure`、Bundle 自己的 `adopt_count`/`known_question_terms`/`auto_promote`（本文档步骤 5/6 契约）仍未实现，命中优先级的完整口径待这些补齐后再回来核对是否需要采纳"Bundle 优先于单链接"这个原始设想。
+
+**2026-08-20 改判，取代上面 2026-08-12 记录的接入方式**：Bundle Match 不再等 ActivationLink 出现跨 unit 歧义才被 consult，而是跟 Link Match 并行主动跑（`retrieval/service.go` `tryFastPath`，`sync.WaitGroup` 并行发起 `activationSvc.Match` 与 `resolveBundleCandidate`，同 `RetrieveWithProgress` 里 Wiki∥ActivationLink 已有的并行写法）。命中优先级：
+
+```text
+Link 解析出单一 unit（不歧义）且 Bundle 也命中 → 按连续置信度
+  （tier 优先，同 tier 比 mean）取更高的一方；
+Link 出现跨 unit 歧义且 Bundle 命中 → 用 Bundle（Bundle 命中的多点候选
+  天然覆盖跨 unit 场景，不再是"歧义兜底"，是它本该发挥作用的场景）；
+Link 出现跨 unit 歧义且 Bundle 未命中 → 直接落慢路径，不再调用任何
+  Bundle 生成的副作用函数（`formCandidateBundle` 已删除，见下）；
+只有一侧命中 → 用命中的一侧；都未命中 → 落慢路径（不变）。
+```
+
+**实时候选生成（`formCandidateBundle`）整体删除**：此前"ActivationLink 跨 unit 歧义、且无 verified Bundle 覆盖时，从这次观测实时新建/加强一条 candidate Bundle"这条路径已删除。理由是它把"两条 Link 各自独立命中同一问题（未必真的一起被引用过）"当成了合并证据——这是较弱的信号，可能是互相替代关系（各自单独就够用），不是联合必需，不该直接采信。现在这种歧义单纯落回慢路径；慢路径真正产生的联合引用（`direct_point_ids` 同时含多个点的 confident trace），会通过步骤 2「增量累积」自然沉淀为生成证据，不需要在歧义发生的当下就急于下结论。`resolveBundleForAmbiguousHits` 相应重命名为 `resolveBundleCandidate`（不再要求调用方先判定歧义，独立可调用），`sameMemberSet` 一并删除。详见 `docs/design/activation-bundle.md`「10. 改判」、`docs/impl/v1/retrieval.md` 步骤 2。
 
 ### 步骤 5：Trace 信号回写契约（预期，供 trace.md 未来接入）
 
@@ -460,6 +547,16 @@ ActivationLink 偶然同时命中、临时拼接的场景；bundle 的成员组�
 > 涨过服务门槛，是它自己的 `success_count`/`failure_count` 持续更新的自然
 > 结果，不需要步骤 2 显影扫描帮它"转正"，见前一节「组装时的用法」。
 同样是契约，不是对 `trace.md` 的代为修改。
+
+> **2026-08-20 落地，取代本步骤"契约，不是实现"的措辞——已实际实现，与上面契约的具体形状有三处出入，逐条说明**：
+>
+> 1. **不新增 `bundle_success`/`bundle_failure` 事件类型**，复用已有的 `activation_success`/`activation_failure`（`trace.generateBundleActivationEvents`），payload 用 `bundle_id`/`member_point_ids` 取代 `link_id`，与 ActivationLink 的事件并列写入同一张 `learning_events` 表，不单独开一套审计事件——理由是这两类事件在"是否被引用"这件事上语义等价，拆成两套事件类型只会让审计浏览多一层要合并的地方，没有额外信息量。
+> 2. **触发轴的"这次命中该不该被信任"不是比例判定（`cited_ratio ≥ bundle_core_ratio_min`），而是"成员里至少一个被引用（direct 或 supporting）就算这次命中成立"**——`bundle_core_ratio_min` 这个键本身在「成员置信度」一节的 2026-08-13 编注里已经降级为"新成员种子值的过渡期回退参考"，不再是判定用阈值，这里延续同一个收窄：触发轴回答的是"该不该认出这条熟路"，只要这次命中确实起到了作用（哪怕只有一个成员真正被用上），就是有效验证，不需要再叠加一个比例门槛去二次判断"用得够不够多"——用得多不多是每个成员各自的 `success_count`/`failure_count` 自己会收敛出来的事，不需要触发轴重复判断一遍。
+> 3. **每个成员的判定信号跟 Link 用的是同一份"是否被 direct/supporting 引用"标准**（`trace.generateBundleActivationEvents` 内联 `citedFactIDsByEvidence` 复用 `generateActivationEvents` 已有的判定逻辑），不是"进核/进路肩"的独立含义——这与「成员置信度」一节 2026-08-13 编注描述的方向一致，只是把"逐个调用 `bundle.RecordMemberOutcome`"这句话真正落到了代码里（`activation.Service.RecordMemberOutcome` 转发 `Store.RecordMemberOutcome`）。
+>
+> 实际调用链：`retrieval.tryFastPath` 把这轮实际解析出的 Bundle 命中（含匹配到的触发条件四元组、实际用到的成员点位）通过新增的 `EvidenceSet.BundleHits` 字段（镜像已有的 `ActivationHits`）带出，`trace.ProcessTrace` 在 `generateActivationEvents` 之后紧接着跑 `generateBundleActivationEvents`，对每个 `BundleHit` 写事件并调用 `activation.Service.RecordBundleOutcome`（触发轴，新增，镜像 `RecordOutcome`）与 `RecordMemberOutcome`（成员轴，步骤 1 已有）。
+>
+> **一个连带修复，不属于本步骤契约范围但阻塞了它生效**：Study 步骤 2「显影扫描」原先每轮重算后用 `UpdateBundleMembers` 整体覆盖 `member_point_ids`/`observed_conditions`，任何刚被上面这条链路写入的 success/failure 计数撑不过下一次显影扫描就会被覆盖清零。新增 `Store.RefreshBundleMembers` 改为合并写——已存在的触发条件/成员保留其累积计数，只有新发现的候选才会被当作新条目插入。步骤 2 相应地把调用点从 `UpdateBundleMembers` 换成 `RefreshBundleMembers`。详见 `docs/design/activation-bundle.md`「11. 验证环节的实际接线」。
 
 ### 步骤 6：只读观测 API
 
@@ -559,3 +656,5 @@ Retrieval / Trace：阶段 2 的实际接入是这两个模块各自的后续修
     bundle_success/bundle_failure 信号写入落地，消费方按本规格实现即可，
     不需要另行设计。
 ```
+
+**2026-08-20 阶段 2 验证环节落地**（Match 契约本身在此之前已单独落地，见步骤 4 记录）：触发轴/成员轴的信号写入均已实现（步骤 5 2026-08-20 编注给出具体形状，与本节列出的原始验收描述有出入：不新增 `bundle_success`/`bundle_failure` 事件类型，复用 `activation_success`/`activation_failure`；触发轴判定不是引用比例阈值，是"至少一个成员被引用"）；`RefreshBundleMembers` 已修复 Study 显影扫描覆盖清零实时累积计数的问题；`go build`/`go vet`/`go test ./... -count=1` 全绿，新增单测覆盖：`internal/activation/bundle_store_test.go`（`RecordBundleOutcome` 精确定位、`RefreshBundleMembers` 合并保留计数）、`internal/study/bundle_scan_test.go`（两轮显影扫描间的实时计数存活）、`internal/trace/confidence_wiring_test.go`（`generateBundleActivationEvents` 双轴调用与成功/失败判定）、`internal/retrieval/fastpath_test.go`（`EvidenceSet.BundleHits` 正确写入）。

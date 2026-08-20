@@ -32,9 +32,9 @@ Conflict 子图」）；编译内部仍是两次 LLM 调用（analyze 产出论�
 `docs/impl/v1/wiki-generation.md`（同样已按本次改造重写）。
 
 检索侧不再有四元组精确匹配（`matchFourTupleEntry` 已删除），改为一次 LLM
-判断问题主要涉及哪个/哪些已发布的 Concept/Fact 词条（`matchEntriesByConcept
-Recognition`），命中后走与此前完全相同的下游流程（sufficient 判断、
-citation 白名单校验）。
+判断问题主要对应哪个/哪些已发布页面（`matchPagesByRecognition`，2026-08-20
+改判判断依据从 entries 换成页面自身字段，见「检索接入」），命中后走
+`answerFromPage` 的覆盖度判断与 citation 白名单校验。
 
 Claim 双产物与防固化要素补齐属 V2（见 `docs/impl/v2/readme.md`）；复杂问题的
 拆解与子结论聚合属深想路径 / Working Model，是 V3 能力。「主题页展开成员 +
@@ -389,39 +389,93 @@ mean(page) = (synthesis_success_count+1) /
 检索总流程与"直答候选采集"细节见 `retrieval.md`；这里只记 Wiki 侧的三个
 候选入口（`gatherDirectAnswerCandidates`，均不看 `page_type`——只有一种）：
 
+**2026-08-20 改判，取代下面三个入口原先"拿 entries 表的 name/description
+做判断"的口径**：entries 是编译时用来挑选材料的词条导航（`RecognizeEntries`/
+`ListEntriesForRecognition` 服务的是"生成弹窗选哪些材料"这件事），跟编译
+产出后页面自己的 title/summary/aliases/trigger_questions 是两回事，实测
+中会明显脱节——同一份出差/考勤材料，entry 叫"考勤管理制度审批流程"，编译
+出的页面标题却是"出差注意事项"；用词条识别一个"出差有哪些注意事项"的问题，
+LLM 大概率不会把它关联到一个字面上讲审批流程的词条。检索匹配要回答的问题
+是"这个问题该由哪个已经沉淀好的页面来答"，判断依据理应是页面自己沉淀下来
+的样子，而不是它编译时用来导航材料的入口——继续用词条身份匹配，Wiki 直答
+就不是"利用已沉淀知识的快捷路径"，而是变相把入口从"问题"又绕回"重新做一次
+词条识别"，退化成跟慢路径一样重的判断。因此候选入口 1、3 均改为判断依据
+页面自身字段，入口 1 从 entries 改判为 wiki_pages。
+
 ```text
-1. Concept/Fact 识别入口（新增，取代原四元组精确匹配）：
-   matchEntriesByConceptRecognition(question, domainIDs) 调用一次 LLM
-   （config/prompts/wiki_entry_recognize.md），输入问题原文与候选 entry
-   列表（domainIDs 限定范围，来自 retrieval.QueryContext.DomainIDs；为空
-   时不做 domain 过滤，候选是全部 domain 的 entries；候选列表为空时直接
-   跳过、不调 LLM），输出该问题主要涉及的 entry_id 数组；命中 entry_id 后
-   经 wiki_page_entries 反查其全部关联 page_id，逐个校验 status=published
-   才作为候选（未发布/草稿/归档静默丢弃）。
+1. Wiki 页面识别入口（判断依据从 entries 改为已发布页面自身）：
+   matchPagesByRecognition(question, domainIDs) 调用一次 LLM
+   （config/prompts/wiki_page_recognize.md），输入问题原文与候选页面
+   列表——每个候选渲染 page_id/title/summary/aliases/trigger_questions
+   （store.ListPublishedPagesForRecognition，domainIDs 限定范围，来自
+   retrieval.QueryContext.DomainIDs，经页面的 entry_id 反查 entries.
+   domain_id 做 join 过滤；为空时不做 domain 过滤；候选列表为空时直接
+   跳过、不调 LLM），输出该问题主要对应的 page_id 数组，逐个校验
+   status=published 才作为候选（理论上查询本身已限定 published，这里是
+   防御性复核）。
 
 2. 词法入口：对问题分词后查询 wiki index（title/content/aliases/
    trigger_questions 均参与打分），取分数 ≥ retrieval.wiki_min_score 的
    页面按分数降序。
 
-3. 概念入口：问题（去除空白后）字面包含已发布页面的概念名称（词法包含，
-   不调 LLM、不分词匹配），命中即入候选。
+3. 标题入口（原"概念入口"，判断依据从 entries.name 改为 wiki_pages.title）：
+   问题（去除空白后）字面包含已发布页面自身的标题（词法包含，不调 LLM、
+   不分词匹配），命中即入候选。
 ```
 
-三入口合并去重，优先级：Concept/Fact 识别命中 > 词法命中（按分数降序）>
-仅概念名包含命中，截取前 `retrieval.wiki_max_candidates` 个。**不再有
-"命中主题页则展开 contains 成员"这一步**——单层化后没有"主题页聚合概念页"
-这回事，每个候选本身就是可直接作答的页面。`gatherDirectAnswerCandidates`
-的骨架返回值（原用于慢路径骨架注入）已随本次改造整体删除，`TryDirectAnswer`
+三入口合并去重，优先级：页面识别命中 > 词法命中（按分数降序）> 仅标题
+包含命中，截取前 `retrieval.wiki_max_candidates` 个。**不再有"命中主题页
+则展开 contains 成员"这一步**——单层化后没有"主题页聚合概念页"这回事，每
+个候选本身就是可直接作答的页面。`gatherDirectAnswerCandidates` 的骨架
+返回值（原用于慢路径骨架注入）已随本次改造整体删除，`TryDirectAnswer`
 签名不再传出 skeleton 相关信息，见 `retrieval.md`。
+
+`RecognizeEntries`/`ListEntriesForRecognition`（entries 表，config/prompts/
+wiki_entry_recognize.md）本身不受影响、继续保留——它服务的是编译时的材料
+导航（`POST /wiki/entries/recognize` 生成弹窗词条匹配），跟检索时判断"这个
+问题该由哪个页面回答"是两件不同的事，只是这次改判之前误共用了同一套判断
+依据。
 
 `TryDirectAnswer(ctx, question, domainIDs, minScore, maxCandidates)` 签名
 已去掉原来的 `subject, intent, audience, constraint` 四元组参数，改传
 `question` 原文 + `domainIDs`——四元组入口本身连同这些参数一起从签名与
 `internal/retrieval/service.go` 调用点清除。
 
-候选页面命中后的下游处理（`answerFromPage`：`config/prompts/answer_wiki.md`
-判断 sufficient、citation 按该页 `source_point_ids` 白名单过滤）**不变**，
-这是本次改造明确保留的部分。
+候选页面命中后的下游处理：`answerFromPage`（`config/prompts/answer_wiki.md`）
+判断该页对问题的覆盖程度，citation 按该页 `source_point_ids` 白名单过滤。
+
+**2026-08-20 改判**：`answer_wiki.md` 原先只有一个 `sufficient` 布尔位，模型
+只判断"能不能答"，实测会倾向于只答上它抓到的第一个相关片段就判 `true`——
+即便页面正文其实还有其他相关小节完全没被覆盖（同一篇"出差注意事项"页面，
+交通/住宿/考勤都在正文里，模型却只答了伙食补贴一节），用户看到的答案显得
+"这就是全部"，实际只是部分覆盖。改为两步：模型先显式判断 `coverage`
+（`full`/`partial`/`none`），只有 `full` 时才生成 `content`；`partial`/`none`
+一律留空、视为未命中，交回 `TryDirectAnswer` 换下一候选或最终落慢路径，
+不用一个只覆盖部分的页面拼凑答案。`sufficient` 不再是模型输出的一部分，
+改为 Go 侧（`answerFromPage`）直接用 `coverage == "full"` 派生，不信任模型
+自己给出的、可能和 `coverage` 不一致的组合。`content` 生成规则也从"照抄
+原文"改为要求模型先在正文里找相关部分，再围绕问题归纳总结，且要覆盖正文
+中所有相关小节（不能只答其中一节就停）。
+
+同批改判：`content` 正文里每句实际引用了某个知识点的话，句末要紧跟着标注
+对应的 `[point_id]`（跟 Wiki 页面正文自己的标注方式一致），不能只把
+point_id 塞进 `citations` 数组、正文里却看不出引用位置——前端 `linkifyEvidence`
+本来就会把正文里出现的 `[point_id]` 原地转成可点击的证据链接，只是这条
+prompt 之前从没要求模型往正文里放，导致引用只能靠回答末尾一个平铺的
+"引用证据"列表兜底，看不出每条证据分别支撑了哪句话。`internal/retrieval/
+service.go` 新增 `buildWikiEvidence`：把 Wiki 答案引用的 point_id 解析成
+可在证据抽屉里展示的 `Evidence`（`FactID` 直接取 point_id 本身，而不是
+像挖掘证据那样现铸一个随机 uuid），此前 Wiki 路径的 `DirectEvidence`/
+`Supporting` 恒为空数组，点击"证据X"打开的抽屉找不到对应条目、内容空白，
+是同一批发现的缺陷，一并修复。
+
+**同日追加**：`answer_short.md`/`answer_deep.md`（MVP 全/快路径的生成
+prompt）有完全相同的结构性缺口——同样只要求模型把 fact_id 填进 `citations`
+数组，没有要求正文内联标注，前端的 inline linkify 机制对这两条 prompt 同样
+是摆设。用户确认后已同步改判，两条 prompt 都补了"content 正文里引用证据的
+那句话句末要标注对应的 [fact_id]"的规则，措辞与 answer_wiki.md 一致；不涉及
+代码改动，前端 `linkifyEvidence`/证据抽屉机制本来就支持任意路径的内联标注，
+这次只是三条生成 prompt 补齐了没被要求过的那部分行为。
 
 ## 写作草稿（不受本次改造影响）
 

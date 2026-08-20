@@ -168,6 +168,56 @@ func (s *Store) ConfidentTraceQuadruples(pointID string) ([]ConfidentTraceQuadru
 	return out, rows.Err()
 }
 
+// DomainIDsForPoint 经 knowledge_points.source_id 反查 point 所属的
+// domain_id（用于喂给 activation.TupleNormalizer.Normalize，其按 domain
+// 分域查 question_tuple_norms，docs/impl/v1/study.md「归一化接入构建阶段」）。
+// 一个 point 恰好落在一个 source，通常对应一个 domain；source 未配置
+// domain_id 时返回空切片，不报错。
+func (s *Store) DomainIDsForPoint(pointID string) ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT src.domain_id
+		FROM knowledge_points kp
+		JOIN sources src ON kp.source_id = src.source_id
+		WHERE kp.point_id = ? AND src.domain_id IS NOT NULL`, pointID)
+	if err != nil {
+		return nil, fmt.Errorf("study store: domain ids for point: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var domainID string
+		if err := rows.Scan(&domainID); err != nil {
+			return nil, fmt.Errorf("study store: domain ids for point scan: %w", err)
+		}
+		out = append(out, domainID)
+	}
+	return out, rows.Err()
+}
+
+// DomainIDsForPoints unions DomainIDsForPoint across multiple points — used
+// by Bundle generation (bundle_scan.go) to scope TupleNormalizer.Normalize
+// for a multi-point trace, where any of the cited points' domains is a valid
+// scope (docs/impl/v1/activation-bundle.md 步骤 4).
+func (s *Store) DomainIDsForPoints(pointIDs []string) ([]string, error) {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, pid := range pointIDs {
+		ids, err := s.DomainIDsForPoint(pid)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range ids {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
 // ConfidentTraceFieldValues returns the distinct raw (un-normalized)
 // intent/audience/constraint_text values across every confident trace that
 // actually cited pointID. Retained for tests / diagnostics; Match induction
@@ -1401,18 +1451,19 @@ type BundleScanTraceRow struct {
 	DirectPointIDs []string
 }
 
-// BundleScanTraces implements docs/impl/v1/activation-bundle.md 步骤 4 第 1 步
-// 的取数：窗口内 confident 且 direct_point_ids 非空的 trace.
-func (s *Store) BundleScanTraces(windowDays int) ([]BundleScanTraceRow, error) {
+// scanMultiPointConfidentTraces runs extraSQL (appended after the base
+// WHERE clause) against confident, direct_point_ids≥2 traces — shared by
+// NewMultiPointConfidentTraces (incremental, dedup-filtered) and
+// AllMultiPointConfidentTraces (full history, for member-roster
+// reconstruction), so the "confident + ≥2 points" filter lives in one place.
+func (s *Store) scanMultiPointConfidentTraces(extraSQL string, args ...interface{}) ([]BundleScanTraceRow, error) {
 	rows, err := s.db.Query(`
 		SELECT trace_id, subject, intent, audience, constraint_text, question, created_at, direct_point_ids
 		FROM traces
-		WHERE created_at >= datetime('now', ?)
-		  AND retrieval_quality = 'confident'
-		  AND direct_point_ids != '[]'`,
-		fmt.Sprintf("-%d days", windowDays))
+		WHERE retrieval_quality = 'confident'
+		  AND direct_point_ids != '[]'`+extraSQL, args...)
 	if err != nil {
-		return nil, fmt.Errorf("study store: bundle scan traces: %w", err)
+		return nil, fmt.Errorf("study store: scan multi-point confident traces: %w", err)
 	}
 	defer rows.Close()
 
@@ -1430,6 +1481,101 @@ func (s *Store) BundleScanTraces(windowDays int) ([]BundleScanTraceRow, error) {
 			// 熟路是"一组知识点合在一起"的信号——单点问题继续走
 			// ActivationLink 最短路径（docs/impl/v1/activation-bundle.md
 			// 设计依据），不参与聚类.
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// NewMultiPointConfidentTraces implements docs/impl/v1/activation-bundle.md
+// 步骤 4 第 1 步（2026-08-20 重设计）的增量取数：confident 且
+// direct_point_ids≥2、且尚未被计入 bundle_trigger_cooccurrence（不在
+// cooccurrence_bundle_dedup 里）的 trace——持久累积语义，不是滚动时间窗口
+// （跟 question_kp_cooccurrence 的累积方式对齐，理由见 study.md「归一化四元
+// 组累积」）。
+func (s *Store) NewMultiPointConfidentTraces() ([]BundleScanTraceRow, error) {
+	return s.scanMultiPointConfidentTraces(`
+		  AND trace_id NOT IN (SELECT trace_id FROM cooccurrence_bundle_dedup)`)
+}
+
+// AllMultiPointConfidentTraces returns every confident, direct_point_ids≥2
+// trace regardless of dedup state — used by
+// buildBundleObservedConditionsAndMembers to reconstruct a Bundle's full
+// member roster (union of point_ids across every trace whose normalized
+// four-tuple matches the Bundle's canonical tuple), mirroring how
+// buildObservedConditions always recomputes fresh from
+// ConfidentTraceQuadruples rather than caching incrementally.
+func (s *Store) AllMultiPointConfidentTraces() ([]BundleScanTraceRow, error) {
+	return s.scanMultiPointConfidentTraces("")
+}
+
+// MarkBundleDedup records trace_ids as folded into bundle_trigger_cooccurrence
+// so a later Study tick doesn't double-count them.
+func (s *Store) MarkBundleDedup(traceIDs []string) error {
+	for _, id := range traceIDs {
+		if _, err := s.db.Exec(`INSERT OR IGNORE INTO cooccurrence_bundle_dedup (trace_id) VALUES (?)`, id); err != nil {
+			return fmt.Errorf("study store: mark bundle dedup: %w", err)
+		}
+	}
+	return nil
+}
+
+// UpsertBundleTriggerCooccurrence increments the (domain, canonical tuple)
+// bookkeeping row bundle_trigger_cooccurrence — the Bundle-side analogue of
+// UpdateCooccurrence (trace/store.go) for ActivationLink, keyed by
+// normalized four-tuple instead of point_id (docs/impl/v1/
+// activation-bundle.md 步骤 4).
+func (s *Store) UpsertBundleTriggerCooccurrence(domainID, subject, intent, audience, constraint string) error {
+	_, err := s.db.Exec(`INSERT INTO bundle_trigger_cooccurrence
+		(trigger_id, domain_id, subject, intent, audience, constraint_text, hit_count, confident_count, last_seen_at)
+		VALUES (?, ?, ?, ?, ?, ?, 1, 1, CURRENT_TIMESTAMP)
+		ON CONFLICT(domain_id, subject, intent, audience, constraint_text) DO UPDATE SET
+			hit_count = hit_count + 1,
+			confident_count = confident_count + 1,
+			last_seen_at = CURRENT_TIMESTAMP`,
+		uuid.New().String(), domainID, subject, intent, audience, constraint)
+	if err != nil {
+		return fmt.Errorf("study store: upsert bundle trigger cooccurrence: %w", err)
+	}
+	return nil
+}
+
+// BundleTriggerCandidateRow is one (domain, canonical tuple) whose
+// accumulated bundle_trigger_cooccurrence evidence crossed the creation gate.
+type BundleTriggerCandidateRow struct {
+	DomainID   string
+	Subject    string
+	Intent     string
+	Audience   string
+	Constraint string
+}
+
+// ScanBundleTriggerCandidates mirrors ScanCandidates for ActivationLink：
+// SUM(confident_count)/SUM(hit_count) per (domain, canonical tuple), same
+// Beta 均值/宽度公式，同一组 study.create_confidence_min/create_width_max
+// 门槛（不新增配置，docs/impl/v1/study.md「归一化四元组累积」）。
+func (s *Store) ScanBundleTriggerCandidates(createConfidenceMin, createWidthMax float64) ([]BundleTriggerCandidateRow, error) {
+	rows, err := s.db.Query(`
+		SELECT domain_id, subject, intent, audience, constraint_text,
+			SUM(confident_count), SUM(hit_count)
+		FROM bundle_trigger_cooccurrence
+		GROUP BY domain_id, subject, intent, audience, constraint_text`)
+	if err != nil {
+		return nil, fmt.Errorf("study store: scan bundle trigger candidates: %w", err)
+	}
+	defer rows.Close()
+
+	var out []BundleTriggerCandidateRow
+	for rows.Next() {
+		var r BundleTriggerCandidateRow
+		var confidentCount, hitCount int
+		if err := rows.Scan(&r.DomainID, &r.Subject, &r.Intent, &r.Audience, &r.Constraint, &confidentCount, &hitCount); err != nil {
+			return nil, fmt.Errorf("study store: scan bundle trigger candidate row: %w", err)
+		}
+		meanPre := activation.ConditionMean(confidentCount, hitCount-confidentCount)
+		widthPre := conditionWidth(meanPre, confidentCount, hitCount-confidentCount)
+		if meanPre < createConfidenceMin || widthPre > createWidthMax {
 			continue
 		}
 		out = append(out, r)

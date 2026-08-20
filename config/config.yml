@@ -107,9 +107,6 @@ retrieval:
   question_tuple_norm_enabled:      true  # 总开关，关闭时 tryFastPath 行为与改动前完全一致
   question_tuple_norm_local_sim_min: 0.8   # Tier2 本地词集 Jaccard 相似度命中阈值（0-1）
   question_tuple_norm_idle_days:    90     # question_tuple_norms 行超过该天数未命中由 Study 周期清理
-  vector_match_enabled:             false  # Tier2.5 向量早筛开关，独立于总开关，二者都为 true 才生效
-  vector_model_dir:                 "./models/bge-small-zh-v1.5"     # goformer 加载 embedding 模型权重的目录（HuggingFace safetensors），为空则不启用
-  vector_match_sim_min:             0.75   # 低于该余弦相似度直接判未命中、跳过 LLM；达到或高于仍需进入 LLM 判断（只拒绝，不单独确认命中）
 
   # ActivationLink/Bundle 连续置信度（2026-08-13 新增，取代 study 节原
   # auto_promote/promote_*/weaken_*/reverify_* — 详见 docs/impl/v1/activation.md）
@@ -121,7 +118,7 @@ retrieval:
 
 # Evidence 模块挖掘
 evidence:
-  enabled:              true
+  enabled:              false
   batch_max_chars:      6000   # 单次 LLM 调用携带的 KU 正文字符数上限（rune）
   max_fragments_per_ku: 5      # 单 KU 最多保留片段数（超出按输出顺序截断）
   min_fragment_chars:   8      # 短于该长度的片段丢弃（无信息量）
@@ -224,13 +221,13 @@ study:
   complexity_min_questions:    3     # 条件组内问答数下限，低于此不出报告项
 
   # —— ActivationBundle（熟路）阶段 1（docs/impl/v1/activation-bundle.md）——
-  # 阶段 1 只做存储/匹配/显影扫描/只读 API，不含 Retrieval 消费与 Trace 回写
-  # （阶段 2），因此 promote/weaken/reverify 相关阈值当前只有 lifecycle 驱动
-  # 的降权路径在用，其余留给阶段 2 接入 bundle_success/bundle_failure 事件后生效。
-  bundle_core_ratio_min:           0.5  # 核心/全部成员比例下限，过宽写报告不建 bundle
-  bundle_cluster_min_questions:    3    # 归一化四元组聚类：不同问题数下限
-  bundle_cluster_min_days_active:  7    # 且跨度天数下限
-  bundle_core_size_max:            8    # 核心成员数上限，超出视为核过宽
+  # 2026-08-20 重设计：生成门槛复用上面的 create_confidence_min/
+  # create_width_max（不新增配置），核心/路肩完全由成员自己的置信度轴派生；
+  # bundle_core_ratio_min/bundle_cluster_min_questions/
+  # bundle_cluster_min_days_active/bundle_core_size_max 四个键随旧的四元组
+  # 聚类生成机制一并删除。promote/weaken/reverify 相关阈值当前只有
+  # lifecycle 驱动的降权路径在用，其余留给阶段 2 接入
+  # bundle_success/bundle_failure 事件后生效。
   bundle_promote_success_min:      5    # 阶段 2 预留：candidate→verified 窗口成功数下限
   bundle_promote_distinct_min:     4    # 阶段 2 预留：且来自 ≥ N 个不同问题
   bundle_weaken_failure_min:       3    # 阶段 2 预留：verified→weakened 窗口失败数下限

@@ -33,6 +33,7 @@ type EvidenceSet struct {
 	Path           string             `json:"path"`
 	PathType       string             `json:"path_type"`
 	ActivationHits []ActivationHit    `json:"activation_hits"`
+	BundleHits     []BundleHit        `json:"bundle_hits,omitempty"`
 	DirectEvidence []Evidence         `json:"direct_evidence"`
 	Supporting     []Evidence         `json:"supporting"`
 	Conflicts      []ConflictEvidence `json:"conflicts,omitempty"`
@@ -96,6 +97,39 @@ type ActivationHit struct {
 	Constraint   string `json:"constraint,omitempty"`
 }
 
+// BundleHit is an ActivationBundle that matched during the activation layer
+// (docs/impl/v1/activation-bundle.md 步骤 2 Match()), carried through to
+// Trace so it can grade bundle_success/bundle_failure per bundle
+// (docs/impl/v1/activation-bundle.md「验证」, 2026-08-20 阶段 2 接线) — the
+// Bundle-side mirror of ActivationHit. Only bundles that actually resolved
+// this round's hits (usedBundleIDs in retrieval.tryFastPath) become a
+// BundleHit; a bundle that matched but lost to a higher-tier Link/Bundle
+// candidate never reaches Trace, same asymmetry Link already has (Match()
+// can return more candidates than resolveUnitsForPoints/resolveBundleCandidate
+// end up using).
+type BundleHit struct {
+	BundleID   string  `json:"bundle_id"`
+	MatchScore float64 `json:"match_score"`
+	MatchedBy  string  `json:"matched_by,omitempty"`
+	// Tier/AuditSampled/Subject/Intent/Audience/Constraint mirror
+	// ActivationHit's fields — the matched condition's own tier verdict and
+	// stored quadruple, populated from activation.BundleMatch at hit build
+	// time so Trace can call activation.Service.RecordBundleOutcome against
+	// the exact condition Match() scored.
+	Tier         string `json:"tier,omitempty"`
+	AuditSampled bool   `json:"audit_sampled,omitempty"`
+	Subject      string `json:"subject,omitempty"`
+	Intent       string `json:"intent,omitempty"`
+	Audience     string `json:"audience,omitempty"`
+	Constraint   string `json:"constraint,omitempty"`
+	// MemberPointIDs are the member point_ids this Bundle actually resolved
+	// into this round's hits — trace.recordBundleHitOutcome calls
+	// RecordMemberOutcome once per id here, not once per every member the
+	// Bundle happens to carry (a member the query didn't need to resolve
+	// isn't evidence either way for this particular trace).
+	MemberPointIDs []string `json:"member_point_ids,omitempty"`
+}
+
 type Evidence struct {
 	FactID      string          `json:"fact_id"`
 	CandidateID string          `json:"-"`
@@ -127,6 +161,7 @@ type Evidence struct {
 const (
 	OriginRerank       = "rerank"
 	OriginKPNExpansion = "kpn_expansion"
+	OriginWiki         = "wiki"
 )
 
 // RoleIrrelevant marks FilteredEvidence entries — candidates the rerank

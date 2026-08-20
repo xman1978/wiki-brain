@@ -85,7 +85,7 @@ func TestRetrieveWithProgress_BothWikiAndActivationHit_ActivationWins(t *testing
 	seedVerifiedLink(t, activationSvc, qTerms, "p1")
 
 	// Wiki side would also be sufficient if it were used.
-	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答：ax+b=0 是线性方程 [p1]","citations":["p1"],"sufficient":true}`})
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答：ax+b=0 是线性方程 [p1]","citations":["p1"],"coverage":"full"}`})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "kpn neighbor"}, {"candidate_id": "c2", "relevant": true, "analysis": "kpn neighbor"}]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
@@ -123,7 +123,7 @@ func TestRetrieveWithProgress_OnlyWikiHits_ActivationMisses_UsesWiki(t *testing.
 	svc, fake, _, _ := setupTestServiceWithWikiAndActivation(t)
 
 	question := "linear equations"
-	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答：ax+b=0 是线性方程 [p1]","citations":["p1"],"sufficient":true}`})
+	fake.SetResponse("answer_wiki.md", llm.FakeResponse{Output: `{"content":"回答：ax+b=0 是线性方程 [p1]","citations":["p1"],"coverage":"full"}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {

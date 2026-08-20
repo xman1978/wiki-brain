@@ -41,6 +41,12 @@ type ObservedConditionEnricher interface {
 	// old discrete promote/weaken state machine (docs/design/activation-convergence.md).
 	RecordOutcome(linkID, subject, intent, audience, constraint string, success bool, questionTerms string) error
 	RecordAuditOutcome(linkID, subject, intent, audience, constraint string, agree bool) error
+	// RecordBundleOutcome/RecordMemberOutcome (2026-08-20, docs/impl/v1/
+	// activation-bundle.md「验证」阶段 2 接线) mirror RecordOutcome for
+	// ActivationBundle's two axes — the Bundle-level trigger condition and
+	// each individual member point resolved into this round's hit.
+	RecordBundleOutcome(bundleID, subject, intent, audience, constraint string, success bool) error
+	RecordMemberOutcome(bundleID, pointID string, success bool) error
 }
 
 // conceptNullRatioMin is docs/impl/v1/concept-evolution.md's
@@ -161,6 +167,7 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 	slog.Debug("trace: saved", "trace_id", t.TraceID, "answer_id", r.AnswerID)
 
 	s.generateActivationEvents(t, r, grade)
+	s.generateBundleActivationEvents(t, r, grade)
 	s.updateCooccurrence(t, r)
 	s.enrichObservedConditions(t)
 	s.generateLearningEvents(t, r)
@@ -606,6 +613,107 @@ func (s *Service) generateActivationEvents(t *Trace, r *answer.AnswerResult, gra
 			slog.Error("trace: save activation_failure event failed", "trace_id", t.TraceID, "link_id", hit.LinkID, "error", err)
 		}
 		s.recordHitOutcome(t, hit, false)
+	}
+}
+
+// generateBundleActivationEvents mirrors generateActivationEvents for
+// ActivationBundle hits (docs/impl/v1/activation-bundle.md「验证」, 2026-08-20
+// 阶段 2 接线) — reuses the same activation_success/activation_failure event
+// types (no new event_type, per that document's decision) with bundle_id/
+// member_point_ids in the payload instead of link_id, so审计浏览不需要区分
+// 两套事件表. A Bundle hit's success is judged at the member level (was this
+// specific member point actually cited direct or supporting), same signal
+// Link uses per-point — the Bundle's own trigger-axis outcome is "did at
+// least one of its resolved members end up cited", not an independent
+// judgement, since the Bundle's whole reason for being consulted was to
+// resolve exactly those members for this question. No activation_gap
+// fallback here — that's Link's "activation layer found nothing" diagnostic,
+// orthogonal to whether a Bundle happened to also match.
+func (s *Service) generateBundleActivationEvents(t *Trace, r *answer.AnswerResult, grade gradeResult) {
+	if t.PathType == retrieval.PathTypeWiki {
+		return
+	}
+	var hits []retrieval.BundleHit
+	if r.EvidenceSet != nil {
+		hits = r.EvidenceSet.BundleHits
+	}
+	if len(hits) == 0 {
+		return
+	}
+
+	directSet := make(map[string]bool, len(grade.DirectPointIDs))
+	for _, pid := range grade.DirectPointIDs {
+		directSet[pid] = true
+	}
+	var supportingEvidence []retrieval.Evidence
+	if r.EvidenceSet != nil {
+		supportingEvidence = r.EvidenceSet.Supporting
+	}
+	supportingFactsByPoint := citedFactIDsByEvidence(supportingEvidence, r.Citations)
+
+	reason := "not_cited"
+	switch {
+	case r.Path == "error":
+		reason = "answer_error"
+	case t.RetrievalQuality == QualityGap:
+		reason = "answer_gap"
+	}
+
+	for _, hit := range hits {
+		bundleSuccess := false
+		for _, pid := range hit.MemberPointIDs {
+			// Same signal as generateActivationEvents' per-point judgment:
+			// directSet[pid] (from grade.DirectPointIDs) or a supporting-role
+			// citation. Deliberately not re-deriving from factsByPoint here —
+			// directSet already is that derivation (directCitedPointIDs), so
+			// checking both would be redundant, not additional evidence.
+			memberSuccess := directSet[pid] || len(supportingFactsByPoint[pid]) > 0
+			if memberSuccess {
+				bundleSuccess = true
+			}
+			s.recordBundleMemberOutcome(t, hit.BundleID, pid, memberSuccess)
+		}
+
+		eventType := "activation_failure"
+		fields := map[string]interface{}{
+			"bundle_id":        hit.BundleID,
+			"question_terms":   t.QuestionTerms,
+			"match_score":      hit.MatchScore,
+			"member_point_ids": nonNilStrings(hit.MemberPointIDs),
+		}
+		if bundleSuccess {
+			eventType = "activation_success"
+		} else {
+			fields["reason"] = reason
+		}
+		payload, _ := json.Marshal(fields)
+		slog.Debug("trace: generating bundle activation event", "trace_id", t.TraceID, "bundle_id", hit.BundleID, "event_type", eventType)
+		if _, err := s.store.SaveLearningEvent(t.TraceID, eventType, string(payload)); err != nil {
+			slog.Error("trace: save bundle activation event failed", "trace_id", t.TraceID, "bundle_id", hit.BundleID, "error", err)
+		}
+		s.recordBundleHitOutcome(t, hit, bundleSuccess)
+	}
+}
+
+// recordBundleHitOutcome calls activation.RecordBundleOutcome using the
+// hit's own stored quadruple — the Bundle-side mirror of recordHitOutcome.
+func (s *Service) recordBundleHitOutcome(t *Trace, hit retrieval.BundleHit, success bool) {
+	if s.enricher == nil {
+		return
+	}
+	if err := s.enricher.RecordBundleOutcome(hit.BundleID, hit.Subject, hit.Intent, hit.Audience, hit.Constraint, success); err != nil {
+		slog.Error("trace: record bundle outcome failed", "trace_id", t.TraceID, "bundle_id", hit.BundleID, "error", err)
+	}
+}
+
+// recordBundleMemberOutcome calls activation.RecordMemberOutcome for a single
+// member point resolved by a Bundle hit — the Bundle-side member axis.
+func (s *Service) recordBundleMemberOutcome(t *Trace, bundleID, pointID string, success bool) {
+	if s.enricher == nil {
+		return
+	}
+	if err := s.enricher.RecordMemberOutcome(bundleID, pointID, success); err != nil {
+		slog.Error("trace: record bundle member outcome failed", "trace_id", t.TraceID, "bundle_id", bundleID, "point_id", pointID, "error", err)
 	}
 }
 

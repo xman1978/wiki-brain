@@ -454,50 +454,14 @@ func TestRetrieve_SubjectJitter_MissesFastPath_FallsBackToFull(t *testing.T) {
 // falling back to slow path must have a side effect: a new candidate bundle
 // seeded from this observation, so future identical hits have Bundle
 // material to Match against.
-func TestRetrieve_FastPath_MultipleUnits_FormsCandidateBundle(t *testing.T) {
-	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
-
-	question := "什么是线性方程"
-	qTerms := text.Terms(text.Normalize(question))
-	seedVerifiedLink(t, activationSvc, qTerms, "p1")
-	seedVerifiedLink(t, activationSvc, qTerms, "p2")
-
-	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
-	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
-	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "x"}]}`})
-
-	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if es.PathType != PathTypeFull {
-		t.Fatalf("path_type = %q, want full (no bundle covers the ambiguous hit yet)", es.PathType)
-	}
-
-	bundles, err := activationSvc.Store().ListMatchableBundles()
-	if err != nil {
-		t.Fatalf("list bundles: %v", err)
-	}
-	if len(bundles) != 1 {
-		t.Fatalf("expected 1 candidate bundle formed from the ambiguous hit, got %d", len(bundles))
-	}
-	if bundles[0].Status != activation.BundleStatusCandidate {
-		t.Errorf("expected candidate status, got %s", bundles[0].Status)
-	}
-	got := append([]string(nil), bundles[0].MemberPointIDs()...)
-	sort.Strings(got)
-	if len(got) != 2 || got[0] != "p1" || got[1] != "p2" {
-		t.Errorf("expected member point ids [p1 p2], got %v", got)
-	}
-}
-
-// TestRetrieve_FastPath_RepeatedAmbiguousHit_ReinforcesExistingBundle_NoDuplicate:
-// the same ambiguous multi-unit hit occurring twice (no verified bundle in
-// between) must not create two candidate bundles — the second occurrence
-// appends an observed condition to the existing one instead.
-func TestRetrieve_FastPath_RepeatedAmbiguousHit_ReinforcesExistingBundle_NoDuplicate(t *testing.T) {
+// TestRetrieve_FastPath_MultipleUnits_NoBundleCovers_FallsBackWithoutSideEffect
+// 2026-08-20 重设计：两条 Link 各自独立命中同一问题、但从未在同一条 trace
+// 里共同被引用过，是比"直接联合引用"更弱的信号（可能是互相替代关系，不是
+// 联合必需）——不再直接拿来建候选 Bundle（docs/design/activation-bundle.md
+// 改判），只落回慢路径；即使这个歧义反复出现多次，也不应该产生任何 Bundle
+// 副作用，真正的联合引用证据留给 Study 从慢路径产生的真实 confident trace
+// 里正常显影（bundle_scan.go）。
+func TestRetrieve_FastPath_MultipleUnits_NoBundleCovers_FallsBackWithoutSideEffect(t *testing.T) {
 	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
 
 	question := "什么是线性方程"
@@ -512,8 +476,12 @@ func TestRetrieve_FastPath_RepeatedAmbiguousHit_ReinforcesExistingBundle_NoDupli
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "x"}]}`})
 
 	for i := 0; i < 2; i++ {
-		if _, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil); err != nil {
+		es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
+		if err != nil {
 			t.Fatalf("retrieve #%d: %v", i+1, err)
+		}
+		if es.PathType != PathTypeFull {
+			t.Fatalf("retrieve #%d: path_type = %q, want full (no bundle covers the ambiguous hit)", i+1, es.PathType)
 		}
 	}
 
@@ -521,14 +489,8 @@ func TestRetrieve_FastPath_RepeatedAmbiguousHit_ReinforcesExistingBundle_NoDupli
 	if err != nil {
 		t.Fatalf("list bundles: %v", err)
 	}
-	if len(bundles) != 1 {
-		t.Fatalf("expected exactly 1 bundle after two identical ambiguous hits, got %d", len(bundles))
-	}
-	if len(bundles[0].ObservedConditions) != 1 {
-		t.Fatalf("expected the identical repeat to merge into the same observed condition group, got %d groups", len(bundles[0].ObservedConditions))
-	}
-	if bundles[0].ObservedConditions[0].SuccessCount != 2 {
-		t.Errorf("expected success_count=2 after two identical hits, got %d", bundles[0].ObservedConditions[0].SuccessCount)
+	if len(bundles) != 0 {
+		t.Fatalf("expected no bundle to be formed from independently-matched Links, got %d: %+v", len(bundles), bundles)
 	}
 }
 
@@ -570,6 +532,65 @@ func TestRetrieve_FastPath_VerifiedBundleCoversAmbiguousHit_TakesFastPath(t *tes
 	}
 	if es.PathType != PathTypeFast {
 		t.Fatalf("path_type = %q, want fast (verified bundle covers the ambiguous multi-unit hit)", es.PathType)
+	}
+}
+
+// TestRetrieve_FastPath_BundleResolved_PopulatesBundleHits covers the
+// 2026-08-20「验证」阶段 2 接线: when a Bundle resolves the fast path, the
+// resulting EvidenceSet carries a BundleHits entry with the matched
+// condition's own quadruple and the member point_ids actually used — the
+// data trace.recordBundleHitOutcome needs to call RecordBundleOutcome/
+// RecordMemberOutcome. Before this change usedBundleIDs was computed but
+// discarded, so es.BundleHits was always empty.
+func TestRetrieve_FastPath_BundleResolved_PopulatesBundleHits(t *testing.T) {
+	svc, fake, _, activationSvc := setupTestServiceWithActivation(t)
+
+	question := "什么是线性方程"
+	qTerms := text.Terms(text.Normalize(question))
+	seedVerifiedLink(t, activationSvc, qTerms, "p1")
+	seedVerifiedLink(t, activationSvc, qTerms, "p2")
+
+	now := time.Now().UTC()
+	cond := activation.NormalizeObservedCondition("线性方程", "定义", "", "", qTerms, now)
+	bundle := &activation.ActivationBundle{
+		RepresentativeTerms: "线性方程 定义",
+		ObservedConditions:  []activation.ObservedCondition{cond},
+		Members:             []activation.BundleMember{{PointID: "p1"}, {PointID: "p2"}},
+	}
+	if err := activationSvc.Store().CreateBundle(bundle); err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	if err := activationSvc.Store().UpdateBundleStatus(bundle.BundleID, activation.StatusVerified); err != nil {
+		t.Fatalf("verify bundle: %v", err)
+	}
+
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "x"}]}`})
+
+	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{
+		Question: question,
+		Subject:  "线性方程",
+		Intent:   "定义",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if es.PathType != PathTypeFast {
+		t.Fatalf("path_type = %q, want fast", es.PathType)
+	}
+	if len(es.BundleHits) != 1 {
+		t.Fatalf("expected 1 BundleHit, got %d: %+v", len(es.BundleHits), es.BundleHits)
+	}
+	hit := es.BundleHits[0]
+	if hit.BundleID != bundle.BundleID {
+		t.Errorf("bundle_id = %q, want %q", hit.BundleID, bundle.BundleID)
+	}
+	if hit.Subject != "线性方程" || hit.Intent != "定义" {
+		t.Errorf("unexpected matched quadruple: %+v", hit)
+	}
+	gotMembers := append([]string(nil), hit.MemberPointIDs...)
+	sort.Strings(gotMembers)
+	if len(gotMembers) != 2 || gotMembers[0] != "p1" || gotMembers[1] != "p2" {
+		t.Errorf("member_point_ids = %v, want [p1 p2]", hit.MemberPointIDs)
 	}
 }
 

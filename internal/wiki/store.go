@@ -981,41 +981,6 @@ func (s *Store) GetSourceTitle(sourceID string) (string, error) {
 	return title, nil
 }
 
-// PublishedEntryPage is one (concept name, page_id) pair for a published
-// page tied to a concept — the concept entry's candidate source
-// (docs/impl/v1/wiki.md 步骤 4b, retrieval.md 第 0 层): the question is
-// matched against concept names in Go (word-lexical contains, not a DB
-// query) since it needs the shared foundation/text normalizer.
-type PublishedEntryPage struct {
-	EntryID string
-	Name    string
-	PageID  string
-}
-
-// ListPublishedEntryPages backs the concept entry: every published page
-// with a non-null entry_id, joined to its concept name.
-func (s *Store) ListPublishedEntryPages() ([]PublishedEntryPage, error) {
-	rows, err := s.db.Query(`
-		SELECT c.entry_id, c.name, w.page_id
-		FROM wiki_pages w
-		JOIN entries c ON c.entry_id = w.entry_id
-		WHERE w.status = ?`, StatusPublished)
-	if err != nil {
-		return nil, fmt.Errorf("wiki store: list published concept pages: %w", err)
-	}
-	defer rows.Close()
-
-	var out []PublishedEntryPage
-	for rows.Next() {
-		var p PublishedEntryPage
-		if err := rows.Scan(&p.EntryID, &p.Name, &p.PageID); err != nil {
-			return nil, fmt.Errorf("wiki store: scan published concept page: %w", err)
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
 // PageConditions is one published page's aggregated observed_conditions —
 // the four-tuple retrieval entry's candidate source (docs/impl/v1/wiki.md
 // 步骤 4c).
@@ -1107,6 +1072,66 @@ func (s *Store) ListEntriesForRecognition(domainIDs []string) ([]EntryCandidate,
 			e.Boundary = boundary.String
 		}
 		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// PageCandidate is one published wiki_pages row surfaced as a candidate for
+// matchPagesByRecognition (docs/impl/v1/wiki.md 检索接入, 2026-08-20 改判):
+// unlike EntryCandidate (the entries table, used for compile-time material
+// navigation), this reflects the compiled page's own emergent identity —
+// title/summary/aliases/trigger_questions can diverge substantially from the
+// entry it was compiled from, and it's that identity a reader's question
+// should be matched against, not the entry's.
+type PageCandidate struct {
+	PageID           string
+	DomainID         string
+	Title            string
+	Summary          string
+	Aliases          []string
+	TriggerQuestions []string
+}
+
+// ListPublishedPagesForRecognition lists candidate published pages for
+// matchPagesByRecognition, scoped by domainIDs via the page's entry's
+// domain_id (empty domainIDs means no scoping — every published page).
+// Inner-joins entries, so a published page with a NULL entry_id (shouldn't
+// happen in the single-tier compile flow, every page is compiled from at
+// least one entry) is silently excluded rather than surfaced with an unknown
+// domain.
+func (s *Store) ListPublishedPagesForRecognition(domainIDs []string) ([]PageCandidate, error) {
+	const cols = `w.page_id, e.domain_id, w.title, w.summary, w.aliases, w.trigger_questions`
+	var rows *sql.Rows
+	var err error
+	if len(domainIDs) > 0 {
+		ph, args := buildPlaceholders(domainIDs)
+		args = append(args, StatusPublished)
+		rows, err = s.db.Query(`SELECT `+cols+` FROM wiki_pages w JOIN entries e ON e.entry_id = w.entry_id WHERE e.domain_id IN (`+ph+`) AND w.status = ? ORDER BY w.title`, args...)
+	} else {
+		rows, err = s.db.Query(`SELECT `+cols+` FROM wiki_pages w JOIN entries e ON e.entry_id = w.entry_id WHERE w.status = ? ORDER BY w.title`, StatusPublished)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("wiki store: list published pages for recognition: %w", err)
+	}
+	defer rows.Close()
+
+	var out []PageCandidate
+	for rows.Next() {
+		var p PageCandidate
+		var summary, aliasesRaw, triggerRaw sql.NullString
+		if err := rows.Scan(&p.PageID, &p.DomainID, &p.Title, &summary, &aliasesRaw, &triggerRaw); err != nil {
+			return nil, fmt.Errorf("wiki store: scan page candidate: %w", err)
+		}
+		if summary.Valid {
+			p.Summary = summary.String
+		}
+		if aliasesRaw.Valid {
+			json.Unmarshal([]byte(aliasesRaw.String), &p.Aliases)
+		}
+		if triggerRaw.Valid {
+			json.Unmarshal([]byte(triggerRaw.String), &p.TriggerQuestions)
+		}
+		out = append(out, p)
 	}
 	return out, rows.Err()
 }

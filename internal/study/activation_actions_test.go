@@ -21,7 +21,7 @@ func setupStudyWithActivation(t *testing.T) (*Service, *Store, *activation.Servi
 	db := setupTestDB(t)
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, testConfig(), activationSvc, nil, 0, 0, 0)
+	svc := NewService(store, testConfig(), activationSvc, nil, 0, 0, 0, false)
 	return svc, store, activationSvc, db
 }
 

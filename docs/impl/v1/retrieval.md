@@ -24,16 +24,22 @@ Wiki 直答层   已发布 Wiki 页面命中 → 直接基于页面回答（见 
 > routing 表述，应理解为"self_graded/trusted 直接服务、exploring 按小概率
 > 试探服务，三档命中都会记 activation_hits"。
 
-> **熟路指针（2026-08-11，设计层面，非实现变更；2026-08-19 更正优先级表述**
-> **以匹配下方"并行 + ActivationLink 优先"改判**）：`docs/impl/v1/activation-bundle.md`
-> 提出的 ActivationBundle（熟路）目前已在实现中作为 ActivationLink 单链接 Match
-> 遇到跨 unit 歧义时的仲裁层（见下方步骤 2），不是独立并行的第三层，因此当前
-> 命中优先级是 ActivationLink/熟路（激活层，二者合一次判定）> Wiki 直答 > 慢
-> 路径——不再是旧版"Wiki 直答 → 熟路 → 单链接"的顺序。熟路服务的是"一个问题
-> 需要综合多个知识点才能回答"这类场景。ActivationBundle 文档「阶段 2」中
-> `bundle_hits[]` 独立字段、Trace `bundle_success`/`bundle_failure` 事件等仍未
-> 实现，具体接入点、是否影响 LLM 调用次数预算，还没有定案，需要单独评估后再
-> 回来修订本文档，见 activation-bundle.md 步骤 4「匹配器契约」。
+> **熟路指针（2026-08-20 改判，取代此前"仅在 ActivationLink 跨 unit
+> 歧义时才 consult"的口径）**：`docs/impl/v1/activation-bundle.md`
+> 提出的 ActivationBundle（熟路）Match 不再等 ActivationLink 出现跨 unit
+> 歧义才被 consult，而是跟 ActivationLink Match 并行主动跑（见下方步骤 2
+> 「命中优先级」），命中优先级按连续置信度（tier/mean）比较，不是写死的
+> 层级顺序；激活层（ActivationLink + 熟路，二者独立并行判定后择一）整体
+> 仍是 > Wiki 直答 > 慢路径（Wiki 直答与激活层本身是并行发起，见下方
+> 「Wiki 直答与 ActivationLink 快路径」一节，不受本次改动影响）。熟路服务
+> 的是"一个问题需要综合多个知识点才能回答"这类场景。**2026-08-20 当天晚些
+> 时候补记**：`EvidenceSet.BundleHits` 字段已实现（下方「LLM 调用预算对照」
+> 之前的步骤 2 表格给出了具体形状）；Trace 侧不新增独立的
+> `bundle_success`/`bundle_failure` 事件类型，复用已有的
+> `activation_success`/`activation_failure`（payload 换成 `bundle_id`/
+> `member_point_ids`），详见 `docs/impl/v1/trace.md` 步骤 3「Bundle 命中的
+> 对称处理」与 `docs/impl/v1/activation-bundle.md` 步骤 5 的 2026-08-20
+> 编注。不影响本节给出的 LLM 调用次数预算——这条链路全程不调用模型。
 
 所有路径在 Rerank（或快路径的证据组装）之后统一经过证据挖掘（见 `evidence.md`），再进入充分性判断与 EvidenceSet 构建。
 
@@ -58,14 +64,18 @@ Wiki 直答层   已发布 Wiki 页面命中 → 直接基于页面回答（见 
   │
   │  第 0 层：Wiki 直答候选采集（三个入口，见 wiki.md「检索接入」；
   │    2026-08-18 单层化改造后，其中一个入口改为调用 LLM，不再是"三个入口
-  │    全部不调 LLM"）
-  │    a. Concept/Fact 识别：一次 LLM 判断问题主要涉及哪个/哪些已发布词条
-  │       （matchEntriesByConceptRecognition，取代原四元组精确匹配入口，
-  │       domain 候选列表为空时跳过、不调用）；
+  │    全部不调 LLM"；2026-08-20 改判：入口 a/c 的判断依据从 entries 表
+  │    改为已发布页面自身的 title/summary/aliases/trigger_questions，理由
+  │    见 wiki.md「检索接入」——entries 是编译时的材料导航，跟编译产出后
+  │    页面自己的样子会脱节，继续用词条身份匹配会让本该省下 LLM 调用的
+  │    "快捷路径"退化成又做一次识别）
+  │    a. 页面识别：一次 LLM 判断问题主要对应哪个/哪些已发布页面
+  │       （matchPagesByRecognition，判断依据是页面自身字段，不是它编译
+  │       自的 entry；domain 候选列表为空时跳过、不调用）；
   │    b. 词法：wiki index 查询（title/content/aliases/trigger_questions），
   │       分数 ≥ wiki_min_score；
-  │    c. 概念名词法包含：问题字面包含已发布页面的概念名称 → 直接入候选；
-  │    优先级：Concept/Fact 识别命中 > 词法（分数降序）> 仅概念名包含命中；
+  │    c. 标题词法包含：问题字面包含已发布页面自身的标题 → 直接入候选；
+  │    优先级：页面识别命中 > 词法（分数降序）> 仅标题包含命中；
   │    合并去重取前 wiki_max_candidates 个，按序直答尝试，
   │    某页 sufficient=true → Wiki 直答路径（path_type=wiki）候选就绪；
   │    候选耗尽或为空 → 本层判定为未命中
@@ -144,18 +154,24 @@ EvidenceSet 新增：
                         常量已从代码移除，字段本身为 API/schema 稳定性保留，
                         见 activation.md 步骤 2）
   bundle_hits[]        [{ bundle_id, member_point_ids[], match_score,
-                        matched_by }]（2026-08-12 定案，阶段 2/熟路命中
-                        用，见 activation-bundle.md 步骤 4；独立数组，不
-                        并入 activation_hits[]——熟路是「一个 bundle_id
-                        对一组 point_id」，跟 activation_hits[] 天然的
-                        1:1 形状不同，硬塞进同一个数组要么用 link_id
-                        装 bundle_id（字段语义对不上，下游按 link_id
-                        反查 activation_links 表会查错表），要么加一个
-                        可空字段让每处消费方都得先判断来源，两种都不如
-                        分开干净；path_type 不新增取值，靠 bundle_hits[]
-                        是否非空区分命中来源是链接还是熟路，见 trace.md
-                        步骤 3 熟路指针；本字段本身仍是「阶段 2」范围，
-                        Match/候选构建的实际接入未实现，这里只定字段形状）
+                        matched_by, tier, audit_sampled, subject, intent,
+                        audience, constraint }]（2026-08-12 定案字段形状，
+                        2026-08-20 实际实现，见 `retrieval.BundleHit`）：
+                        独立数组，不并入 activation_hits[]——熟路是「一个
+                        bundle_id 对一组 point_id」，跟 activation_hits[]
+                        天然的 1:1 形状不同，硬塞进同一个数组要么用
+                        link_id 装 bundle_id（字段语义对不上，下游按
+                        link_id 反查 activation_links 表会查错表），要么
+                        加一个可空字段让每处消费方都得先判断来源，两种都
+                        不如分开干净；path_type 不新增取值，靠
+                        bundle_hits[] 是否非空区分命中来源是链接还是熟路；
+                        subject/intent/audience/constraint 是匹配到的
+                        触发条件自己的四元组（同 activation_hits[] 的同名
+                        字段，不是查询原文），member_point_ids 是这次实际
+                        解析进 hits 的成员点位（多个 Bundle 合并命中时，
+                        每个 BundleHit 只带自己贡献的那部分，不是合并后的
+                        并集）——Trace 消费方式见 trace.md 步骤 3「Bundle
+                        命中的对称处理」。
   gap_reason           no_candidates / judge_filtered（空字符串＝非 gap 结果；
                         产出位置见步骤 6，消费方见 study.md「knowledge_gaps 表扩展」）
   filtered_evidence[]  结构同 Evidence，role 固定为 "irrelevant"；
@@ -184,24 +200,40 @@ EvidenceItem 新增：
   2. Tier 2 本地词集 Jaccard 相似度：对该域下最近命中的候选逐字段算
      token-Jaccard 取四字段均值，达到 `question_tuple_norm_local_sim_min`
      即命中，免费；
-  3. Tier 2.5 向量早筛（`vector_match_enabled` 独立开关，默认关闭）：
-     goformer 本地 embedding 算余弦相似度，**只用于提前拒绝**——低于
-     `vector_match_sim_min` 直接判未命中（连 LLM 都不试），达到或高于
-     阈值仍然要进 Tier 3 交给 LLM 判断，向量分数从不单独确认命中（刻意
-     的非对称设计：宁可多问一次 LLM，也不让向量分数直接拍板"是同一个
-     问题"）；
-  4. Tier 3 LLM 批量判断（`config/prompts/tuple_norm_match.md`）：把
-     Tier 2（或 Tier 2.5 幸存）候选整批传给模型，一次调用给出匹配/
+  3. Tier 3 LLM 批量判断（`config/prompts/tuple_norm_match.md`）：把
+     Tier 2 候选整批传给模型，一次调用给出匹配/
      不匹配 + 候选下标；audience/constraint 要求比 subject/intent 更严格
      的等价判断（不臆测不同受众/条件是一回事）；
-  5. 全部未命中：以当前四元组为新的 canonical 记录写入
+  4. 全部未命中：以当前四元组为新的 canonical 记录写入
      `question_tuple_norms`（按 `domain_ids` 逐个域各插入一行）。
+  **2026-08-20 改判**：Tier 2.5 向量早筛（goformer 本地 embedding + 余弦
+  相似度提前拒绝）整体移除，`vector_match_enabled`/`vector_model_dir`/
+  `vector_match_sim_min` 三个配置项、`internal/activation/tuplenorm_vector.go`
+  （`VectorEmbedder`/`goformerEmbedder`/`NewGoformerEmbedder`）、
+  `TupleNormalizer.SetEmbedder`、`go.mod` 的 `github.com/MichaelAyles/goformer`
+  依赖均已删除；四层已收回为三层（Tier 1 精确匹配 → Tier 2 本地 Jaccard →
+  Tier 3 LLM 判断 → 全部未命中新建记录）。
   消费入口（`activation.Matcher`/`BundleMatcher`）本身仍是纯精确匹配，
   不受影响——这一层只改变喂给它们的四元组，不改动匹配逻辑本身。
   （`wiki.matchFourTupleEntry` 已随 2026-08-18 单层化改造删除，不再是
   归一化的消费方之一——Wiki 检索侧的 Concept/Fact 识别入口是语义识别，
   不消费四元组，见 wiki.md「检索接入」；此处归一化机制仅服务于
   activation.Matcher/BundleMatcher 两个消费方。）
+  **2026-08-20 新增第二个调用方**：`activation.TupleNormalizer.Normalize`
+  此前只在这里（查询侧 `tryFastPath`）生效；现在 Study 构建/刷新
+  `activation_links.observed_conditions` 时（`study.md`「归一化接入构建
+  阶段」，`buildObservedConditions`）也会调用同一个入口
+  （`activationSvc.NormalizeTuple`），把 confident trace 的四元组先归一化
+  再按四元组分组合并，解决"同一 KP 被不同问法命中却各开一条低样本量
+  `ObservedCondition`、置信度永远收敛不上去"的问题（`activation.md`
+  「条件身份的来源」）。两个调用方共享同一张 `question_tuple_norms`
+  表、同一个 canonical 空间，都受 `retrieval.question_tuple_norm_enabled`
+  同一个开关门控，不新增配置项。**接受的时序竞态**：构建阶段处理某个问
+  法时，若该问法当时还没有被查询侧写入过 `question_tuple_norms`（比如
+  一个 KP 从未真正被检索命中过、只是刚被抽取出来），本轮就归一化不到、
+  条件也就没能合并，Study 不做特殊协调（比如反过来触发一次查询侧归一
+  化）——最坏结果是这次没吃到合并红利、观测条件依旧按原始四元组分组，
+  等下一轮查询或构建时表里有记录了自然收敛，不影响正确性。
 - **Match 本身（硬性过滤 + 精确匹配）不再有第二轮模型辅助匹配**
   （2026-08-12 改判，撤销 2026-08-11 引入的两级结构，见 activation.md
   步骤 2）；不区分"首次/非首次提问"，一律走同一套纯程序流程；
@@ -228,31 +260,52 @@ EvidenceItem 新增：
    （命中分数恒为 1.0，没有排序依据；跨 KU 打包进快路径 direct 等于免检。
    同 unit 上多条本轮服务的命中 / 多个 point 不视为歧义——证据仍是同一 KU
    正文，可走快路径；2026-08 修订，见 plan-parser-vocab-and-unit-ambiguity.md）；
-   跨 unit 歧义时 TouchLastUsed 不触发，但 activation_hits 仍照常写入
-   （含 tier=exploring 未中选、仅记信号的命中），Trace 按普通快路径未命中
-   一样评分；
-   （2026-08-12 实现，取代上面"熟路指针"的待定案状态：跨 unit 歧义时不再
-   直接回落慢路径，先consult ActivationBundle——`resolveBundleForAmbiguousHits`
-   调 `activation.MatchBundles` 用同一个 `expandedQuery`/`matchCfg`：
-   (a) 命中一个及以上 verified Bundle → 用其（合并后的）核心成员点集，
-   跳过单 unit 限制，直接进入候选构建/证据充分性判断；命中多个 verified
-   Bundle 时先用 `retrieval.Store.GetKPNConflicts` 做核心成员两两冲突判定
-   （复用慢路径既有的 KPN `contradicts` 判定原语），任意一对冲突就仍判定
-   为歧义、回落慢路径，不冲突则取并集合并使用，**不**因此新建 Bundle；
-   (b) 没有 verified Bundle 覆盖 → 从这次观测实时新建/加强一条 candidate
-   Bundle（`formCandidateBundle`，核心成员=本次命中点集，去重复用已有相同
-   成员集合的 Bundle 而非重复创建），仍回落慢路径，只是多了这个副作用，
-   为将来同样的歧义提供可匹配的 Bundle 素材。这是 Bundle 消费侧的部分实现
-   ——只覆盖了"多链接歧义时查/建 Bundle"这一入口，`bundle_hits[]`
-   独立字段、Trace 的 `bundle_success`/`bundle_failure`、Bundle 自己的
-   `adopt_count`/`known_question_terms`/`auto_promote` 仍未实现，见
-   activation-bundle.md 对应记录。**2026-08-13 编注（创建门槛，见
-   `docs/design/activation-convergence.md` 第 11 节）**：`formCandidateBundle`
-   这里第一次遇到就直接创建，不额外加 Beta 均值/宽度门槛（对照 Link/
-   离线聚类新增的 create_confidence_min/create_width_max，见 study.md
-   步骤 1）——这条路径本身的触发条件（两条独立的、已各自服务过/自证过
-   的链接同时命中、却分属不同知识单元）已经是一个足够高的准入门槛，
-   能走到这一步不是噪声，再叠加一层次数/比例检查是画蛇添足）；
+   跨 unit 歧义时 activation_hits 仍照常写入（含 tier=exploring 未中选、
+   仅记信号的命中），Trace 按普通快路径未命中一样评分；TouchLastUsed
+   是否触发取决于最终是 Link 侧还是 Bundle 侧解析出这次命中（见下）。
+
+   **命中优先级（2026-08-20 改判，取代此前"仅在跨 unit 歧义时才 consult
+   ActivationBundle"的口径）**：`tryFastPath` 用 `sync.WaitGroup` 并行发起
+   `activation.Match`（Link）与 `resolveBundleCandidate`（Bundle，内部调
+   `activation.MatchBundles`，同一个 `expandedQuery`/`matchCfg`），不再是
+   "Link 先跑、出现歧义才触发 Bundle"的串行依赖——Bundle 不需要等 Link
+   歧义作为触发信号：
+
+   ```text
+   Link 单 unit（不歧义）且 Bundle 也命中
+     → 按连续置信度（tier 优先，同 tier 比 mean）取更高的一方；
+   Link 跨 unit 歧义且 Bundle 命中
+     → 用 Bundle（合并后的核心成员点集，跳过单 unit 限制，直接进入候选
+       构建/证据充分性判断；命中多个 verified Bundle 时先用
+       `retrieval.Store.GetKPNConflicts` 做核心成员两两冲突判定，任意一对
+       冲突就整体丢弃 Bundle 候选、回落慢路径，不冲突则取并集合并使用）；
+   Link 跨 unit 歧义且 Bundle 未命中
+     → 直接落慢路径，不再调用任何 Bundle 生成的副作用函数
+       （`formCandidateBundle` 已删除，见下）；
+   只有一侧命中 → 用命中的一侧；都未命中 → 落慢路径。
+   ```
+
+   命中后异步 touch：Link 侧解析生效时 touch 该轮命中的全部 link_ids；
+   Bundle 侧解析生效时改为 `activationSvc.Store().TouchBundleLastUsed`
+   touch 该轮命中的全部 bundle_id（新增，此前实时仲裁路径没有这一步）。
+
+   **实时候选生成（`formCandidateBundle`）整体删除**：此前"跨 unit 歧义、
+   且没有 verified Bundle 覆盖时，从这次观测实时新建/加强一条 candidate
+   Bundle"的做法已删除——"两条 Link 各自独立命中同一问题、但从未在同一条
+   trace 里共同出现过"是比"直接联合引用"更弱的信号（可能是互相替代关系，
+   不是联合必需），不该直接采信为合并证据。现在这种歧义单纯落回慢路径；
+   慢路径真正产生的联合引用会通过 Study 的增量累积（`study.md`「归一化
+   四元组累积」）自然沉淀为生成证据。Bundle 的生成机制本身（身份=归一化
+   四元组、创建门槛复用 create_confidence_min/create_width_max）详见
+   `docs/impl/v1/activation-bundle.md` 步骤 2、`docs/design/
+   activation-bundle.md`「10. 改判」。`bundle_hits[]` 独立字段与 Trace 侧
+   验证写入均已实现（2026-08-20，见步骤 1 的 `bundle_hits[]` schema、
+   `docs/impl/v1/activation-bundle.md` 步骤 5 编注——不新增
+   `bundle_success`/`bundle_failure` 事件类型，复用
+   `activation_success`/`activation_failure`）；Bundle 自己的
+   `adopt_count`（展示用聚合计数）随触发轴 `RecordBundleOutcome` 一并更新，
+   `known_question_terms`/`auto_promote` 仍未实现，见 activation-bundle.md
+   对应记录；
 
 2. 取命中链接的 point_id → 反查所属 KU：
      SELECT ... FROM knowledge_points p JOIN knowledge_units u ...
@@ -457,16 +510,15 @@ POST /answer（既有，见 answer 模块）
                       Tier 1/2 都未命中时才付一次 Tier 3 LLM 调用：多数
                       重复问答仍是 0 次额外调用（Tier 1 命中）或 3 次，
                       Tier 1/2 双未命中时 +1 次 → 4 次。
-Wiki 直答：           entry_recognize(0~1) + answer(0~wiki_max_candidates)
+Wiki 直答：           page_recognize(0~1) + answer(0~wiki_max_candidates)
                       典型 2 次（识别命中 1 次 + 回答 1 次），最坏 4 次
-                      （sufficient=false 换下一候选页重试）；entry_recognize
-                      是 2026-08-18 单层化改造新增的 Concept/Fact 识别调用
-                      （docs/impl/v1/wiki-single-tier-task-brief.md 步骤 4），
-                      取代原四元组精确匹配（不调用 LLM）的直答入口——当前
-                      域下没有任何候选 entry（如全新领域）时跳过，不产生
-                      这次调用；命中 0 个 entry 或全部 entry 都没有已发布
-                      页面覆盖时，仍会退回 wiki 索引词法匹配 / 概念名词法
-                      匹配两个不调 LLM 的入口，不代表直答整体失败。
+                      （sufficient=false 换下一候选页重试）；page_recognize
+                      是 2026-08-18 单层化改造新增、2026-08-20 改判判断依据
+                      从 entries 换为已发布页面自身字段的识别调用（wiki.md
+                      「检索接入」）——当前域下没有任何已发布候选页面（如
+                      全新领域）时跳过，不产生这次调用；命中 0 个页面时，
+                      仍会退回 wiki 索引词法匹配 / 标题词法匹配两个不调 LLM
+                      的入口，不代表直答整体失败。
 独立核实试验（2026-08-13 新增，见步骤 2c）：
                       不改变已发出回答的调用预算——审计是后台、异步的，
                       不阻塞当前请求，因此上面「快路径 = 3 次」这个数字

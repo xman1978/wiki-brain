@@ -496,6 +496,36 @@ func (s *Store) GetPointContentsByUnitIDs(unitIDs []string) (map[string][]PointF
 	return facts, nil
 }
 
+// GetPointContentsByPointIDs returns point_id -> content for the given
+// current points — the Wiki direct-answer path's evidence lookup (docs/impl/
+// v1/wiki.md 检索接入): a Wiki answer cites the compiled page's own
+// point_ids directly (not a freshly-mined Evidence.FactID), so resolving
+// citations back to displayable evidence needs content keyed by point_id,
+// not by unit_id like GetPointContentsByUnitIDs.
+func (s *Store) GetPointContentsByPointIDs(pointIDs []string) (map[string]string, error) {
+	out := make(map[string]string, len(pointIDs))
+	if len(pointIDs) == 0 {
+		return out, nil
+	}
+	ph, args := buildPlaceholders(pointIDs)
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT point_id, content FROM knowledge_points
+		WHERE point_id IN (%s) AND lifecycle = 'current'`, ph), args...)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval store: get point contents by point ids: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var pointID, content string
+		if err := rows.Scan(&pointID, &content); err != nil {
+			return nil, fmt.Errorf("retrieval store: get point contents by point ids: scan: %w", err)
+		}
+		out[pointID] = content
+	}
+	return out, rows.Err()
+}
+
 // GetUnitCenters returns unit_id -> center for the given units. Centers come
 // from unit extraction — an independent LLM pass from the point extraction
 // that produces knowledge_points — so feeding both to rerank_judge means a

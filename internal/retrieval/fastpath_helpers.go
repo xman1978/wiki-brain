@@ -2,14 +2,9 @@ package retrieval
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
-	"sort"
-	"strings"
-	"time"
 
 	"github.com/jxman78/wiki-brain/internal/activation"
-	"github.com/jxman78/wiki-brain/internal/foundation/text"
 	"github.com/jxman78/wiki-brain/internal/session"
 )
 
@@ -84,33 +79,43 @@ func (s *Service) resolveUnitsForPoints(pointIDs, linkIDs []string) ([]DirectHit
 	return hits, unitResolutionOK
 }
 
-// resolveBundleForAmbiguousHits implements docs/impl/v1/retrieval.md 步骤 2's
-// Bundle-consultation branch: when verified ActivationLink matches span
-// multiple KUs (raw ambiguity), consult ActivationBundle before giving up on
-// the fast path. Only reached from resolveUnitsForPoints' ambiguous case —
-// single-unit hits never call this, so that path stays pixel-identical to
-// before.
-func (s *Service) resolveBundleForAmbiguousHits(ctx context.Context, workQC QueryContext, expandedQuery session.ExpandedQuery, matchCfg activation.MatchConfig, linkIDs, pointIDs []string) ([]DirectHit, bool) {
-	// 2026-08-13: no more Status==verified filter here, same reasoning as
-	// classifyActivationMatches — MatchBundles' tiering already decided which
-	// bundles are eligible to serve this round; trust its output set
-	// directly (docs/impl/v1/activation.md「置信度分档判定」).
-	verifiedBundles, err := s.activationSvc.MatchBundles(ctx, expandedQuery, matchCfg)
-	if err != nil {
-		slog.Warn("retrieval: bundle match failed, falling back to slow path", "error", err)
-		return nil, false
-	}
+// bundleCandidate is the resolved result of a Bundle Match this round —
+// mirrors what resolveUnitsForPoints produces for Link, plus the tier/mean
+// needed to compare against a Link candidate on the same axis (docs/impl/v1/
+// retrieval.md 步骤 2「命中优先级」).
+type bundleCandidate struct {
+	hits      []DirectHit
+	bundleIDs []string
+	tier      activation.Tier
+	mean      float64
+	// hitInfo carries per-bundle Trace-ready detail (2026-08-20 阶段 2「验证」
+	// 接线) — one BundleHit per bundle actually merged into bundleIDs, each
+	// with its own matched condition's quadruple/tier and the member
+	// point_ids that specific bundle contributed to resolvedPoints, so
+	// trace.recordBundleHitOutcome can call RecordBundleOutcome/
+	// RecordMemberOutcome against the exact condition/members this round
+	// used, without re-deriving them from the merged, bundle-agnostic hits.
+	hitInfo []BundleHit
+}
 
-	if len(verifiedBundles) == 0 {
-		// No verified Bundle covers this hit — form/enrich a candidate bundle
-		// from this real-time observation (docs/impl/v1/activation-bundle.md
-		// 步骤 4b), then fall back to slow path this round exactly as before;
-		// bundle formation is a side effect, not a reason to change today's
-		// control flow.
-		s.formCandidateBundle(workQC, pointIDs)
-		slog.Info("retrieval: activation matched verified links across multiple units, no verified bundle covers them, falling back to slow path",
-			"link_ids", linkIDs, "point_ids", pointIDs)
-		return nil, false
+// resolveBundleCandidate implements docs/impl/v1/retrieval.md 步骤 2's Bundle
+// matching (2026-08-20 重设计，取代此前"仅在 Link 跨 unit 歧义时才 consult，
+// 未覆盖则实时新建候选"的口径): runs independently of Link matching, in
+// parallel with it (see tryFastPath) — Bundle no longer needs Link's
+// ambiguity as a trigger, and no longer seeds a candidate Bundle from an
+// unresolved hit here (that was direct evidence conflation with "两条 Link
+// 各自独立命中同一问题" — a weaker signal that should only trigger slow-path
+// re-verification, not a Bundle merge; see docs/design/activation-bundle.md
+// 改判). A miss here is simply "no Bundle candidate this round" — the caller
+// falls back to whatever the Link side resolved, or the slow path.
+func (s *Service) resolveBundleCandidate(ctx context.Context, expandedQuery session.ExpandedQuery, matchCfg activation.MatchConfig) (bundleCandidate, bool) {
+	matches, err := s.activationSvc.MatchBundles(ctx, expandedQuery, matchCfg)
+	if err != nil {
+		slog.Warn("retrieval: bundle match failed", "error", err)
+		return bundleCandidate{}, false
+	}
+	if len(matches) == 0 {
+		return bundleCandidate{}, false
 	}
 
 	// 2026-08-13: 核心成员不再是建/刷新 Bundle 那一刻写死的静态数组，是
@@ -118,25 +123,28 @@ func (s *Service) resolveBundleForAmbiguousHits(ctx context.Context, workQC Quer
 	// 结果（docs/impl/v1/activation-bundle.md「成员置信度」组装时的用法）。
 	confCfg := s.activationSvc.ConfidenceConfig()
 	var resolvedPoints []string
-	if len(verifiedBundles) == 1 {
-		resolvedPoints = verifiedBundles[0].Bundle.CoreMemberPointIDs(confCfg)
+	bundleIDs := make([]string, 0, len(matches))
+	if len(matches) == 1 {
+		resolvedPoints = matches[0].Bundle.CoreMemberPointIDs(confCfg)
+		bundleIDs = append(bundleIDs, matches[0].Bundle.BundleID)
 	} else {
-		conflict, err := s.bundlesConflict(verifiedBundles, confCfg)
+		conflict, err := s.bundlesConflict(matches, confCfg)
 		if err != nil {
-			slog.Warn("retrieval: bundle conflict check failed, falling back to slow path", "error", err)
-			return nil, false
+			slog.Warn("retrieval: bundle conflict check failed", "error", err)
+			return bundleCandidate{}, false
 		}
 		if conflict {
-			bundleIDs := make([]string, len(verifiedBundles))
-			for i, bm := range verifiedBundles {
-				bundleIDs[i] = bm.Bundle.BundleID
+			ids := make([]string, len(matches))
+			for i, bm := range matches {
+				ids[i] = bm.Bundle.BundleID
 			}
-			slog.Info("retrieval: multiple verified bundles matched with a contradicts relation between core members, ambiguous, falling back to slow path",
-				"link_ids", linkIDs, "bundle_ids", bundleIDs)
-			return nil, false
+			slog.Info("retrieval: multiple bundles matched with a contradicts relation between core members, ambiguous, ignoring bundle candidate",
+				"bundle_ids", ids)
+			return bundleCandidate{}, false
 		}
 		seen := make(map[string]bool)
-		for _, bm := range verifiedBundles {
+		for _, bm := range matches {
+			bundleIDs = append(bundleIDs, bm.Bundle.BundleID)
 			for _, pid := range bm.Bundle.CoreMemberPointIDs(confCfg) {
 				if seen[pid] {
 					continue
@@ -149,14 +157,60 @@ func (s *Service) resolveBundleForAmbiguousHits(ctx context.Context, workQC Quer
 
 	hits, err := s.store.GetCurrentUnitsByPointIDs(resolvedPoints)
 	if err != nil {
-		slog.Warn("retrieval: fast path bundle unit lookup failed, falling back to slow path", "error", err)
-		return nil, false
+		slog.Warn("retrieval: fast path bundle unit lookup failed", "error", err)
+		return bundleCandidate{}, false
 	}
 	if len(hits) == 0 {
-		slog.Warn("retrieval: fast path bundle resolved no current KU, falling back to slow path", "point_ids", resolvedPoints)
-		return nil, false
+		slog.Warn("retrieval: fast path bundle resolved no current KU", "point_ids", resolvedPoints)
+		return bundleCandidate{}, false
 	}
-	return hits, true
+
+	tier, mean := bestBundleTierMean(matches)
+	hitInfo := make([]BundleHit, len(matches))
+	for i, bm := range matches {
+		hitInfo[i] = BundleHit{
+			BundleID: bm.Bundle.BundleID, MatchScore: bm.Score, MatchedBy: bm.MatchedBy,
+			Tier: string(bm.Tier), AuditSampled: bm.AuditSampled,
+			Subject: bm.Subject, Intent: bm.Intent, Audience: bm.Audience, Constraint: bm.Constraint,
+			MemberPointIDs: bm.Bundle.CoreMemberPointIDs(confCfg),
+		}
+	}
+	return bundleCandidate{hits: hits, bundleIDs: bundleIDs, tier: tier, mean: mean, hitInfo: hitInfo}, true
+}
+
+// bestBundleTierMean / bestLinkTierMean / tierRank implement the "same axis"
+// comparison docs/impl/v1/retrieval.md 步骤 2 uses to pick between a resolved
+// Link candidate and a resolved Bundle candidate: trusted > self_graded >
+// exploring, tie-broken by mean.
+func bestBundleTierMean(matches []activation.BundleMatch) (activation.Tier, float64) {
+	best := matches[0]
+	for _, m := range matches[1:] {
+		if tierRank(m.Tier) > tierRank(best.Tier) || (tierRank(m.Tier) == tierRank(best.Tier) && m.Mean > best.Mean) {
+			best = m
+		}
+	}
+	return best.Tier, best.Mean
+}
+
+func bestLinkTierMean(matches []activation.LinkMatch) (activation.Tier, float64) {
+	best := matches[0]
+	for _, m := range matches[1:] {
+		if tierRank(m.Tier) > tierRank(best.Tier) || (tierRank(m.Tier) == tierRank(best.Tier) && m.Mean > best.Mean) {
+			best = m
+		}
+	}
+	return best.Tier, best.Mean
+}
+
+func tierRank(t activation.Tier) int {
+	switch t {
+	case activation.TierTrusted:
+		return 2
+	case activation.TierSelfGraded:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // bundlesConflict reports whether any core member of one matched bundle has
@@ -189,90 +243,6 @@ func (s *Service) bundlesConflict(bundles []activation.BundleMatch, confCfg acti
 		}
 	}
 	return false, nil
-}
-
-// sameMemberSet reports order-independent set equality between two
-// point_id slices — used to dedupe real-time candidate bundle formation
-// against every existing non-deprecated bundle's core members.
-func sameMemberSet(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	set := make(map[string]struct{}, len(a))
-	for _, x := range a {
-		set[x] = struct{}{}
-	}
-	for _, x := range b {
-		if _, ok := set[x]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-// formCandidateBundle implements docs/impl/v1/activation-bundle.md 步骤 4b: a
-// real-time formation path, additive to Study's periodic clustering scan
-// (internal/study/bundle_scan.go) — a multi-Link hit with no covering
-// verified Bundle seeds a candidate bundle from this single observation so
-// future identical hits have Bundle material to Match against. Idempotent on
-// exact core-member-set identity: a second identical hit appends an observed
-// condition to the existing bundle instead of creating a duplicate. Errors
-// are logged and swallowed — bundle formation is a side effect, never the
-// reason a fast-path turn fails or succeeds.
-func (s *Service) formCandidateBundle(workQC QueryContext, pointIDs []string) {
-	if s.activationSvc == nil || len(pointIDs) == 0 {
-		return
-	}
-	members := append([]string(nil), pointIDs...)
-	sort.Strings(members)
-
-	store := s.activationSvc.Store()
-	existing, err := store.ListMatchableBundles()
-	if err != nil {
-		slog.Warn("retrieval: list matchable bundles for dedup check failed", "error", err)
-		return
-	}
-
-	questionTerms := text.Terms(text.Normalize(workQC.Question))
-	cond := activation.NormalizeObservedCondition(workQC.Subject, workQC.Intent, workQC.Audience, workQC.Constraint, questionTerms, time.Now().UTC())
-
-	for _, b := range existing {
-		if sameMemberSet(b.MemberPointIDs(), members) {
-			if err := store.AppendBundleObservedCondition(b.BundleID, cond, 50); err != nil {
-				slog.Warn("retrieval: append observed condition to existing bundle failed", "bundle_id", b.BundleID, "error", err)
-				return
-			}
-			s.activationSvc.BundleMatcher().InvalidateCache()
-			slog.Info("retrieval: appended observed condition to existing candidate bundle from cross-unit ambiguity",
-				"bundle_id", b.BundleID, "point_ids", members)
-			return
-		}
-	}
-
-	createdFromJSON, err := json.Marshal([]string{"cross_unit_ambiguity"})
-	if err != nil {
-		slog.Warn("retrieval: marshal bundle created_from failed", "error", err)
-		return
-	}
-	seedMembers := make([]activation.BundleMember, 0, len(members))
-	now := time.Now().UTC()
-	for _, pid := range members {
-		seedMembers = append(seedMembers, activation.BundleMember{PointID: pid, SuccessCount: 1, FailureCount: 0, LastSeenAt: now})
-	}
-	newBundle := &activation.ActivationBundle{
-		RepresentativeTerms: strings.TrimSpace(workQC.Subject + " " + workQC.Intent),
-		ObservedConditions:  []activation.ObservedCondition{cond},
-		Members:             seedMembers,
-		Status:              activation.BundleStatusCandidate,
-		CreatedFrom:         string(createdFromJSON),
-	}
-	if err := store.CreateBundle(newBundle); err != nil {
-		slog.Warn("retrieval: create candidate bundle from cross-unit ambiguity failed", "error", err)
-		return
-	}
-	s.activationSvc.BundleMatcher().InvalidateCache()
-	slog.Info("retrieval: created candidate bundle from cross-unit ambiguity",
-		"bundle_id", newBundle.BundleID, "point_ids", members)
 }
 
 // filterMatchesByDomain keeps links whose KP source is in qc.DomainIDs when

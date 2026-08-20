@@ -171,17 +171,6 @@ type RetrievalConfig struct {
 	// QuestionTupleNormIdleDays：question_tuple_norms 行 last_hit_at 超过此
 	// 天数未再命中，由 Study 周期清理（study.md 步骤 4 同款 idle 清理）。
 	QuestionTupleNormIdleDays int `yaml:"question_tuple_norm_idle_days"`
-	// VectorMatchEnabled 单独开关，只在 QuestionTupleNormEnabled=true 时才
-	// 生效，控制 Tier 2.5（向量相似度早筛）。默认关闭。
-	VectorMatchEnabled bool `yaml:"vector_match_enabled"`
-	// VectorModelDir 是 goformer 加载 embedding 模型权重的目录（HuggingFace
-	// safetensors 格式），为空则不启用向量匹配。
-	VectorModelDir string `yaml:"vector_model_dir"`
-	// VectorMatchSimMin：Tier 2.5 的拒绝阈值——余弦相似度低于此值时直接判定
-	// "不是同一个问题"、跳过 LLM 判断（Tier 3），按未命中处理；达到或高于此
-	// 阈值只表示"不能排除"，仍然要进入 Tier 3 交给 LLM 做最终判断，向量分数
-	// 本身从不单独确认命中（刻意的非对称设计，只拒绝、不确认）。
-	VectorMatchSimMin float64 `yaml:"vector_match_sim_min"`
 
 	// —— ActivationLink/Bundle 连续置信度（2026-08-13 新增，
 	// docs/impl/v1/activation.md 配置项）——
@@ -318,18 +307,18 @@ type StudyConfig struct {
 	// —— 问题复杂度观测量（两层架构扩展，docs/impl/v1/study.md 步骤 7）——
 	ComplexityMinQuestions int `yaml:"complexity_min_questions"`
 	// —— ActivationBundle（熟路）阶段 1（docs/impl/v1/activation-bundle.md）——
-	BundleCoreRatioMin         float64 `yaml:"bundle_core_ratio_min"`
-	BundleClusterMinQuestions  int     `yaml:"bundle_cluster_min_questions"`
-	BundleClusterMinDaysActive int     `yaml:"bundle_cluster_min_days_active"`
-	BundleCoreSizeMax          int     `yaml:"bundle_core_size_max"`
-	BundlePromoteSuccessMin    int     `yaml:"bundle_promote_success_min"`
-	BundlePromoteDistinctMin   int     `yaml:"bundle_promote_distinct_min"`
-	BundleWeakenFailureMin     int     `yaml:"bundle_weaken_failure_min"`
-	BundleWeakenRatioMin       float64 `yaml:"bundle_weaken_ratio_min"`
-	BundleReverifySuccessMin   int     `yaml:"bundle_reverify_success_min"`
-	BundleCandidateIdleDays    int     `yaml:"bundle_candidate_idle_days"`
-	BundleDeprecateIdleDays    int     `yaml:"bundle_deprecate_idle_days"`
-	BundleAutoPromote          bool    `yaml:"bundle_auto_promote"`
+	// 2026-08-20 重设计：生成门槛复用 CreateConfidenceMin/CreateWidthMax
+	// （不新增配置），核心/路肩完全由 BundleMember 自己的置信度轴派生，
+	// BundleCoreRatioMin/BundleClusterMinQuestions/BundleClusterMinDaysActive/
+	// BundleCoreSizeMax 四个字段随旧的四元组聚类生成机制一并删除。
+	BundlePromoteSuccessMin  int     `yaml:"bundle_promote_success_min"`
+	BundlePromoteDistinctMin int     `yaml:"bundle_promote_distinct_min"`
+	BundleWeakenFailureMin   int     `yaml:"bundle_weaken_failure_min"`
+	BundleWeakenRatioMin     float64 `yaml:"bundle_weaken_ratio_min"`
+	BundleReverifySuccessMin int     `yaml:"bundle_reverify_success_min"`
+	BundleCandidateIdleDays  int     `yaml:"bundle_candidate_idle_days"`
+	BundleDeprecateIdleDays  int     `yaml:"bundle_deprecate_idle_days"`
+	BundleAutoPromote        bool    `yaml:"bundle_auto_promote"`
 }
 
 func Load(configPath string) (*Config, error) {
