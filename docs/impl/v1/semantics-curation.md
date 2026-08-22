@@ -1,5 +1,48 @@
 # Rerank 语义 / KP 人工修正（Semantics Curation）实现路径（V1 扩展）
 
+## 2026-08-21 改判：语义从 KU 级下沉到 KP 级
+
+**本节以下的全部内容描述的是改判前的 KU 级设计（`unit_rerank_semantics` 表、
+`GET/PUT /units/:id/semantics`），已被取代，仅保留作历史背景（本文档"设计依据"
+一节的故障链分析、KP 取代 key_facts 的推理依然成立，不受本次改判影响）。**
+
+根因：本文档原设计已经指出 KU 级摘要（当时是 `key_facts`）"漏事实"的问题，并
+用 KP 取代了 key_facts；但 rerank 语义本身（`source_theme`/`content_theme`/
+`intent`/`object`/`scope`）仍然停留在 KU 级——一个 KU 内的多条 KP 可能适用于不
+同的对象/范围（例如同一制度文档里一条规则只对某营销中心生效、另一条对全体员工
+生效），KU 级语义天然无法反映这种差异。实测案例：问"实施万相公文可以拿到多少
+奖金"时，rerank 判断把"万相公文销售奖励制度"（仅营销中心适用）当作证据放行给
+"实施人员项目奖金"问题，根源就是两条 KP 共用同一份 KU 级 `object`/`scope`。
+
+改判要点：
+
+- `unit_rerank_semantics` 表整体废弃（migration 062 DROP TABLE）；
+  `source_theme`/`content_theme`/`object`/`scope` 四列（不再有 `intent`）直接
+  加到 `knowledge_points` 表上，每条 KP 各自一份，复用 KP 已有的
+  `manually_edited`/`edited_at` 人工修正保护（不新增字段）。
+- 新导入路径不再有独立的语义抽取 LLM 调用：`unit_point_extract.md`（v6）在产出
+  每条 KP 的 `content`/`type` 的同一次调用里一并给出该 KP 自己的
+  `content_theme`/`object`/`scope`；`source_theme` 不调用 LLM，直接取该 KU 所
+  属 Source 的标题。gap-fill（`unit_gap_extract.md`）、重试
+  （`unit_extract_retry.md`）、覆盖补录（`unit_point_coverage_fill.md`）产出的
+  KP 暂不携带这些字段（`semantics_prompt_version` 留空），靠新增的独立回填引擎
+  `internal/unit/kp_semantics.go` + `config/prompts/kp_semantics_extract.md`
+  按 `point_id` 补齐——回填逻辑与原 KU 级 `rerank_semantics.go` 同构（批量+重
+  试+content_head 对齐三级回退），只是候选粒度从"一个 KU 的整段正文"变成"一条
+  KP 的正文"。
+- dedup 合并（`unit_dedup_merge.md`）产出的合并结果不重新生成语义字段；合并后
+  的知识点按归一化正文匹配回原始 a/b 两侧知识点继承其语义，匹配不到则留空——
+  与 Center/Points 合并本就是近似处理同一个量级，不额外加机制。
+- 人工修正 UI：`GET/PUT /units/:id/semantics` 废弃，改为
+  `GET/PUT /points/:id/semantics`；Page 的 KU 详情页改为"KU 本体只读 + 每条 KP
+  展开各自的语义编辑器"，不再有一份 KU 级共用表单。
+- Retrieval 消费端（`internal/retrieval/service.go` 的 `buildJudgeItems`/
+  `buildRerankJudgeCandidate`/`buildEvidenceSet`）改为按候选自己的
+  `point_id` 取语义，不再借用整个 KU 的语义——这是本次改判修复的核心缺陷。
+
+详见 `internal/rerank/semantics.go`、`internal/unit/kp_semantics.go`、
+`internal/unit/split_extract.go`、迁移 `internal/foundation/db/migrations/062_kp_semantics.sql`。
+
 ## 职责
 
 给用户提供对知识单元 rerank 语义（`unit_rerank_semantics`）、中心句（`knowledge_units.center`）与知识点（`knowledge_points`，即 KP）的查看与手动修正能力，用确定性的人工修正兜住 LLM 流水线的概率性遗漏，并保证人工修正不被后续自动流程静默覆盖。

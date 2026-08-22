@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/jxman78/wiki-brain/internal/rerank"
 )
 
 // preInsertDedupMinOverlapDefault mirrors BuildSegments' pattern for
@@ -54,12 +53,11 @@ type unitCandidate struct {
 }
 
 type segmentExtraction struct {
-	seg           Segment
-	segIndex      int
-	output        extractOutput
-	promptVersion string
-	ok            bool
-	err           error
+	seg        Segment
+	segIndex   int
+	candidates []unitCandidate
+	ok         bool
+	err        error
 }
 
 // extractSegmentsPreInsertDedup is the unit-extraction path. Up to
@@ -81,7 +79,7 @@ type segmentExtraction struct {
 // onSegmentDone is called once per segment as it finishes, for progress
 // reporting — segments complete in extraction order, not document order, so
 // callers must not assume it matches segment index.
-func (s *Service) extractSegmentsPreInsertDedup(ctx context.Context, sourceTitle, sourceID string, segments []Segment, mdLines []string, onSegmentDone func(), onBeforeSemantics func() error) error {
+func (s *Service) extractSegmentsPreInsertDedup(ctx context.Context, sourceTitle, sourceSummary, sourceID string, segments []Segment, mdLines []string, onSegmentDone func(), onBeforeSemantics func() error) error {
 	concurrency := s.cfg.Source.PreInsertDedupConcurrency
 	if concurrency <= 0 {
 		concurrency = preInsertDedupConcurrencyDefault
@@ -94,14 +92,27 @@ func (s *Service) extractSegmentsPreInsertDedup(ctx context.Context, sourceTitle
 	work := make(chan indexedSegment)
 	results := make(chan segmentExtraction)
 
+	// collectSegmentCandidates (locate/validate, gap-fill, per-segment dedup —
+	// each of which can itself make an LLM call, for gap-fill and dedup
+	// judging and failed-unit retry) runs here, inside the same worker
+	// goroutine as the segment's own extraction call, instead of being
+	// funneled through a single consumer afterward. It touches no store or
+	// index (only s.cfg and its arguments), so running it on N worker
+	// goroutines concurrently is as safe as the extraction call already run
+	// there — and it means a segment's post-processing LLM calls no longer
+	// serialize behind every other segment's.
 	var wg sync.WaitGroup
 	for w := 0; w < concurrency; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for is := range work {
-				output, ok, err := s.extractSegmentOutputSplit(ctx, sourceID, is.seg, mdLines)
-				results <- segmentExtraction{seg: is.seg, segIndex: is.index, output: output, promptVersion: promptVersionSplitExtract, ok: ok, err: err}
+				output, ok, err := s.extractSegmentOutputSplit(ctx, sourceID, sourceTitle, sourceSummary, is.seg, mdLines)
+				var candidates []unitCandidate
+				if err == nil && ok {
+					candidates = s.collectSegmentCandidates(ctx, sourceID, is.seg, is.index, mdLines, output, promptVersionSplitExtract)
+				}
+				results <- segmentExtraction{seg: is.seg, segIndex: is.index, candidates: candidates, ok: ok, err: err}
 			}
 		}()
 	}
@@ -128,7 +139,7 @@ func (s *Service) extractSegmentsPreInsertDedup(ctx context.Context, sourceTitle
 				extractionErr = fmt.Errorf("segment extraction failed: source_id %s segment %q lines %d-%d: %w", sourceID, r.seg.Title, r.seg.LineStart, r.seg.LineEnd, r.err)
 			}
 		} else if r.ok {
-			pool = append(pool, s.collectSegmentCandidates(ctx, sourceID, r.seg, r.segIndex, mdLines, r.output, r.promptVersion)...)
+			pool = append(pool, r.candidates...)
 		}
 		if onSegmentDone != nil {
 			onSegmentDone()
@@ -146,11 +157,7 @@ func (s *Service) extractSegmentsPreInsertDedup(ctx context.Context, sourceTitle
 		}
 	}
 
-	semantics, err := s.extractRerankSemantics(ctx, sourceTitle, mdLines, pool)
-	if err != nil {
-		return fmt.Errorf("extract rerank semantics: %w", err)
-	}
-	if err := s.publishCandidates(sourceID, mdLines, pool, semantics); err != nil {
+	if err := s.publishCandidates(sourceID, mdLines, pool); err != nil {
 		return err
 	}
 	return nil
@@ -258,8 +265,8 @@ func (s *Service) logDocumentCandidates(sourceID string, mdLines []string, pool 
 // publishCandidates commits the full document generation before rewriting
 // any Bleve documents. points contains both cascaded old points and new
 // points, matching the affected unit set returned by PublishGeneration.
-func (s *Service) publishCandidates(sourceID string, mdLines []string, pool []unitCandidate, semantics map[string]rerank.Semantics) error {
-	superseded, inserted, points, err := s.store.PublishGeneration(sourceID, pool, semantics)
+func (s *Service) publishCandidates(sourceID string, mdLines []string, pool []unitCandidate) error {
+	superseded, inserted, points, err := s.store.PublishGeneration(sourceID, pool)
 	if err != nil {
 		return fmt.Errorf("publish generation: %w", err)
 	}
@@ -543,7 +550,11 @@ func (s *Service) resolveCandidateDuplicate(ctx context.Context, sourceID string
 
 	mergedPoints := make([]llmPoint, len(merged.Points))
 	for i, p := range merged.Points {
-		mergedPoints[i] = llmPoint{UnitID: a.llm.UnitID, Content: p.Content, Type: p.Type}
+		mergedPoints[i] = llmPoint{
+			UnitID: a.llm.UnitID, Content: p.Content, Type: p.Type,
+			SourceTheme: p.SourceTheme, ContentTheme: p.ContentTheme,
+			Object: p.Object, Scope: p.Scope, SemanticsPromptVersion: p.SemanticsPromptVersion,
+		}
 	}
 
 	return unitCandidate{
@@ -563,7 +574,11 @@ func (s *Service) resolveCandidateDuplicate(ctx context.Context, sourceID string
 func llmPointsToDedupPoints(points []llmPoint) []llmDedupPoint {
 	out := make([]llmDedupPoint, len(points))
 	for i, p := range points {
-		out[i] = llmDedupPoint{Content: p.Content, Type: p.Type}
+		out[i] = llmDedupPoint{
+			Content: p.Content, Type: p.Type,
+			SourceTheme: p.SourceTheme, ContentTheme: p.ContentTheme,
+			Object: p.Object, Scope: p.Scope, SemanticsPromptVersion: p.SemanticsPromptVersion,
+		}
 	}
 	return out
 }

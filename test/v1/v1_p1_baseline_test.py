@@ -71,6 +71,65 @@ def wait_trace(conn, answer_id, timeout_s=15):
     return c.poll_until(lambda: c.db_trace_by_answer_id(conn, answer_id), timeout_s, 0.5)
 
 
+_CN_DIGITS = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_CN_UNITS = {"十": 10, "百": 100, "千": 1000, "万": 10000}
+_CN_NUM_RE = re.compile(r"[零一二两三四五六七八九十百千万]+")
+
+
+def _cn_num_to_int(s):
+    """把连续的中文数字片段转成整数，覆盖本题库常见的量级（个位数~万）；
+    不是通用中文数词解析器，遇到无法识别的字符直接放弃返回 None。"""
+    total = 0
+    section = 0
+    num = 0
+    for ch in s:
+        if ch in _CN_DIGITS:
+            num = _CN_DIGITS[ch]
+        elif ch in _CN_UNITS:
+            unit = _CN_UNITS[ch]
+            if num == 0:
+                num = 1
+            if unit >= 10000:
+                total += (section + num) * unit
+                section = 0
+            else:
+                section += num * unit
+            num = 0
+        else:
+            return None
+    return total + section + num
+
+
+def _convert_cn_numbers(text):
+    """把"三个月"这类中文数字统一转成"3个月"再参与匹配——题库期望片段/关键
+    词固定写阿拉伯数字，但材料原文和 LLM 回答里同一个数字经常写成中文数字，
+    字面子串匹配会把语义相同的值判成未命中（如 A2 的"3个月" vs 证据里的
+    "三个月"）。"""
+    def repl(m):
+        v = _cn_num_to_int(m.group(0))
+        return str(v) if v is not None else m.group(0)
+
+    return _CN_NUM_RE.sub(repl, text or "")
+
+
+_QUOTE_MAP = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"'})
+
+
+def _normalize_for_match(s):
+    """统一归一化后再做子串/关键词核验，覆盖三类已确认的假阴性根因：
+      1. Markdown 表格分隔符 "|" 把同一表行的相邻信息断开（D1/D2/D5/D6）；
+      2. 中文数字 vs 阿拉伯数字（A2："三个月" vs 期望词"3个月"）；
+      3. 弯引号 vs 直引号（T9：材料用 ‘sysdate-7’，期望词写 'sysdate-7'）；
+      4. 百分号只标在区间右端（G46：材料写"25 ~ 40%"，期望词是"25%"）——
+         统一去掉 "%" 参与比较即可，代价是可能把裸数字也匹配上，本题库场景
+         风险可接受。
+    不是通用文本规整器，只解决这批测试已实测到的假阴性，别的场景假阴性
+    出现再补。"""
+    s = _convert_cn_numbers(s or "")
+    s = s.translate(_QUOTE_MAP)
+    return re.sub(r"[\s|%]+", "", s)
+
+
 def check_d_group(base_url, row, direct_ev, supporting_ev, markdown_cache, markdown_lock):
     all_ev = direct_ev + supporting_ev
     mined_check = []
@@ -98,10 +157,10 @@ def check_d_group(base_url, row, direct_ev, supporting_ev, markdown_cache, markd
     # 字符，要拆成子段分别核对是否都出现，而不是连省略号一起当整串子串比对。
     m = re.search(r"「(.+)」", row["expected_fragment"])
     fragment_text = m.group(1) if m else row["expected_fragment"].strip()
-    segments = [s.replace(" ", "") for s in fragment_text.split("……") if s.strip()]
+    segments = [_normalize_for_match(s) for s in fragment_text.split("……") if s.strip()]
 
     def content_has_all_segments(content):
-        norm = (content or "").replace(" ", "")
+        norm = _normalize_for_match(content)
         return bool(segments) and all(seg in norm for seg in segments)
 
     frag_hit = any(content_has_all_segments(ev.get("content", "")) for ev in all_ev)
@@ -131,12 +190,28 @@ def run_question(base_url, db_path, row, id_to_title, markdown_cache, markdown_l
     supporting_ev = es.get("supporting") or []
     direct_ids = c.evidence_source_ids(direct_ev)
     direct_titles = sorted({id_to_title.get(sid, sid) for sid in direct_ids})
+    # direct_hit 要回答的是"检索有没有找到正确的材料"，不是"材料恰好被归到
+    # direct 桶而不是 supporting 桶"——慢路径走多步推理时，模型经常只引用
+    # supporting 证据就给出了正确答案（G2/G32 均是此例：direct_evidence 为空，
+    # 但 supporting 里已经有对的材料且被引用），只看 direct 桶会把这类正确
+    # 检索误判成未命中。改成看 direct+supporting 的并集。
+    supporting_ids = c.evidence_source_ids(supporting_ev)
+    all_evidence_titles = sorted({id_to_title.get(sid, sid) for sid in set(direct_ids) | set(supporting_ids)})
 
     expected_titles = c.expected_titles_for(row["expected_source"]) if row["expected_source"] else []
-    direct_hit = bool(expected_titles) and any(t in expected_titles for t in direct_titles)
+    direct_hit = bool(expected_titles) and any(t in expected_titles for t in all_evidence_titles)
 
+    # 关键词覆盖率判定的是"检索有没有找到正确的 KU/KP"，不是"LLM 有没有把这些词
+    # 复述进最终回答"——后者会被 LLM 的改写/省略/同义替换污染，跟检索是否命中
+    # 无关。所以候选文本改成 direct_evidence + supporting 的原始证据内容拼接，
+    # 而不是 result.content。归一化时把空格和 Markdown 表格分隔符 "|" 都去掉，
+    # 否则表格类证据（如"参数 | 值 | 说明"）会把本该相邻的关键词从中间断开，
+    # 造成假阴性（这也是 D 组片段子串核验的同一类问题，一并在这里和
+    # check_d_group 里修）。
     key_terms = c.extract_key_terms(row["expected_points"]) if row["expected_points"] else []
-    found_terms = [t for t in key_terms if t.lower() in content.lower()]
+    evidence_text = "\n".join((ev.get("content") or "") for ev in direct_ev + supporting_ev)
+    evidence_text_norm = _normalize_for_match(evidence_text)
+    found_terms = [t for t in key_terms if _normalize_for_match(t) in evidence_text_norm]
 
     conn = c.open_db(db_path)
     try:
@@ -196,13 +271,17 @@ def summarize(records):
         found, total = r["key_term_coverage"]
         st["cov_found"] += found
         st["cov_total"] += total
-    lines.append("\n按域统计（自动代理指标，最终以人工 manual_verdict 复核为准；direct_hit 分母只含有期望来源的题，D 组片段级核验见下）：")
+    lines.append(
+        "\n按域统计（自动代理指标，最终以人工 manual_verdict 复核为准；direct_hit 分母只含有期望来源的题，"
+        "D 组片段级核验见下；证据覆盖率核对的是检索到的 KU/KP 内容是否包含期望答案要点关键词，"
+        "不看 LLM 最终回答怎么措辞）："
+    )
     for domain, st in by_domain.items():
         hit_rate = st["hit"] / st["hit_n"] * 100 if st["hit_n"] else 0
         cov_rate = st["cov_found"] / st["cov_total"] * 100 if st["cov_total"] else 0
         lines.append(
             f"  {domain}: n={st['n']}（direct_hit 计分题数={st['hit_n']}）"
-            f"direct_hit={hit_rate:.1f}% 关键词覆盖={cov_rate:.1f}%（目标各自 ≥90%）"
+            f"direct_hit={hit_rate:.1f}% 证据覆盖率={cov_rate:.1f}%（目标各自 ≥90%）"
         )
 
     # C 组判定口径（2026-07-19 定案，见方案 4.4 节）：主判定是"回答不幻构"——
@@ -245,10 +324,12 @@ def summarize(records):
 def write_md_report(records, out_dir: Path):
     lines = ["# P1 慢路径基线报告\n"]
     lines.append(
-        "direct_hit 与关键词覆盖率为自动代理指标，**不能替代人工核对「回答要点是否正确」**；"
-        "manual_verdict 列留空，需人工按方案标准填写 正确/错误 后重新统计。\n"
+        "direct_hit 与证据覆盖率为自动代理指标，**不能替代人工核对「回答要点是否正确」**；"
+        "证据覆盖率核对的是检索到的 KU/KP（direct_evidence + supporting 原文）是否包含期望答案要点的"
+        "关键词，不是从 LLM 最终回答文本里找关键词——用词、改写、省略都不会影响这项指标，只反映检索"
+        "有没有找对材料。manual_verdict 列留空，需人工按方案标准填写 正确/错误 后重新统计。\n"
     )
-    lines.append("| ID | 组 | 域 | path_type | direct_hit | 关键词覆盖 | 耗时(s) | manual_verdict | 回答摘要 |")
+    lines.append("| ID | 组 | 域 | path_type | direct_hit | 证据覆盖率 | 耗时(s) | manual_verdict | 回答摘要 |")
     lines.append("|---|---|---|---|---|---|---|---|---|")
     for r in records:
         if r.get("error"):

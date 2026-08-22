@@ -185,17 +185,6 @@ func TestServiceProcess_SemanticTrigger(t *testing.T) {
 	}
 }
 
-func TestExtractFirstParagraph(t *testing.T) {
-	content := "# Heading\n\nFirst paragraph here.\n\nSecond paragraph."
-	got := extractFirstParagraph(content, 300)
-	if strings.Contains(got, "# Heading") {
-		t.Error("should skip headings")
-	}
-	if !strings.Contains(got, "First paragraph") {
-		t.Error("should include first paragraph")
-	}
-}
-
 func TestGenerateSummary_Fallback(t *testing.T) {
 	svc, fake := setupTestService(t)
 

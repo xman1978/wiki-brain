@@ -125,6 +125,22 @@ type SourceConfig struct {
 	// overlap gate is unreliable exactly where short-vs-long pairs matter
 	// most. Defaults to 4 when unset (<=0).
 	PreInsertDedupShortTokenMax int `yaml:"pre_insert_dedup_short_token_max"`
+	// UploadConcurrency caps how many sources can be running source_process
+	// at once, and independently how many can be running unit_extract at
+	// once (each stage gets its own dedicated worker pool of this size, see
+	// cmd/server/main.go) — this is separate from queue.workers, which only
+	// sizes the shared pool for everything else (trace_write, manual
+	// re-extraction triggers, etc). Defaults to 2 when unset (<=0).
+	UploadConcurrency int `yaml:"upload_concurrency"`
+	// KPNGenerateConcurrency is how many kpn_extract.md batches run at once
+	// in generateKPN — batches (grouped by top-level outline, ≤60 points
+	// each) are independent of each other, so this was previously fully
+	// sequential for no reason. Defaults to 2 when unset (<=0).
+	KPNGenerateConcurrency int `yaml:"kpn_generate_concurrency"`
+	// OutlineSummaryConcurrency is how many GenerateOutlineSummaries batches
+	// (grouped by model max_input_tokens) run at once — also previously
+	// fully sequential. Defaults to 2 when unset (<=0).
+	OutlineSummaryConcurrency int `yaml:"outline_summary_concurrency"`
 }
 
 type RetrievalConfig struct {
@@ -134,7 +150,16 @@ type RetrievalConfig struct {
 	RerankExtractBatchMaxUnits int     `yaml:"rerank_extract_batch_max_units"`
 	RerankExtractConcurrency   int     `yaml:"rerank_extract_concurrency"`
 	RerankJudgeBatchMaxChars   int     `yaml:"rerank_judge_batch_max_chars"`
-	RerankJudgeConcurrency     int     `yaml:"rerank_judge_concurrency"`
+	// RerankJudgeBatchMaxCandidates caps how many candidates go into one
+	// rerank judge call regardless of RerankJudgeBatchMaxChars — the model's
+	// per-candidate output (relevant + a one-sentence analysis) can push a
+	// large batch past its output token budget and get truncated mid-JSON,
+	// silently dropping the tail candidates (defaulted to "relevant" by
+	// runRerankJudgeBatches' missing-candidate fallback). A count cap forces
+	// a split before that happens even when the char budget alone would have
+	// allowed a bigger batch.
+	RerankJudgeBatchMaxCandidates int `yaml:"rerank_judge_batch_max_candidates"`
+	RerankJudgeConcurrency        int `yaml:"rerank_judge_concurrency"`
 	ActivationMatchTop         int     `yaml:"activation_match_top"`
 	// OutlineRRFBoost multiplies the RRF score contributed by the outline
 	// (目录) recall path in rrfMerge, to reflect its higher observed hit rate
@@ -418,6 +443,7 @@ func applyEnvOverrides(cfg *Config) {
 		"WB_SERVER_MAX_CONCURRENCY": &cfg.Server.MaxConcurrency,
 		"WB_QUEUE_BUFFER_SIZE":      &cfg.Queue.BufferSize,
 		"WB_QUEUE_WORKERS":          &cfg.Queue.Workers,
+		"WB_SOURCE_UPLOAD_CONCURRENCY": &cfg.Source.UploadConcurrency,
 		"WB_LOGGING_MAX_SIZE_MB":    &cfg.Logging.MaxSizeMB,
 		"WB_LOGGING_MAX_BACKUPS":    &cfg.Logging.MaxBackups,
 		"WB_LOGGING_MAX_AGE_DAYS":   &cfg.Logging.MaxAgeDays,

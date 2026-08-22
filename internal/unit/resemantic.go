@@ -3,8 +3,6 @@ package unit
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 
 	"github.com/jxman78/wiki-brain/internal/rerank"
 	"github.com/jxman78/wiki-brain/internal/source"
@@ -16,66 +14,50 @@ type RegenerateRerankSemanticsResult struct {
 	Updated        int
 	Skipped        int // manually_edited rows, left untouched
 	AlreadyCurrent int // already at rerank.ExtractPromptVersion, not re-sent to the LLM
-	Ignored        int // extraction produced no result even after every fallback tier (see extractRerankSemanticBatch)
+	Ignored        int // extraction produced no result even after every fallback tier (see extractKPSemanticBatch)
 }
 
-// RegenerateRerankSemantics re-runs unit_semantics_extract.md
-// (rerank.ExtractPromptVersion) over every current unit of src that isn't
-// already on that prompt version and hasn't been manually corrected,
-// overwriting unit_rerank_semantics with the fresh result. Used to backfill
-// existing sources after a semantics-extraction prompt change, without
-// re-running the whole source's extraction pipeline (segmentation, dedup,
-// KPN — none of that is touched here).
+// RegenerateRerankSemantics re-runs kp_semantics_extract.md
+// (rerank.ExtractPromptVersion) over every current knowledge point of src
+// that isn't already on that prompt version and hasn't been manually
+// corrected, overwriting its source_theme/content_theme/object/scope
+// columns with the fresh result. Used to backfill points whose semantics
+// were never populated at extraction time (gap/retry/coverage-fill paths,
+// or a prompt version bump) without re-running the source's whole
+// extraction pipeline.
 //
-// Idempotent by design: a unit already stamped with the current prompt
-// version is left alone rather than re-sent to the LLM, so re-running this
-// over a source that's already been backfilled — e.g. to retry the handful
-// of units a previous run's extraction had to discard (see Ignored) — only
-// pays for the units that still need it.
+// Idempotent by design: a point already stamped with the current prompt
+// version is left alone rather than re-sent to the LLM.
 //
-// Units flagged manually_edited are skipped entirely, never sent to the LLM:
-// a human correction must not be silently discarded by a backfill re-run.
+// Points flagged manually_edited are skipped entirely, never sent to the LLM.
 func (s *Service) RegenerateRerankSemantics(ctx context.Context, src source.Source) (RegenerateRerankSemanticsResult, error) {
 	res := RegenerateRerankSemanticsResult{SourceID: src.SourceID}
 
-	units, err := s.store.GetUnitsBySourceIDFiltered(src.SourceID, LifecycleCurrent)
+	points, err := s.store.GetPointsBySourceID(src.SourceID)
 	if err != nil {
-		return res, fmt.Errorf("unit: regenerate semantics: list units: %w", err)
+		return res, fmt.Errorf("unit: regenerate semantics: list points: %w", err)
 	}
-	if len(units) == 0 {
+	if len(points) == 0 {
 		return res, nil
 	}
 
-	if src.MarkdownPath == "" {
-		return res, fmt.Errorf("unit: regenerate semantics: source %s has no markdown_path", src.SourceID)
-	}
-	data, err := os.ReadFile(src.MarkdownPath)
-	if err != nil {
-		return res, fmt.Errorf("unit: regenerate semantics: read markdown: %w", err)
-	}
-	mdLines := strings.Split(string(data), "\n")
-
-	var pool []unitCandidate
-	for _, ku := range units {
-		existing, err := s.store.GetRerankSemanticsByUnitID(ku.UnitID)
-		if err != nil {
-			return res, fmt.Errorf("unit: regenerate semantics: lookup existing (%s): %w", ku.UnitID, err)
-		}
-		if existing != nil && existing.ManuallyEdited {
+	var pool []kpSemanticCandidate
+	for _, kp := range points {
+		if kp.ManuallyEdited {
 			res.Skipped++
 			continue
 		}
-		if existing != nil && existing.PromptVersion == rerank.ExtractPromptVersion {
+		if kp.SemanticsPromptVersion == rerank.ExtractPromptVersion {
 			res.AlreadyCurrent++
 			continue
 		}
-		pool = append(pool, unitCandidate{id: ku.UnitID, lineStart: ku.LineStart, lineEnd: ku.LineEnd})
+		pool = append(pool, kpSemanticCandidate{id: kp.PointID, content: kp.Content})
 	}
 	if len(pool) == 0 {
 		return res, nil
 	}
 
-	semantics, err := s.extractRerankSemantics(ctx, src.Title, mdLines, pool)
+	semantics, err := s.extractKPSemantics(ctx, src.Title, src.Summary.String, pool)
 	if err != nil {
 		return res, fmt.Errorf("unit: regenerate semantics: extract: %w", err)
 	}
@@ -86,7 +68,7 @@ func (s *Service) RegenerateRerankSemantics(ctx context.Context, src source.Sour
 			res.Ignored++
 			continue
 		}
-		if err := s.store.UpsertRerankSemanticsFromExtraction(candidate.id, sem, rerank.ExtractPromptVersion); err != nil {
+		if err := s.store.UpsertPointSemanticsFromExtraction(candidate.id, sem, rerank.ExtractPromptVersion); err != nil {
 			return res, fmt.Errorf("unit: regenerate semantics: store (%s): %w", candidate.id, err)
 		}
 		res.Updated++

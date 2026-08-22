@@ -617,13 +617,9 @@ func TestRerankConsumesSemanticsAfterShadowReparentSwap(t *testing.T) {
 		VALUES ('shadow-u1', 'shadow-1', 'Hotel limits', 1, 2, 'completed', 'v6-split', 'current')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO unit_rerank_semantics
-		(unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
-		VALUES ('shadow-u1', 'Travel policy', 'Hotel limits', 'Explain limit', 'Employees', 'Domestic travel', ?)`, rerank.ExtractPromptVersion); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO knowledge_points (point_id, unit_id, source_id, content, point_type)
-		VALUES ('shadow-p1', 'shadow-u1', 'shadow-1', 'Hotel limit is 500', 'rule')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO knowledge_points
+		(point_id, unit_id, source_id, content, point_type, source_theme, content_theme, object, scope, semantics_prompt_version)
+		VALUES ('shadow-p1', 'shadow-u1', 'shadow-1', 'Hotel limit is 500', 'rule', 'Travel policy', 'Hotel limits', 'Employees', 'Domestic travel', ?)`, rerank.ExtractPromptVersion); err != nil {
 		t.Fatal(err)
 	}
 
@@ -632,18 +628,18 @@ func TestRerankConsumesSemanticsAfterShadowReparentSwap(t *testing.T) {
 	}
 
 	store := NewStore(db)
-	semantics, err := store.GetUnitRerankSemantics([]string{"shadow-u1"})
+	points, err := store.GetPointContentsByUnitIDs([]string{"shadow-u1"})
 	if err != nil {
-		t.Fatalf("GetUnitRerankSemantics after swap: %v", err)
+		t.Fatalf("GetPointContentsByUnitIDs after swap: %v", err)
 	}
-	if got := semantics["shadow-u1"].ContentTheme; got != "Hotel limits" {
-		t.Fatalf("reparented semantics content_theme = %q, want persisted value", got)
+	if len(points["shadow-u1"]) != 1 || points["shadow-u1"][0].ContentTheme != "Hotel limits" {
+		t.Fatalf("reparented point semantics = %#v, want content_theme=Hotel limits", points["shadow-u1"])
 	}
 
 	tracker := &rerankJudgeTrackingLLM{}
 	svc := NewService(store, tracker, nil, nil, nil, &config.Config{}, nil, nil, nil)
 	kept, _, err := svc.rerank(t.Context(), QueryContext{Question: "What is the hotel limit?"}, []candidate{{
-		unitID: "shadow-u1", sourceID: "target-1", lineStart: 1, lineEnd: 2, score: 1,
+		unitID: "shadow-u1", pointID: "shadow-p1", sourceID: "target-1", lineStart: 1, lineEnd: 2, score: 1,
 	}})
 	if err != nil {
 		t.Fatalf("rerank reparented unit: %v", err)
@@ -670,10 +666,6 @@ func TestRerankJudgeBatchBudgetCountsCompactJSONRunesAndDelimiters(t *testing.T)
 		unitID: "u3", pointID: "p3", sourceID: "s2", lineStart: 1, lineEnd: 30, score: 0.25,
 	})
 
-	semantics, err := svc.store.GetUnitRerankSemantics([]string{"u1", "u2"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	centers, err := svc.store.GetUnitCenters([]string{"u1", "u2"})
 	if err != nil {
 		t.Fatal(err)
@@ -682,8 +674,8 @@ func TestRerankJudgeBatchBudgetCountsCompactJSONRunesAndDelimiters(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := buildRerankJudgeCandidate("c1", "Algebra", centers["u1"], semantics["u1"], points["u1"])
-	second := buildRerankJudgeCandidate("c2", "Algebra", centers["u2"], semantics["u2"], points["u2"])
+	first := buildRerankJudgeCandidate("c1", "Algebra", centers["u1"], "p1", points["u1"])
+	second := buildRerankJudgeCandidate("c2", "Algebra", centers["u2"], "p2", points["u2"])
 	firstJSON, err := json.Marshal(first)
 	if err != nil {
 		t.Fatal(err)
@@ -718,13 +710,16 @@ func TestRerankJudgeBatchBudgetCountsCompactJSONRunesAndDelimiters(t *testing.T)
 
 func TestRerankRejectsMissingSemanticsListsAllUnitIDs(t *testing.T) {
 	svc, tracker, candidates := setupPersistedSemanticRerank(t, 4000, 4)
-	if _, err := svc.store.db.Exec(`DELETE FROM unit_rerank_semantics WHERE unit_id IN ('u1', 'u2')`); err != nil {
+	if _, err := svc.store.db.Exec(`DELETE FROM knowledge_point_relations WHERE source_point_id IN ('p1', 'p2') OR target_point_id IN ('p1', 'p2')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.store.db.Exec(`DELETE FROM knowledge_points WHERE point_id IN ('p1', 'p2')`); err != nil {
 		t.Fatal(err)
 	}
 
 	_, _, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, reverseCandidates(candidates))
 	assertRerankIntegrityError(t, err,
-		"retrieval: rerank semantics integrity: missing unit_ids: u1, u2")
+		"retrieval: rerank semantics integrity: missing point_ids: p1, p2")
 	if tracker.Count("rerank_relevance.md") != 0 || tracker.Count("rerank_classify.md") != 0 {
 		t.Fatalf("judge calls = relevance:%d classify:%d, want 0/0",
 			tracker.Count("rerank_relevance.md"), tracker.Count("rerank_classify.md"))
@@ -740,7 +735,7 @@ func TestRerankRejectsMissingSemanticsListsAllUnitIDs(t *testing.T) {
 // TestRerankRejectsMissingSemanticsListsAllUnitIDs.
 func TestRerankUsesStaleSemanticsWithoutRejecting(t *testing.T) {
 	svc, tracker, candidates := setupPersistedSemanticRerank(t, 4000, 4)
-	if _, err := svc.store.db.Exec(`UPDATE unit_rerank_semantics SET prompt_version = 'v0' WHERE unit_id IN ('u1', 'u2')`); err != nil {
+	if _, err := svc.store.db.Exec(`UPDATE knowledge_points SET semantics_prompt_version = 'v0' WHERE point_id IN ('p1', 'p2')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -767,12 +762,17 @@ func setupPersistedSemanticRerank(t *testing.T, maxChars, concurrency int) (*Ser
 	return svc, tracker, candidates
 }
 
+// insertRerankSemantic stamps rerank semantics onto every current point of
+// unitID — the KP-level replacement for the old per-unit
+// unit_rerank_semantics row (docs/impl/v1/semantics-curation.md 2026-08-21
+// 改判). Test fixtures here use a 1:1 unit:point mapping (u1↔p1, u2↔p2, ...),
+// so "every point of this unit" and "this unit's one point" coincide.
 func insertRerankSemantic(t *testing.T, store *Store, unitID, promptVersion string) {
 	t.Helper()
-	_, err := store.db.Exec(`INSERT OR REPLACE INTO unit_rerank_semantics
-		(unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
-		VALUES (?, '差旅制度', '住宿报销', '说明限额', '出差员工', '境内差旅', ?)`,
-		unitID, promptVersion)
+	_, err := store.db.Exec(`UPDATE knowledge_points
+		SET source_theme = '差旅制度', content_theme = '住宿报销', object = '出差员工', scope = '境内差旅', semantics_prompt_version = ?
+		WHERE unit_id = ?`,
+		promptVersion, unitID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1241,7 +1241,7 @@ func TestSplitRerankJudgeBatches_BalancesLoad(t *testing.T) {
 		})
 	}
 
-	batches := splitRerankJudgeBatches(candidates, 2200)
+	batches := splitRerankJudgeBatches(candidates, 2200, len(candidates))
 	if len(batches) < 2 {
 		t.Fatalf("expected candidates split across multiple batches, got %d", len(batches))
 	}

@@ -1,5 +1,5 @@
 ---
-version: v5
+version: v7
 ---
 
 ## System
@@ -8,13 +8,23 @@ version: v5
 
 知识点是从知识单元中提取的可激活摘要：一句话一个核心主张，脱离原文也能独立理解；用自己的话概括，不要逐字照抄原文中的语句、SQL、配置或日志。
 
+同一个知识单元内的不同知识点，可能各自适用于不同的对象/范围（例如同一制度文档里，一条规则只适用于某个部门，另一条适用于全体员工）——**每条知识点必须独立给出自己的 content_theme/object/scope，不能用整个单元笼统的主题代替**，否则检索时会把不适用于本条知识点的证据错误地当作支持依据放行。
+
+下方"来源文档摘要"是整份文档的背景（可能包含文档整体的适用对象/适用范围）。知识单元原文没有点名具体对象，但文档摘要明确写了整份文档的适用对象/适用范围时，可以把摘要里的这个对象填进 object；文档摘要也没有提供适用对象信息时，object 留空，不要凭空编造。
+
 要求输出 json 格式的数据：
 
 ```
 {
   "center": "知识单元主题",
   "points": [
-    {"content": "可激活摘要内容", "type": "definition|rule|method|case|question"}
+    {
+      "content": "可激活摘要内容",
+      "type": "definition|rule|method|case|question",
+      "content_theme": "这条知识点自己的主题，8~20字",
+      "object": "这条知识点规定/描述的对象是谁（岗位、部门、人群等），原文没写明确对象则留空字符串",
+      "scope": "这条知识点的适用范围/前提条件，8~20字；原文没有额外范围限定就填\"通用\""
+    }
   ]
 }
 ```
@@ -42,6 +52,10 @@ version: v5
 
 ## User
 
+来源文档标题：{{source_title}}
+
+来源文档摘要：{{source_summary}}
+
 知识单元范围：{{unit_line_start}}-{{unit_line_end}}
 
 知识单元原文：
@@ -60,10 +74,13 @@ version: v5
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["content", "type"],
+        "required": ["content", "type", "content_theme", "scope"],
         "properties": {
           "content": { "type": "string", "minLength": 1 },
-          "type": { "type": "string", "enum": ["definition", "rule", "method", "case", "question"] }
+          "type": { "type": "string", "enum": ["definition", "rule", "method", "case", "question"] },
+          "content_theme": { "type": "string", "minLength": 1 },
+          "object": { "type": "string" },
+          "scope": { "type": "string", "minLength": 1 }
         }
       }
     }

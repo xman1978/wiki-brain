@@ -1,19 +1,28 @@
-// resemantic-backfill re-runs unit_semantics_extract.md over existing
-// current knowledge units, overwriting their unit_rerank_semantics row with
-// a fresh extraction (rerank.ExtractPromptVersion). It exists to backfill
-// already-imported sources after a semantics-extraction prompt change,
+// resemantic-backfill re-runs kp_semantics_extract.md over existing current
+// knowledge points, overwriting their source_theme/content_theme/object/
+// scope columns with a fresh extraction (rerank.ExtractPromptVersion). It
+// exists to backfill points whose semantics were never populated at
+// extraction time (gap/retry/coverage-fill paths, or a prompt version bump)
 // without re-running the whole source's extraction pipeline (segmentation,
 // dedup, KPN — none of that is touched here).
 //
-// Units flagged manually_edited are always skipped, never sent to the LLM —
+// Points flagged manually_edited are always skipped, never sent to the LLM —
 // a human correction must not be silently discarded by a re-run.
 //
 // The server must be STOPPED first: this opens the bleve indexes, which
 // take an exclusive lock (same requirement as cmd/dedup-report -apply).
 //
+// -resummarize additionally re-runs source_summary.md over each source's
+// current markdown before the knowledge-point pass, overwriting
+// sources.summary — knowledge-point semantics extraction reads this summary
+// as background context (see docs/impl/v1/semantics-curation.md), so a
+// source whose summary predates the source_summary.md 2026-08-21 change
+// (300-char snippet → full document) needs its summary refreshed first for
+// the knowledge-point backfill to actually benefit from it.
+//
 // Usage:
 //
-//	go run ./cmd/resemantic-backfill -config config/config.yml [-source <source_id>] [-dry-run]
+//	go run ./cmd/resemantic-backfill -config config/config.yml [-source <source_id>] [-dry-run] [-resummarize]
 package main
 
 import (
@@ -35,10 +44,11 @@ import (
 
 func main() {
 	var configPath, sourceID string
-	var dryRun bool
+	var dryRun, resummarize bool
 	flag.StringVar(&configPath, "config", "", "配置文件路径")
 	flag.StringVar(&sourceID, "source", "", "只处理这一个 source_id（默认全部 completed 状态的 source）")
 	flag.BoolVar(&dryRun, "dry-run", false, "只统计将处理多少个 unit，不实际调用 LLM 或写库")
+	flag.BoolVar(&resummarize, "resummarize", false, "先重新生成每个 source 的摘要（sources.summary），再做知识点语义回填")
 	flag.Parse()
 
 	cfg, err := config.Load(configPath)
@@ -76,23 +86,25 @@ func main() {
 	if dryRun {
 		total := 0
 		for _, src := range sources {
-			units, err := unitStore.GetUnitsBySourceIDFiltered(src.SourceID, unit.LifecycleCurrent)
+			points, err := unitStore.GetPointsBySourceID(src.SourceID)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "source %s 查询 units 失败: %v\n", src.SourceID, err)
+				fmt.Fprintf(os.Stderr, "source %s 查询 points 失败: %v\n", src.SourceID, err)
 				continue
 			}
-			manual := 0
-			for _, ku := range units {
-				row, err := unitStore.GetRerankSemanticsByUnitID(ku.UnitID)
-				if err == nil && row != nil && row.ManuallyEdited {
+			manual, current := 0, 0
+			for _, kp := range points {
+				if kp.ManuallyEdited {
 					manual++
+				} else if kp.SemanticsPromptVersion == rerank.ExtractPromptVersion {
+					current++
 				}
 			}
-			fmt.Printf("%s (%s): %d 个 current unit，其中 %d 个 manually_edited 将跳过，%d 个待重抽取\n",
-				src.Title, src.SourceID, len(units), manual, len(units)-manual)
-			total += len(units) - manual
+			pending := len(points) - manual - current
+			fmt.Printf("%s (%s): %d 个 current point，其中 %d 个 manually_edited 将跳过，%d 个已是最新版本，%d 个待重抽取\n",
+				src.Title, src.SourceID, len(points), manual, current, pending)
+			total += pending
 		}
-		fmt.Printf("\n共 %d 个 source，预计重抽取 %d 个 unit（prompt_version 目标 %s）。\n", len(sources), total, rerank.ExtractPromptVersion)
+		fmt.Printf("\n共 %d 个 source，预计重抽取 %d 个 knowledge point（prompt_version 目标 %s）。\n", len(sources), total, rerank.ExtractPromptVersion)
 		return
 	}
 
@@ -119,8 +131,26 @@ func main() {
 	}
 
 	unitSvc := unit.NewService(unitStore, sourceStore, llmRouter, idxMgr.Units, idxMgr.Points, queue.New(1), cfg)
+	sourceSvc := source.NewService(sourceStore, nil, llmRouter, llmRouter, idxMgr.Outlines, queue.New(1), cfg, ".")
 
 	ctx := context.Background()
+	if resummarize {
+		for i, src := range sources {
+			if err := sourceSvc.RegenerateSummary(ctx, src.SourceID); err != nil {
+				fmt.Fprintf(os.Stderr, "source %s (%s) 重新生成摘要失败: %v\n", src.Title, src.SourceID, err)
+				continue
+			}
+			refreshed, err := sourceStore.GetByID(src.SourceID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "source %s (%s) 读回摘要失败: %v\n", src.Title, src.SourceID, err)
+				continue
+			}
+			sources[i] = *refreshed
+			fmt.Printf("%s (%s): 摘要已更新\n", src.Title, src.SourceID)
+		}
+		fmt.Println()
+	}
+
 	var totalUpdated, totalSkipped, totalIgnored int
 	for _, src := range sources {
 		res, err := unitSvc.RegenerateRerankSemantics(ctx, src)

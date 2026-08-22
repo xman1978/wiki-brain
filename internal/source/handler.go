@@ -2,6 +2,7 @@ package source
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -34,6 +35,7 @@ mux.HandleFunc("PATCH /sources/{id}/summary", h.setSourceSummary)
 	mux.HandleFunc("POST /sources/{id}/reupload/retry", h.reuploadRetry)
 	mux.HandleFunc("GET /sources/{id}/outlines", h.getOutlines)
 	mux.HandleFunc("PATCH /sources/{id}/outlines/{outline_id}", h.setOutlineSummary)
+	mux.HandleFunc("DELETE /sources/{id}/outlines/{outline_id}", h.deleteOutlineNode)
 	mux.HandleFunc("GET /sources/{id}/markdown", h.getMarkdown)
 	mux.HandleFunc("GET /sources/{id}/preview", h.getPreview)
 	mux.HandleFunc("GET /sources/{id}/progress", h.streamProgress)
@@ -537,6 +539,31 @@ func (h *Handler) setOutlineSummary(w http.ResponseWriter, r *http.Request) {
 		resp["summary"] = updated.Summary.String
 	}
 	foundation.WriteJSON(w, http.StatusOK, resp)
+}
+
+// deleteOutlineNode implements DELETE /sources/:id/outlines/:outline_id —
+// 仅允许删除叶子节点（无子目录）且节点下无 KU 的目录，不做级联删除。
+func (h *Handler) deleteOutlineNode(w http.ResponseWriter, r *http.Request) {
+	sourceID := r.PathValue("id")
+	outlineID := r.PathValue("outline_id")
+
+	err := h.svc.DeleteOutlineNode(sourceID, outlineID)
+	if err != nil {
+		switch {
+		case strings.Contains(err.Error(), "outline not found"):
+			foundation.WriteError(w, http.StatusNotFound, "outline not found")
+		case errors.Is(err, ErrOutlineHasChildren):
+			foundation.WriteError(w, http.StatusBadRequest, "目录下存在子目录，不能删除")
+		case errors.Is(err, ErrOutlineHasUnits):
+			foundation.WriteError(w, http.StatusBadRequest, "目录下存在知识单元，不能删除")
+		default:
+			slog.Error("delete outline node failed", "error", err)
+			foundation.WriteError(w, http.StatusInternalServerError, "delete outline node failed")
+		}
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *Handler) getOutlines(w http.ResponseWriter, r *http.Request) {

@@ -9,6 +9,17 @@ import (
 type llmDedupPoint struct {
 	Content string `json:"content"`
 	Type    string `json:"type"`
+	// SourceTheme/ContentTheme/Object/Scope/SemanticsPromptVersion carry a
+	// point's own rerank semantics through the merge ladder. unit_dedup_merge.md
+	// only ever regenerates Content/Type, so mergePairViaLLM's result must
+	// have these fields re-attached by matching the merged content back to
+	// whichever original a/b point it came from (see inheritMergedSemantics)
+	// — an approximation, same caliber as Center/Points merging already is.
+	SourceTheme            string `json:"-"`
+	ContentTheme           string `json:"-"`
+	Object                 string `json:"-"`
+	Scope                  string `json:"-"`
+	SemanticsPromptVersion string `json:"-"`
 }
 
 type llmDedupMerged struct {
@@ -123,7 +134,34 @@ func (s *Service) judgePair(ctx context.Context, sourceID string, vars map[strin
 	if s.classifyPair(ctx, sourceID, vars) != relationDuplicate {
 		return nil
 	}
-	return s.mergePairViaLLM(ctx, sourceID, vars)
+	merged := s.mergePairViaLLM(ctx, sourceID, vars)
+	if merged != nil {
+		inheritMergedSemantics(merged, aPoints, bPoints)
+	}
+	return merged
+}
+
+// inheritMergedSemantics fills in each merged point's rerank semantics
+// (never produced by unit_dedup_merge.md itself) by matching its content
+// back to whichever original a/b point it echoes, via exact normalized-text
+// equality. A merged point whose wording changed enough that no original
+// matches is left with blank semantics — the same approximation the merge
+// ladder already accepts for Center/Points, closeable later by the KP-level
+// backfill (see kp_semantics.go) rather than by a bespoke mechanism here.
+func inheritMergedSemantics(merged *llmDedupMerged, aPoints, bPoints []llmDedupPoint) {
+	byText := make(map[string]llmDedupPoint, len(aPoints)+len(bPoints))
+	for _, p := range append(append([]llmDedupPoint{}, aPoints...), bPoints...) {
+		byText[normText(p.Content)] = p
+	}
+	for i, p := range merged.Points {
+		if orig, ok := byText[normText(p.Content)]; ok {
+			merged.Points[i].SourceTheme = orig.SourceTheme
+			merged.Points[i].ContentTheme = orig.ContentTheme
+			merged.Points[i].Object = orig.Object
+			merged.Points[i].Scope = orig.Scope
+			merged.Points[i].SemanticsPromptVersion = orig.SemanticsPromptVersion
+		}
+	}
 }
 
 // dedupMaxGapLines is how far apart two units' line ranges can sit and still

@@ -40,7 +40,7 @@ func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *sql.DB) {
 		},
 	}
 
-	svc := NewService(unitStore, sourceStore, &semanticAwareFakeClient{FakeClient: fake}, idxMgr.Units, idxMgr.Points, q, cfg)
+	svc := NewService(unitStore, sourceStore, fake, idxMgr.Units, idxMgr.Points, q, cfg)
 	return svc, fake, db
 }
 

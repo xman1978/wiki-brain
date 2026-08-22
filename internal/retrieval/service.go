@@ -82,8 +82,9 @@ func (s *Service) SetSynthesisOutcomeWriter(w SynthesisOutcomeWriter) {
 }
 
 const (
-	defaultRerankJudgeBatchMaxChars = 4000
-	defaultRerankJudgeConcurrency   = 4
+	defaultRerankJudgeBatchMaxChars      = 2000
+	defaultRerankJudgeBatchMaxCandidates = 5
+	defaultRerankJudgeConcurrency        = 4
 )
 
 func NewService(store *Store, llmClient llm.LLMClient, unitsIdx, pointsIdx, outlinesIdx bleve.Index, cfg *config.Config, activationSvc *activation.Service, evidenceSvc *evidence.Service, wikiSvc *wiki.Service) *Service {
@@ -901,7 +902,19 @@ func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, source
 		}, nil
 	}
 
-	return s.rerankAndBuildEvidenceSet(ctx, qc, merged, emit, progress, lastResort)
+	// rrfMerge/ftsRecall pick each KU's single best-scoring KP as that KU's
+	// stand-in candidate — a shortcut for ranking the KU, not a claim that
+	// this is the only KP worth judging. Expanding here restores the KU's
+	// full current KP set before judging, so a KU that wins its way into the
+	// top-N by one KP's score doesn't silently hide its other KPs (which may
+	// be the ones that actually answer the question) from the judge.
+	expanded, err := s.expandCandidatesToPoints(merged)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval: expand candidates to points: %w", err)
+	}
+	slog.Info("retrieval: step6b expand candidates to points done", "units", len(merged), "points", len(expanded))
+
+	return s.rerankAndBuildEvidenceSet(ctx, qc, expanded, emit, progress, lastResort)
 }
 
 // rerankAndBuildEvidenceSet runs Steps 7-10 (Rerank through EvidenceSet
@@ -1588,6 +1601,44 @@ func (s *Service) rrfMerge(lists ...[]candidate) []candidate {
 	return result
 }
 
+// expandCandidatesToPoints turns each of rrfMerge's top-N KU-level
+// candidates into one candidate per that KU's own current knowledge points,
+// so every KP belonging to a selected KU gets its own judge candidate.
+// Without this, only the single KP that ftsRecall/rrfMerge happened to rank
+// the KU by (bestPointPerUnit) would ever reach buildJudgeItems — any other
+// KP under the same KU, however relevant, would never be seen by the judge
+// at all (not even filed as "irrelevant").
+func (s *Service) expandCandidatesToPoints(candidates []candidate) ([]candidate, error) {
+	unitIDs := make([]string, len(candidates))
+	for i, c := range candidates {
+		unitIDs[i] = c.unitID
+	}
+	pointsByUnit, err := s.store.GetPointContentsByUnitIDs(unitIDs)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval: expand candidates to points: %w", err)
+	}
+
+	expanded := make([]candidate, 0, len(candidates))
+	for _, c := range candidates {
+		points := pointsByUnit[c.unitID]
+		if len(points) == 0 {
+			// No current KP found for this unit (e.g. a lifecycle change
+			// raced the query moments after FTS recall) — keep the
+			// original single-point candidate rather than dropping the
+			// whole unit; filterCurrentUnits/buildJudgeItems downstream
+			// will surface the inconsistency if it's real.
+			expanded = append(expanded, c)
+			continue
+		}
+		for _, p := range points {
+			pc := c
+			pc.pointID = p.PointID
+			expanded = append(expanded, pc)
+		}
+	}
+	return expanded, nil
+}
+
 // Step 7: LLM Rerank
 func (s *Service) rerank(ctx context.Context, qc QueryContext, candidates []candidate) ([]candidate, []Evidence, error) {
 	return s.rerankWithProgress(ctx, qc, candidates, nil)
@@ -1642,10 +1693,6 @@ func (s *Service) buildJudgeItems(candidates []candidate) ([]rerankJudgeCandidat
 	for i := range candidates {
 		unitIDs[i] = candidates[i].unitID
 	}
-	semanticsByUnit, err := s.store.GetUnitRerankSemantics(unitIDs)
-	if err != nil {
-		return nil, fmt.Errorf("retrieval: rerank get semantics: %w", err)
-	}
 	centersByUnit, err := s.store.GetUnitCenters(unitIDs)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: rerank get centers: %w", err)
@@ -1654,31 +1701,37 @@ func (s *Service) buildJudgeItems(candidates []candidate) ([]rerankJudgeCandidat
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: rerank get points: %w", err)
 	}
+	pointByID := make(map[string]PointFact, len(candidates))
+	for _, facts := range pointsByUnit {
+		for _, f := range facts {
+			pointByID[f.PointID] = f
+		}
+	}
 
-	// A unit's persisted semantics are used regardless of which extraction
-	// prompt version produced them — prompt_version is kept on the row for
-	// diagnostics only, not as a completeness gate. Requiring an exact match
-	// meant every prompt wording tweak instantly broke rerank for the whole
-	// existing corpus until every source was re-extracted; only a genuinely
-	// missing row (nothing to feed the judge with at all) is a real
-	// integrity problem.
+	// A point's persisted semantics are used regardless of which extraction
+	// prompt version produced them — semantics_prompt_version is kept on the
+	// row for diagnostics only, not as a completeness gate. Requiring an
+	// exact match meant every prompt wording tweak instantly broke rerank
+	// for the whole existing corpus until every source was re-extracted;
+	// only a genuinely missing row (nothing to feed the judge with at all)
+	// is a real integrity problem.
 	missingSet := make(map[string]struct{})
 	var staleCount int
 	for _, c := range candidates {
-		semantic, ok := semanticsByUnit[c.unitID]
+		fact, ok := pointByID[c.pointID]
 		if !ok {
-			missingSet[c.unitID] = struct{}{}
+			missingSet[c.pointID] = struct{}{}
 			continue
 		}
-		if semantic.PromptVersion != rerank.ExtractPromptVersion {
+		if fact.SemanticsPromptVersion != rerank.ExtractPromptVersion {
 			staleCount++
 		}
 	}
 	if staleCount > 0 {
-		slog.Debug("retrieval: rerank using semantics from an older extraction prompt version", "stale_count", staleCount)
+		slog.Debug("retrieval: rerank using semantics from an older/missing extraction prompt version", "stale_count", staleCount)
 	}
 	if len(missingSet) > 0 {
-		return nil, fmt.Errorf("retrieval: rerank semantics integrity: missing unit_ids: %s", strings.Join(sortedUnitIDs(missingSet), ", "))
+		return nil, fmt.Errorf("retrieval: rerank semantics integrity: missing point_ids: %s", strings.Join(sortedUnitIDs(missingSet), ", "))
 	}
 
 	titleCache := make(map[string]string)
@@ -1696,7 +1749,7 @@ func (s *Service) buildJudgeItems(candidates []candidate) ([]rerankJudgeCandidat
 	judgeItems := make([]rerankJudgeCandidate, 0, len(candidates))
 	for _, c := range candidates {
 		judgeItems = append(judgeItems, buildRerankJudgeCandidate(
-			c.candidateID, titleCache[c.sourceID], centersByUnit[c.unitID], semanticsByUnit[c.unitID], pointsByUnit[c.unitID]))
+			c.candidateID, titleCache[c.sourceID], centersByUnit[c.unitID], c.pointID, pointsByUnit[c.unitID]))
 	}
 	return judgeItems, nil
 }
@@ -1787,14 +1840,47 @@ func sortedUnitIDs(ids map[string]struct{}) []string {
 }
 
 // buildRerankJudgeCandidate assembles the judge's entire view of one
-// candidate. center (knowledge_units.center, from unit extraction) and points
-// (this KU's knowledge_points) come from two independent extraction passes
-// over the same KU — including both lowers the chance that a fact the
-// question hinges on is invisible to the judge because one pass dropped it.
-func buildRerankJudgeCandidate(candidateID, sourceTitle, center string, semantic rerank.Semantics, points []PointFact) rerankJudgeCandidate {
-	judgePoints := make([]rerankJudgePoint, len(points))
-	for i, p := range points {
-		judgePoints[i] = rerankJudgePoint{Content: p.Content, Type: p.PointType}
+// candidate. center (knowledge_units.center, from unit extraction) still
+// covers the whole KU, but points is scoped to just this candidate's own
+// targetPointID — a candidate is always recalled against one specific KP
+// (see the candidate struct's pointID), and previously this fed the judge
+// every sibling KP in the same unit regardless of which one the candidate
+// actually represents. A unit's KPs can have different objects/audiences
+// (a policy document mixing a sales-commission clause with an unrelated
+// eligibility clause, say), so bundling them let one sibling's wording
+// launder relevance onto another — the judge would see the whole unit's
+// text as one blob and let a loosely matching phrase in an unrelated KP
+// carry a different KP's candidate across the object/scenario gate. If
+// targetPointID isn't found in points (e.g. a lifecycle change raced the
+// query), fall back to the full unit's points rather than judging with an
+// empty payload.
+func buildRerankJudgeCandidate(candidateID, sourceTitle, center, targetPointID string, points []PointFact) rerankJudgeCandidate {
+	var target *PointFact
+	for i := range points {
+		if points[i].PointID == targetPointID {
+			target = &points[i]
+			break
+		}
+	}
+
+	judgePoints := make([]rerankJudgePoint, 0, 1)
+	if target != nil {
+		judgePoints = append(judgePoints, rerankJudgePoint{Content: target.Content, Type: target.PointType})
+	} else {
+		judgePoints = make([]rerankJudgePoint, len(points))
+		for i, p := range points {
+			judgePoints[i] = rerankJudgePoint{Content: p.Content, Type: p.PointType}
+		}
+	}
+
+	var semantic PointFact
+	if target != nil {
+		semantic = *target
+	} else if len(points) > 0 {
+		// targetPointID not found among this unit's current points (e.g. a
+		// lifecycle change raced the query) — fall back to the first
+		// sibling's semantics rather than judging with an empty payload.
+		semantic = points[0]
 	}
 	return rerankJudgeCandidate{
 		CandidateID:  candidateID,
@@ -1802,7 +1888,6 @@ func buildRerankJudgeCandidate(candidateID, sourceTitle, center string, semantic
 		Center:       center,
 		SourceTheme:  semantic.SourceTheme,
 		ContentTheme: semantic.ContentTheme,
-		Intent:       semantic.Intent,
 		Object:       semantic.Object,
 		Scope:        semantic.Scope,
 		Points:       judgePoints,
@@ -1959,7 +2044,7 @@ func missingCandidateIDs(batch []rerankJudgeCandidate, results map[string]string
 // classify) so a dropped candidate degrades to "kept but unclassified"
 // rather than silently disappearing.
 func (s *Service) runRerankJudgeBatches(ctx context.Context, candidates []rerankJudgeCandidate, defaultForMissing string, callBatch func(ctx context.Context, batch []rerankJudgeCandidate) (map[string]string, error)) (map[string]string, error) {
-	batches := splitRerankJudgeBatches(candidates, s.rerankJudgeBatchMaxChars())
+	batches := splitRerankJudgeBatches(candidates, s.rerankJudgeBatchMaxChars(), s.rerankJudgeBatchMaxCandidates())
 	if len(batches) == 0 {
 		return nil, nil
 	}
@@ -2132,6 +2217,13 @@ func (s *Service) rerankJudgeBatchMaxChars() int {
 	return defaultRerankJudgeBatchMaxChars
 }
 
+func (s *Service) rerankJudgeBatchMaxCandidates() int {
+	if s.cfg != nil && s.cfg.Retrieval.RerankJudgeBatchMaxCandidates > 0 {
+		return s.cfg.Retrieval.RerankJudgeBatchMaxCandidates
+	}
+	return defaultRerankJudgeBatchMaxCandidates
+}
+
 func (s *Service) rerankJudgeConcurrency() int {
 	if s.cfg != nil && s.cfg.Retrieval.RerankJudgeConcurrency > 0 {
 		return s.cfg.Retrieval.RerankJudgeConcurrency
@@ -2140,19 +2232,28 @@ func (s *Service) rerankJudgeConcurrency() int {
 }
 
 // splitRerankJudgeBatches packs candidates into batches capped at maxChars
-// each, then balances candidates across those batches (LPT: largest items
-// first, each placed into the currently-smallest batch that still fits) so
-// that concurrent batches finish around the same time — the two-step judge's
-// wall-clock cost is set by the slowest batch in a round, so an uneven
-// packing (one near-full batch, one near-empty) wastes the concurrency
-// budget. Candidate order carries no judging semantics (each candidate is
-// judged independently), so reordering across batches is safe.
-func splitRerankJudgeBatches(candidates []rerankJudgeCandidate, maxChars int) [][]rerankJudgeCandidate {
+// each and at maxCandidates candidates each — whichever cap is stricter for
+// a given batch — then balances candidates across those batches (LPT:
+// largest items first, each placed into the currently-smallest batch that
+// still fits) so that concurrent batches finish around the same time — the
+// two-step judge's wall-clock cost is set by the slowest batch in a round,
+// so an uneven packing (one near-full batch, one near-empty) wastes the
+// concurrency budget. The candidate-count cap exists because the model's
+// per-candidate output (relevant + a one-sentence analysis) can push a
+// large batch past its output token budget and get truncated mid-JSON even
+// while comfortably under maxChars, which only bounds the candidates' own
+// input size, not the model's response size. Candidate order carries no
+// judging semantics (each candidate is judged independently), so
+// reordering across batches is safe.
+func splitRerankJudgeBatches(candidates []rerankJudgeCandidate, maxChars, maxCandidates int) [][]rerankJudgeCandidate {
 	if len(candidates) == 0 {
 		return nil
 	}
 	if maxChars <= 0 {
 		maxChars = defaultRerankJudgeBatchMaxChars
+	}
+	if maxCandidates <= 0 {
+		maxCandidates = defaultRerankJudgeBatchMaxCandidates
 	}
 
 	type sizedCandidate struct {
@@ -2170,6 +2271,9 @@ func splitRerankJudgeBatches(candidates []rerankJudgeCandidate, maxChars int) []
 	sort.SliceStable(sized, func(i, j int) bool { return sized[i].chars > sized[j].chars })
 
 	numBatches := (totalChars + maxChars - 1) / maxChars
+	if byCount := (len(candidates) + maxCandidates - 1) / maxCandidates; byCount > numBatches {
+		numBatches = byCount
+	}
 	if numBatches < 1 {
 		numBatches = 1
 	}
@@ -2179,6 +2283,9 @@ func splitRerankJudgeBatches(candidates []rerankJudgeCandidate, maxChars int) []
 	for _, item := range sized {
 		best := -1
 		for b := 0; b < len(batches); b++ {
+			if len(batches[b]) >= maxCandidates {
+				continue
+			}
 			if len(batches[b]) > 0 && batchChars[b]+item.chars > maxChars {
 				continue
 			}
@@ -2210,7 +2317,6 @@ type rerankJudgeCandidate struct {
 	Center       string             `json:"center"`
 	SourceTheme  string             `json:"source_theme"`
 	ContentTheme string             `json:"content_theme"`
-	Intent       string             `json:"intent"`
 	Object       string             `json:"object"`
 	Scope        string             `json:"scope"`
 	Points       []rerankJudgePoint `json:"points"`
@@ -2404,10 +2510,6 @@ func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, inten
 		unitIDs = append(unitIDs, unitID)
 	}
 	sort.Strings(unitIDs)
-	semantics, err := s.store.GetUnitRerankSemantics(unitIDs)
-	if err != nil {
-		return nil, fmt.Errorf("retrieval: get evidence semantics: %w", err)
-	}
 	sourceTitles := make(map[string]string)
 	for _, sourceID := range unitSourceIDs {
 		if _, ok := sourceTitles[sourceID]; ok {
@@ -2430,9 +2532,11 @@ func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, inten
 		return nil, fmt.Errorf("retrieval: get evidence point contents: %w", err)
 	}
 	pointContent := make(map[string]string)
+	semanticsByPoint := make(map[string]PointFact)
 	for _, facts := range pointsByUnit {
 		for _, f := range facts {
 			pointContent[f.PointID] = f.Content
+			semanticsByPoint[f.PointID] = f
 		}
 	}
 
@@ -2475,7 +2579,7 @@ func (s *Service) buildEvidenceSet(ctx context.Context, question, subject, inten
 	for _, item := range mined {
 		ref := SourceRef{SourceID: item.SourceID, LineStart: item.LineStart, LineEnd: item.LineEnd}
 		refJSON, _ := json.Marshal(ref)
-		semantic := semantics[item.UnitID]
+		semantic := semanticsByPoint[item.PointID]
 		recall := unitRecallInfo[item.UnitID]
 		ev := Evidence{
 			FactID:       uuid.New().String(),

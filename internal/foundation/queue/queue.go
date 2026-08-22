@@ -31,22 +31,42 @@ type TraceTask struct {
 type HandlerFunc func(payload interface{})
 
 type Queue struct {
-	ch       chan Task
-	handlers map[string]HandlerFunc
-	wg       sync.WaitGroup
-	done     chan struct{}
+	ch        chan Task
+	handlers  map[string]HandlerFunc
+	dedicated map[string]chan Task
+	bufSize   int
+	wg        sync.WaitGroup
+	done      chan struct{}
 }
 
 func New(bufferSize int) *Queue {
 	return &Queue{
-		ch:       make(chan Task, bufferSize),
-		handlers: make(map[string]HandlerFunc),
-		done:     make(chan struct{}),
+		ch:        make(chan Task, bufferSize),
+		handlers:  make(map[string]HandlerFunc),
+		dedicated: make(map[string]chan Task),
+		bufSize:   bufferSize,
+		done:      make(chan struct{}),
 	}
 }
 
 func (q *Queue) RegisterHandler(taskType string, handler HandlerFunc) {
 	q.handlers[taskType] = handler
+}
+
+// RegisterHandlerWithWorkers registers handler for taskType on its own
+// dedicated channel and worker pool, isolated from the shared pool started
+// by Start/StartN and from every other task type — tasks of this type never
+// wait behind, or block, tasks of another type, and vice versa. Must be
+// called before any Enqueue of this task type. Use this when a task type
+// needs its own concurrency cap distinct from queue.workers.
+func (q *Queue) RegisterHandlerWithWorkers(taskType string, workers int, handler HandlerFunc) {
+	if workers < 1 {
+		workers = 1
+	}
+	q.handlers[taskType] = handler
+	ch := make(chan Task, q.bufSize)
+	q.dedicated[taskType] = ch
+	q.startWorkers(ch, workers)
 }
 
 func (q *Queue) Start() {
@@ -57,13 +77,17 @@ func (q *Queue) StartN(workers int) {
 	if workers < 1 {
 		workers = 1
 	}
+	q.startWorkers(q.ch, workers)
+}
+
+func (q *Queue) startWorkers(ch chan Task, workers int) {
 	for i := 0; i < workers; i++ {
 		q.wg.Add(1)
 		go func() {
 			defer q.wg.Done()
 			for {
 				select {
-				case task, ok := <-q.ch:
+				case task, ok := <-ch:
 					if !ok {
 						return
 					}
@@ -71,7 +95,7 @@ func (q *Queue) StartN(workers int) {
 				case <-q.done:
 					for {
 						select {
-						case task, ok := <-q.ch:
+						case task, ok := <-ch:
 							if !ok {
 								return
 							}
@@ -87,8 +111,12 @@ func (q *Queue) StartN(workers int) {
 }
 
 func (q *Queue) Enqueue(task Task) bool {
+	ch := q.ch
+	if dedicated, ok := q.dedicated[task.Type]; ok {
+		ch = dedicated
+	}
 	select {
-	case q.ch <- task:
+	case ch <- task:
 		return true
 	default:
 		slog.Error("queue full, task dropped", "type", task.Type)

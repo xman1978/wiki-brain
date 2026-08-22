@@ -18,6 +18,7 @@ Wiki-Brain 是一个知识检索系统，核心流程：文件导入 → KU/KP �
 
 ## V1 关键设计决策（近期定稿，实现时务必对照 docs/impl/v1/ 精确核对，不要凭旧印象或直觉简化/扩展）
 
+- **Rerank 语义从 KU 级下沉到 KP 级（2026-08-21 改判）**：`unit_rerank_semantics` 表（KU 级 `source_theme`/`content_theme`/`intent`/`object`/`scope`）已废弃并删除（migration 062），四个字段（不再有 `intent`）改为 `knowledge_points` 表上的列，每条 KP 各自一份，复用 KP 已有的 `manually_edited`/`edited_at` 保护。根因：同一 KU 常含多条适用对象/范围各不相同的 KP，KU 级语义借用给所有 KP 会让不适用的证据被 rerank 误判放行（实测案例：营销中心专属的"销售奖励制度"被当作"实施人员项目奖金"问题的证据）。新导入路径把语义抽取合并进 `unit_point_extract.md`（v6，产出每条 KP 的 content/type 时一并给出该 KP 自己的 content_theme/object/scope，`source_theme` 直接取 Source 标题不调用 LLM，不新增 LLM 调用）；gap-fill/重试/覆盖补录路径产出的 KP 暂不携带这些字段，靠新增的独立回填引擎 `internal/unit/kp_semantics.go` + `config/prompts/kp_semantics_extract.md` 按 point_id 补齐；dedup 合并按归一化正文匹配回原 KP 继承语义，匹配不到则留空（与 Center/Points 合并同等近似，不额外加机制）。人工修正 UI 从 `GET/PUT /units/:id/semantics` 迁移为 `GET/PUT /points/:id/semantics`。`internal/retrieval/service.go` 的 `buildJudgeItems`/`buildRerankJudgeCandidate`/`buildEvidenceSet` 改为按候选自己的 point_id 取语义，这是本次改判修复的核心机制。详见 `docs/impl/v1/semantics-curation.md`。
 - **KPN 关系类型只有 2 种**：`related` / `contradicts`，`direction` 恒为 `bidirectional`（MVP 的 `internal/unit/service.go` 已是此实现）。V1 跨 Source 匹配（`kpn.md`）保持同样的 2 种，不要按早期设计文档的 5 种类型实现。
 - **KU/KP lifecycle 只有 3 种状态**：`current` / `superseded` / `deprecated`，没有 candidate/needs_verification/conflicted/historical/retracted（详见 `docs/design/lifecycle.md` 第 2 节的场景推导）。`activation_links` 自己有独立状态机（candidate/verified/weakened/deprecated，见 `activation.md`），与 KU/KP 的 lifecycle 是两套不同状态，不要混用。
 - **Source 重新上传用 Shadow Source 机制**：新文件先在隐藏的影子 Source（`sources.shadow_of` 指向目标 source_id）里走完全正常的 `source_process → unit_extract`（不改动该链路一行代码），全程不影响、不暴露原 Source；只有影子处理全部成功（含 KPN、Concept 匹配）后，才在一个事务里把影子内容的 `source_id` 改写为目标 source_id、原内容标记 `superseded`、影子行删除。创建影子时要跳过对目标 source_id 自身的文件名去重检查。影子失败直接丢弃，不需要回滚代码；提供 `POST /sources/:id/reupload/retry` 复用已有的 `POST /sources/:shadow_id/retry` 续跑逻辑。Retrieval 的 Domain 预过滤、Source 语义过滤要排除 `shadow_of IS NOT NULL` 的行。详见 `docs/impl/v1/lifecycle.md`。
@@ -69,6 +70,8 @@ Wiki-Brain 是一个知识检索系统，核心流程：文件导入 → KU/KP �
 
 - 在修改 bug 时，不要破坏原本的设计和实现方案，除非用户确认要修改。
 
+- 在修改 bug 时，要考虑通用性，不要只针对当前问题修改提示词和代码。
+
 ## 参考文档
 
 ### MVP（已完成）
@@ -87,17 +90,17 @@ Wiki-Brain 是一个知识检索系统，核心流程：文件导入 → KU/KP �
 
 ### V1（进行中，按此顺序实现）
 
-| 顺序 | 模块       | 文档                          |
-| -- | -------- | --------------------------- |
-| 1  | Lifecycle  | `docs/impl/v1/lifecycle.md` |
-| 2  | Activation | `docs/impl/v1/activation.md` |
-| 3  | Trace      | `docs/impl/v1/trace.md`     |
-| 4  | Study      | `docs/impl/v1/study.md`     |
-| 5  | Retrieval  | `docs/impl/v1/retrieval.md` |
-| 6  | Evidence   | `docs/impl/v1/evidence.md`  |
-| 7  | KPN        | `docs/impl/v1/kpn.md`       |
-| 8  | Wiki       | `docs/impl/v1/wiki.md`（编译链路重构见 `docs/impl/v1/wiki-generation.md`：P0 已实现；P1 切面聚类已实现，写作调用维持两次整页 LLM 调用（analyze+compile，材料按切面分组），**不做**提纲/逐节生成——该架构曾实现过一版又确认收缩，代码收缩指令见 `docs/impl/v1/wiki-generation-simplify-task-brief.md`。**2026-08-18 单层化改判已实施**，取代 `wiki.md` 中两层架构相关章节，以 `docs/design/wiki-single-tier-revision.md` + `docs/impl/v1/wiki-single-tier-task-brief.md` 为准，详见上方「V1 关键设计决策」）      |
-| 9  | Page       | `docs/impl/v1/page.md`      |
+| 顺序  | 模块         | 文档                                                                                                                                                                                                                                                                                                                                                                                        |
+| --- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Lifecycle  | `docs/impl/v1/lifecycle.md`                                                                                                                                                                                                                                                                                                                                                               |
+| 2   | Activation | `docs/impl/v1/activation.md`                                                                                                                                                                                                                                                                                                                                                              |
+| 3   | Trace      | `docs/impl/v1/trace.md`                                                                                                                                                                                                                                                                                                                                                                   |
+| 4   | Study      | `docs/impl/v1/study.md`                                                                                                                                                                                                                                                                                                                                                                   |
+| 5   | Retrieval  | `docs/impl/v1/retrieval.md`                                                                                                                                                                                                                                                                                                                                                               |
+| 6   | Evidence   | `docs/impl/v1/evidence.md`                                                                                                                                                                                                                                                                                                                                                                |
+| 7   | KPN        | `docs/impl/v1/kpn.md`                                                                                                                                                                                                                                                                                                                                                                     |
+| 8   | Wiki       | `docs/impl/v1/wiki.md`（编译链路重构见 `docs/impl/v1/wiki-generation.md`：P0 已实现；P1 切面聚类已实现，写作调用维持两次整页 LLM 调用（analyze+compile，材料按切面分组），**不做**提纲/逐节生成——该架构曾实现过一版又确认收缩，代码收缩指令见 `docs/impl/v1/wiki-generation-simplify-task-brief.md`。**2026-08-18 单层化改判已实施**，取代 `wiki.md` 中两层架构相关章节，以 `docs/design/wiki-single-tier-revision.md` + `docs/impl/v1/wiki-single-tier-task-brief.md` 为准，详见上方「V1 关键设计决策」） |
+| 9   | Page       | `docs/impl/v1/page.md`                                                                                                                                                                                                                                                                                                                                                                    |
 
 设计方向（不在上面强制顺序内，尚未排期，见文档内「待确认」标注）：`docs/impl/v1/activation-bundle.md`（ActivationBundle / 熟路——ActivationLink 之上的组合激活层）。
 

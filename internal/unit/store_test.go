@@ -2,7 +2,6 @@ package unit
 
 import (
 	"database/sql"
-	"strings"
 	"testing"
 
 	"github.com/jxman78/wiki-brain/internal/foundation"
@@ -30,136 +29,50 @@ func insertTestSource(t *testing.T, db *sql.DB) {
 	}
 }
 
-func TestPublishGenerationRejectsInvalidSemanticsBeforeWriting(t *testing.T) {
-	valid := rerank.Semantics{
-		UnitID:        "u1",
-		SourceTheme:   "policy",
-		ContentTheme:  "limits",
-		Intent:        "explain",
-		Object:        "employees",
-		Scope:         "travel",
-		PromptVersion: rerank.ExtractPromptVersion,
-	}
-	tests := []struct {
-		name   string
-		mutate func(*rerank.Semantics)
-		want   string
-	}{
-		{name: "empty unit id", mutate: func(s *rerank.Semantics) { s.UnitID = "" }, want: "unit_id"},
-		{name: "wrong prompt version", mutate: func(s *rerank.Semantics) { s.PromptVersion = "v0" }, want: "prompt_version"},
-		{name: "empty source theme", mutate: func(s *rerank.Semantics) { s.SourceTheme = " " }, want: "source_theme"},
-		{name: "empty content theme", mutate: func(s *rerank.Semantics) { s.ContentTheme = "" }, want: "content_theme"},
-		{name: "empty intent", mutate: func(s *rerank.Semantics) { s.Intent = "" }, want: "intent"},
-		{name: "empty scope", mutate: func(s *rerank.Semantics) { s.Scope = "" }, want: "scope"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			store := setupTestStore(t)
-			semantic := valid
-			tc.mutate(&semantic)
-			pool := []unitCandidate{{
-				id: "u1", llm: llmUnit{Center: "Policy limits"},
-				lineStart: 1, lineEnd: 1, promptVersion: promptVersionSplitExtract,
-			}}
-
-			_, _, _, err := store.PublishGeneration("src-1", pool, map[string]rerank.Semantics{"u1": semantic})
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("PublishGeneration err = %v, want field %q", err, tc.want)
-			}
-			var units, semantics int
-			if err := store.db.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE source_id = 'src-1'`).Scan(&units); err != nil {
-				t.Fatal(err)
-			}
-			if err := store.db.QueryRow(`SELECT COUNT(*) FROM unit_rerank_semantics`).Scan(&semantics); err != nil {
-				t.Fatal(err)
-			}
-			if units != 0 || semantics != 0 {
-				t.Fatalf("rows after rejected publication: units=%d semantics=%d, want 0/0", units, semantics)
-			}
-		})
-	}
-}
-
-// TestPublishGenerationAcceptsEmptyObject covers unit_semantics_extract.md's
-// v14 instruction to leave object blank when the unit's text never states
-// who/what a rule applies to, rather than fabricate a value — unlike the
-// other semantic fields, an empty object must not be rejected.
-func TestPublishGenerationAcceptsEmptyObject(t *testing.T) {
+// TestPublishGenerationWritesEachPointsOwnSemantics covers the KP-level
+// semantics design (docs/impl/v1/semantics-curation.md 2026-08-21 改判):
+// each candidate point carries its own source_theme/content_theme/object/
+// scope, written straight to its knowledge_points row — no separate
+// validation gate, no whole-unit discard when a point's semantics are
+// incomplete (object may legitimately be blank; a point with no theme/scope
+// at all is still published, just with an empty semantics_prompt_version,
+// to be picked up later by RegenerateRerankSemantics).
+func TestPublishGenerationWritesEachPointsOwnSemantics(t *testing.T) {
 	store := setupTestStore(t)
-	semantic := rerank.Semantics{
-		UnitID:        "u1",
-		SourceTheme:   "policy",
-		ContentTheme:  "limits",
-		Intent:        "explain",
-		Object:        "",
-		Scope:         "travel",
-		PromptVersion: rerank.ExtractPromptVersion,
+	pool := []unitCandidate{
+		{
+			id: "u1", llm: llmUnit{Center: "Policy limits"},
+			lineStart: 1, lineEnd: 1, promptVersion: promptVersionSplitExtract,
+			points: []llmPoint{
+				{Content: "employees only", Type: "rule", SourceTheme: "policy", ContentTheme: "limits", Object: "employees", Scope: "travel", SemanticsPromptVersion: rerank.ExtractPromptVersion},
+				{Content: "no stated object", Type: "rule", SourceTheme: "policy", ContentTheme: "limits", Object: "", Scope: "travel", SemanticsPromptVersion: rerank.ExtractPromptVersion},
+				{Content: "never got semantics", Type: "rule"},
+			},
+		},
 	}
-	pool := []unitCandidate{{
-		id: "u1", llm: llmUnit{Center: "Policy limits"},
-		lineStart: 1, lineEnd: 1, promptVersion: promptVersionSplitExtract,
-	}}
 
-	_, inserted, _, err := store.PublishGeneration("src-1", pool, map[string]rerank.Semantics{"u1": semantic})
+	_, inserted, points, err := store.PublishGeneration("src-1", pool)
 	if err != nil {
 		t.Fatalf("PublishGeneration: %v", err)
 	}
 	if len(inserted) != 1 || inserted[0].UnitID != "u1" {
 		t.Fatalf("inserted = %+v, want only u1", inserted)
 	}
-}
-
-// TestPublishGenerationDiscardsUnitWhenSemanticsMissing covers the "discard
-// units semantics extraction gave up on" policy: a candidate simply absent
-// from the semantics map (as opposed to present-but-invalid, covered by
-// TestPublishGenerationRejectsInvalidSemanticsBeforeWriting) must not be
-// published at all — no knowledge_units row, no knowledge_points rows —
-// while every other candidate in the same generation still publishes
-// normally.
-func TestPublishGenerationDiscardsUnitWhenSemanticsMissing(t *testing.T) {
-	store := setupTestStore(t)
-	pool := []unitCandidate{
-		{id: "u1", llm: llmUnit{Center: "Policy limits"}, lineStart: 1, lineEnd: 1, promptVersion: promptVersionSplitExtract},
-		{id: "u2", llm: llmUnit{Center: "Heading only"}, lineStart: 2, lineEnd: 2, promptVersion: promptVersionSplitExtract},
+	if len(points) != 3 {
+		t.Fatalf("points = %+v, want 3", points)
 	}
-	semantics := map[string]rerank.Semantics{
-		"u1": {
-			UnitID: "u1", SourceTheme: "policy", ContentTheme: "limits", Intent: "explain",
-			Object: "employees", Scope: "travel",
-			PromptVersion: rerank.ExtractPromptVersion,
-		},
-		// u2 intentionally has no entry — simulates extractRerankSemantics
-		// giving up on it after every fallback tier.
+	byContent := make(map[string]KnowledgePoint, len(points))
+	for _, p := range points {
+		byContent[p.Content] = p
 	}
-
-	_, inserted, _, err := store.PublishGeneration("src-1", pool, semantics)
-	if err != nil {
-		t.Fatalf("PublishGeneration: %v", err)
+	if p := byContent["employees only"]; p.Object != "employees" || p.Scope != "travel" || p.SemanticsPromptVersion != rerank.ExtractPromptVersion {
+		t.Fatalf("point with full semantics = %+v", p)
 	}
-	if len(inserted) != 1 || inserted[0].UnitID != "u1" {
-		t.Fatalf("inserted = %+v, want only u1 (u2 discarded, semantics never resolved)", inserted)
+	if p := byContent["no stated object"]; p.Object != "" || p.Scope != "travel" || p.SemanticsPromptVersion != rerank.ExtractPromptVersion {
+		t.Fatalf("point with blank object = %+v, want object blank but still stamped current", p)
 	}
-
-	var unitCount, semanticsCount int
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE source_id = 'src-1'`).Scan(&unitCount); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM unit_rerank_semantics`).Scan(&semanticsCount); err != nil {
-		t.Fatal(err)
-	}
-	if unitCount != 1 {
-		t.Fatalf("knowledge_units rows = %d, want 1 (u2 discarded entirely)", unitCount)
-	}
-	if semanticsCount != 1 {
-		t.Fatalf("unit_rerank_semantics rows = %d, want 1 (only u1)", semanticsCount)
-	}
-	var semanticUnitID string
-	if err := store.db.QueryRow(`SELECT unit_id FROM unit_rerank_semantics`).Scan(&semanticUnitID); err != nil {
-		t.Fatal(err)
-	}
-	if semanticUnitID != "u1" {
-		t.Fatalf("unit_rerank_semantics row is for %q, want u1", semanticUnitID)
+	if p := byContent["never got semantics"]; p.SemanticsPromptVersion != "" {
+		t.Fatalf("point with no semantics = %+v, want empty semantics_prompt_version (not discarded)", p)
 	}
 }
 

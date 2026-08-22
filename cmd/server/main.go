@@ -152,6 +152,20 @@ func main() {
 
 	// ── Stores ──────────────────────────────────────────
 	sourceStore := source.NewStore(database)
+
+	// A source/units row left in "processing" only happens if the previous
+	// run was killed mid-task (crash, forced restart) — on a clean run that
+	// status is always terminal by the time the queue handler returns. Flag
+	// those as failed now, before the queue starts accepting tasks, so the
+	// file management page doesn't show them as stuck "处理中" forever with
+	// nothing actually working on them; the existing retry/reupload-retry
+	// endpoints pick up from "failed" normally.
+	if srcN, unitsN, err := sourceStore.RecoverInterruptedProcessing(); err != nil {
+		slog.Error("恢复中断处理状态失败", "error", err)
+	} else if srcN > 0 || unitsN > 0 {
+		slog.Warn("发现服务重启前中断的处理任务，已标记为失败", "source_count", srcN, "units_count", unitsN)
+	}
+
 	unitStore := unit.NewStore(database)
 	retrievalStore := retrieval.NewStore(database)
 	answerStore := answer.NewStore(database)
@@ -229,7 +243,17 @@ func main() {
 	domainSvc := domain.NewService(domainStore)
 
 	// ── Queue handlers ──────────────────────────────────
-	q.RegisterHandler(queue.TaskTypeSourceProcess, func(payload interface{}) {
+	// source_process and unit_extract each get their own dedicated worker
+	// pool sized by source.upload_concurrency, independent of each other and
+	// of queue.workers below — at most that many sources can be running
+	// source_process at once, and independently at most that many running
+	// unit_extract at once.
+	uploadConcurrency := cfg.Source.UploadConcurrency
+	if uploadConcurrency <= 0 {
+		uploadConcurrency = 2
+	}
+
+	q.RegisterHandlerWithWorkers(queue.TaskTypeSourceProcess, uploadConcurrency, func(payload interface{}) {
 		task := payload.(queue.SourceTask)
 		if err := sourceSvc.Process(context.Background(), task.SourceID); err != nil {
 			slog.Error("source process failed", "source_id", task.SourceID, "error", err)
@@ -237,7 +261,7 @@ func main() {
 		}
 	})
 
-	q.RegisterHandler(queue.TaskTypeUnitExtract, func(payload interface{}) {
+	q.RegisterHandlerWithWorkers(queue.TaskTypeUnitExtract, uploadConcurrency, func(payload interface{}) {
 		task := payload.(queue.UnitTask)
 
 		unitsStatus := "completed"

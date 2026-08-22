@@ -31,13 +31,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /sources/{id}/coverage/merge", h.mergeCoverageGap)
 	mux.HandleFunc("POST /sources/{id}/kpn-cross", h.triggerCrossKPN)
 	mux.HandleFunc("GET /units/{id}", h.getUnit)
-	mux.HandleFunc("GET /units/{id}/semantics", h.getUnitSemantics)
-	mux.HandleFunc("PUT /units/{id}/semantics", h.putUnitSemantics)
 	mux.HandleFunc("GET /units/{id}/points", h.listPoints)
 	mux.HandleFunc("POST /units/{id}/points", h.addPoint)
 	mux.HandleFunc("GET /points/{id}", h.getPoint)
 	mux.HandleFunc("PUT /points/{id}", h.updatePoint)
+	mux.HandleFunc("GET /points/{id}/semantics", h.getPointSemantics)
+	mux.HandleFunc("PUT /points/{id}/semantics", h.putPointSemantics)
 	mux.HandleFunc("POST /points/{id}/deprecate", h.deprecatePoint)
+	mux.HandleFunc("POST /units/{id}/deprecate", h.deprecateUnit)
 	mux.HandleFunc("GET /points/{id}/relations", h.listRelations)
 }
 
@@ -272,110 +273,86 @@ func (h *Handler) mergeCoverageGap(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// getUnitSemantics / putUnitSemantics: rerank 语义人工修正
-// (docs/impl/v1/semantics-curation.md)。GET 返回 KU 本体（只读，含正文切片）
-// 与语义行（missing 时为 null）；PUT 只接受 semantics —— KU 本体不可编辑。
-func (h *Handler) getUnitSemantics(w http.ResponseWriter, r *http.Request) {
-	unitID := r.PathValue("id")
-	if unitID == "" {
-		foundation.WriteError(w, http.StatusBadRequest, "missing unit id")
+// getPointSemantics / putPointSemantics: rerank 语义人工修正
+// (docs/impl/v1/semantics-curation.md 2026-08-21 改判: 下沉自 KU 级到 KP 级)。
+// GET 返回 KP 本体（只读，含 content/point_type）与语义字段；PUT 只接受
+// semantics —— KP 本体（content/point_type）走 PUT /points/:id 编辑。
+func (h *Handler) getPointSemantics(w http.ResponseWriter, r *http.Request) {
+	pointID := r.PathValue("id")
+	if pointID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "missing point id")
 		return
 	}
 
-	view, err := h.svc.GetUnitSemanticsView(unitID)
+	view, err := h.svc.GetPointSemanticsView(pointID)
 	if err != nil {
-		foundation.WriteError(w, http.StatusNotFound, "unit not found")
+		foundation.WriteError(w, http.StatusNotFound, "point not found")
 		return
 	}
 
-	type semanticsResp struct {
-		SourceTheme    string  `json:"source_theme"`
-		ContentTheme   string  `json:"content_theme"`
-		Intent         string  `json:"intent"`
-		Object         string  `json:"object"`
-		Scope          string  `json:"scope"`
-		PromptVersion  string  `json:"prompt_version"`
-		ManuallyEdited bool    `json:"manually_edited"`
-		EditedAt       *string `json:"edited_at"`
-	}
-	type unitResp struct {
-		UnitID          string `json:"unit_id"`
-		SourceID        string `json:"source_id"`
-		Center          string `json:"center"`
-		LineStart       int    `json:"line_start"`
-		LineEnd         int    `json:"line_end"`
-		Lifecycle       string `json:"lifecycle"`
-		Content         string `json:"content"`
-		OutlinePath     string `json:"outline_path,omitempty"`
-		OutlineNodeType string `json:"outline_node_type,omitempty"`
+	type pointResp struct {
+		PointID         string  `json:"point_id"`
+		UnitID          string  `json:"unit_id"`
+		SourceID        string  `json:"source_id"`
+		Content         string  `json:"content"`
+		PointType       string  `json:"point_type"`
+		Lifecycle       string  `json:"lifecycle"`
+		SourceTheme     string  `json:"source_theme"`
+		ContentTheme    string  `json:"content_theme"`
+		Object          string  `json:"object"`
+		Scope           string  `json:"scope"`
+		PromptVersion   string  `json:"prompt_version"`
+		ManuallyEdited  bool    `json:"manually_edited"`
+		EditedAt        *string `json:"edited_at,omitempty"`
+		OutlinePath     string  `json:"outline_path,omitempty"`
+		OutlineNodeType string  `json:"outline_node_type,omitempty"`
 	}
 
-	resp := struct {
-		Unit      unitResp       `json:"unit"`
-		Semantics *semanticsResp `json:"semantics"`
-	}{
-		Unit: unitResp{
-			UnitID:          view.Unit.UnitID,
-			SourceID:        view.Unit.SourceID,
-			Center:          view.Unit.Center,
-			LineStart:       view.Unit.LineStart,
-			LineEnd:         view.Unit.LineEnd,
-			Lifecycle:       view.Unit.Lifecycle,
-			Content:         view.Unit.Content,
-			OutlinePath:     view.Unit.OutlinePath,
-			OutlineNodeType: view.Unit.OutlineNodeType,
-		},
+	resp := pointResp{
+		PointID:         view.Point.PointID,
+		UnitID:          view.Point.UnitID,
+		SourceID:        view.Point.SourceID,
+		Content:         view.Point.Content,
+		PointType:       view.Point.PointType,
+		Lifecycle:       view.Point.Lifecycle,
+		SourceTheme:     view.Point.SourceTheme,
+		ContentTheme:    view.Point.ContentTheme,
+		Object:          view.Point.Object,
+		Scope:           view.Point.Scope,
+		PromptVersion:   view.Point.SemanticsPromptVersion,
+		ManuallyEdited:  view.Point.ManuallyEdited,
+		OutlinePath:     view.OutlinePath,
+		OutlineNodeType: view.OutlineNodeType,
 	}
-	if view.Semantics != nil {
-		sem := &semanticsResp{
-			SourceTheme:    view.Semantics.SourceTheme,
-			ContentTheme:   view.Semantics.ContentTheme,
-			Intent:         view.Semantics.Intent,
-			Object:         view.Semantics.Object,
-			Scope:          view.Semantics.Scope,
-			PromptVersion:  view.Semantics.PromptVersion,
-			ManuallyEdited: view.Semantics.ManuallyEdited,
-		}
-		if view.Semantics.EditedAt.Valid {
-			t := view.Semantics.EditedAt.Time.UTC().Format(time.RFC3339)
-			sem.EditedAt = &t
-		}
-		resp.Semantics = sem
+	if view.Point.EditedAt.Valid {
+		t := view.Point.EditedAt.Time.UTC().Format(time.RFC3339)
+		resp.EditedAt = &t
 	}
 	foundation.WriteJSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) putUnitSemantics(w http.ResponseWriter, r *http.Request) {
-	unitID := r.PathValue("id")
-	if unitID == "" {
-		foundation.WriteError(w, http.StatusBadRequest, "missing unit id")
+func (h *Handler) putPointSemantics(w http.ResponseWriter, r *http.Request) {
+	pointID := r.PathValue("id")
+	if pointID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "missing point id")
 		return
 	}
 
 	var req struct {
-		Semantics *struct {
-			SourceTheme  string `json:"source_theme"`
-			ContentTheme string `json:"content_theme"`
-			Intent       string `json:"intent"`
-			Object       string `json:"object"`
-			Scope        string `json:"scope"`
-		} `json:"semantics"`
+		SourceTheme  string `json:"source_theme"`
+		ContentTheme string `json:"content_theme"`
+		Object       string `json:"object"`
+		Scope        string `json:"scope"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Semantics == nil {
-		foundation.WriteError(w, http.StatusBadRequest, "semantics is required")
-		return
-	}
 
-	sem := req.Semantics
-	// 校验规则与 unit_semantics_extract.md 的 Schema 一致：五字段均非空 ——
-	// 人工数据与 LLM 数据形状相同。
+	// 校验规则与 kp_semantics_extract.md 的 Schema 一致：source_theme/
+	// content_theme/scope 非空，object 允许留空（人工数据与 LLM 数据形状相同）。
 	for name, v := range map[string]string{
-		"source_theme": sem.SourceTheme, "content_theme": sem.ContentTheme,
-		"intent": sem.Intent, "object": sem.Object, "scope": sem.Scope,
+		"source_theme": req.SourceTheme, "content_theme": req.ContentTheme, "scope": req.Scope,
 	} {
 		if strings.TrimSpace(v) == "" {
 			foundation.WriteError(w, http.StatusBadRequest, name+" is required")
@@ -383,20 +360,19 @@ func (h *Handler) putUnitSemantics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	err := h.svc.UpdateUnitSemantics(unitID, rerank.Semantics{
-		UnitID:       unitID,
-		SourceTheme:  sem.SourceTheme,
-		ContentTheme: sem.ContentTheme,
-		Intent:       sem.Intent,
-		Object:       sem.Object,
-		Scope:        sem.Scope,
+	err := h.svc.UpdatePointSemantics(pointID, rerank.Semantics{
+		PointID:      pointID,
+		SourceTheme:  req.SourceTheme,
+		ContentTheme: req.ContentTheme,
+		Object:       req.Object,
+		Scope:        req.Scope,
 	})
 	if errors.Is(err, ErrUnitNotCurrent) {
 		foundation.WriteError(w, http.StatusConflict, err.Error())
 		return
 	}
 	if err != nil {
-		foundation.WriteError(w, http.StatusNotFound, "unit not found")
+		foundation.WriteError(w, http.StatusNotFound, "point not found")
 		return
 	}
 	foundation.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -701,6 +677,33 @@ func (h *Handler) deprecatePoint(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"point_id":  kp.PointID,
 		"lifecycle": kp.Lifecycle,
+	})
+}
+
+// deprecateUnit implements POST /units/:id/deprecate — 来源详情页删除 KU：
+// 软删除（lifecycle=deprecated），级联子 KP，不做物理删除（内部经由
+// Service.SetUnitLifecycle 统一入口，保留 KPN/Wiki/ActivationLink 等既有引用）。
+func (h *Handler) deprecateUnit(w http.ResponseWriter, r *http.Request) {
+	unitID := r.PathValue("id")
+	if unitID == "" {
+		foundation.WriteError(w, http.StatusBadRequest, "missing unit id")
+		return
+	}
+
+	ku, err := h.svc.store.GetUnitByID(unitID)
+	if err != nil {
+		foundation.WriteError(w, http.StatusNotFound, "unit not found")
+		return
+	}
+
+	if err := h.svc.SetUnitLifecycle([]string{unitID}, LifecycleDeprecated, "manual delete from source detail page"); err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"unit_id":   ku.UnitID,
+		"lifecycle": LifecycleDeprecated,
 	})
 }
 

@@ -44,82 +44,63 @@ var validPointTypes = map[string]bool{
 	"question":   true,
 }
 
-// SemanticsView is the full curation view of one KU: the read-only unit
-// fields (including the verbatim content slice, so the curator can see what
-// the summaries missed) plus the editable semantics row (nil when missing).
-type SemanticsView struct {
-	Unit      SemanticsViewUnit
-	Semantics *RerankSemanticsRow
-}
-
-type SemanticsViewUnit struct {
-	UnitID    string
-	SourceID  string
-	Center    string
-	LineStart int
-	LineEnd   int
-	Lifecycle string
-	Content   string
-	// OutlinePath is the unit's owning outline chain root→leaf joined with
-	// " / "（如"第三章 积分结果公布及应用"）; empty for standalone units
-	// (coverage-fix 产物没有 outline_id). OutlineNodeType is the leaf node's
-	// node_type（structural / semantic）.
+// PointSemanticsView is the full curation view of one KP: the read-only KP
+// fields (content/type, plus its owning unit's outline context) and its
+// editable rerank semantics (source_theme/content_theme/object/scope, which
+// live directly on knowledge_points — docs/impl/v1/semantics-curation.md
+// 2026-08-21 改判: 下沉自 KU 级 unit_rerank_semantics 到 KP 级).
+type PointSemanticsView struct {
+	Point KnowledgePoint
+	// OutlinePath is the owning unit's outline chain root→leaf joined with
+	// " / "; empty for standalone units (coverage-fix 产物没有 outline_id).
 	OutlinePath     string
 	OutlineNodeType string
 }
 
-func (s *Service) GetUnitSemanticsView(unitID string) (*SemanticsView, error) {
-	ku, err := s.store.GetUnitByID(unitID)
+func (s *Service) GetPointSemanticsView(pointID string) (*PointSemanticsView, error) {
+	kp, err := s.store.GetPointByID(pointID)
 	if err != nil {
 		return nil, err
 	}
 
-	content, err := s.readUnitContent(ku)
+	ku, err := s.store.GetUnitByID(kp.UnitID)
 	if err != nil {
 		return nil, err
 	}
 
-	sem, err := s.store.GetRerankSemanticsByUnitID(unitID)
-	if err != nil {
-		return nil, err
-	}
-
-	unitView := SemanticsViewUnit{
-		UnitID:    ku.UnitID,
-		SourceID:  ku.SourceID,
-		Center:    ku.Center,
-		LineStart: ku.LineStart,
-		LineEnd:   ku.LineEnd,
-		Lifecycle: ku.Lifecycle,
-		Content:   content,
-	}
+	view := &PointSemanticsView{Point: *kp}
 	if ku.OutlineID.Valid {
 		path, nodeType, err := s.store.GetOutlinePath(ku.OutlineID.String)
 		if err != nil {
 			// 目录只是展示辅助信息，查不到不阻塞语义编辑本身。
-			slog.Warn("unit: semantics view: outline path lookup failed", "unit_id", unitID, "outline_id", ku.OutlineID.String, "error", err)
+			slog.Warn("unit: semantics view: outline path lookup failed", "point_id", pointID, "outline_id", ku.OutlineID.String, "error", err)
 		} else {
-			unitView.OutlinePath = path
-			unitView.OutlineNodeType = nodeType
+			view.OutlinePath = path
+			view.OutlineNodeType = nodeType
 		}
 	}
 
-	return &SemanticsView{Unit: unitView, Semantics: sem}, nil
+	return view, nil
 }
 
-// UpdateUnitSemantics persists a human-curated semantics row for a current
-// KU. sem must already be shape-validated by the caller (five non-empty
-// fields) — the same shape unit_semantics_extract.md produces, so rerank's
-// readers never need to care where a row came from.
-func (s *Service) UpdateUnitSemantics(unitID string, sem rerank.Semantics) error {
-	ku, err := s.store.GetUnitByID(unitID)
+// UpdatePointSemantics persists a human-curated semantics row for a current
+// KP. sem must already be shape-validated by the caller (source_theme/
+// content_theme/scope non-empty, object may be blank) — the same shape
+// kp_semantics_extract.md produces, so rerank's readers never need to care
+// where a row came from.
+func (s *Service) UpdatePointSemantics(pointID string, sem rerank.Semantics) error {
+	kp, err := s.store.GetPointByID(pointID)
+	if err != nil {
+		return err
+	}
+	ku, err := s.store.GetUnitByID(kp.UnitID)
 	if err != nil {
 		return err
 	}
 	if ku.Lifecycle != LifecycleCurrent {
-		return fmt.Errorf("%w: unit %s is %s", ErrUnitNotCurrent, unitID, ku.Lifecycle)
+		return fmt.Errorf("%w: unit %s is %s", ErrUnitNotCurrent, ku.UnitID, ku.Lifecycle)
 	}
-	return s.store.UpsertManualRerankSemantics(unitID, sem, rerank.ExtractPromptVersion)
+	return s.store.UpsertManualPointSemantics(pointID, sem, rerank.ExtractPromptVersion)
 }
 
 // readUnitContent slices the unit's verbatim content out of the markdown

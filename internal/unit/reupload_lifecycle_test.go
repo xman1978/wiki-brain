@@ -54,7 +54,7 @@ func setupReuploadTest(t *testing.T) (*source.Service, *Service, *llm.FakeClient
 	sourceSvc := source.NewService(sourceStore, nil, fake, models, idxMgr.Outlines, q, cfg, tmpDir)
 	sourceSvc.SetUnitIndexes(idxMgr.Units, idxMgr.Points)
 
-	unitSvc := NewService(unitStore, sourceStore, &semanticAwareFakeClient{FakeClient: fake}, idxMgr.Units, idxMgr.Points, q, cfg)
+	unitSvc := NewService(unitStore, sourceStore, fake, idxMgr.Units, idxMgr.Points, q, cfg)
 	sourceSvc.SetLifecycleSetter(unitSvc)
 
 	return sourceSvc, unitSvc, fake, tmpDir, idxMgr, q
@@ -406,13 +406,15 @@ func TestReuploadLifecycle_SemanticFailureRetriesUnitStageThenSwaps(t *testing.T
 	}
 	awaitQueuedSourceID(t, unitTasks, shadow.SourceID)
 
-	setExtractResponse(t, fake, "New policy", "New fact", 1, 3)
-	fake.SetResponse("unit_semantics_extract.md", llm.FakeResponse{Err: errors.New("semantic extraction failed")})
+	fake.SetResponse("unit_boundary_extract.md", llm.FakeResponse{Output: splitBoundaryResp(extractOutput{
+		Units: []llmUnit{{UnitID: "1", Center: "New policy", LineStart: 1, LineEnd: 3, FirstLineAnchor: "# Policy"}},
+	})})
+	fake.SetResponseSequence("unit_point_extract.md", []llm.FakeResponse{{Err: errors.New("point extraction failed")}})
 	if err := sourceSvc.Store().UpdateUnitsStatus(shadow.SourceID, "processing"); err != nil {
 		t.Fatalf("mark shadow units processing: %v", err)
 	}
-	if err := unitSvc.Extract(context.Background(), shadow.SourceID); err == nil || !strings.Contains(err.Error(), "semantic extraction failed") {
-		t.Fatalf("shadow Extract err = %v, want semantic extraction failure", err)
+	if err := unitSvc.Extract(context.Background(), shadow.SourceID); err == nil || !strings.Contains(err.Error(), "point extraction failed") {
+		t.Fatalf("shadow Extract err = %v, want point extraction failure", err)
 	}
 	if err := sourceSvc.Store().UpdateUnitsStatus(shadow.SourceID, "failed"); err != nil {
 		t.Fatalf("mark shadow units failed: %v", err)
@@ -448,7 +450,6 @@ func TestReuploadLifecycle_SemanticFailureRetriesUnitStageThenSwaps(t *testing.T
 	}
 
 	setExtractResponse(t, fake, "New policy", "New fact", 1, 3)
-	fake.SetResponse("unit_semantics_extract.md", llm.FakeResponse{Err: errors.New("no response configured")})
 	if err := sourceSvc.Store().UpdateUnitsStatus(shadow.SourceID, "processing"); err != nil {
 		t.Fatalf("mark retried units processing: %v", err)
 	}

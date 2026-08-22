@@ -170,6 +170,112 @@ func TestStoreUpdateUnitsStatus(t *testing.T) {
 	}
 }
 
+func TestRecoverInterruptedProcessing(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	store := NewStore(db)
+
+	stuckSource := &Source{
+		Title: "Stuck at source stage", Format: "pdf", FileName: "a.pdf",
+		OriginalPath: "o/a.pdf", MarkdownPath: "m/a.md", Status: "pending",
+	}
+	store.Create(stuckSource)
+	if err := store.UpdateStatus(stuckSource.SourceID, "processing", nil); err != nil {
+		t.Fatalf("UpdateStatus: %v", err)
+	}
+
+	stuckUnits := &Source{
+		Title: "Stuck at units stage", Format: "pdf", FileName: "b.pdf",
+		OriginalPath: "o/b.pdf", MarkdownPath: "m/b.md", Status: "completed",
+	}
+	store.Create(stuckUnits)
+	if err := store.StartUnitsProcessing(stuckUnits.SourceID); err != nil {
+		t.Fatalf("StartUnitsProcessing: %v", err)
+	}
+
+	// Never dequeued at all before the crash — its task existed only as a
+	// channel entry, so it never got to "processing".
+	neverStarted := &Source{
+		Title: "Never dequeued", Format: "pdf", FileName: "d.pdf",
+		OriginalPath: "o/d.pdf", MarkdownPath: "m/d.md", Status: "pending",
+	}
+	store.Create(neverStarted)
+
+	// Source stage finished and unit_extract was enqueued, but the crash hit
+	// before any worker dequeued it — units_status is still its column
+	// default "pending", never bumped to "processing".
+	unitsNeverStarted := &Source{
+		Title: "Units never dequeued", Format: "pdf", FileName: "e.pdf",
+		OriginalPath: "o/e.pdf", MarkdownPath: "m/e.md", Status: "completed",
+	}
+	store.Create(unitsNeverStarted)
+
+	untouched := &Source{
+		Title: "Already completed", Format: "pdf", FileName: "c.pdf",
+		OriginalPath: "o/c.pdf", MarkdownPath: "m/c.md", Status: "completed",
+	}
+	store.Create(untouched)
+	if err := store.UpdateUnitsStatus(untouched.SourceID, "completed"); err != nil {
+		t.Fatalf("UpdateUnitsStatus: %v", err)
+	}
+
+	srcN, unitsN, err := store.RecoverInterruptedProcessing()
+	if err != nil {
+		t.Fatalf("RecoverInterruptedProcessing: %v", err)
+	}
+	if srcN != 2 || unitsN != 2 {
+		t.Errorf("RecoverInterruptedProcessing() = (%d, %d), want (2, 2)", srcN, unitsN)
+	}
+
+	got, _ := store.GetByID(stuckSource.SourceID)
+	if got.Status != "failed" {
+		t.Errorf("stuck source status = %q, want failed", got.Status)
+	}
+	if !got.ErrorMsg.Valid || got.ErrorMsg.String == "" {
+		t.Errorf("stuck source error_msg not set")
+	}
+
+	got, _ = store.GetByID(stuckUnits.SourceID)
+	if got.UnitsStatus != "failed" {
+		t.Errorf("stuck units_status = %q, want failed", got.UnitsStatus)
+	}
+	if got.Status != "completed" {
+		t.Errorf("stuck-units row's source status = %q, want unchanged completed", got.Status)
+	}
+	if !got.ErrorMsg.Valid || got.ErrorMsg.String == "" {
+		t.Errorf("stuck units row error_msg not set")
+	}
+
+	got, _ = store.GetByID(neverStarted.SourceID)
+	if got.Status != "failed" {
+		t.Errorf("never-started source status = %q, want failed", got.Status)
+	}
+
+	got, _ = store.GetByID(unitsNeverStarted.SourceID)
+	if got.UnitsStatus != "failed" {
+		t.Errorf("units-never-started units_status = %q, want failed", got.UnitsStatus)
+	}
+	if got.Status != "completed" {
+		t.Errorf("units-never-started row's source status = %q, want unchanged completed", got.Status)
+	}
+
+	got, _ = store.GetByID(untouched.SourceID)
+	if got.Status != "completed" || got.UnitsStatus != "completed" {
+		t.Errorf("untouched source was modified: status=%q units_status=%q", got.Status, got.UnitsStatus)
+	}
+	if got.ErrorMsg.Valid {
+		t.Errorf("untouched source error_msg unexpectedly set: %q", got.ErrorMsg.String)
+	}
+
+	// Re-running with nothing stuck must be a no-op.
+	srcN, unitsN, err = store.RecoverInterruptedProcessing()
+	if err != nil {
+		t.Fatalf("RecoverInterruptedProcessing (second run): %v", err)
+	}
+	if srcN != 0 || unitsN != 0 {
+		t.Errorf("second RecoverInterruptedProcessing() = (%d, %d), want (0, 0)", srcN, unitsN)
+	}
+}
+
 func TestStoreUpdateUnitsStatusClearsCompletedAtForNonTerminalStatus(t *testing.T) {
 	db := foundation.NewTestDB(t)
 	store := NewStore(db)

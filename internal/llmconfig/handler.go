@@ -54,6 +54,17 @@ func (h *Handler) listPlatforms(w http.ResponseWriter, _ *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, items)
 }
 
+// maskProviderAPIKey returns p with a real, non-empty APIKey replaced by
+// MaskedAPIKey before it goes out over HTTP — the plaintext key must never
+// reach the browser after the initial save. An empty key (no key configured
+// yet) is left empty so the form still shows it as unset.
+func maskProviderAPIKey(p Provider) Provider {
+	if p.APIKey != "" {
+		p.APIKey = MaskedAPIKey
+	}
+	return p
+}
+
 func (h *Handler) listProviders(w http.ResponseWriter, _ *http.Request) {
 	list, err := h.svc.ListProviders()
 	if err != nil {
@@ -62,6 +73,9 @@ func (h *Handler) listProviders(w http.ResponseWriter, _ *http.Request) {
 	}
 	if list == nil {
 		list = []Provider{}
+	}
+	for i := range list {
+		list[i] = maskProviderAPIKey(list[i])
 	}
 	foundation.WriteJSON(w, http.StatusOK, list)
 }
@@ -77,7 +91,7 @@ func (h *Handler) getProvider(w http.ResponseWriter, r *http.Request) {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	foundation.WriteJSON(w, http.StatusOK, p)
+	foundation.WriteJSON(w, http.StatusOK, maskProviderAPIKey(p))
 }
 
 func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +109,7 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	foundation.WriteJSON(w, http.StatusCreated, created)
+	foundation.WriteJSON(w, http.StatusCreated, maskProviderAPIKey(created))
 }
 
 func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +133,7 @@ func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	foundation.WriteJSON(w, http.StatusOK, updated)
+	foundation.WriteJSON(w, http.StatusOK, maskProviderAPIKey(updated))
 }
 
 func (h *Handler) deleteProvider(w http.ResponseWriter, r *http.Request) {

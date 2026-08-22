@@ -24,29 +24,29 @@ func insertRetrievalTestSourceAndUnit(t *testing.T, db *sql.DB, sourceID, unitID
 	}
 }
 
-func TestGetUnitRerankSemanticsBulk(t *testing.T) {
+func TestGetPointContentsByUnitIDsIncludesSemantics(t *testing.T) {
 	db := foundation.NewTestDB(t)
 	insertRetrievalTestSourceAndUnit(t, db, "s1", "u1")
 	insertRetrievalTestSourceAndUnit(t, db, "s1", "u2")
-	_, err := db.Exec(`INSERT INTO unit_rerank_semantics
-		(unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
-		VALUES ('u1', '制度', '报销', '说明限额', '员工', '出差', 'v1')`)
+	_, err := db.Exec(`INSERT INTO knowledge_points
+		(point_id, unit_id, source_id, content, point_type, source_theme, content_theme, object, scope, semantics_prompt_version)
+		VALUES ('p1', 'u1', 's1', '住宿限额500元', 'rule', '制度', '报销', '员工', '出差', 'v1')`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec(`INSERT INTO unit_rerank_semantics
-		(unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
-		VALUES ('u2', '制度', '报销', '说明流程', '员工', '出差', 'v1')`)
+	_, err = db.Exec(`INSERT INTO knowledge_points
+		(point_id, unit_id, source_id, content, point_type, source_theme, content_theme, object, scope, semantics_prompt_version)
+		VALUES ('p2', 'u2', 's1', '提交发票', 'method', '制度', '报销', '员工', '出差', 'v1')`)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := NewStore(db).GetUnitRerankSemantics([]string{"u1"})
+	got, err := NewStore(db).GetPointContentsByUnitIDs([]string{"u1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got["u1"].ContentTheme != "报销" || got["u1"].Intent != "说明限额" {
-		t.Fatalf("semantics = %#v, want content_theme=报销 intent=说明限额", got["u1"])
+	if len(got["u1"]) != 1 || got["u1"][0].ContentTheme != "报销" || got["u1"][0].Object != "员工" {
+		t.Fatalf("points for u1 = %#v, want content_theme=报销 object=员工", got["u1"])
 	}
 	if _, ok := got["u2"]; ok {
 		t.Fatal("unrequested unit returned")

@@ -11,11 +11,12 @@ import (
 	"strings"
 
 	"github.com/jxman78/wiki-brain/internal/foundation/textmatch"
+	"github.com/jxman78/wiki-brain/internal/rerank"
 )
 
 const (
 	promptVersionBoundaryExtract   = "v3"
-	promptVersionPointExtract      = "v5"
+	promptVersionPointExtract      = "v7"
 	promptVersionPointCoverageFill = "v1"
 	// promptVersionSplitExtract tags candidates produced by the two-step
 	// boundary+point split pipeline — derived from the two prompts' own
@@ -53,8 +54,11 @@ type pointExtractOutput struct {
 }
 
 type pointOnly struct {
-	Content string `json:"content"`
-	Type    string `json:"type"`
+	Content      string `json:"content"`
+	Type         string `json:"type"`
+	ContentTheme string `json:"content_theme"`
+	Object       string `json:"object"`
+	Scope        string `json:"scope"`
 }
 
 // extractSegmentOutputSplit runs one segment's extraction: a single
@@ -62,7 +66,7 @@ type pointOnly struct {
 // unit_point_extract.md call per unit extracts its knowledge points. This is
 // the only extraction path — the pre-V1 single-call unit_extract.md flow was
 // removed once the split flow became the default.
-func (s *Service) extractSegmentOutputSplit(ctx context.Context, sourceID string, seg Segment, mdLines []string) (extractOutput, bool, error) {
+func (s *Service) extractSegmentOutputSplit(ctx context.Context, sourceID, sourceTitle, sourceSummary string, seg Segment, mdLines []string) (extractOutput, bool, error) {
 	textContent := sliceLinesWithLineNumbers(mdLines, seg.LineStart, seg.LineEnd)
 	vars := map[string]string{
 		"outline_title":      seg.Title,
@@ -91,7 +95,7 @@ func (s *Service) extractSegmentOutputSplit(ctx context.Context, sourceID string
 			continue
 		}
 
-		center, points, ok, err := s.extractPointsForSplitUnit(ctx, u, unitContent)
+		center, points, ok, err := s.extractPointsForSplitUnit(ctx, sourceTitle, sourceSummary, u, unitContent)
 		if err != nil {
 			return extractOutput{}, false, fmt.Errorf("split point extraction for unit %s lines %d-%d: %w", u.UnitID, u.LineStart, u.LineEnd, err)
 		}
@@ -115,8 +119,10 @@ func (s *Service) extractSegmentOutputSplit(ctx context.Context, sourceID string
 // only (差旅费报销制度 incident: a 住宿费-flavored fallback center left the
 // entire 第六条交通费用 half of the unit with zero points). The point model
 // derives the center from the full content itself.
-func (s *Service) extractPointsForSplitUnit(ctx context.Context, u llmUnit, unitContent string) (string, []llmPoint, bool, error) {
+func (s *Service) extractPointsForSplitUnit(ctx context.Context, sourceTitle, sourceSummary string, u llmUnit, unitContent string) (string, []llmPoint, bool, error) {
 	vars := map[string]string{
+		"source_title":    sourceTitle,
+		"source_summary":  emptyOr(sourceSummary, "（无摘要）"),
 		"unit_line_start": strconv.Itoa(u.LineStart),
 		"unit_line_end":   strconv.Itoa(u.LineEnd),
 		"unit_content":    unitContent,
@@ -136,7 +142,7 @@ func (s *Service) extractPointsForSplitUnit(ctx context.Context, u llmUnit, unit
 		if strings.TrimSpace(p.Content) == "" || strings.TrimSpace(p.Type) == "" {
 			continue
 		}
-		points = append(points, llmPoint{
+		point := llmPoint{
 			PointID:         fmt.Sprintf("p%d", i+1),
 			UnitID:          u.UnitID,
 			Content:         p.Content,
@@ -145,7 +151,15 @@ func (s *Service) extractPointsForSplitUnit(ctx context.Context, u llmUnit, unit
 			FirstLineAnchor: u.FirstLineAnchor,
 			LineEnd:         u.LineEnd,
 			LastLineAnchor:  u.LastLineAnchor,
-		})
+			SourceTheme:     strings.TrimSpace(sourceTitle),
+			ContentTheme:    strings.TrimSpace(p.ContentTheme),
+			Object:          strings.TrimSpace(p.Object),
+			Scope:           strings.TrimSpace(p.Scope),
+		}
+		if point.ContentTheme != "" && point.Scope != "" {
+			point.SemanticsPromptVersion = rerank.ExtractPromptVersion
+		}
+		points = append(points, point)
 	}
 	if len(points) > 0 {
 		points = s.ensurePointsCoverage(ctx, u, unitContent, points)
@@ -234,6 +248,16 @@ func (s *Service) fillPointsCoverageGap(ctx context.Context, u llmUnit, unitCont
 		})
 	}
 	return points, nil
+}
+
+// emptyOr returns fallback when s is empty (after trimming) — used for
+// optional prompt vars like source_summary that may not exist yet (source
+// summary generation is best-effort and can fail, see generateSummary).
+func emptyOr(s, fallback string) string {
+	if strings.TrimSpace(s) == "" {
+		return fallback
+	}
+	return s
 }
 
 func buildLLMUnitFromBoundary(seg Segment, mdLines []string, bu boundaryUnit, index int) (llmUnit, string, []int, bool) {

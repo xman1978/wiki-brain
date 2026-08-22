@@ -11,6 +11,11 @@ import (
 	"github.com/google/uuid"
 )
 
+var (
+	ErrOutlineHasChildren = errors.New("outline node has child nodes, cannot delete")
+	ErrOutlineHasUnits    = errors.New("outline node has knowledge units, cannot delete")
+)
+
 type Source struct {
 	SourceID            string
 	Title               string
@@ -332,12 +337,69 @@ func (s *Store) UpdateUnitsStatus(sourceID, unitsStatus string) error {
 	return nil
 }
 
+// interruptedProcessingErrMsg / interruptedUnitsErrMsg are the error_msg
+// values RecoverInterruptedProcessing stamps on rows it recovers, so the
+// file management page shows why a source that was never actually touched
+// again ended up failed.
+const (
+	interruptedProcessingErrMsg = "服务重启导致处理中断，请重试"
+	interruptedUnitsErrMsg      = "服务重启导致知识单元提取中断，请重试"
+)
+
+// RecoverInterruptedProcessing marks every source stuck in status IN
+// (pending, processing), and independently every source stuck in
+// units_status IN (pending, processing) once its own status has reached
+// "completed", as failed. The queue backing source_process/unit_extract is
+// an in-memory Go channel with no persistence: a task only exists as an
+// entry sitting in that channel (status/units_status "pending") or as the
+// goroutine currently running it ("processing") — both cases are enqueued
+// exactly once, synchronously, right next to the same statement that sets
+// pending/processing, with nothing else ever re-enqueuing a task for a row
+// already in one of those states. So if the process is killed mid-run
+// (crash, forced restart), the channel and every task in it are gone, and
+// nothing will ever move such a row out of pending/processing again — it
+// would otherwise sit in the file management page forever labeled
+// "处理中"/"等待中" with no worker anywhere actually working on it.
+//
+// This is only safe to call once, at startup, before the queue starts
+// accepting new tasks and before the HTTP server starts accepting new
+// uploads — at that point nothing in the current process has enqueued
+// anything yet, so any row already in pending/processing is unambiguously
+// left over from a previous run, never a legitimate row about to be picked
+// up by this one. status IN (pending, processing) and (status=completed AND
+// units_status IN (pending, processing)) are mutually exclusive per row (the
+// units stage only starts after the source stage reaches "completed"), so
+// the two UPDATEs never touch the same interrupted-reason field on the same
+// row.
+func (s *Store) RecoverInterruptedProcessing() (sourceRecovered, unitsRecovered int, err error) {
+	res, err := s.db.Exec(`UPDATE sources SET status = 'failed', error_msg = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE status IN ('pending', 'processing')`, interruptedProcessingErrMsg)
+	if err != nil {
+		return 0, 0, fmt.Errorf("source store: recover interrupted source processing: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil {
+		sourceRecovered = int(n)
+	}
+
+	res, err = s.db.Exec(`UPDATE sources SET units_status = 'failed', error_msg = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE status = 'completed' AND units_status IN ('pending', 'processing')`, interruptedUnitsErrMsg)
+	if err != nil {
+		return sourceRecovered, 0, fmt.Errorf("source store: recover interrupted units processing: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil {
+		unitsRecovered = int(n)
+	}
+
+	return sourceRecovered, unitsRecovered, nil
+}
+
 func (s *Store) StartUnitsProcessing(sourceID string) error {
 	_, err := s.db.Exec(`UPDATE sources
 		SET units_status = 'processing',
 			units_stage = 'building',
 			units_built_at = NULL,
 			units_completed_at = NULL,
+			error_msg = NULL,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE source_id = ?`, sourceID)
 	if err != nil {
@@ -812,6 +874,56 @@ func (s *Store) DeleteOutlines(sourceID string) error {
 	return nil
 }
 
+// DeleteOutlineNode 删除单个目录节点：仅允许删除叶子节点（无子目录）且节点下无
+// 未失效 KU（lifecycle != deprecated）的目录，不做级联删除——已被逻辑删除的
+// KU 不应阻塞其所属目录被删除。
+func (s *Store) DeleteOutlineNode(sourceID, outlineID string) error {
+	var childCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM source_outlines WHERE parent_id = ?`, outlineID).Scan(&childCount); err != nil {
+		return fmt.Errorf("source store: count outline children: %w", err)
+	}
+	if childCount > 0 {
+		return ErrOutlineHasChildren
+	}
+
+	var kuCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE outline_id = ? AND lifecycle != 'deprecated'`, outlineID).Scan(&kuCount); err != nil {
+		return fmt.Errorf("source store: count outline units: %w", err)
+	}
+	if kuCount > 0 {
+		return ErrOutlineHasUnits
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("source store: delete outline node: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 已失效（deprecated）的 KU 仍可能保留 outline_id 外键指向本节点，
+	// 需先解除引用再删除，否则触发外键约束失败。
+	if _, err := tx.Exec(`UPDATE knowledge_units SET outline_id = NULL WHERE outline_id = ?`, outlineID); err != nil {
+		return fmt.Errorf("source store: clear outline references: %w", err)
+	}
+
+	res, err := tx.Exec(`DELETE FROM source_outlines WHERE outline_id = ? AND source_id = ?`, outlineID, sourceID)
+	if err != nil {
+		return fmt.Errorf("source store: delete outline node: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("source store: delete outline node: %w", err)
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("source store: delete outline node: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) GetOutlines(sourceID string) ([]Outline, error) {
 	rows, err := s.db.Query(`SELECT outline_id, source_id, parent_id, level, title, summary, line_start, line_end, node_type, position, created_at
 		FROM source_outlines WHERE source_id = ? ORDER BY line_start ASC`, sourceID)
@@ -930,17 +1042,17 @@ type Domain struct {
 	Description string
 }
 
-// CountManuallyEditedSemantics returns how many current-lifecycle KUs of the
-// source carry manually edited rerank semantics
-// (docs/impl/v1/semantics-curation.md)。GET /sources/:id 用它填
-// manually_edited_count，reupload 入口据此提示"N 条人工修正将随重传失效"
-// —— Shadow Source 替换产生全新 unit_id，人工修正随原 KU 一起 superseded。
+// CountManuallyEditedSemantics returns how many current-lifecycle KPs of the
+// source carry manually edited fields (content/point_type or rerank
+// semantics — docs/impl/v1/semantics-curation.md 2026-08-21 改判: 下沉自 KU
+// 级到 KP 级, 两者共享同一个 manually_edited 保护标记). GET /sources/:id 用
+// 它填 manually_edited_count，reupload 入口据此提示"N 条人工修正将随重传失效"
+// —— Shadow Source 替换产生全新 unit_id/point_id，人工修正随原 KU 一起 superseded。
 func (s *Store) CountManuallyEditedSemantics(sourceID string) (int, error) {
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*)
-		FROM unit_rerank_semantics urs
-		INNER JOIN knowledge_units ku ON ku.unit_id = urs.unit_id
-		WHERE ku.source_id = ? AND ku.lifecycle = 'current' AND urs.manually_edited = 1`,
+		FROM knowledge_points
+		WHERE source_id = ? AND lifecycle = 'current' AND manually_edited = 1`,
 		sourceID).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("source store: count manually edited semantics: %w", err)

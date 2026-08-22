@@ -1153,9 +1153,13 @@ const S = {
   activationDomainSelectedId: null,
   activationLinksList: [],
   activationDomainStats: {},
+  activationLinkPage:     0,
+  activationLinkPageSize: 12,
   wikiCatalog:         [],
   wikiDomainFilter:    '',
   wikiDomainSelectedId: null,
+  wikiCatalogPage:      0,
+  wikiCatalogPageSize:  12,
   wikiCandidateList:   [],
   wikiSelectedId:      null,
   wikiConceptId:       null,
@@ -1184,6 +1188,10 @@ const S = {
   // 切页签都重新拉一遍接口。
   domainConceptTab:    'concept',
   domainConceptItems:  [],
+  // 概念/事实网格分页——默认每页 12 张卡片，页数随 pageSize 可自定义；切换
+  // 领域或页签都要回到第 1 页，否则容易停在一个已经不存在的页码上白屏。
+  domainConceptPage:     0,
+  domainConceptPageSize: 12,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -1745,6 +1753,7 @@ var ICON_CHECK = '<svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>';
 var ICON_RETRY = '<svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>';
 var ICON_EDIT  = '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 var ICON_FOLDER = '<svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+var ICON_DELETE = '<svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
 var ICON_THUMB_UP   = '<svg viewBox="0 0 24 24"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2h0a3.13 3.13 0 0 1 3 3.88Z"/></svg>';
 var ICON_THUMB_DOWN = '<svg viewBox="0 0 24 24"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22h0a3.13 3.13 0 0 1-3-3.88Z"/></svg>';
 
@@ -2672,14 +2681,13 @@ async function viewSource(sourceId, citedUnitId) {
       var previewUrl = S.baseUrl + '/sources/' + d.source_id + '/preview';
       if (citedUnitId) previewUrl += '?unit_id=' + encodeURIComponent(citedUnitId);
       content.innerHTML = '<h2>来源详情</h2>\
-        <div class="detail-row"><span class="dl">source_id</span><span class="dv"><code style="font-size:11px">' + esc(d.source_id) + '</code> <button class="copy-btn" onclick="copy(\'' + esc(d.source_id) + '\',this)">复制</button></span></div>\
-        <div class="detail-row"><span class="dl">标题</span><span class="dv">' + esc(d.title || '') + '</span></div>\
-        <div class="detail-row"><span class="dl">格式</span><span class="dv">' + esc(d.format || '') + '</span></div>\
-        <div class="detail-row"><span class="dl">状态</span><span class="dv"><span class="status-chip status-' + (sourceDisplayStatus(d)||'') + '">' + statusLabel(sourceDisplayStatus(d)) + '</span> <span class="badge">v' + (d.version || 1) + '</span></span></div>\
-        <div class="detail-row" id="sourceSummaryRow"><span class="dl">摘要</span><span class="dv" id="sourceSummaryView">' + esc(d.summary || '') + ' <button class="btn btn-sm" onclick="editSourceSummary(\'' + esc(d.source_id) + '\')">编辑</button></span></div>\
-        ' + (d.word_count ? '<div class="detail-row"><span class="dl">字数</span><span class="dv">' + d.word_count + '</span></div>' : '') + '\
+        <div class="detail-row"><span class="dl">标题</span><span class="dv" style="color:var(--text-1)">' + esc(d.title || '') + '</span></div>\
+        <div class="detail-row"><span class="dl">格式</span><span class="dv" style="color:var(--text-1)">' + esc(d.format || '') + '</span></div>\
+        <div class="detail-row"><span class="dl">状态</span><span class="dv" style="color:var(--text-1)"><span class="status-chip status-' + (sourceDisplayStatus(d)||'') + '">' + statusLabel(sourceDisplayStatus(d)) + '</span> <span class="badge">v' + (d.version || 1) + '</span></span></div>\
+        <div class="detail-row" id="sourceSummaryRow"><span class="dl">摘要</span><span class="dv" id="sourceSummaryView" style="color:var(--text-1)">' + esc(d.summary || '') + ' <button class="btn btn-sm" onclick="editSourceSummary(\'' + esc(d.source_id) + '\')">编辑</button></span></div>\
+        ' + (d.word_count ? '<div class="detail-row"><span class="dl">字数</span><span class="dv" style="color:var(--text-1)">' + d.word_count + '</span></div>' : '') + '\
         ' + (d.error_msg ? '<div class="detail-row"><span class="dl">错误</span><span class="dv" style="color:var(--red)">' + esc(d.error_msg) + '</span></div>' : '') + '\
-        <div class="detail-row"><span class="dl">创建时间</span><span class="dv">' + dateStr(d.created_at) + '</span></div>\
+        <div class="detail-row"><span class="dl">创建时间</span><span class="dv" style="color:var(--text-1)">' + dateStr(d.created_at) + '</span></div>\
         <div class="modal-actions">\
           ' + (d.status==='completed' ? '<button class="btn btn-sm" onclick="window.open(\'' + esc(previewUrl) + '\',\'_blank\')">预览</button>' : '') + '\
           ' + (sourceDisplayStatus(d)==='completed' ? '<button class="btn btn-sm" onclick="reuploadSource(\'' + esc(d.source_id) + '\')">重新上传</button>' : '') + '\
@@ -2690,10 +2698,9 @@ async function viewSource(sourceId, citedUnitId) {
           ' + (d.status==='deleted' ? '<button class="btn btn-sm" style="color:var(--green)" onclick="restoreSource(\'' + esc(d.source_id) + '\');closeSourceDetail()">恢复</button>' : '') + '\
           <button class="btn" onclick="closeSourceDetail()">关闭</button>\
         </div>\
-        ' + (d.status==='completed' ? '<h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">知识单元</h3><div id="sourceKUList" style="margin-top:8px"><div style="font-size:12px;color:var(--text-3)">加载中...</div></div>' : '') + '\
+        ' + (d.status==='completed' ? '<h3 style="margin-top:14px;font-size:13px;color:var(--text-1);text-transform:uppercase;letter-spacing:.05em">知识单元</h3><div id="sourceKUList" style="margin-top:8px"><div style="font-size:12px;color:var(--text-3)">加载中...</div></div>' : '') + '\
         ' + (d.status==='completed' ? '<div id="sourceCoverageResult"></div>' : '') + '\
-        ' + (d.status==='completed' ? '<h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">历史版本</h3><div id="sourceVersionsList" style="margin-top:8px"><div style="font-size:12px;color:var(--text-3)">加载中...</div></div>' : '') + '\
-        <details style="margin-top:14px"><summary style="font-size:11px;cursor:pointer;color:var(--text-3)">原始 JSON</summary><div class="raw-json" style="margin-top:6px">' + esc(JSON.stringify(d,null,2)) + '</div></details>';
+        ' + (d.status==='completed' ? '<h3 style="margin-top:14px;font-size:13px;color:var(--text-1);text-transform:uppercase;letter-spacing:.05em">历史版本</h3><div id="sourceVersionsList" style="margin-top:8px"><div style="font-size:12px;color:var(--text-3)">加载中...</div></div>' : '') + '';
       if (d.status === 'completed') { loadSourceUnits(d.source_id, citedUnitId); loadSourceVersions(d.source_id); }
     } else content.innerHTML = '<h2>来源详情</h2><div style="color:var(--red)">加载失败</div><div class="modal-actions"><button class="btn" onclick="closeSourceDetail()">关闭</button></div>';
   } catch(e) { content.innerHTML = '<h2>来源详情</h2><div style="color:var(--red)">' + esc(e.message) + '</div><div class="modal-actions"><button class="btn" onclick="closeSourceDetail()">关闭</button></div>'; }
@@ -2741,14 +2748,15 @@ function outlineNodeTypeBadgeHtml(nodeType) {
 }
 
 // 单条 KU 行的渲染，供分组树与"未归属目录"分组共用。
-function renderKuRow(u, citedUnitId) {
+function renderKuRow(u, citedUnitId, sourceId) {
   var highlight = citedUnitId && u.unit_id === citedUnitId
     ? 'background:var(--accent-lt);border-radius:4px;padding:5px 6px;'
     : 'padding:5px 0;';
   return '<div style="display:flex;align-items:center;gap:6px;' + highlight + 'border-bottom:1px solid var(--border-lt);font-size:12px">\
     <span style="flex:1">' + esc(u.center || '') + ' <span style="color:var(--text-3)">(L' + u.line_start + '-L' + u.line_end + ')</span></span>\
     ' + lifecycleBadgeHtml(u.lifecycle) + '\
-    <button class="icon-btn" title="编辑知识单元语义" onclick="openKuSemantics(\'' + esc(u.unit_id) + '\')">' + ICON_EDIT + '</button>\
+    <button class="icon-btn" title="查看知识单元 / 编辑知识点语义" onclick="openKuSemantics(\'' + esc(u.unit_id) + '\')">' + ICON_EDIT + '</button>\
+    <button class="icon-btn" title="删除知识单元" onclick="deleteKu(\'' + esc(u.unit_id) + '\',\'' + esc(sourceId || '') + '\')">' + ICON_DELETE + '</button>\
   </div>';
 }
 
@@ -2757,6 +2765,11 @@ function renderKuRow(u, citedUnitId) {
 function renderOutlineNode(node, unitsByOutline, sourceId, citedUnitId, depth) {
   var indent = 14 + depth * 16;
   var ownUnits = unitsByOutline[node.outline_id] || [];
+  var isLeaf = !Array.isArray(node.children) || node.children.length === 0;
+  var canDelete = isLeaf && ownUnits.length === 0;
+  var deleteBtn = canDelete
+    ? '<button class="icon-btn" title="删除目录（仅限无子目录且无知识单元）" onclick="deleteOutlineNode(\'' + esc(sourceId) + '\',\'' + esc(node.outline_id) + '\')">' + ICON_DELETE + '</button>'
+    : '';
   var html = '<div style="margin-top:6px">\
     <div style="display:flex;align-items:center;gap:6px;padding:4px 0 4px ' + indent + 'px;border-bottom:1px solid var(--border-lt)">\
       <span style="color:var(--text-3);font-size:11px">▾</span>\
@@ -2765,10 +2778,11 @@ function renderOutlineNode(node, unitsByOutline, sourceId, citedUnitId, depth) {
       ' + outlineNodeTypeBadgeHtml(node.node_type) + '\
       <span class="badge">' + ownUnits.length + ' KU</span>\
       <button class="icon-btn" title="编辑目录摘要" onclick="openOutlineEditor(\'' + esc(sourceId) + '\',\'' + esc(node.outline_id) + '\')">' + ICON_EDIT + '</button>\
+      ' + deleteBtn + '\
     </div>\
     <div style="padding-left:' + (indent + 20) + 'px">' +
       (ownUnits.length
-        ? ownUnits.map(function(u) { return renderKuRow(u, citedUnitId); }).join('')
+        ? ownUnits.map(function(u) { return renderKuRow(u, citedUnitId, sourceId); }).join('')
         : '<div style="font-size:11px;color:var(--text-3);padding:4px 0">（无直接归属知识单元）</div>') +
     '</div>';
   if (Array.isArray(node.children) && node.children.length) {
@@ -2817,12 +2831,39 @@ async function loadSourceUnits(sourceId, citedUnitId) {
           <span style="flex:1;font-size:12px;font-weight:500;color:var(--text-2)">未归属目录</span>\
           <span class="badge">' + unassigned.length + ' KU</span>\
         </div>\
-        <div style="padding-left:20px">' + unassigned.map(function(u) { return renderKuRow(u, citedUnitId); }).join('') + '</div>\
+        <div style="padding-left:20px">' + unassigned.map(function(u) { return renderKuRow(u, citedUnitId, sourceId); }).join('') + '</div>\
       </div>';
     }
 
     el.innerHTML = html || '<div style="font-size:12px;color:var(--text-3)">暂无知识单元</div>';
   } catch(e) { el.innerHTML = '<div style="font-size:12px;color:var(--red)">加载失败</div>'; }
+}
+
+// 删除目录节点：仅叶子节点（无子目录）且无直接归属 KU 时按钮才会渲染出来，
+// 后端仍会再校验一遍（source, DELETE /sources/:id/outlines/:outline_id）。
+async function deleteOutlineNode(sourceId, outlineId) {
+  if (!(await showConfirm('确定删除此目录？此操作不可恢复。'))) return;
+  try {
+    var r = await api('DELETE', '/sources/' + sourceId + '/outlines/' + outlineId);
+    if (r.ok) {
+      loadSourceUnits(sourceId);
+    } else {
+      showAlert('删除失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+    }
+  } catch(e) { showAlert('删除出错：' + e.message); }
+}
+
+// 删除 KU：软删除（lifecycle=deprecated），级联子 KP，不做物理删除。
+async function deleteKu(unitId, sourceId) {
+  if (!(await showConfirm('确定删除此知识单元？将标记为失效（逻辑删除），不可直接撤销。'))) return;
+  try {
+    var r = await api('POST', '/units/' + unitId + '/deprecate');
+    if (r.ok) {
+      loadSourceUnits(sourceId);
+    } else {
+      showAlert('删除失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+    }
+  } catch(e) { showAlert('删除出错：' + e.message); }
 }
 
 // 目录属性编辑弹窗：标题/行号/类型/KU数量只读，summary 可编辑。
@@ -3096,52 +3137,38 @@ async function openKuSemantics(unitId) {
   kuSemanticsUnitId = unitId;
   var modal = document.getElementById('kuSemanticsModal');
   var content = document.getElementById('kuSemanticsContent');
-  content.innerHTML = '<h2>知识单元语义</h2><div style="color:var(--text-3)">加载中…</div>';
+  content.innerHTML = '<h2>知识单元</h2><div style="color:var(--text-3)">加载中…</div>';
   modal.classList.remove('hidden');
 
-  var r = await api('GET', '/units/' + unitId + '/semantics');
+  var r = await api('GET', '/units/' + unitId);
   if (!r.ok) {
-    content.innerHTML = '<h2>知识单元语义</h2><div style="color:var(--red)">加载失败</div>\
+    content.innerHTML = '<h2>知识单元</h2><div style="color:var(--red)">加载失败</div>\
       <div class="modal-actions"><button class="btn" onclick="closeKuSemantics()">关闭</button></div>';
     return;
   }
-  var u = r.data.unit, sem = r.data.semantics;
-  var missing = !sem;
-  sem = sem || { source_theme:'', content_theme:'', intent:'', object:'', scope:'' };
+  var u = r.data;
 
-  function fieldRow(label, id, val) {
-    return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">\
-      <label style="width:110px;font-size:12px;color:var(--text-2);flex-shrink:0">' + label + '</label>\
-      <input id="' + id + '" value="' + esc(val || '') + '" style="flex:1;padding:5px 8px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg)" />\
-    </div>';
-  }
-
-  content.innerHTML = '<h2>知识单元语义 ' + (sem.manually_edited ? '<span class="badge" title="人工修正过">人工</span>' : '') + '</h2>\
-    <div style="font-size:12px;margin-bottom:14px">\
-      <div style="display:flex;gap:14px;color:var(--text-2);margin-bottom:6px">\
-        <span>中心句：<b style="color:var(--text-1)">' + esc(u.center || '') + '</b></span>\
+  var kuLabelStyle = 'text-align:left;font-size:13px;font-weight:700;color:var(--text-1);margin-bottom:6px';
+  content.innerHTML = '<h2>知识单元</h2>\
+    <div style="font-size:12px;margin-bottom:14px;text-align:left">\
+      <div style="' + kuLabelStyle + '">中心句</div>\
+      <div style="display:flex;gap:14px;align-items:center;color:var(--text-2);margin-bottom:10px">\
+        <span>' + esc(u.center || '') + '</span>\
         <span>L' + u.line_start + '-L' + u.line_end + '</span>\
         ' + lifecycleBadgeHtml(u.lifecycle) + '\
       </div>\
-      ' + (u.outline_path ? '<div style="color:var(--text-2);margin-bottom:6px">所属目录：' + esc(u.outline_path) + (u.outline_node_type ? ' <span class="badge">' + esc(u.outline_node_type) + '</span>' : '') + '</div>' : '') + '\
-      <div style="max-height:180px;overflow:auto;background:var(--bg-2);border:1px solid var(--border-lt);border-radius:4px;padding:8px;white-space:pre-wrap;font-family:monospace;font-size:11px;color:var(--text-2)">' + esc(u.content || '') + '</div>\
-      <div style="color:var(--text-3);margin-top:4px">KU 内容与字段为提取产物，只读；下方 rerank 语义可编辑，检索的相关性筛选与证据分类依据语义字段与知识点判断。</div>\
+      ' + (u.outline_path ? '<div style="color:var(--text-2);margin-bottom:10px">所属目录：' + esc(u.outline_path) + (u.outline_node_type ? ' <span class="badge">' + esc(u.outline_node_type) + '</span>' : '') + '</div>' : '') + '\
+      <div style="' + kuLabelStyle + '">内容</div>\
+      <div style="max-height:180px;overflow:auto;background:var(--bg-2);border:1px solid var(--border-lt);border-radius:4px;padding:8px;white-space:pre-wrap;font-family:monospace;font-size:11px;color:var(--text-2);text-align:left">' + esc(u.content || '') + '</div>\
+      <div style="color:var(--text-3);margin-top:4px">KU 本体（中心句/行号/正文）为提取产物，只读；每条知识点各自的 rerank 语义可展开编辑——同一 KU 内不同知识点可能适用于不同的对象/范围，检索的相关性筛选与证据分类依据的是知识点自己的语义，而非整个 KU 共用一份。</div>\
     </div>\
-    ' + (missing ? '<div style="font-size:12px;color:var(--red);margin-bottom:10px">该 KU 无语义记录，被召回将导致检索报错——请补写后保存。</div>' : '') + '\
-    ' + fieldRow('内容主题', 'kuSemContentTheme', sem.content_theme)
-      + fieldRow('意图', 'kuSemIntent', sem.intent)
-      + fieldRow('对象', 'kuSemObject', sem.object)
-      + fieldRow('范围', 'kuSemScope', sem.scope)
-      + fieldRow('来源主题', 'kuSemSourceTheme', sem.source_theme) + '\
-    <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;margin-top:14px">\
-      <label style="width:110px;font-size:12px;color:var(--text-2);flex-shrink:0;padding-top:5px">知识点</label>\
-      <div id="kuSemPoints" style="flex:1"></div>\
+    <div style="text-align:left;margin-bottom:8px">\
+      <div style="' + kuLabelStyle + '">知识点</div>\
+      <div id="kuSemPoints"></div>\
     </div>\
-    <div style="font-size:11px;color:var(--text-3);margin-left:118px">检索靠知识点匹配问题——把「问题会怎么问」对应的具体规则/数字逐字补进来（如“不跨年累计，次年清零”）。提取产物只读；手动新增的可撤销。</div>\
-    ' + (sem.edited_at ? '<div style="font-size:11px;color:var(--text-3);margin-top:6px">最近人工修正：' + dateStr(sem.edited_at) + '</div>' : '') + '\
+    <div style="font-size:11px;color:var(--text-3);text-align:left">检索靠知识点匹配问题——把「问题会怎么问」对应的具体规则/数字逐字补进来（如“不跨年累计，次年清零”）。提取产物只读；手动新增的可撤销。</div>\
     <div class="modal-actions">\
-      <button class="btn" onclick="closeKuSemantics()">取消</button>\
-      <button class="btn btn-primary" onclick="saveKuSemantics()">保存</button>\
+      <button class="btn" onclick="closeKuSemantics()">关闭</button>\
     </div>';
   loadKuPoints(unitId);
 }
@@ -3167,10 +3194,14 @@ function renderKuPoints(points) {
     var revokeBtn = p.manually_edited
       ? '<button type="button" class="btn btn-sm" style="flex-shrink:0;color:var(--red)" onclick="deprecateKuPoint(\'' + esc(p.point_id) + '\')">撤销</button>'
       : '';
-    return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">\
-      <span class="badge" style="flex-shrink:0">' + esc(pointTypeLabel(p.point_type)) + '</span>\
-      <span style="flex:1;font-size:12px;color:var(--text-1);padding:5px 8px;border:1px solid var(--border-lt);border-radius:4px;background:var(--bg-2)">' + esc(p.content) + '</span>\
-      ' + manualBadge + revokeBtn + '\
+    return '<div style="margin-bottom:6px">\
+      <div style="display:flex;align-items:center;gap:6px">\
+        <span class="badge" style="flex-shrink:0">' + esc(pointTypeLabel(p.point_type)) + '</span>\
+        <span style="flex:1;font-size:12px;color:var(--text-1);padding:5px 8px;border:1px solid var(--border-lt);border-radius:4px;background:var(--bg-2)">' + esc(p.content) + '</span>\
+        <button type="button" class="btn btn-sm" style="flex-shrink:0" onclick="togglePointSemantics(\'' + esc(p.point_id) + '\')">语义</button>\
+        ' + manualBadge + revokeBtn + '\
+      </div>\
+      <div id="pointSem_' + esc(p.point_id) + '" class="hidden" style="margin:6px 0 0 0;padding:8px;border:1px solid var(--border-lt);border-radius:4px;background:var(--bg)"></div>\
     </div>';
   }).join('');
   el.innerHTML = (rows || '<div style="font-size:12px;color:var(--text-3);margin-bottom:6px">（无知识点）</div>') + '\
@@ -3181,6 +3212,52 @@ function renderKuPoints(points) {
       <input id="kuNewPointContent" placeholder="新增知识点内容" style="flex:1;padding:5px 8px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg)" />\
       <button class="btn btn-sm" id="kuNewPointBtn" onclick="addKuPoint()">＋ 新增</button>\
     </div>';
+}
+
+// 每条知识点各自的 rerank 语义（docs/impl/v1/semantics-curation.md
+// 2026-08-21 改判：下沉自 KU 级到 KP 级）——点开「语义」按需加载，避免为一个
+// 单元里每条知识点都发一次请求。
+async function togglePointSemantics(pointId) {
+  var box = document.getElementById('pointSem_' + pointId);
+  if (!box) return;
+  if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  box.innerHTML = '<div style="font-size:12px;color:var(--text-3)">加载中…</div>';
+
+  var r = await api('GET', '/points/' + encodeURIComponent(pointId) + '/semantics');
+  if (!document.getElementById('pointSem_' + pointId)) return; // 已切换到别的 KU
+  if (!r.ok) { box.innerHTML = '<div style="font-size:12px;color:var(--red)">加载失败</div>'; return; }
+  var sem = r.data;
+
+  function fieldRow(label, id, val) {
+    return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">\
+      <label style="width:80px;font-size:12px;color:var(--text-2);flex-shrink:0">' + label + '</label>\
+      <input id="' + id + '" value="' + esc(val || '') + '" style="flex:1;padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg)" />\
+    </div>';
+  }
+  var missing = !sem.content_theme && !sem.scope;
+  box.innerHTML = (sem.manually_edited ? '<span class="badge" title="人工修正过" style="margin-bottom:6px;display:inline-block">人工</span>' : '') +
+    (missing ? '<div style="font-size:11px;color:var(--red);margin-bottom:6px">该知识点无语义记录，被召回将导致检索报错——请补写后保存。</div>' : '') +
+    fieldRow('内容主题', 'pointSemContentTheme_' + pointId, sem.content_theme) +
+    fieldRow('对象', 'pointSemObject_' + pointId, sem.object) +
+    fieldRow('范围', 'pointSemScope_' + pointId, sem.scope) +
+    fieldRow('来源主题', 'pointSemSourceTheme_' + pointId, sem.source_theme) +
+    (sem.edited_at ? '<div style="font-size:11px;color:var(--text-3);margin-bottom:6px">最近人工修正：' + dateStr(sem.edited_at) + '</div>' : '') +
+    '<div style="text-align:right"><button class="btn btn-sm btn-primary" onclick="savePointSemantics(\'' + esc(pointId) + '\')">保存</button></div>';
+}
+
+async function savePointSemantics(pointId) {
+  var body = {
+    content_theme: document.getElementById('pointSemContentTheme_' + pointId).value.trim(),
+    object:        document.getElementById('pointSemObject_' + pointId).value.trim(),
+    scope:         document.getElementById('pointSemScope_' + pointId).value.trim(),
+    source_theme:  document.getElementById('pointSemSourceTheme_' + pointId).value.trim()
+  };
+  if (!body.content_theme || !body.scope || !body.source_theme) { showAlert('内容主题/范围/来源主题均不能为空（对象可留空）'); return; }
+
+  var r = await api('PUT', '/points/' + encodeURIComponent(pointId) + '/semantics', body);
+  if (r.ok) { togglePointSemantics(pointId); togglePointSemantics(pointId); }
+  else { showAlert('保存失败：' + ((r.data && r.data.error) || r.status)); }
 }
 
 async function deprecateKuPoint(pointId) {
@@ -3215,22 +3292,6 @@ async function addKuPoint() {
     btn.textContent = '＋ 新增';
     showAlert('新增失败：' + ((r.data && r.data.error) || r.status));
   }
-}
-
-async function saveKuSemantics() {
-  var body = { semantics: {
-    content_theme: document.getElementById('kuSemContentTheme').value.trim(),
-    intent:        document.getElementById('kuSemIntent').value.trim(),
-    object:        document.getElementById('kuSemObject').value.trim(),
-    scope:         document.getElementById('kuSemScope').value.trim(),
-    source_theme:  document.getElementById('kuSemSourceTheme').value.trim()
-  }};
-  var missingField = ['content_theme','intent','object','scope','source_theme'].find(function(k){ return !body.semantics[k]; });
-  if (missingField) { showAlert('所有语义字段均不能为空'); return; }
-
-  var r = await api('PUT', '/units/' + kuSemanticsUnitId + '/semantics', body);
-  if (r.ok) { closeKuSemantics(); }
-  else { showAlert('保存失败：' + ((r.data && r.data.error) || r.status)); }
 }
 
 function closeKuSemantics() {
@@ -4327,8 +4388,22 @@ function renderActivationDomainRail() {
 
 function selectActivationDomainRail(domainId) {
   S.activationDomainSelectedId = domainId;
+  S.activationLinkPage = 0;
   renderActivationDomainRail();
   renderActivationDomainPane();
+}
+
+function setActivationLinkPage(page) {
+  S.activationLinkPage = clampGridPage(page, (S.activationLinksList || []).length, S.activationLinkPageSize);
+  renderActivationLinkGrid();
+}
+
+function setActivationLinkPageSize(size) {
+  var n = parseInt(size, 10);
+  if (!n || n < 1) return;
+  S.activationLinkPageSize = n;
+  S.activationLinkPage = 0;
+  renderActivationLinkGrid();
 }
 
 // 领域下的激活链接 = 该领域概念挂载的 KP 对应的 activation_links（一对一）。
@@ -4369,7 +4444,8 @@ async function renderActivationDomainPane() {
         <span>激活链接 <b style="color:var(--text)" id="activationDomainLinkCount">…</b></span>\
       </div>\
     </div>\
-    <div class="domain-concept-grid" id="activationDomainGrid" style="margin-top:12px"><div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">加载中...</div></div>';
+    <div class="domain-concept-grid" id="activationDomainGrid" style="margin-top:12px"><div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">加载中...</div></div>\
+    <div id="activationLinkPager"></div>';
 
   var links = [];
   try { links = await fetchActivationLinksForDomain(domainId); }
@@ -4391,11 +4467,25 @@ async function renderActivationDomainPane() {
   var countEl = document.getElementById('activationDomainLinkCount');
   if (countEl) countEl.textContent = String(links.length);
 
+  S.activationLinkPage = 0;
+  renderActivationLinkGrid();
+}
+
+function renderActivationLinkGrid() {
   var grid = document.getElementById('activationDomainGrid');
   if (!grid) return;
-  grid.innerHTML = links.length
-    ? links.map(renderActivationLinkCardHtml).join('')
+  var links = S.activationLinksList || [];
+  var pageSize = S.activationLinkPageSize || 12;
+  var page = clampGridPage(S.activationLinkPage || 0, links.length, pageSize);
+  S.activationLinkPage = page;
+  var pageItems = links.slice(page * pageSize, page * pageSize + pageSize);
+
+  grid.innerHTML = pageItems.length
+    ? pageItems.map(renderActivationLinkCardHtml).join('')
     : '<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">该领域下还没有激活链接</div>';
+
+  var pagerEl = document.getElementById('activationLinkPager');
+  if (pagerEl) pagerEl.innerHTML = links.length ? gridPagerHtml(links.length, page, pageSize, 'setActivationLinkPage', 'setActivationLinkPageSize') : '';
 }
 
 function renderActivationLinkCardHtml(l) {
@@ -4705,6 +4795,7 @@ async function openWikiPageFromBadge(pageId) {
   });
   if (domainId) {
     S.wikiDomainSelectedId = domainId;
+    S.wikiCatalogPage = 0;
     renderWikiDomainRail();
     renderWikiDomainPane();
   }
@@ -4762,8 +4853,24 @@ function renderWikiDomainRail() {
 
 function selectWikiDomainRail(domainId) {
   S.wikiDomainSelectedId = domainId;
+  S.wikiCatalogPage = 0;
   renderWikiDomainRail();
   renderWikiDomainPane();
+}
+
+function setWikiCatalogPage(page) {
+  var d = (S.wikiCatalog || []).find(function(x) { return x.domain_id === S.wikiDomainSelectedId; });
+  var total = d ? (d.pages || []).length : 0;
+  S.wikiCatalogPage = clampGridPage(page, total, S.wikiCatalogPageSize);
+  renderWikiCatalogGrid();
+}
+
+function setWikiCatalogPageSize(size) {
+  var n = parseInt(size, 10);
+  if (!n || n < 1) return;
+  S.wikiCatalogPageSize = n;
+  S.wikiCatalogPage = 0;
+  renderWikiCatalogGrid();
 }
 
 function renderWikiDomainPane() {
@@ -4773,11 +4880,6 @@ function renderWikiDomainPane() {
     pane.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">请先在「知识领域」中新增领域</div>';
     return;
   }
-  var pages = d.pages || [];
-  var cardsHtml = pages.map(renderWikiCatalogCardHtml).join('');
-  if (!cardsHtml) {
-    cardsHtml = '<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">该领域下还没有 Wiki</div>';
-  }
   pane.innerHTML = '\
     <div style="min-width:0">\
       <div style="font-size:16px;font-weight:700">' + esc(d.name) + '</div>\
@@ -4786,7 +4888,27 @@ function renderWikiDomainPane() {
         <span>Wiki <b style="color:var(--text)">' + (d.wiki_count || 0) + '</b></span>\
       </div>\
     </div>\
-    <div class="domain-concept-grid" id="wikiDomainGrid" style="margin-top:12px">' + cardsHtml + '</div>';
+    <div class="domain-concept-grid" id="wikiDomainGrid" style="margin-top:12px"></div>\
+    <div id="wikiCatalogPager"></div>';
+  renderWikiCatalogGrid();
+}
+
+function renderWikiCatalogGrid() {
+  var grid = document.getElementById('wikiDomainGrid');
+  if (!grid) return;
+  var d = (S.wikiCatalog || []).find(function(x) { return x.domain_id === S.wikiDomainSelectedId; });
+  var pages = d ? (d.pages || []) : [];
+  var pageSize = S.wikiCatalogPageSize || 12;
+  var page = clampGridPage(S.wikiCatalogPage || 0, pages.length, pageSize);
+  S.wikiCatalogPage = page;
+  var pageItems = pages.slice(page * pageSize, page * pageSize + pageSize);
+
+  grid.innerHTML = pageItems.length
+    ? pageItems.map(renderWikiCatalogCardHtml).join('')
+    : '<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">该领域下还没有 Wiki</div>';
+
+  var pagerEl = document.getElementById('wikiCatalogPager');
+  if (pagerEl) pagerEl.innerHTML = pages.length ? gridPagerHtml(pages.length, page, pageSize, 'setWikiCatalogPage', 'setWikiCatalogPageSize') : '';
 }
 
 function wikiStatusLabel(status) {
@@ -6100,7 +6222,8 @@ async function renderDomainConceptPane() {
       <button class="btn btn-sm" onclick="proposeEntriesFromOrphans(\'' + esc(domainId) + '\')">+ 新增词条</button>\
     </div>\
     <div id="domainConceptTabs" style="margin-top:12px"></div>\
-    <div class="domain-concept-grid" id="domainConceptGrid"><div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">加载中...</div></div>';
+    <div class="domain-concept-grid" id="domainConceptGrid"><div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">加载中...</div></div>\
+    <div id="domainConceptPager"></div>';
 
   var conceptsR, domainCandidatesR, pendingR;
   try {
@@ -6142,6 +6265,7 @@ async function renderDomainConceptPane() {
     .forEach(function(c) { items.push({ type: 'candidate', data: c }); });
 
   S.domainConceptItems = items;
+  S.domainConceptPage = 0;
   renderDomainConceptTabsAndGrid(domainId);
 }
 
@@ -6156,6 +6280,26 @@ function domainConceptItemKind(item) {
 
 function switchDomainConceptTab(tab) {
   S.domainConceptTab = tab;
+  S.domainConceptPage = 0;
+  var d = S.domainRailList.find(function(x) { return x.domain_id === S.domainRailSelectedId; });
+  if (d) renderDomainConceptTabsAndGrid(d.domain_id);
+}
+
+var DOMAIN_CONCEPT_PAGE_SIZE_OPTIONS = [12, 24, 48, 96];
+
+function setDomainConceptPage(page) {
+  var d = S.domainRailList.find(function(x) { return x.domain_id === S.domainRailSelectedId; });
+  if (!d) return;
+  var items = (S.domainConceptItems || []).filter(function(i) { return domainConceptItemKind(i) === (S.domainConceptTab === 'fact' ? 'fact' : 'concept'); });
+  S.domainConceptPage = clampGridPage(page, items.length, S.domainConceptPageSize);
+  renderDomainConceptTabsAndGrid(d.domain_id);
+}
+
+function setDomainConceptPageSize(size) {
+  var n = parseInt(size, 10);
+  if (!n || n < 1) return;
+  S.domainConceptPageSize = n;
+  S.domainConceptPage = 0;
   var d = S.domainRailList.find(function(x) { return x.domain_id === S.domainRailSelectedId; });
   if (d) renderDomainConceptTabsAndGrid(d.domain_id);
 }
@@ -6179,10 +6323,48 @@ function renderDomainConceptTabsAndGrid(domainId) {
   var filtered = items.filter(function(i) { return domainConceptItemKind(i) === tab; });
   var grid = document.getElementById('domainConceptGrid');
   if (!grid) return;
-  var cardsHtml = filtered.length
-    ? filtered.map(renderDomainGridCard).join('')
+
+  var pageSize = S.domainConceptPageSize || 12;
+  var page = clampGridPage(S.domainConceptPage || 0, filtered.length, pageSize);
+  S.domainConceptPage = page;
+  var pageItems = filtered.slice(page * pageSize, page * pageSize + pageSize);
+
+  var cardsHtml = pageItems.length
+    ? pageItems.map(renderDomainGridCard).join('')
     : '<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">该页签下还没有词条</div>';
   grid.innerHTML = cardsHtml + '<div class="domain-concept-new" onclick="openManualConceptDraft(\'' + esc(domainId) + '\')">+ 新增词条</div>';
+
+  var pagerEl = document.getElementById('domainConceptPager');
+  if (pagerEl) pagerEl.innerHTML = gridPagerHtml(filtered.length, page, pageSize, 'setDomainConceptPage', 'setDomainConceptPageSize');
+}
+
+// gridPagerHtml 是「知识领域」概念/事实网格、激活链接网格、Wiki 网格三处
+// 共用的分页条渲染——三处都是同一种卡片网格 + "共 N 个/每页 N 个/上一页/下一页"
+// 交互，只是数据来源和回调函数名不同，抽成一个通用渲染器避免三份几乎一样的模板重复。
+function gridPagerHtml(total, page, pageSize, onPageFn, onSizeFn) {
+  var totalPages = Math.ceil(total / pageSize) || 1;
+  var sizeOptions = DOMAIN_CONCEPT_PAGE_SIZE_OPTIONS.slice();
+  if (sizeOptions.indexOf(pageSize) === -1) sizeOptions.push(pageSize);
+  sizeOptions.sort(function(a, b) { return a - b; });
+  var sizeSelect = '<select style="font-size:12px;padding:2px 6px" onchange="' + onSizeFn + '(this.value)">' +
+    sizeOptions.map(function(n) { return '<option value="' + n + '"' + (n === pageSize ? ' selected' : '') + '>每页 ' + n + ' 个</option>'; }).join('') +
+    '</select>';
+  return '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0 0;font-size:12px;color:var(--text-3)">\
+    <span>共 ' + total + ' 个</span>\
+    <div style="display:flex;align-items:center;gap:8px">\
+      ' + sizeSelect + '\
+      <button class="btn btn-sm"' + (page <= 0 ? ' disabled' : '') + ' onclick="' + onPageFn + '(' + (page - 1) + ')">上一页</button>\
+      <span>' + (page + 1) + ' / ' + totalPages + '</span>\
+      <button class="btn btn-sm"' + (page >= totalPages - 1 ? ' disabled' : '') + ' onclick="' + onPageFn + '(' + (page + 1) + ')">下一页</button>\
+    </div>\
+  </div>';
+}
+
+// clampGridPage 把 page 收进 [0, totalPages-1]——用于页大小变化、数据变化后
+// 页码可能越界的场景（如切换到更大 pageSize 或列表变短）。
+function clampGridPage(page, total, pageSize) {
+  var totalPages = Math.ceil(total / pageSize) || 1;
+  return Math.max(0, Math.min(page, totalPages - 1));
 }
 
 var CONCEPT_CANDIDATE_STATUS_LABELS = { pending_confirm: '待确认', rejected: '已驳回', expired: '已过期' };

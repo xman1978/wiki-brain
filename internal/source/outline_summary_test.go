@@ -34,7 +34,7 @@ func TestGenerateOutlineSummaries_SingleBatch(t *testing.T) {
 		MaxOutputTokens: 4096,
 	}
 
-	GenerateOutlineSummaries(context.Background(), fake, outlines, content, mc)
+	GenerateOutlineSummaries(context.Background(), fake, outlines, content, mc, 2)
 
 	for _, o := range outlines {
 		if !o.Summary.Valid || o.Summary.String == "" {
@@ -80,7 +80,7 @@ func TestGenerateOutlineSummaries_MultipleBatches(t *testing.T) {
 		MaxOutputTokens: 4096,
 	}
 
-	GenerateOutlineSummaries(context.Background(), fake, outlines, content, mc)
+	GenerateOutlineSummaries(context.Background(), fake, outlines, content, mc, 2)
 
 	calls := fake.Calls()
 	if len(calls) < 2 {
@@ -100,7 +100,7 @@ func TestGenerateOutlineSummaries_SkipsExistingSummary(t *testing.T) {
 	}
 
 	mc := llm.ModelParams{Model: "test", MaxInputTokens: 100000, MaxOutputTokens: 4096}
-	GenerateOutlineSummaries(context.Background(), fake, outlines, content, mc)
+	GenerateOutlineSummaries(context.Background(), fake, outlines, content, mc, 2)
 
 	// Should not call LLM since all already have summaries
 	if len(fake.Calls()) != 0 {

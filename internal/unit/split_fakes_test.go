@@ -40,15 +40,25 @@ func splitBoundaryResp(out extractOutput) string {
 
 func splitPointResps(out extractOutput) []llm.FakeResponse {
 	type pointJSON struct {
-		Content string `json:"content"`
-		Type    string `json:"type"`
+		Content      string `json:"content"`
+		Type         string `json:"type"`
+		ContentTheme string `json:"content_theme"`
+		Object       string `json:"object"`
+		Scope        string `json:"scope"`
 	}
 	resps := make([]llm.FakeResponse, 0, len(out.Units))
 	for _, u := range out.Units {
 		var pts []pointJSON
 		for _, p := range out.Points {
 			if p.UnitID == u.UnitID {
-				pts = append(pts, pointJSON{Content: p.Content, Type: p.Type})
+				contentTheme, scope := p.ContentTheme, p.Scope
+				if contentTheme == "" {
+					contentTheme = "test theme"
+				}
+				if scope == "" {
+					scope = "general"
+				}
+				pts = append(pts, pointJSON{Content: p.Content, Type: p.Type, ContentTheme: contentTheme, Object: p.Object, Scope: scope})
 			}
 		}
 		b, _ := json.Marshal(map[string]any{"center": u.Center, "points": pts})

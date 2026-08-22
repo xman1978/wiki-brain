@@ -305,7 +305,7 @@ func (s *Service) Extract(ctx context.Context, sourceID string) error {
 		semanticsStart = time.Now()
 		return nil
 	}
-	if err := s.extractSegmentsPreInsertDedup(ctx, src.Title, sourceID, segments, mdLines, func() {
+	if err := s.extractSegmentsPreInsertDedup(ctx, src.Title, src.Summary.String, sourceID, segments, mdLines, func() {
 		done++
 		s.emit(sourceID, progress.Event{Step: progress.StepUnitExtract, Status: progress.StatusCompleted, Message: fmt.Sprintf("提取知识单元 (%d/%d)", done, len(segments)), Current: done, Total: len(segments), ElapsedMs: time.Since(extractStart).Milliseconds()})
 	}, onBeforeSemantics); err != nil {
@@ -367,6 +367,19 @@ type llmPoint struct {
 	FirstLineAnchor string `json:"first_line_anchor"`
 	LineEnd         int    `json:"line_end"`
 	LastLineAnchor  string `json:"last_line_anchor"`
+	// SourceTheme/ContentTheme/Object/Scope are this point's own rerank
+	// semantics (docs/impl/v1/semantics-curation.md 2026-08-21 改判: 下沉自
+	// KU 级 unit_rerank_semantics 到 KP 级) — a KU's points can each apply to
+	// a different object/scope, so these travel per point, not per unit.
+	// SemanticsPromptVersion is set only when ContentTheme/Scope were
+	// actually produced by this point's own extraction call (a required
+	// field came back empty for gap/retry/coverage-fill paths that don't yet
+	// populate these — see kp_semantics.go's backfill for closing that gap).
+	SourceTheme            string `json:"-"`
+	ContentTheme           string `json:"-"`
+	Object                 string `json:"-"`
+	Scope                  string `json:"-"`
+	SemanticsPromptVersion string `json:"-"`
 }
 
 type extractOutput struct {
@@ -468,6 +481,10 @@ type kpnOutput struct {
 	Relations []kpnRelation `json:"relations"`
 }
 
+// kpnGenerateConcurrencyDefault is used whenever
+// cfg.Source.KPNGenerateConcurrency is left at its zero value.
+const kpnGenerateConcurrencyDefault = 2
+
 func (s *Service) generateKPN(ctx context.Context, sourceID string) {
 	points, err := s.store.GetPointsBySourceID(sourceID)
 	if err != nil {
@@ -484,22 +501,45 @@ func (s *Service) generateKPN(ctx context.Context, sourceID string) {
 		unitCenterMap[u.UnitID] = u.Center
 	}
 
+	var batches [][]KnowledgePoint
 	if len(points) <= 60 {
-		s.kpnBatch(ctx, points, unitCenterMap)
+		batches = [][]KnowledgePoint{points}
 	} else {
 		outlines, _ := s.sourceStore.GetOutlines(sourceID)
 		topLevel := findTopLevelOutlines(outlines)
-		batches := groupPointsByTopOutline(points, units, topLevel)
-		for _, batch := range batches {
+		grouped := groupPointsByTopOutline(points, units, topLevel)
+		for _, batch := range grouped {
 			for i := 0; i < len(batch); i += 60 {
 				end := i + 60
 				if end > len(batch) {
 					end = len(batch)
 				}
-				s.kpnBatch(ctx, batch[i:end], unitCenterMap)
+				batches = append(batches, batch[i:end])
 			}
 		}
 	}
+
+	// Batches are independent of each other (each is its own kpn_extract.md
+	// call writing relations via InsertRelation, which is INSERT OR IGNORE
+	// against a unique index — concurrent inserts across batches are safe),
+	// so run them concurrently instead of one after another.
+	concurrency := s.cfg.Source.KPNGenerateConcurrency
+	if concurrency <= 0 {
+		concurrency = kpnGenerateConcurrencyDefault
+	}
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for _, batch := range batches {
+		batch := batch
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			s.kpnBatch(ctx, batch, unitCenterMap)
+		}()
+	}
+	wg.Wait()
 }
 
 func findTopLevelOutlines(outlines []source.Outline) []source.Outline {

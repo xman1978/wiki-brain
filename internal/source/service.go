@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -361,7 +362,7 @@ func (s *Service) Process(ctx context.Context, sourceID string) error {
 	s.emit(sourceID, progress.Event{Step: progress.StepOutlineSummary, Status: progress.StatusStarted, Message: "目录摘要生成"})
 	if len(allOutlines) > 0 {
 		if mc, err := s.extractionModel(); err == nil {
-			GenerateOutlineSummaries(ctx, s.llmClient, allOutlines, normalized, mc)
+			GenerateOutlineSummaries(ctx, s.llmClient, allOutlines, normalized, mc, s.cfg.Source.OutlineSummaryConcurrency)
 		}
 	}
 	s.emit(sourceID, progress.Event{Step: progress.StepOutlineSummary, Status: progress.StatusCompleted, ElapsedMs: time.Since(stepStart).Milliseconds()})
@@ -380,7 +381,7 @@ func (s *Service) Process(ctx context.Context, sourceID string) error {
 	// Step 7: Generate summary
 	stepStart = time.Now()
 	s.emit(sourceID, progress.Event{Step: progress.StepSourceSummary, Status: progress.StatusStarted, Message: "文档摘要生成"})
-	s.generateSummary(ctx, sourceID, src.Title, normalized, allOutlines)
+	s.generateSummary(ctx, sourceID, src.Title, allOutlines)
 	s.emit(sourceID, progress.Event{Step: progress.StepSourceSummary, Status: progress.StatusCompleted, ElapsedMs: time.Since(stepStart).Milliseconds()})
 
 	// Step 8: Domain matching
@@ -448,26 +449,34 @@ func (s *Service) convertToMarkdown(ctx context.Context, src *Source) error {
 	return nil
 }
 
-func (s *Service) generateSummary(ctx context.Context, sourceID, title, content string, outlines []Outline) {
-	// Build top outline titles
-	var topTitles []string
-	for _, o := range outlines {
-		if o.Level == 1 {
-			topTitles = append(topTitles, o.Title)
-		}
-	}
-	topOutlineTitles := strings.Join(topTitles, "\n")
-	if topOutlineTitles == "" {
-		topOutlineTitles = "（无顶层目录）"
-	}
+// generateSummary synthesizes the whole-document summary from each outline
+// node's already-computed keyword summary (GenerateOutlineSummaries, run
+// immediately before this at both call sites) rather than raw document
+// content — a full-document input risks exceeding the model's max input
+// tokens on large sources, while the per-node keyword summaries are already
+// bounded in size (each capped by the same segment-size limit extraction
+// uses) regardless of how long the source is. See docs/impl/v1/
+// semantics-curation.md for why 适用范围/适用对象 coverage matters here:
+// knowledge-point semantics extraction reads this summary as background.
+func (s *Service) generateSummary(ctx context.Context, sourceID, title string, outlines []Outline) {
+	sorted := append([]Outline(nil), outlines...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].LineStart < sorted[j].LineStart })
 
-	// Extract first 300 chars (excluding heading lines)
-	firstParagraph := extractFirstParagraph(content, 300)
+	var sb strings.Builder
+	for _, o := range sorted {
+		if !o.Summary.Valid || strings.TrimSpace(o.Summary.String) == "" {
+			continue
+		}
+		fmt.Fprintf(&sb, "%s：%s\n", o.Title, o.Summary.String)
+	}
+	outlineSummaries := sb.String()
+	if outlineSummaries == "" {
+		outlineSummaries = "（无目录摘要）"
+	}
 
 	summary, err := s.llmClient.Complete(ctx, "source_summary.md", map[string]string{
-		"title":              title,
-		"top_outline_titles": topOutlineTitles,
-		"first_paragraph":    firstParagraph,
+		"title":             title,
+		"outline_summaries": outlineSummaries,
 	}, "extraction")
 
 	if err != nil {
@@ -589,6 +598,35 @@ func (s *Service) SetDomain(sourceID, domainID string) error {
 	return nil
 }
 
+// RegenerateSummary re-runs source_summary.md over a completed source's
+// existing per-outline keyword summaries, overwriting sources.summary — used
+// to backfill sources whose summary predates a source_summary.md input
+// change (2026-08-21: whole-document summary now synthesizes from each
+// outline node's already-computed keyword summary, joined, instead of raw
+// document content — bounded in size regardless of document length, and
+// more likely to include a scope/applicability declaration since that
+// content usually lives in its own outline node; see
+// docs/impl/v1/semantics-curation.md). Used by cmd/resemantic-backfill
+// -resummarize, since knowledge-point semantics extraction reads this same
+// summary as background context. Does not touch the outline keyword
+// summaries themselves (GenerateOutlineSummaries) — those are unaffected by
+// this change and only computed once at import.
+func (s *Service) RegenerateSummary(ctx context.Context, sourceID string) error {
+	src, err := s.store.GetByID(sourceID)
+	if err != nil {
+		return fmt.Errorf("source: regenerate summary: get source: %w", err)
+	}
+	if src.Status != "completed" {
+		return fmt.Errorf("source: regenerate summary: source %s status is %q, need completed", sourceID, src.Status)
+	}
+	outlines, err := s.store.GetOutlines(sourceID)
+	if err != nil {
+		return fmt.Errorf("source: regenerate summary: get outlines: %w", err)
+	}
+	s.generateSummary(ctx, sourceID, src.Title, outlines)
+	return nil
+}
+
 // SetSummary lets a human correct the auto-generated summary (e.g. when it
 // omits a product/role name that source_filter's title+summary pre-screen
 // relies on to keep the source in the candidate pool for a question).
@@ -626,6 +664,30 @@ func (s *Service) UpdateOutlineSummary(sourceID, outlineID, summary string) (*Ou
 	}
 
 	return updated, nil
+}
+
+// DeleteOutlineNode 删除来源详情页目录树中的单个节点。仅允许删除叶子节点
+// （无子目录）且节点下无未失效 KU（lifecycle != deprecated）的目录，不做级联删除——
+// 前端应据此在渲染时决定删除图标是否可点。
+func (s *Service) DeleteOutlineNode(sourceID, outlineID string) error {
+	if _, err := s.store.GetOutlineByID(sourceID, outlineID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("outline not found")
+		}
+		return err
+	}
+
+	if err := s.store.DeleteOutlineNode(sourceID, outlineID); err != nil {
+		return err
+	}
+
+	if s.outlineIdx != nil {
+		if err := s.outlineIdx.Delete(outlineID); err != nil {
+			slog.Warn("delete outline from index failed", "error", err)
+		}
+	}
+
+	return nil
 }
 
 func (s *Service) indexOutlines(outlines []Outline) {
@@ -1252,37 +1314,6 @@ func (s *Service) GetVersionHTMLPreview(sourceID string, version int) (string, e
 	return "<pre>" + escaped + "</pre>", nil
 }
 
-func extractFirstParagraph(content string, maxRunes int) string {
-	lines := strings.Split(content, "\n")
-	var sb strings.Builder
-	count := 0
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		if trimmed == "" {
-			continue
-		}
-
-		for _, r := range line {
-			sb.WriteRune(r)
-			count++
-			if count >= maxRunes {
-				return sb.String()
-			}
-		}
-		sb.WriteString("\n")
-		count++
-		if count >= maxRunes {
-			return sb.String()
-		}
-	}
-
-	return sb.String()
-}
-
 // ProcessRetry handles retry with idempotent rules per doc.
 func (s *Service) ProcessRetry(ctx context.Context, sourceID string) error {
 	src, err := s.store.GetByID(sourceID)
@@ -1338,7 +1369,7 @@ func (s *Service) ProcessRetry(ctx context.Context, sourceID string) error {
 
 	if len(structOutlines) > 0 {
 		if mc, err := s.extractionModel(); err == nil {
-			GenerateOutlineSummaries(ctx, s.llmClient, structOutlines, normalized, mc)
+			GenerateOutlineSummaries(ctx, s.llmClient, structOutlines, normalized, mc, s.cfg.Source.OutlineSummaryConcurrency)
 		}
 	}
 
@@ -1394,13 +1425,13 @@ func (s *Service) ProcessRetry(ctx context.Context, sourceID string) error {
 
 	if len(allOutlines) > 0 {
 		if mc, err := s.extractionModel(); err == nil {
-			GenerateOutlineSummaries(ctx, s.llmClient, allOutlines, normalized, mc)
+			GenerateOutlineSummaries(ctx, s.llmClient, allOutlines, normalized, mc, s.cfg.Source.OutlineSummaryConcurrency)
 		}
 	}
 
 	s.store.InsertOutlines(allOutlines)
 	s.store.UpdateOutlineType(sourceID, outlineType)
-	s.generateSummary(ctx, sourceID, src.Title, normalized, allOutlines)
+	s.generateSummary(ctx, sourceID, src.Title, allOutlines)
 	s.matchDomain(ctx, sourceID)
 	s.indexOutlines(allOutlines)
 

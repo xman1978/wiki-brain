@@ -3,6 +3,7 @@ package unit
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -49,6 +50,17 @@ type KnowledgePoint struct {
 	CreatedAt          time.Time
 	ManuallyEdited     bool
 	EditedAt           sql.NullTime
+	// SourceTheme/ContentTheme/Object/Scope/SemanticsPromptVersion are this
+	// KP's own rerank semantics (docs/impl/v1/semantics-curation.md
+	// 2026-08-21 改判: 下沉自 KU 级 unit_rerank_semantics 到 KP 级). Empty
+	// SemanticsPromptVersion means this point has no usable semantics yet
+	// (an extraction path that doesn't populate them, or not yet backfilled)
+	// — see kp_semantics.go.
+	SourceTheme            string
+	ContentTheme           string
+	Object                 string
+	Scope                  string
+	SemanticsPromptVersion string
 }
 
 // Relation scope (docs/impl/v1/kpn.md 数据结构).
@@ -83,12 +95,7 @@ func NewStore(db *sql.DB) *Store {
 func (s *Store) PublishGeneration(
 	sourceID string,
 	pool []unitCandidate,
-	semantics map[string]rerank.Semantics,
 ) (superseded []KnowledgeUnit, inserted []KnowledgeUnit, points []KnowledgePoint, err error) {
-	if err := validatePublicationSemantics(pool, semantics); err != nil {
-		return nil, nil, nil, err
-	}
-
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("unit store: publish generation: begin: %w", err)
@@ -132,18 +139,6 @@ func (s *Store) PublishGeneration(
 
 	inserted = make([]KnowledgeUnit, 0, len(pool))
 	for _, candidate := range pool {
-		// A unit_id absent from semantics is one that extractRerankSemantics
-		// gave up on even after every fallback tier (see rerank_semantics.go)
-		// — the whole unit is discarded rather than published without a
-		// usable rerank signal: it would never be selectable by rerank
-		// anyway (see the retrieval integrity check), so keeping it around
-		// with no semantics row would only be dead weight. Every other
-		// candidate in the same pool still publishes normally.
-		semantic, ok := semantics[candidate.id]
-		if !ok {
-			continue
-		}
-
 		promptVersion := candidate.promptVersion
 		if promptVersion == "" {
 			promptVersion = promptVersionSplitExtract
@@ -169,29 +164,28 @@ func (s *Store) PublishGeneration(
 
 		for _, candidatePoint := range candidate.points {
 			point := KnowledgePoint{
-				PointID:   uuid.New().String(),
-				UnitID:    unit.UnitID,
-				SourceID:  sourceID,
-				Content:   candidatePoint.Content,
-				PointType: candidatePoint.Type,
-				Lifecycle: LifecycleCurrent,
+				PointID:                uuid.New().String(),
+				UnitID:                 unit.UnitID,
+				SourceID:               sourceID,
+				Content:                candidatePoint.Content,
+				PointType:              candidatePoint.Type,
+				Lifecycle:              LifecycleCurrent,
+				SourceTheme:            candidatePoint.SourceTheme,
+				ContentTheme:           candidatePoint.ContentTheme,
+				Object:                 candidatePoint.Object,
+				Scope:                  candidatePoint.Scope,
+				SemanticsPromptVersion: candidatePoint.SemanticsPromptVersion,
 			}
 			if _, err := tx.Exec(`INSERT INTO knowledge_points
-				(point_id, unit_id, source_id, content, point_type, lifecycle)
-				VALUES (?, ?, ?, ?, ?, ?)`,
-				point.PointID, point.UnitID, point.SourceID, point.Content, point.PointType, point.Lifecycle); err != nil {
+				(point_id, unit_id, source_id, content, point_type, lifecycle, source_theme, content_theme, object, scope, semantics_prompt_version)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				point.PointID, point.UnitID, point.SourceID, point.Content, point.PointType, point.Lifecycle,
+				point.SourceTheme, point.ContentTheme, point.Object, point.Scope, point.SemanticsPromptVersion); err != nil {
 				return nil, nil, nil, fmt.Errorf("unit store: publish generation: insert point for unit %s: %w", unit.UnitID, err)
 			}
 			points = append(points, point)
 		}
 
-		if _, err := tx.Exec(`INSERT INTO unit_rerank_semantics
-			(unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			unit.UnitID, semantic.SourceTheme, semantic.ContentTheme, semantic.Intent,
-			semantic.Object, semantic.Scope, semantic.PromptVersion); err != nil {
-			return nil, nil, nil, fmt.Errorf("unit store: publish generation: insert semantics for unit %s: %w", unit.UnitID, err)
-		}
 		inserted = append(inserted, unit)
 	}
 
@@ -201,98 +195,18 @@ func (s *Store) PublishGeneration(
 	return superseded, inserted, points, nil
 }
 
-// validatePublicationSemantics validates whatever semantics were actually
-// produced — a candidate with no entry in semantics at all is tolerated here
-// (it's simply discarded later, see the loop above) since
-// extractRerankSemantics already gave up on it after every fallback tier;
-// what it does return an entry for must still be well-formed.
-func validatePublicationSemantics(pool []unitCandidate, semantics map[string]rerank.Semantics) error {
-	candidateIDs := make(map[string]bool, len(pool))
-	for _, candidate := range pool {
-		if candidate.id == "" {
-			return fmt.Errorf("unit store: publish generation: candidate has empty unit_id")
-		}
-		if candidateIDs[candidate.id] {
-			return fmt.Errorf("unit store: publish generation: duplicate candidate unit_id %s", candidate.id)
-		}
-		candidateIDs[candidate.id] = true
-
-		semantic, ok := semantics[candidate.id]
-		if !ok {
-			continue
-		}
-		if err := validateSemantic(candidate.id, semantic); err != nil {
-			return fmt.Errorf("unit store: publish generation: %w", err)
-		}
-	}
-	for unitID := range semantics {
-		if !candidateIDs[unitID] {
-			return fmt.Errorf("unit store: publish generation: extra semantics for unit_id %s", unitID)
-		}
-	}
-	return nil
-}
-
-// validateSemantic validates one unit's semantics (the same rules
-// validatePublicationSemantics applies per-candidate). Shared by
-// validatePublicationSemantics (a whole generation) and InsertStandaloneUnit
-// (a single manually-fixed unit) so both insert paths enforce identical row
-// well-formedness.
-func validateSemantic(unitID string, semantic rerank.Semantics) error {
-	if semantic.UnitID != unitID {
-		return fmt.Errorf("semantic unit_id %s does not match %s", semantic.UnitID, unitID)
-	}
-	if semantic.PromptVersion != rerank.ExtractPromptVersion {
-		return fmt.Errorf("semantic prompt_version for unit %s = %q, want %q",
-			unitID, semantic.PromptVersion, rerank.ExtractPromptVersion)
-	}
-	if field := semanticMissingField(semantic); field != "" {
-		return fmt.Errorf("semantic %s is empty for unit %s", field, unitID)
-	}
-	return nil
-}
-
-// semanticMissingField returns the name of the first required field that's
-// empty (after trimming), or "" if semantic is well-formed. Shared by
-// validateSemantic (store.go's fatal, "this should never happen" safety net
-// on the write path — see its own comment) and extractRerankSemanticBatchOnce
-// (rerank_semantics.go's per-unit fallback matching, where the fix actually
-// belongs: a result with an empty required field must be treated the same as
-// an omitted one — retried, then discarded if it's still empty after every
-// fallback tier — instead of reaching PublishGeneration's safety net and
-// failing the whole source's extraction over one unit's incomplete result).
-// object is allowed to be empty (unit_semantics_extract.md v14): when the
-// unit's text never states who a rule applies to, the model is instructed to
-// leave it blank rather than fabricate a value or repeat content_theme.
-func semanticMissingField(semantic rerank.Semantics) string {
-	for _, field := range []struct {
-		name  string
-		value string
-	}{
-		{name: "source_theme", value: semantic.SourceTheme},
-		{name: "content_theme", value: semantic.ContentTheme},
-		{name: "intent", value: semantic.Intent},
-		{name: "scope", value: semantic.Scope},
-	} {
-		if strings.TrimSpace(field.value) == "" {
-			return field.name
-		}
-	}
-	return ""
-}
-
 // InsertStandaloneUnit inserts one new current knowledge unit together with
-// its points and rerank semantics in a single transaction. Unlike
-// PublishGeneration, it is purely additive — it never supersedes any other
-// unit for the source — so it's the insert path for manually recovering one
-// coverage gap (see Service.FixCoverageGap) without re-running the source's
-// whole extraction generation.
-func (s *Store) InsertStandaloneUnit(ku *KnowledgeUnit, points []KnowledgePoint, sem rerank.Semantics) error {
+// its points in a single transaction. Unlike PublishGeneration, it is purely
+// additive — it never supersedes any other unit for the source — so it's the
+// insert path for manually recovering one coverage gap (see
+// Service.FixCoverageGap) without re-running the source's whole extraction
+// generation. Each point in points is expected to already carry its own
+// rerank semantics (SourceTheme/ContentTheme/Object/Scope) if available —
+// FixCoverageGap fills those in via the same KP-level semantics engine
+// backfill uses (kp_semantics.go) before calling this.
+func (s *Store) InsertStandaloneUnit(ku *KnowledgeUnit, points []KnowledgePoint) error {
 	if ku.UnitID == "" {
 		return fmt.Errorf("unit store: insert standalone unit: empty unit_id")
-	}
-	if err := validateSemantic(ku.UnitID, sem); err != nil {
-		return fmt.Errorf("unit store: insert standalone unit: %w", err)
 	}
 
 	tx, err := s.db.Begin()
@@ -315,18 +229,12 @@ func (s *Store) InsertStandaloneUnit(ku *KnowledgeUnit, points []KnowledgePoint,
 		}
 		points[i].UnitID = ku.UnitID
 		if _, err := tx.Exec(`INSERT INTO knowledge_points
-			(point_id, unit_id, source_id, content, point_type, lifecycle)
-			VALUES (?, ?, ?, ?, ?, ?)`,
-			points[i].PointID, points[i].UnitID, points[i].SourceID, points[i].Content, points[i].PointType, LifecycleCurrent); err != nil {
+			(point_id, unit_id, source_id, content, point_type, lifecycle, source_theme, content_theme, object, scope, semantics_prompt_version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			points[i].PointID, points[i].UnitID, points[i].SourceID, points[i].Content, points[i].PointType, LifecycleCurrent,
+			points[i].SourceTheme, points[i].ContentTheme, points[i].Object, points[i].Scope, points[i].SemanticsPromptVersion); err != nil {
 			return fmt.Errorf("unit store: insert standalone unit: insert point: %w", err)
 		}
-	}
-
-	if _, err := tx.Exec(`INSERT INTO unit_rerank_semantics
-		(unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		ku.UnitID, sem.SourceTheme, sem.ContentTheme, sem.Intent, sem.Object, sem.Scope, sem.PromptVersion); err != nil {
-		return fmt.Errorf("unit store: insert standalone unit: insert semantics: %w", err)
 	}
 
 	return tx.Commit()
@@ -1017,10 +925,12 @@ func (s *Store) GetUnitByID(unitID string) (*KnowledgeUnit, error) {
 func (s *Store) GetPointByID(pointID string) (*KnowledgePoint, error) {
 	kp := &KnowledgePoint{}
 	var manuallyEdited int
-	err := s.db.QueryRow(`SELECT point_id, unit_id, source_id, content, point_type, lifecycle, lifecycle_changed_at, created_at, manually_edited, edited_at
+	err := s.db.QueryRow(`SELECT point_id, unit_id, source_id, content, point_type, lifecycle, lifecycle_changed_at, created_at, manually_edited, edited_at,
+		source_theme, content_theme, object, scope, semantics_prompt_version
 		FROM knowledge_points WHERE point_id = ?`, pointID).Scan(
 		&kp.PointID, &kp.UnitID, &kp.SourceID, &kp.Content, &kp.PointType,
-		&kp.Lifecycle, &kp.LifecycleChangedAt, &kp.CreatedAt, &manuallyEdited, &kp.EditedAt)
+		&kp.Lifecycle, &kp.LifecycleChangedAt, &kp.CreatedAt, &manuallyEdited, &kp.EditedAt,
+		&kp.SourceTheme, &kp.ContentTheme, &kp.Object, &kp.Scope, &kp.SemanticsPromptVersion)
 	if err != nil {
 		return nil, fmt.Errorf("unit store: get point by id: %w", err)
 	}
@@ -1321,95 +1231,57 @@ type Concept struct {
 	Kind string
 }
 
-// RerankSemanticsRow is one unit_rerank_semantics row as stored, including
-// the manual-curation columns (docs/impl/v1/semantics-curation.md).
-type RerankSemanticsRow struct {
-	UnitID         string
-	SourceTheme    string
-	ContentTheme   string
-	Intent         string
-	Object         string
-	Scope          string
-	PromptVersion  string
-	ManuallyEdited bool
-	EditedAt       sql.NullTime
+// GetPointSemanticsByPointID returns the point's rerank semantics as stored
+// directly on knowledge_points, or (nil, nil) if the point doesn't exist —
+// the KP-level replacement for the old unit_rerank_semantics row
+// (docs/impl/v1/semantics-curation.md 2026-08-21 改判).
+func (s *Store) GetPointSemanticsByPointID(pointID string) (*KnowledgePoint, error) {
+	kp, err := s.GetPointByID(pointID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return kp, nil
 }
 
-// GetRerankSemanticsByUnitID returns the unit's rerank semantics row, or
-// (nil, nil) when the unit has no semantics at all — the "missing" state the
-// curation UI must surface (被召回会触发 retrieval 完整性报错).
-func (s *Store) GetRerankSemanticsByUnitID(unitID string) (*RerankSemanticsRow, error) {
-	row := &RerankSemanticsRow{}
-	var manuallyEdited int
-	err := s.db.QueryRow(`SELECT unit_id, source_theme, content_theme, intent, object, scope, prompt_version, manually_edited, edited_at
-		FROM unit_rerank_semantics WHERE unit_id = ?`, unitID).Scan(
-		&row.UnitID, &row.SourceTheme, &row.ContentTheme, &row.Intent,
-		&row.Object, &row.Scope, &row.PromptVersion,
-		&manuallyEdited, &row.EditedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
+// UpsertPointSemanticsFromExtraction overwrites a point's rerank semantics
+// with a fresh LLM extraction (unlike UpsertManualPointSemantics, this never
+// sets manually_edited). The `WHERE manually_edited = 0` guard makes this a
+// no-op for a point a human has since hand-corrected, so a backfill re-run
+// can be pointed at every current point without the caller pre-filtering
+// manually_edited ones itself.
+func (s *Store) UpsertPointSemanticsFromExtraction(pointID string, sem rerank.Semantics, promptVersion string) error {
+	_, err := s.db.Exec(`UPDATE knowledge_points
+		SET source_theme = ?, content_theme = ?, object = ?, scope = ?, semantics_prompt_version = ?
+		WHERE point_id = ? AND manually_edited = 0`,
+		sem.SourceTheme, sem.ContentTheme, sem.Object, sem.Scope, promptVersion, pointID)
 	if err != nil {
-		return nil, fmt.Errorf("unit store: get rerank semantics: %w", err)
-	}
-	row.ManuallyEdited = manuallyEdited != 0
-	return row, nil
-}
-
-// UpsertRerankSemanticsFromExtraction overwrites a unit's semantics row with
-// a fresh LLM extraction (unlike UpsertManualRerankSemantics, this always
-// stamps the given promptVersion and never sets manually_edited). The
-// `WHERE manually_edited = 0` guard on the conflict clause makes this a
-// no-op for rows a human has since hand-corrected, so a backfill re-run
-// (e.g. after a semantics-extraction prompt change) can be pointed at every
-// current unit without needing the caller to pre-filter manually_edited
-// units itself — though Service.RegenerateRerankSemantics does that anyway,
-// to avoid paying for an extraction call whose result would be discarded.
-func (s *Store) UpsertRerankSemanticsFromExtraction(unitID string, sem rerank.Semantics, promptVersion string) error {
-	_, err := s.db.Exec(`INSERT INTO unit_rerank_semantics
-		(unit_id, source_theme, content_theme, intent, object, scope, prompt_version)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(unit_id) DO UPDATE SET
-			source_theme = excluded.source_theme,
-			content_theme = excluded.content_theme,
-			intent = excluded.intent,
-			object = excluded.object,
-			scope = excluded.scope,
-			prompt_version = excluded.prompt_version,
-			updated_at = CURRENT_TIMESTAMP
-		WHERE manually_edited = 0`,
-		unitID, sem.SourceTheme, sem.ContentTheme, sem.Intent,
-		sem.Object, sem.Scope, promptVersion)
-	if err != nil {
-		return fmt.Errorf("unit store: upsert rerank semantics from extraction: %w", err)
+		return fmt.Errorf("unit store: upsert point semantics from extraction: %w", err)
 	}
 	return nil
 }
 
-// UpsertManualRerankSemantics writes a human-curated semantics row
-// (docs/impl/v1/semantics-curation.md): it sets manually_edited=1 and
-// edited_at=now. On update the stored prompt_version is left untouched (it
-// records the last LLM extraction, which the manual edit doesn't fake); on
-// insert — the unit had no semantics row at all — promptVersion (the current
-// rerank.ExtractPromptVersion) is written so the retrieval integrity check
-// sees a complete row.
-func (s *Store) UpsertManualRerankSemantics(unitID string, sem rerank.Semantics, promptVersion string) error {
-	_, err := s.db.Exec(`INSERT INTO unit_rerank_semantics
-		(unit_id, source_theme, content_theme, intent, object, scope, prompt_version, manually_edited, edited_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
-		ON CONFLICT(unit_id) DO UPDATE SET
-			source_theme = excluded.source_theme,
-			content_theme = excluded.content_theme,
-			intent = excluded.intent,
-			object = excluded.object,
-			scope = excluded.scope,
-			manually_edited = 1,
-			edited_at = CURRENT_TIMESTAMP,
-			updated_at = CURRENT_TIMESTAMP`,
-		unitID, sem.SourceTheme, sem.ContentTheme, sem.Intent,
-		sem.Object, sem.Scope, promptVersion)
+// UpsertManualPointSemantics writes a human-curated semantics row
+// (docs/impl/v1/semantics-curation.md): sets manually_edited=1/edited_at=now,
+// the same protection AddManualPoint/UpdateManualPoint already give a KP's
+// content/point_type.
+func (s *Store) UpsertManualPointSemantics(pointID string, sem rerank.Semantics, promptVersion string) error {
+	res, err := s.db.Exec(`UPDATE knowledge_points
+		SET source_theme = ?, content_theme = ?, object = ?, scope = ?, semantics_prompt_version = ?,
+			manually_edited = 1, edited_at = CURRENT_TIMESTAMP
+		WHERE point_id = ?`,
+		sem.SourceTheme, sem.ContentTheme, sem.Object, sem.Scope, promptVersion, pointID)
 	if err != nil {
-		return fmt.Errorf("unit store: upsert manual semantics: %w", err)
+		return fmt.Errorf("unit store: upsert manual point semantics: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("unit store: upsert manual point semantics: rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("unit store: upsert manual point semantics: point %s not found", pointID)
 	}
 	return nil
 }

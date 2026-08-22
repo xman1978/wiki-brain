@@ -521,24 +521,34 @@ entry_id 为空或不存在：entry_id 保持 null；
 LLM 调用失败：记录 warn 日志，当前批次 KU 的 entry_id 保持 null，不阻塞 Source 完成。
 ```
 
-### 步骤 6：提取并原子持久化 Rerank 语义
+### 步骤 6：随知识点提取一并生成 Rerank 语义（KP 级，2026-08-21 改判）
 
-每个将被发布为可检索的 KnowledgeUnit 都必须先完成 Rerank 语义提取。程序按 unit 的
-Markdown 行范围读取正文，调用 `config/prompts/unit_semantics_extract.md` 生成并校验以下
-语义分类字段：`source_theme`、`content_theme`、`intent`、`object`、`scope`。
-（早期版本还抽取 `key_facts`，V1 已废弃——事实点统一由 KP 承载，见
-`docs/impl/v1/semantics-curation.md`。）
+**本节取代早期"KU 级、单独一次 LLM 调用"的口径**：`unit_rerank_semantics` 表（KU
+级 `source_theme`/`content_theme`/`intent`/`object`/`scope`）已废弃并删除
+（migration 062）。根因是同一个 KU 常常包含多条适用对象/范围各不相同的 KP（例如同一
+制度文档里一条规则只对某部门生效、另一条对全员生效），KU 级语义天然无法反映这种差
+异，导致 rerank 证据过滤把不适用的证据当作佐证放行。详见
+`docs/impl/v1/semantics-curation.md`。
+
+现在 `source_theme`/`content_theme`/`object`/`scope`（不再有 `intent`）是 `knowledge_points`
+表上的列，每条 KP 各自一份。新导入路径**不再有独立的语义抽取 LLM 调用**：
+`config/prompts/unit_point_extract.md`（v6）在产出每条 KP 的 `content`/`type` 的同一次调
+用里，一并要求模型给出该 KP 自己的 `content_theme`/`object`/`scope`；`source_theme` 不
+调用 LLM，直接取该 KU 所属 Source 的标题。`content_theme`/`scope` 缺失时，该 KP 的
+`semantics_prompt_version` 留空（不阻塞该 KP 或整个新代的发布），供后续
+`internal/unit/kp_semantics.go` 的独立回填批处理引擎（`config/prompts/kp_semantics_extract.md`）
+按 `point_id` 补齐——这条回填路径也是 gap-fill（`unit_gap_extract.md`）、重试
+（`unit_extract_retry.md`）等不携带这些字段的路径唯一能获得语义的方式。
 
 ```text
-对候选 KU 批量提取语义；每个 unit_id 必须恰好返回一条语义结果；
-语义与 KU / KP 的当前代写入同一 SQLite 事务，写入 unit_rerank_semantics；
-语义 prompt_version 固定为当前提取版本（v1）；
+每条 KP 随 content/type 一并写入 source_theme/content_theme/object/scope；
+KP 与其语义同 KU 一起写入同一 SQLite 事务，直接落在 knowledge_points 表；
+无法在本次调用中获得 content_theme/scope 的 KP 仍然发布，semantics_prompt_version 留空；
 事务成功后才发布新的 current KU/KP，并在随后写入 Bleve 索引；
 ```
 
-语义提取、解析、覆盖校验或持久化任一步失败时，整个新代不发布：先前的 current KU/KP、
-对应语义行和索引继续可用，失败代不会成为可检索内容。这样在线 Retrieval 不需要也不允许
-针对原始候选正文补做语义提取。
+写入任一步失败时，整个新代不发布：先前的 current KU/KP 继续可用，失败代不会成为可
+检索内容。
 
 ### 步骤 7：写入 Bleve 索引
 
@@ -550,6 +560,8 @@ units index 写入字段：
 
 points index 写入字段：
   point_id、unit_id、source_id、content、point_type
+  （source_theme/content_theme/object/scope 只存 SQLite，不进 Bleve 索引——
+  rerank 判断读的是 knowledge_points 表，不经过全文检索）
 ```
 
 KPN 关系不写入 Bleve（通过 SQLite 按 point_id 查询）。

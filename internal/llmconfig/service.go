@@ -201,7 +201,20 @@ func (s *Service) CreateProvider(p Provider) (Provider, error) {
 	return s.store.GetProvider(p.ProviderID)
 }
 
+// MaskedAPIKey is what the API returns in place of a provider's real key, and
+// what the update form re-submits unchanged when the user never touched the
+// field — UpdateProvider treats it as "keep the existing key" rather than
+// overwriting the stored key with the literal mask string.
+const MaskedAPIKey = "********"
+
 func (s *Service) UpdateProvider(p Provider) (Provider, error) {
+	if p.APIKey == MaskedAPIKey {
+		existing, err := s.store.GetProvider(p.ProviderID)
+		if err != nil {
+			return Provider{}, err
+		}
+		p.APIKey = existing.APIKey
+	}
 	if err := ValidateProvider(&p); err != nil {
 		return Provider{}, err
 	}

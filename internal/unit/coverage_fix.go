@@ -92,7 +92,7 @@ func (s *Service) FixCoverageGap(ctx context.Context, sourceID string, lineStart
 	}
 	unitContent := sliceLinesWithLineNumbers(mdLines, lineStart, lineEnd)
 
-	center, points, ok, err := s.extractPointsForSplitUnit(ctx, u, unitContent)
+	center, points, ok, err := s.extractPointsForSplitUnit(ctx, src.Title, src.Summary.String, u, unitContent)
 	if err != nil {
 		return nil, fmt.Errorf("unit: fix coverage gap: extract points: %w", err)
 	}
@@ -103,19 +103,6 @@ func (s *Service) FixCoverageGap(ctx context.Context, sourceID string, lineStart
 		u.Center = strings.TrimSpace(center)
 	} else {
 		u.Center = fallbackCenterFromLines(mdLines, lineStart, lineEnd)
-	}
-
-	candidate := rerankSemanticCandidate{
-		id:      unitID,
-		content: strings.Join(mdLines[lineStart-1:lineEnd], "\n"),
-	}
-	semantics, err := s.extractRerankSemanticBatch(ctx, src.Title, []rerankSemanticCandidate{candidate})
-	if err != nil {
-		return nil, fmt.Errorf("unit: fix coverage gap: extract semantics: %w", err)
-	}
-	sem, ok := semantics[unitID]
-	if !ok {
-		return nil, fmt.Errorf("unit: fix coverage gap: semantics extraction returned no result for range %d-%d, try again", lineStart, lineEnd)
 	}
 
 	ku := &KnowledgeUnit{
@@ -132,17 +119,26 @@ func (s *Service) FixCoverageGap(ctx context.Context, sourceID string, lineStart
 		ku.OutlineID = sql.NullString{String: outlineID, Valid: true}
 	}
 
+	// p already carries its own rerank semantics (source_theme/content_theme/
+	// object/scope) — extractPointsForSplitUnit calls unit_point_extract.md,
+	// the same inline-fields path the normal segment pipeline uses (see
+	// split_extract.go), so there is nothing extra to extract here.
 	kps := make([]KnowledgePoint, 0, len(points))
 	for _, p := range points {
 		kps = append(kps, KnowledgePoint{
-			SourceID:  sourceID,
-			Content:   p.Content,
-			PointType: p.Type,
-			Lifecycle: LifecycleCurrent,
+			SourceID:               sourceID,
+			Content:                p.Content,
+			PointType:              p.Type,
+			Lifecycle:              LifecycleCurrent,
+			SourceTheme:            p.SourceTheme,
+			ContentTheme:           p.ContentTheme,
+			Object:                 p.Object,
+			Scope:                  p.Scope,
+			SemanticsPromptVersion: p.SemanticsPromptVersion,
 		})
 	}
 
-	if err := s.store.InsertStandaloneUnit(ku, kps, sem); err != nil {
+	if err := s.store.InsertStandaloneUnit(ku, kps); err != nil {
 		return nil, fmt.Errorf("unit: fix coverage gap: persist: %w", err)
 	}
 

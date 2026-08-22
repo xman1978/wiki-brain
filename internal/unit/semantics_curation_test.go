@@ -64,138 +64,140 @@ func curationMux(svc *Service) *http.ServeMux {
 	return mux
 }
 
-func TestGetUnitSemantics_MissingRow(t *testing.T) {
+func TestGetPointSemantics_MissingSemantics(t *testing.T) {
 	svc, _ := setupCurationTest(t)
+	if err := svc.store.InsertPoint(&KnowledgePoint{
+		PointID: "kp-1", UnitID: "ku-1", SourceID: "src-1",
+		Content: "培训积分不跨年累计，次年自动清零", PointType: "rule",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	mux := curationMux(svc)
 
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest("GET", "/units/ku-1/semantics", nil))
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/points/kp-1/semantics", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 
 	var resp struct {
-		Unit struct {
-			Center          string `json:"center"`
-			LineStart       int    `json:"line_start"`
-			LineEnd         int    `json:"line_end"`
-			Lifecycle       string `json:"lifecycle"`
-			Content         string `json:"content"`
-			OutlinePath     string `json:"outline_path"`
-			OutlineNodeType string `json:"outline_node_type"`
-		} `json:"unit"`
-		Semantics *json.RawMessage `json:"semantics"`
+		Content         string `json:"content"`
+		ContentTheme    string `json:"content_theme"`
+		ManuallyEdited  bool   `json:"manually_edited"`
+		OutlinePath     string `json:"outline_path"`
+		OutlineNodeType string `json:"outline_node_type"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.Semantics != nil && string(*resp.Semantics) != "null" {
-		t.Errorf("semantics = %s, want null for a unit with no semantics row", string(*resp.Semantics))
+	if resp.ContentTheme != "" {
+		t.Errorf("content_theme = %q, want empty for a point with no semantics yet", resp.ContentTheme)
 	}
-	if resp.Unit.Center != "培训积分的统计、清零与公布规则" {
-		t.Errorf("center = %q", resp.Unit.Center)
+	if resp.Content != "培训积分不跨年累计，次年自动清零" {
+		t.Errorf("content = %q", resp.Content)
 	}
-	want := "第二行：培训积分不跨年累计，次年自动清零。\n第三行\n第四行"
-	if resp.Unit.Content != want {
-		t.Errorf("content = %q, want L2-L4 slice %q", resp.Unit.Content, want)
+	if resp.OutlinePath != "第三章 积分结果公布及应用 / 第六条 积分统计及公布" {
+		t.Errorf("outline_path = %q, want root→leaf chain", resp.OutlinePath)
 	}
-	if resp.Unit.OutlinePath != "第三章 积分结果公布及应用 / 第六条 积分统计及公布" {
-		t.Errorf("outline_path = %q, want root→leaf chain", resp.Unit.OutlinePath)
-	}
-	if resp.Unit.OutlineNodeType != "semantic" {
-		t.Errorf("outline_node_type = %q, want leaf's node_type \"semantic\"", resp.Unit.OutlineNodeType)
+	if resp.OutlineNodeType != "semantic" {
+		t.Errorf("outline_node_type = %q, want leaf's node_type \"semantic\"", resp.OutlineNodeType)
 	}
 }
 
-func TestPutUnitSemantics_CreatesAndUpdates(t *testing.T) {
+func TestPutPointSemantics_CreatesAndUpdates(t *testing.T) {
 	svc, _ := setupCurationTest(t)
+	if err := svc.store.InsertPoint(&KnowledgePoint{
+		PointID: "kp-1", UnitID: "ku-1", SourceID: "src-1",
+		Content: "培训积分不跨年累计，次年自动清零", PointType: "rule",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	mux := curationMux(svc)
 
-	body := `{"semantics":{"source_theme":"培训积分管理办法","content_theme":"积分统计与公布机制","intent":"规则","object":"培训积分","scope":"全体员工"}}`
+	body := `{"source_theme":"培训积分管理办法","content_theme":"积分统计与公布机制","object":"培训积分","scope":"全体员工"}`
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest("PUT", "/units/ku-1/semantics", bytes.NewBufferString(body)))
+	mux.ServeHTTP(w, httptest.NewRequest("PUT", "/points/kp-1/semantics", bytes.NewBufferString(body)))
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 
-	// The created row is manually_edited, carries the current extract prompt
-	// version (it was missing before), and round-trips through GET.
-	row, err := svc.store.GetRerankSemanticsByUnitID("ku-1")
+	kp, err := svc.store.GetPointByID("kp-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row == nil {
-		t.Fatal("semantics row not created")
+	if !kp.ManuallyEdited || !kp.EditedAt.Valid {
+		t.Errorf("manually_edited/edited_at = %v/%v, want true/set", kp.ManuallyEdited, kp.EditedAt.Valid)
 	}
-	if !row.ManuallyEdited || !row.EditedAt.Valid {
-		t.Errorf("manually_edited/edited_at = %v/%v, want true/set", row.ManuallyEdited, row.EditedAt.Valid)
+	if kp.SemanticsPromptVersion != rerank.ExtractPromptVersion {
+		t.Errorf("prompt_version = %q, want %q on create", kp.SemanticsPromptVersion, rerank.ExtractPromptVersion)
 	}
-	if row.PromptVersion != rerank.ExtractPromptVersion {
-		t.Errorf("prompt_version = %q, want %q on create", row.PromptVersion, rerank.ExtractPromptVersion)
-	}
-	if row.ContentTheme != "积分统计与公布机制" {
-		t.Errorf("content_theme = %q", row.ContentTheme)
+	if kp.ContentTheme != "积分统计与公布机制" {
+		t.Errorf("content_theme = %q", kp.ContentTheme)
 	}
 
-	// Update again — prompt_version must stay untouched (not re-faked).
-	if _, err := svc.store.db.Exec(`UPDATE unit_rerank_semantics SET prompt_version = 'v3' WHERE unit_id = 'ku-1'`); err != nil {
-		t.Fatal(err)
-	}
-	body2 := `{"semantics":{"source_theme":"培训积分管理办法","content_theme":"改","intent":"规则","object":"培训积分","scope":"全体员工"}}`
+	body2 := `{"source_theme":"培训积分管理办法","content_theme":"改","object":"培训积分","scope":"全体员工"}`
 	w2 := httptest.NewRecorder()
-	mux.ServeHTTP(w2, httptest.NewRequest("PUT", "/units/ku-1/semantics", bytes.NewBufferString(body2)))
+	mux.ServeHTTP(w2, httptest.NewRequest("PUT", "/points/kp-1/semantics", bytes.NewBufferString(body2)))
 	if w2.Code != http.StatusOK {
 		t.Fatalf("second PUT status = %d; body=%s", w2.Code, w2.Body.String())
 	}
-	row, err = svc.store.GetRerankSemanticsByUnitID("ku-1")
+	kp, err = svc.store.GetPointByID("kp-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.PromptVersion != "v3" {
-		t.Errorf("prompt_version = %q, want v3 preserved on update", row.PromptVersion)
-	}
-	if row.ContentTheme != "改" {
-		t.Errorf("content_theme = %q, want updated value", row.ContentTheme)
+	if kp.ContentTheme != "改" {
+		t.Errorf("content_theme = %q, want updated value", kp.ContentTheme)
 	}
 }
 
-func TestPutUnitSemantics_Validation(t *testing.T) {
+func TestPutPointSemantics_Validation(t *testing.T) {
 	svc, _ := setupCurationTest(t)
+	if err := svc.store.InsertPoint(&KnowledgePoint{
+		PointID: "kp-1", UnitID: "ku-1", SourceID: "src-1",
+		Content: "x", PointType: "rule",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	mux := curationMux(svc)
 
 	for name, body := range map[string]string{
-		"no semantics":   `{}`,
-		"missing field":  `{"semantics":{"source_theme":"a","content_theme":"b","intent":"c","object":"d","scope":""}}`,
+		"missing field":  `{"source_theme":"a","content_theme":"b","object":"d","scope":""}`,
 		"malformed json": `{`,
 	} {
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, httptest.NewRequest("PUT", "/units/ku-1/semantics", bytes.NewBufferString(body)))
+		mux.ServeHTTP(w, httptest.NewRequest("PUT", "/points/kp-1/semantics", bytes.NewBufferString(body)))
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("%s: status = %d, want 400", name, w.Code)
 		}
 	}
 }
 
-func TestPutUnitSemantics_NonCurrentUnitRejected(t *testing.T) {
+func TestPutPointSemantics_NonCurrentUnitRejected(t *testing.T) {
 	svc, _ := setupCurationTest(t)
+	if err := svc.store.InsertPoint(&KnowledgePoint{
+		PointID: "kp-1", UnitID: "ku-1", SourceID: "src-1",
+		Content: "x", PointType: "rule",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := svc.store.db.Exec(`UPDATE knowledge_units SET lifecycle = 'superseded' WHERE unit_id = 'ku-1'`); err != nil {
 		t.Fatal(err)
 	}
 	mux := curationMux(svc)
 
-	body := `{"semantics":{"source_theme":"a","content_theme":"b","intent":"c","object":"d","scope":"e"}}`
+	body := `{"source_theme":"a","content_theme":"b","object":"d","scope":"e"}`
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest("PUT", "/units/ku-1/semantics", bytes.NewBufferString(body)))
+	mux.ServeHTTP(w, httptest.NewRequest("PUT", "/points/kp-1/semantics", bytes.NewBufferString(body)))
 	if w.Code != http.StatusConflict {
 		t.Errorf("status = %d, want 409 for superseded unit", w.Code)
 	}
 }
 
-func TestGetUnitSemantics_NotFound(t *testing.T) {
+func TestGetPointSemantics_NotFound(t *testing.T) {
 	svc, _ := setupCurationTest(t)
 	mux := curationMux(svc)
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest("GET", "/units/nope/semantics", nil))
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/points/nope/semantics", nil))
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
 	}

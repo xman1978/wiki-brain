@@ -3,31 +3,31 @@
 
 # LLM 配置
 llm:
-  api_key:           "sk-ws-H.EIHEDMI.xWSE.MEQCIAUqkSSOSoIzTE4DZCVAdWc84C3WNJgp6eHJfZsLhVYtAiBrw11oQke4KjEgM-A1PxjEE6aw4tjH7RBhkq94ahc55g"
-  base_url:          "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  api_key:           "sk-sp-H.DMXMPP.8ilN.MEUCIQD1WsHKwfXBui1mtTdf4pVSpYfLr-ZnHDJJehAD0L2UwwIgJEK-45oY2q1bJGn9WmJyizsv6Re67tnDMJmonewLjS4"
+  base_url:          "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
   timeout_seconds:   120
   max_retries:       3
   models:
     default:
-      model:            "qwen3-30b-a3b-instruct-2507"
+      model:            "qwen3.6-flash"
       temperature:      0
       max_input_tokens: 4096
       max_output_tokens: 4096
       thinking:          false
     reasoning:
-      model:            "qwen3-30b-a3b-instruct-2507"
+      model:            "qwen3.6-flash"
       temperature:      0.1
       max_input_tokens: 4096
       max_output_tokens: 8192
-      thinking:         true
+      thinking:         false
     extraction:
-      model:            "qwen3-30b-a3b-instruct-2507"
+      model:            "qwen3.6-flash"
       temperature:      0
       max_input_tokens: 4096
       max_output_tokens: 8192
       thinking:         false
     classification:
-      model:            "qwen3-30b-a3b-instruct-2507"
+      model:            "qwen3.6-flash"
       temperature:      0
       max_input_tokens: 4096
       max_output_tokens: 4096
@@ -71,7 +71,7 @@ queue:
 # FileView 服务（格式转换）
 fileview:
 #  base_url:          "http://192.168.0.169:9000"
-  base_url:          "http://127.0.0.1:9100"
+  base_url:          "http://127.0.0.1:8000"
   poll_interval_ms:  1500
   max_poll_seconds:  600
 
@@ -83,6 +83,9 @@ source:
   pre_insert_dedup_min_overlap: 0.15    # 相邻两个 unit 原文分词重叠度低于此值时跳过 LLM 去重调用
   pre_insert_dedup_concurrency: 2       # 并发提取的 segment 数
   pre_insert_dedup_short_token_max: 4   # 相邻两个 unit 有一方有效分词数（排除标点）≤ 此值时，跳过重叠度过滤直接问 LLM
+  upload_concurrency: 2                 # 文件处理并发上限：同一时刻最多这么多个文件在跑 source_process、独立地最多这么多个文件在跑 unit_extract（与 queue.workers 分离，后者只管 trace_write 等其它任务）
+  kpn_generate_concurrency: 2           # generateKPN 内部按 outline 分组的 batch 并发数（batch 间互不依赖）
+  outline_summary_concurrency: 2        # GenerateOutlineSummaries 按 token 预算分批后的 batch 并发数（batch 间互不依赖）
 
 # Retrieval 模块
 retrieval:
@@ -92,7 +95,8 @@ retrieval:
   rerank_extract_batch_max_chars: 4000  # 单次语义抽取传给模型的 KU 正文字符预算，超出后按 KU 切 batch
   rerank_extract_batch_max_units: 8     # 单次语义抽取一批最多传的 KU 数量，超出后按数量切 batch（和字符预算取更严的那个）
   rerank_extract_concurrency:     2     # 语义抽取 batch 并发数
-  rerank_judge_batch_max_chars:   4000  # 单次 rerank 判断（相关性/分类两步共用）传给模型的候选语义字符预算
+  rerank_judge_batch_max_chars:   2000  # 单次 rerank 判断（相关性/分类两步共用）传给模型的候选语义字符预算
+  rerank_judge_batch_max_candidates: 5  # 单次 rerank 判断一批最多传的候选数量，超出后按数量切 batch（和字符预算取更严的那个），避免模型输出被截断
   rerank_judge_concurrency:       4     # rerank 判断 batch 并发数
   activation_match_top:          5     # 匹配结果保留条数（四元组完全匹配，无阈值可调）
   fast_path:              true   # false 时激活层只记录命中、不走快路径（灰度开关）

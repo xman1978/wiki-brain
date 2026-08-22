@@ -282,7 +282,7 @@ func (c *OpenAIClient) CompleteStreamWithParams(ctx context.Context, promptFile 
 	}
 	messages = append(messages, chatMessage{Role: "user", Content: prompt.User})
 
-	bodyBytes, err := marshalChatRequest(c.provider.Platform, mc, messages, false, true, c.provider.ResponseFormat, "")
+	bodyBytes, err := marshalChatRequest(c.provider.Platform, mc, messages, true, true, c.provider.ResponseFormat, prompt.Schema)
 	if err != nil {
 		return nil, fmt.Errorf("llm: marshal request: %w", err)
 	}
@@ -438,11 +438,36 @@ func extractJSON(s string) string {
 	if open == '[' {
 		close = ']'
 	}
-	end := strings.LastIndexByte(s, close)
-	if end <= start {
-		return s
+
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case open:
+			depth++
+		case close:
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
 	}
-	return s[start : end+1]
+	return s
 }
 
 func truncate(s string, maxLen int) string {

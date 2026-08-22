@@ -1,19 +1,14 @@
 package unit
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/jxman78/wiki-brain/internal/foundation"
@@ -21,7 +16,6 @@ import (
 	"github.com/jxman78/wiki-brain/internal/foundation/index"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 	"github.com/jxman78/wiki-brain/internal/foundation/queue"
-	"github.com/jxman78/wiki-brain/internal/rerank"
 	"github.com/jxman78/wiki-brain/internal/source"
 )
 
@@ -55,15 +49,8 @@ func setupPreInsertDedupTestService(t *testing.T, minOverlap float64, concurrenc
 		},
 	}
 
-	svc := NewService(unitStore, sourceStore, &semanticAwareFakeClient{FakeClient: fake}, idxMgr.Units, idxMgr.Points, q, cfg)
+	svc := NewService(unitStore, sourceStore, fake, idxMgr.Units, idxMgr.Points, q, cfg)
 	return svc, fake, db
-}
-
-// semanticAwareFakeClient keeps UUID-bearing semantic responses coupled to
-// the candidates sent by extraction. Tests can still override the prompt on
-// the embedded FakeClient to exercise explicit failures.
-type semanticAwareFakeClient struct {
-	*llm.FakeClient
 }
 
 type delegatedBleveIndex struct {
@@ -77,24 +64,6 @@ type failingBleveIndex struct {
 
 func (i *failingBleveIndex) Index(_ string, _ interface{}) error {
 	return i.err
-}
-
-func (f *semanticAwareFakeClient) CompleteJSON(ctx context.Context, promptFile string, vars map[string]string, model string) ([]byte, error) {
-	data, err := f.FakeClient.CompleteJSON(ctx, promptFile, vars, model)
-	if promptFile != "unit_semantics_extract.md" || err == nil || !strings.Contains(err.Error(), "no response configured") {
-		return data, err
-	}
-
-	contents := rerankSemanticUnitContents(vars["units"])
-	results := make([]map[string]any, 0, len(contents))
-	for i, content := range contents {
-		results = append(results, map[string]any{
-			"index": i + 1, "content_head": runePrefix(content, 10),
-			"source_theme": "source", "content_theme": "content",
-			"intent": "explain", "object": "policy", "scope": "general",
-		})
-	}
-	return json.Marshal(map[string]any{"results": results})
 }
 
 func countCalls(fake *llm.FakeClient, promptFile string) int {
@@ -195,87 +164,6 @@ func assertOnlyPointIndexed(t *testing.T, svc *Service, pointID string) {
 	}
 }
 
-func TestExtractSemanticFailureLeavesPreviousGenerationCurrent(t *testing.T) {
-	svc, fake, db := setupReuploadExtractionFixture(t)
-	oldID := insertCurrentIndexedUnit(t, svc, db, "src-1")
-	setSuccessfulUnitExtractionFakes(t, fake)
-	fake.SetResponse("unit_semantics_extract.md", llm.FakeResponse{Err: errors.New("semantic extraction failed")})
-
-	err := svc.Extract(t.Context(), "src-1")
-	if err == nil || !strings.Contains(err.Error(), "semantic extraction failed") {
-		t.Fatalf("err = %v, want semantic extraction failure", err)
-	}
-	if calls := countCalls(fake, "kpn_extract.md"); calls != 0 {
-		t.Fatalf("kpn_extract.md calls = %d, want 0 after semantic failure", calls)
-	}
-	assertUnitLifecycle(t, db, oldID, LifecycleCurrent)
-	assertOnlyUnitIndexed(t, svc, oldID)
-	var units int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE source_id = 'src-1'`).Scan(&units); err != nil {
-		t.Fatal(err)
-	}
-	if units != 1 {
-		t.Fatalf("stored units = %d, want only the previous generation", units)
-	}
-}
-
-func TestRetryFailureThenSemanticFailurePublishesNoStrayArtifacts(t *testing.T) {
-	svc, fake, db := setupPreInsertDedupTestService(t, 0.1, 1)
-	insertSource(t, db, "src-1", "/tmp/unused.md")
-
-	mdLines := []string{"# Policy", "Atomic publication content."}
-	seg := Segment{Title: "Policy", LineStart: 1, LineEnd: 2}
-	output := extractOutput{
-		Units: []llmUnit{
-			{
-				UnitID: "bad", Center: "Unlocatable unit",
-				FirstLineAnchor: "# Policy", LastLineAnchor: "hallucinated ending",
-			},
-			{
-				UnitID: "good", Center: "Atomic publication",
-				LineStart: 1, FirstLineAnchor: "# Policy", LineEnd: 2, LastLineAnchor: "Atomic publication content.",
-			},
-		},
-		Points: []llmPoint{
-			{PointID: "bad-point", UnitID: "bad", Content: "Invalid point.", Type: "rule"},
-			{PointID: "good-point", UnitID: "good", Content: "The generation publishes atomically.", Type: "rule"},
-		},
-	}
-	fake.SetResponse("unit_extract_retry.md", llm.FakeResponse{Err: errors.New("retry failed")})
-
-	pool := svc.collectSegmentCandidates(t.Context(), "src-1", seg, 0, mdLines, output, promptVersionExtractRetry)
-	if len(pool) != 1 || pool[0].llm.UnitID != "good" {
-		t.Fatalf("candidate pool = %+v, want only the valid unit", pool)
-	}
-	fake.SetResponse("unit_semantics_extract.md", llm.FakeResponse{Err: errors.New("semantic extraction failed")})
-	if _, err := svc.extractRerankSemantics(t.Context(), "Policy", mdLines, pool); err == nil || !strings.Contains(err.Error(), "semantic extraction failed") {
-		t.Fatalf("semantic extraction err = %v, want semantic extraction failure", err)
-	}
-
-	var currentUnits, points, semantics int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE source_id = 'src-1' AND lifecycle = 'current'`).Scan(&currentUnits); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_points WHERE source_id = 'src-1'`).Scan(&points); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM unit_rerank_semantics`).Scan(&semantics); err != nil {
-		t.Fatal(err)
-	}
-	unitDocs, err := svc.unitsIndex.DocCount()
-	if err != nil {
-		t.Fatal(err)
-	}
-	pointDocs, err := svc.pointsIndex.DocCount()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if currentUnits != 0 || points != 0 || semantics != 0 || unitDocs != 0 || pointDocs != 0 {
-		t.Fatalf("stray artifacts: current_units=%d points=%d semantics=%d unit_docs=%d point_docs=%d, want all zero",
-			currentUnits, points, semantics, unitDocs, pointDocs)
-	}
-}
-
 func TestExtractSegmentFailureLeavesPreviousGenerationCurrent(t *testing.T) {
 	svc, fake, db := setupReuploadExtractionFixture(t)
 	oldID := insertCurrentIndexedUnit(t, svc, db, "src-1")
@@ -352,7 +240,7 @@ func TestExtractSegmentOutputSplitSkipsDeliberatePointRejection(t *testing.T) {
 		{Output: `{"center":"Second","points":[]}`},
 	})
 
-	output, ok, err := svc.extractSegmentOutputSplit(t.Context(), "src-1", seg, mdLines)
+	output, ok, err := svc.extractSegmentOutputSplit(t.Context(), "src-1", "Title", "", seg, mdLines)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +252,7 @@ func TestExtractSegmentOutputSplitSkipsDeliberatePointRejection(t *testing.T) {
 	}
 }
 
-func TestPublishCandidatesPublishesUnitsPointsAndSemanticsTogether(t *testing.T) {
+func TestPublishCandidatesPublishesUnitsAndPointsWithSemanticsTogether(t *testing.T) {
 	svc, fake, db := setupReuploadExtractionFixture(t)
 	oldID := insertCurrentIndexedUnit(t, svc, db, "src-1")
 	setSuccessfulUnitExtractionFakes(t, fake)
@@ -381,53 +269,12 @@ func TestPublishCandidatesPublishesUnitsPointsAndSemanticsTogether(t *testing.T)
 	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_points WHERE source_id = 'src-1' AND lifecycle = 'current'`).Scan(&currentPoints); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM unit_rerank_semantics s
-		JOIN knowledge_units u ON u.unit_id = s.unit_id
-		WHERE u.source_id = 'src-1' AND u.lifecycle = 'current'`).Scan(&semantics); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_points
+		WHERE source_id = 'src-1' AND lifecycle = 'current' AND content_theme != '' AND scope != ''`).Scan(&semantics); err != nil {
 		t.Fatal(err)
 	}
 	if currentUnits != 1 || currentPoints != 1 || semantics != 1 {
-		t.Fatalf("published current rows: units=%d points=%d semantics=%d, want 1/1/1", currentUnits, currentPoints, semantics)
-	}
-}
-
-func TestPublishCandidatesTransactionFailureRollsBackGeneration(t *testing.T) {
-	svc, fake, db := setupReuploadExtractionFixture(t)
-	oldID := insertCurrentIndexedUnit(t, svc, db, "src-1")
-	setSuccessfulUnitExtractionFakes(t, fake)
-	if _, err := db.Exec(`CREATE TRIGGER fail_semantic_publication
-		BEFORE INSERT ON unit_rerank_semantics
-		BEGIN SELECT RAISE(ABORT, 'forced semantic insert failure'); END`); err != nil {
-		t.Fatalf("create failure trigger: %v", err)
-	}
-
-	err := svc.Extract(t.Context(), "src-1")
-	if err == nil || !strings.Contains(err.Error(), "forced semantic insert failure") {
-		t.Fatalf("err = %v, want forced semantic insert failure", err)
-	}
-	assertUnitLifecycle(t, db, oldID, LifecycleCurrent)
-	assertOnlyUnitIndexed(t, svc, oldID)
-	assertOnlyPointIndexed(t, svc, "old-point")
-
-	var units, points, semantics int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_units WHERE source_id = 'src-1'`).Scan(&units); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_points WHERE source_id = 'src-1'`).Scan(&points); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM unit_rerank_semantics`).Scan(&semantics); err != nil {
-		t.Fatal(err)
-	}
-	if units != 1 || points != 1 || semantics != 0 {
-		t.Fatalf("rows after rollback: units=%d points=%d semantics=%d, want 1/1/0", units, points, semantics)
-	}
-	var pointLifecycle string
-	if err := db.QueryRow(`SELECT lifecycle FROM knowledge_points WHERE point_id = 'old-point'`).Scan(&pointLifecycle); err != nil {
-		t.Fatal(err)
-	}
-	if pointLifecycle != LifecycleCurrent {
-		t.Fatalf("old point lifecycle = %q, want current", pointLifecycle)
+		t.Fatalf("published current rows: units=%d points=%d points_with_semantics=%d, want 1/1/1", currentUnits, currentPoints, semantics)
 	}
 }
 
@@ -461,541 +308,6 @@ func TestPublishCandidatesReturnsBleveFailuresBeforeDownstreamProcessing(t *test
 	}
 }
 
-func TestExtractRerankSemanticsBatchesByFinalTextAndRunsConcurrently(t *testing.T) {
-	svc, tracker := setupRerankSemanticExtractionService(t, 1, 2)
-	tracker.releaseAfterStarts(2)
-
-	pool := []unitCandidate{
-		{id: "u1", lineStart: 1, lineEnd: 1},
-		{id: "u2", lineStart: 2, lineEnd: 2},
-		{id: "u3", lineStart: 3, lineEnd: 3},
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	got, err := svc.extractRerankSemantics(ctx, "差旅制度", []string{"甲", "乙", "丙"}, pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 3 {
-		t.Fatalf("got %d semantics, want 3", len(got))
-	}
-	if tracker.MaxConcurrent() < 2 {
-		t.Fatalf("max concurrency = %d, want >= 2", tracker.MaxConcurrent())
-	}
-	for _, id := range []string{"u1", "u2", "u3"} {
-		if got[id].PromptVersion != rerank.ExtractPromptVersion {
-			t.Fatalf("%s prompt version = %q, want %q", id, got[id].PromptVersion, rerank.ExtractPromptVersion)
-		}
-	}
-}
-
-// TestExtractRerankSemanticsPublishesPartiallyWhenOneUnitNeverResolves is the
-// end-to-end version of the "ignore units semantics extraction gave up on"
-// policy: extractRerankSemantics itself must return successfully with a
-// partial map (not an error) when exactly one unit never gets semantics
-// through any tier, while every other unit in the pool is still extracted.
-func TestExtractRerankSemanticsPublishesPartiallyWhenOneUnitNeverResolves(t *testing.T) {
-	svc, fake := setupRerankSemanticFakeService(t)
-	mdLines := []string{"出差期间往返机票按实际发生报销", "住宿费按城市分级标准执行"}
-	pool := []unitCandidate{
-		{id: "u1", lineStart: 1, lineEnd: 1},
-		{id: "u2", lineStart: 2, lineEnd: 2},
-	}
-
-	// Batch of 2 → u2 omitted; batch retry of [u2] (size 1) also empty;
-	// single-unit fallback of [u2] (size 1) also empty → u2 never resolves.
-	fake.SetResponseSequence("unit_semantics_extract.md", []llm.FakeResponse{
-		{Output: semanticResultJSON(semanticEntry(1, "出差期间往返机票按实际发生报销"))},
-		{Output: semanticResultJSON()},
-		{Output: semanticResultJSON()},
-	})
-
-	got, err := svc.extractRerankSemantics(t.Context(), "差旅制度", mdLines, pool)
-	if err != nil {
-		t.Fatalf("extractRerankSemantics: %v", err)
-	}
-	if _, ok := got["u1"]; !ok {
-		t.Fatalf("got = %+v, want u1 present", got)
-	}
-	if _, ok := got["u2"]; ok {
-		t.Fatalf("got = %+v, want u2 absent (never resolved, not fabricated)", got)
-	}
-}
-
-func TestSplitRerankSemanticBatchesCountsUnicodeCharacters(t *testing.T) {
-	candidates := []rerankSemanticCandidate{
-		{id: "u1", content: "甲乙"},
-		{id: "u2", content: "丙丁"},
-	}
-
-	batches := splitRerankSemanticBatches(candidates, 4, 8)
-	if len(batches) != 1 {
-		t.Fatalf("got %d batches, want 1 for four CJK characters", len(batches))
-	}
-	if len(batches[0]) != 2 {
-		t.Fatalf("batch size = %d, want 2", len(batches[0]))
-	}
-}
-
-// TestSplitRerankSemanticBatchesCapsByUnitCount ensures a large character
-// budget alone doesn't let a batch keep growing indefinitely — a large batch
-// raises the odds the model omits/mismatches a unit in one response, so the
-// unit-count cap applies independently of how much text budget is left.
-func TestSplitRerankSemanticBatchesCapsByUnitCount(t *testing.T) {
-	candidates := make([]rerankSemanticCandidate, 10)
-	for i := range candidates {
-		candidates[i] = rerankSemanticCandidate{id: fmt.Sprintf("u%d", i), content: "x"}
-	}
-
-	batches := splitRerankSemanticBatches(candidates, 4000, 8)
-	if len(batches) != 2 {
-		t.Fatalf("got %d batches, want 2 for 10 units capped at 8 per batch", len(batches))
-	}
-	if len(batches[0]) != 8 || len(batches[1]) != 2 {
-		t.Fatalf("batch sizes = %d, %d, want 8, 2", len(batches[0]), len(batches[1]))
-	}
-}
-
-func semanticResultJSON(entries ...string) string {
-	return `{"results":[` + strings.Join(entries, ",") + `]}`
-}
-
-func semanticEntry(index int, contentHead string) string {
-	b, _ := json.Marshal(map[string]any{
-		"index": index, "content_head": contentHead,
-		"source_theme": "s", "content_theme": "c", "intent": "i", "object": "o", "scope": "g",
-	})
-	return string(b)
-}
-
-func setupRerankSemanticFakeService(t *testing.T) (*Service, *llm.FakeClient) {
-	t.Helper()
-	svc, _, _ := setupPreInsertDedupTestService(t, 0.1, 1)
-	fake := llm.NewFakeClient()
-	svc.llmClient = fake
-	svc.cfg.Retrieval.RerankExtractBatchMaxChars = 4000
-	svc.cfg.Retrieval.RerankExtractConcurrency = 1
-	return svc, fake
-}
-
-// TestExtractRerankSemanticBatch_RetriesOnlyOmittedUnits covers the exact
-// production scenario reported in practice: a large batch comes back one
-// (or more) results short. Per the agreed fix, this must retry only the
-// omitted units — not the whole batch — and succeed if the retry covers
-// them.
-func TestExtractRerankSemanticBatch_RetriesOnlyOmittedUnits(t *testing.T) {
-	svc, fake := setupRerankSemanticFakeService(t)
-	batch := []rerankSemanticCandidate{{id: "u1", content: "出差期间往返机票"}, {id: "u2", content: "住宿费按城市分级标准"}}
-
-	// First call omits u2 (batch index 2); retry batch contains only u2,
-	// renumbered as index 1 within that sub-batch.
-	fake.SetResponseSequence("unit_semantics_extract.md", []llm.FakeResponse{
-		{Output: semanticResultJSON(semanticEntry(1, "出差期间往返机票"))},
-		{Output: semanticResultJSON(semanticEntry(1, "住宿费按城市分级标准"))},
-	})
-
-	got, err := svc.extractRerankSemanticBatch(t.Context(), "差旅制度", batch)
-	if err != nil {
-		t.Fatalf("extractRerankSemanticBatch: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("got %d semantics, want 2", len(got))
-	}
-	if calls := countCalls(fake, "unit_semantics_extract.md"); calls != 2 {
-		t.Fatalf("unit_semantics_extract.md calls = %d, want 2 (initial + retry of the omitted unit)", calls)
-	}
-}
-
-// TestExtractRerankSemanticBatch_FallsBackToPerUnitAfterRetryStillMissing
-// covers the third tier: the batch retry (scoped to just the omitted units)
-// can itself come up short, and that must fall back to one call per
-// still-missing unit rather than failing immediately.
-func TestExtractRerankSemanticBatch_FallsBackToPerUnitAfterRetryStillMissing(t *testing.T) {
-	svc, fake := setupRerankSemanticFakeService(t)
-	batch := []rerankSemanticCandidate{{id: "u1", content: "出差期间往返机票"}, {id: "u2", content: "住宿费按城市分级标准"}}
-
-	fake.SetResponseSequence("unit_semantics_extract.md", []llm.FakeResponse{
-		{Output: semanticResultJSON(semanticEntry(1, "出差期间往返机票"))},   // initial: omits u2
-		{Output: semanticResultJSON()},                               // retry-of-missing (batch=[u2]): still omits it
-		{Output: semanticResultJSON(semanticEntry(1, "住宿费按城市分级标准"))}, // per-unit fallback (batch=[u2]): succeeds
-	})
-
-	got, err := svc.extractRerankSemanticBatch(t.Context(), "差旅制度", batch)
-	if err != nil {
-		t.Fatalf("extractRerankSemanticBatch: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("got %d semantics, want 2", len(got))
-	}
-	if calls := countCalls(fake, "unit_semantics_extract.md"); calls != 3 {
-		t.Fatalf("unit_semantics_extract.md calls = %d, want 3 (initial + batch retry + per-unit fallback)", calls)
-	}
-}
-
-// TestExtractRerankSemanticBatch_StillOmittedAfterFallbackIsIgnoredNotFailed
-// ensures a unit missing at every tier — initial, batch retry, and per-unit
-// fallback — is simply left out of the returned map (so the caller,
-// PublishGeneration, discards that one unit) rather than failing the whole
-// batch and blocking every other, successfully-extracted unit in it.
-func TestExtractRerankSemanticBatch_StillOmittedAfterFallbackIsIgnoredNotFailed(t *testing.T) {
-	svc, fake := setupRerankSemanticFakeService(t)
-	batch := []rerankSemanticCandidate{{id: "u1", content: "出差期间往返机票"}, {id: "u2", content: "住宿费按城市分级标准"}}
-
-	fake.SetResponseSequence("unit_semantics_extract.md", []llm.FakeResponse{
-		{Output: semanticResultJSON(semanticEntry(1, "出差期间往返机票"))},
-		{Output: semanticResultJSON()},
-		{Output: semanticResultJSON()},
-	})
-
-	got, err := svc.extractRerankSemanticBatch(t.Context(), "差旅制度", batch)
-	if err != nil {
-		t.Fatalf("extractRerankSemanticBatch: %v", err)
-	}
-	if _, ok := got["u1"]; !ok {
-		t.Fatalf("got = %+v, want u1 (successfully extracted) present", got)
-	}
-	if _, ok := got["u2"]; ok {
-		t.Fatalf("got = %+v, want u2 (never resolved) absent, not a fabricated entry", got)
-	}
-	if calls := countCalls(fake, "unit_semantics_extract.md"); calls != 3 {
-		t.Fatalf("unit_semantics_extract.md calls = %d, want 3 (initial + batch retry + per-unit fallback, then give up on that unit alone)", calls)
-	}
-}
-
-// semanticEntryMissingField is like semanticEntry but leaves one required
-// field ("source_theme"/"content_theme"/"intent"/"scope") empty — simulating
-// the real production failure this whole fix targets: the model returns a
-// structurally well-formed, correctly-indexed/content_head-matched result
-// that is nonetheless incomplete.
-func semanticEntryMissingField(index int, contentHead, missingField string) string {
-	entry := map[string]any{
-		"index": index, "content_head": contentHead,
-		"source_theme": "s", "content_theme": "c", "intent": "i", "object": "o", "scope": "g",
-	}
-	entry[missingField] = ""
-	b, _ := json.Marshal(entry)
-	return string(b)
-}
-
-// TestExtractRerankSemanticBatch_EmptyRequiredFieldDiscardsOnlyThatUnit is
-// the regression test for the bug reported against a real import: a unit
-// whose extracted semantics came back with an empty required field (e.g.
-// "scope") must be retried and, if still incomplete after every fallback
-// tier, discarded on its own — exactly like a genuinely omitted result —
-// instead of being published with a blank field and later blowing up
-// PublishGeneration's fatal safety net (validateSemantic), which used to
-// fail the *entire* source's unit extraction over one unit's incomplete
-// result.
-func TestExtractRerankSemanticBatch_EmptyRequiredFieldDiscardsOnlyThatUnit(t *testing.T) {
-	svc, fake := setupRerankSemanticFakeService(t)
-	batch := []rerankSemanticCandidate{{id: "u1", content: "出差期间往返机票"}, {id: "u2", content: "住宿费按城市分级标准"}}
-
-	fake.SetResponseSequence("unit_semantics_extract.md", []llm.FakeResponse{
-		// initial: u1 fine, u2 comes back with an empty scope.
-		{Output: semanticResultJSON(
-			semanticEntry(1, "出差期间往返机票"),
-			semanticEntryMissingField(2, "住宿费按城市分级标准", "scope"),
-		)},
-		{Output: semanticResultJSON()}, // batch retry of just u2: still nothing usable
-		{Output: semanticResultJSON(semanticEntryMissingField(1, "住宿费按城市分级标准", "scope"))}, // per-unit fallback: still empty scope
-	})
-
-	got, err := svc.extractRerankSemanticBatch(t.Context(), "差旅制度", batch)
-	if err != nil {
-		t.Fatalf("extractRerankSemanticBatch: %v", err)
-	}
-	if _, ok := got["u1"]; !ok {
-		t.Fatalf("got = %+v, want u1 (complete) present", got)
-	}
-	if _, ok := got["u2"]; ok {
-		t.Fatalf("got = %+v, want u2 (never resolved a non-empty scope) absent, not published with a blank field", got)
-	}
-	if calls := countCalls(fake, "unit_semantics_extract.md"); calls != 3 {
-		t.Fatalf("unit_semantics_extract.md calls = %d, want 3 (initial + batch retry + per-unit fallback, then give up on u2 alone)", calls)
-	}
-}
-
-// TestExtractRerankSemanticBatchOnce_SingleCandidateEmptyFieldTreatedAsMissing
-// covers the batch-of-one path (matchSingleCandidateResult) directly: unlike
-// index/content_head, which a single candidate is exempt from needing to
-// match, an empty required field must still be rejected — this is the exact
-// tier-3 (per-unit fallback) call that used to slip an incomplete result all
-// the way through to PublishGeneration.
-func TestExtractRerankSemanticBatchOnce_SingleCandidateEmptyFieldTreatedAsMissing(t *testing.T) {
-	svc, fake := setupRerankSemanticFakeService(t)
-	candidate := rerankSemanticCandidate{id: "u1", content: "出差期间往返机票"}
-
-	fake.SetResponse("unit_semantics_extract.md", llm.FakeResponse{
-		Output: semanticResultJSON(semanticEntryMissingField(1, "出差期间往返机票", "source_theme")),
-	})
-
-	semantics, missing, err := svc.extractRerankSemanticBatchOnce(t.Context(), "差旅制度", []rerankSemanticCandidate{candidate})
-	if err != nil {
-		t.Fatalf("extractRerankSemanticBatchOnce: %v", err)
-	}
-	if len(semantics) != 0 {
-		t.Fatalf("semantics = %+v, want none (incomplete result must not be published)", semantics)
-	}
-	if len(missing) != 1 || missing[0].id != "u1" {
-		t.Fatalf("missing = %+v, want [u1]", missing)
-	}
-}
-
-// TestExtractRerankSemanticBatch_ContentHeadMismatchIsTreatedAsMissing
-// verifies the anti-hallucination guard: a result whose content_head doesn't
-// actually match its claimed index's unit is rejected (not stored under the
-// wrong unit_id) and retried like an omission — recovering here if the
-// retry gets it right.
-func TestExtractRerankSemanticBatch_ContentHeadMismatchIsTreatedAsMissing(t *testing.T) {
-	svc, fake := setupRerankSemanticFakeService(t)
-	batch := []rerankSemanticCandidate{{id: "u1", content: "出差期间往返机票"}, {id: "u2", content: "住宿费按城市分级标准"}}
-
-	fake.SetResponseSequence("unit_semantics_extract.md", []llm.FakeResponse{
-		// index claims u2 (position 2), but content_head is actually u1's text.
-		{Output: semanticResultJSON(semanticEntry(1, "出差期间往返机票"), semanticEntry(2, "出差期间往返机票"))},
-		{Output: semanticResultJSON(semanticEntry(1, "住宿费按城市分级标准"))},
-	})
-
-	got, err := svc.extractRerankSemanticBatch(t.Context(), "差旅制度", batch)
-	if err != nil {
-		t.Fatalf("extractRerankSemanticBatch: %v", err)
-	}
-	if sem, ok := got["u2"]; !ok || sem.UnitID != "u2" {
-		t.Fatalf("u2 semantics = %+v, ok=%v, want a correctly-attributed entry", sem, ok)
-	}
-	if calls := countCalls(fake, "unit_semantics_extract.md"); calls != 2 {
-		t.Fatalf("unit_semantics_extract.md calls = %d, want 2 (initial + retry of the mismatched unit)", calls)
-	}
-}
-
-// TestExtractRerankSemanticBatch_DuplicateIndexOnlyAffectsThatUnit ensures a
-// duplicate index in the response only costs the unit(s) that index maps
-// to — every other, unambiguously-indexed entry in the same response is
-// still used, and the affected unit recovers through the normal
-// missing-unit retry instead of the whole call being discarded.
-func TestExtractRerankSemanticBatch_DuplicateIndexOnlyAffectsThatUnit(t *testing.T) {
-	svc, fake := setupRerankSemanticFakeService(t)
-	batch := []rerankSemanticCandidate{{id: "u1", content: "出差期间往返机票"}, {id: "u2", content: "住宿费按城市分级标准"}}
-
-	fake.SetResponseSequence("unit_semantics_extract.md", []llm.FakeResponse{
-		// index 1 (u1) claimed twice — ambiguous, discarded; index 2 (u2) is
-		// unambiguous and must still be used.
-		{Output: semanticResultJSON(
-			semanticEntry(1, "出差期间往返机票"),
-			semanticEntry(1, "出差期间往返机票"),
-			semanticEntry(2, "住宿费按城市分级标准"),
-		)},
-		{Output: semanticResultJSON(semanticEntry(1, "出差期间往返机票"))}, // retry of just u1
-	})
-
-	got, err := svc.extractRerankSemanticBatch(t.Context(), "差旅制度", batch)
-	if err != nil {
-		t.Fatalf("extractRerankSemanticBatch: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("got %d semantics, want 2", len(got))
-	}
-	if calls := countCalls(fake, "unit_semantics_extract.md"); calls != 2 {
-		t.Fatalf("unit_semantics_extract.md calls = %d, want 2 (initial + retry of only the duplicated-index unit)", calls)
-	}
-}
-
-// TestExtractRerankSemanticBatch_OutOfRangeIndexIgnoredWithoutAffectingOthers
-// mirrors the duplicate-index case for an index outside the batch's range.
-func TestExtractRerankSemanticBatch_OutOfRangeIndexIgnoredWithoutAffectingOthers(t *testing.T) {
-	svc, fake := setupRerankSemanticFakeService(t)
-	batch := []rerankSemanticCandidate{{id: "u1", content: "出差期间往返机票"}, {id: "u2", content: "住宿费按城市分级标准"}}
-
-	fake.SetResponseSequence("unit_semantics_extract.md", []llm.FakeResponse{
-		{Output: semanticResultJSON(semanticEntry(1, "出差期间往返机票"), semanticEntry(99, "garbage"))},
-		{Output: semanticResultJSON(semanticEntry(1, "住宿费按城市分级标准"))}, // retry of just u2
-	})
-
-	got, err := svc.extractRerankSemanticBatch(t.Context(), "差旅制度", batch)
-	if err != nil {
-		t.Fatalf("extractRerankSemanticBatch: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("got %d semantics, want 2", len(got))
-	}
-	if calls := countCalls(fake, "unit_semantics_extract.md"); calls != 2 {
-		t.Fatalf("unit_semantics_extract.md calls = %d, want 2 (initial + retry of only the out-of-range unit)", calls)
-	}
-}
-
-// TestExtractRerankSemanticBatchOnce_SingleCandidateSkipsAlignmentChecks
-// covers the case that motivated the whole fix: for a batch of exactly one
-// candidate, index/content_head aren't required to line up (there's nothing
-// to disambiguate) — a mismatched content_head (as happens when the model
-// correctly quotes the body text after a unit's own leading markdown
-// heading) must not be rejected here the way it would be in a multi-unit
-// batch.
-func TestExtractRerankSemanticBatchOnce_SingleCandidateSkipsAlignmentChecks(t *testing.T) {
-	svc, fake := setupRerankSemanticFakeService(t)
-	candidate := rerankSemanticCandidate{id: "u1", content: "# 第二章 绩效管理执行\n\n第六条绩效计划\n\n(一)当新的绩效周期开始时"}
-
-	// index is wrong (claims 5) and content_head only matches the body after
-	// the heading, not the full content — neither should matter when there's
-	// only one candidate to assign the result to.
-	fake.SetResponse("unit_semantics_extract.md", llm.FakeResponse{
-		Output: semanticResultJSON(semanticEntry(5, "第六条绩效计划")),
-	})
-
-	semantics, missing, err := svc.extractRerankSemanticBatchOnce(t.Context(), "绩效管理制度", []rerankSemanticCandidate{candidate})
-	if err != nil {
-		t.Fatalf("extractRerankSemanticBatchOnce: %v", err)
-	}
-	if len(missing) != 0 {
-		t.Fatalf("missing = %v, want none", missing)
-	}
-	if _, ok := semantics["u1"]; !ok {
-		t.Fatalf("semantics = %+v, want an entry for u1", semantics)
-	}
-}
-
-// TestContentHeadMatches_StripsLeadingMarkdownHeading is the direct unit
-// test for the root cause found against a real document: the model
-// correctly quotes the first line of body text after a unit's own leading
-// "# heading" line, which is a legitimate content_head even though it isn't
-// a literal prefix of the heading-inclusive content block.
-func TestContentHeadMatches_StripsLeadingMarkdownHeading(t *testing.T) {
-	content := "# 第二章 绩效管理执行\n\n第六条绩效计划\n\n(一)当新的绩效周期开始时，管理者"
-
-	if !contentHeadMatches(content, "第六条绩效计划") {
-		t.Error("expected match for body text right after the leading heading")
-	}
-	if !contentHeadMatches(content, "# 第二章 绩效管理执行") {
-		t.Error("expected match for the literal heading-inclusive prefix too")
-	}
-	if contentHeadMatches(content, "完全不相关的内容") {
-		t.Error("expected no match for genuinely unrelated text")
-	}
-}
-
-func setupRerankSemanticExtractionService(t *testing.T, batchMaxChars, concurrency int) (*Service, *rerankSemanticExtractionTracker) {
-	t.Helper()
-	svc, _, _ := setupPreInsertDedupTestService(t, 0.1, 1)
-	tracker := newRerankSemanticExtractionTracker()
-	svc.llmClient = tracker
-	svc.cfg.Retrieval.RerankExtractBatchMaxChars = batchMaxChars
-	svc.cfg.Retrieval.RerankExtractConcurrency = concurrency
-	return svc, tracker
-}
-
-type rerankSemanticExtractionTracker struct {
-	mu          sync.Mutex
-	releaseCh   chan struct{}
-	startedCh   chan struct{}
-	releaseOnce sync.Once
-	inFlight    int
-	maxInFlight int
-}
-
-func newRerankSemanticExtractionTracker() *rerankSemanticExtractionTracker {
-	return &rerankSemanticExtractionTracker{
-		releaseCh: make(chan struct{}),
-		startedCh: make(chan struct{}, 8),
-	}
-}
-
-func (f *rerankSemanticExtractionTracker) Complete(_ context.Context, promptFile string, vars map[string]string, model string) (string, error) {
-	return "", errors.New("unexpected Complete call: " + promptFile)
-}
-
-func (f *rerankSemanticExtractionTracker) CompleteStream(_ context.Context, promptFile string, vars map[string]string, model string) (<-chan llm.StreamChunk, error) {
-	return nil, errors.New("unexpected CompleteStream call: " + promptFile)
-}
-
-func (f *rerankSemanticExtractionTracker) CompleteJSON(ctx context.Context, promptFile string, vars map[string]string, model string) ([]byte, error) {
-	if promptFile != "unit_semantics_extract.md" {
-		return nil, errors.New("unexpected prompt: " + promptFile)
-	}
-	contents := rerankSemanticUnitContents(vars["units"])
-
-	f.mu.Lock()
-	f.inFlight++
-	if f.inFlight > f.maxInFlight {
-		f.maxInFlight = f.inFlight
-	}
-	f.mu.Unlock()
-	f.startedCh <- struct{}{}
-	defer func() {
-		f.mu.Lock()
-		f.inFlight--
-		f.mu.Unlock()
-	}()
-
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-f.releaseCh:
-	}
-
-	results := make([]map[string]interface{}, 0, len(contents))
-	for i, content := range contents {
-		results = append(results, map[string]interface{}{
-			"index": i + 1, "content_head": runePrefix(content, 10),
-			"source_theme": "theme", "content_theme": "content",
-			"intent": "说明", "object": "object", "scope": "通用",
-		})
-	}
-	return json.Marshal(map[string]interface{}{"results": results})
-}
-
-func (f *rerankSemanticExtractionTracker) releaseAfterStarts(n int) {
-	go func() {
-		for range n {
-			<-f.startedCh
-		}
-		f.release()
-	}()
-}
-
-func (f *rerankSemanticExtractionTracker) release() {
-	f.releaseOnce.Do(func() { close(f.releaseCh) })
-}
-
-func (f *rerankSemanticExtractionTracker) MaxConcurrent() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.maxInFlight
-}
-
-var rerankSemanticUnitPattern = regexp.MustCompile(`(?m)^\d+\. `)
-
-// rerankSemanticUnitCount counts the units formatRerankSemanticUnits placed
-// in the prompt (one "N. " line per unit).
-func rerankSemanticUnitCount(units string) int {
-	return len(rerankSemanticUnitPattern.FindAllString(units, -1))
-}
-
-// rerankSemanticUnitContents recovers each unit's own content text from the
-// numbered prompt formatRerankSemanticUnits produced — the fakes below use
-// it to fabricate a genuine "content_head" (see contentHeadMatches) instead
-// of an echoed unit_id, matching production's index+content_head response
-// contract.
-func rerankSemanticUnitContents(units string) []string {
-	locs := rerankSemanticUnitPattern.FindAllStringIndex(units, -1)
-	contents := make([]string, 0, len(locs))
-	for i, loc := range locs {
-		end := len(units)
-		if i+1 < len(locs) {
-			end = locs[i+1][0]
-		}
-		contents = append(contents, strings.TrimSpace(units[loc[1]:end]))
-	}
-	return contents
-}
-
-// runePrefix returns the first n runes of s (or all of s if shorter).
-func runePrefix(s string, n int) string {
-	r := []rune(s)
-	if len(r) > n {
-		r = r[:n]
-	}
-	return string(r)
-}
-
 func TestExtractSegmentOutputSplit_AssemblesLegacyOutput(t *testing.T) {
 	svc, fake, _ := setupPreInsertDedupTestService(t, 0.1, 1)
 
@@ -1019,7 +331,7 @@ func TestExtractSegmentOutputSplit_AssemblesLegacyOutput(t *testing.T) {
 		{Output: `{"center":"调休申请规则","points":[{"content":"加班人员可以按规定申请调休。","type":"rule"}]}`},
 	})
 
-	output, ok, err := svc.extractSegmentOutputSplit(t.Context(), "src-split", seg, mdLines)
+	output, ok, err := svc.extractSegmentOutputSplit(t.Context(), "src-split", "Title", "", seg, mdLines)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 )
@@ -16,6 +17,9 @@ const (
 	runesPerToken = 1.5
 	// prompt 模板本身预留的 token 数
 	promptOverheadTokens = 300
+	// outlineSummaryConcurrencyDefault is used whenever the caller passes a
+	// concurrency <= 0.
+	outlineSummaryConcurrencyDefault = 2
 )
 
 type outlineSummaryOutput struct {
@@ -26,8 +30,9 @@ type outlineSummaryOutput struct {
 }
 
 // GenerateOutlineSummaries 为结构 outline 节点批量生成关键词 summary。
-// 按模型 max_input_tokens 分批，每批一次 LLM 调用。
-func GenerateOutlineSummaries(ctx context.Context, client llm.LLMClient, outlines []Outline, content string, mc llm.ModelParams) {
+// 按模型 max_input_tokens 分批，批次之间互不依赖，并发跑（concurrency <= 0
+// 时用 outlineSummaryConcurrencyDefault）。
+func GenerateOutlineSummaries(ctx context.Context, client llm.LLMClient, outlines []Outline, content string, mc llm.ModelParams, concurrency int) {
 	lines := strings.Split(content, "\n")
 
 	// 筛选需要生成 summary 的节点（structural 且 summary 为空）
@@ -90,35 +95,54 @@ func GenerateOutlineSummaries(ctx context.Context, client llm.LLMClient, outline
 
 	slog.Info("outline summary generation", "total_nodes", len(targets), "batches", len(batches))
 
-	// 逐批调用 LLM
+	if concurrency <= 0 {
+		concurrency = outlineSummaryConcurrencyDefault
+	}
+
+	// 批次彼此独立（各自是不同 outline 节点子集的一次 LLM 调用），并发跑；
+	// 只有写 results 这一步需要互斥。
 	results := make(map[string]string) // outline_id -> summary
+	var mu sync.Mutex
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
 
 	for i, batch := range batches {
-		var sb strings.Builder
-		for _, s := range batch {
-			fmt.Fprintf(&sb, "[%s] %s\n%s\n\n", s.outline.OutlineID, s.outline.Title, s.text)
-		}
+		i, batch := i, batch
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-		data, err := client.CompleteJSON(ctx, "outline_summary.md", map[string]string{
-			"sections": sb.String(),
-		}, "extraction")
-		if err != nil {
-			slog.Warn("outline summary batch failed", "batch", i+1, "error", err)
-			continue
-		}
-
-		var output outlineSummaryOutput
-		if err := json.Unmarshal(data, &output); err != nil {
-			slog.Warn("outline summary parse failed", "batch", i+1, "error", err)
-			continue
-		}
-
-		for _, s := range output.Summaries {
-			if s.ID != "" && s.Summary != "" {
-				results[s.ID] = normalizeSummary(s.Summary)
+			var sb strings.Builder
+			for _, s := range batch {
+				fmt.Fprintf(&sb, "[%s] %s\n%s\n\n", s.outline.OutlineID, s.outline.Title, s.text)
 			}
-		}
+
+			data, err := client.CompleteJSON(ctx, "outline_summary.md", map[string]string{
+				"sections": sb.String(),
+			}, "extraction")
+			if err != nil {
+				slog.Warn("outline summary batch failed", "batch", i+1, "error", err)
+				return
+			}
+
+			var output outlineSummaryOutput
+			if err := json.Unmarshal(data, &output); err != nil {
+				slog.Warn("outline summary parse failed", "batch", i+1, "error", err)
+				return
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			for _, s := range output.Summaries {
+				if s.ID != "" && s.Summary != "" {
+					results[s.ID] = normalizeSummary(s.Summary)
+				}
+			}
+		}()
 	}
+	wg.Wait()
 
 	// 回写到 outlines
 	for i := range outlines {
