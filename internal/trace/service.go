@@ -171,6 +171,7 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 	s.updateCooccurrence(t, r)
 	s.enrichObservedConditions(t)
 	s.generateLearningEvents(t, r)
+	s.generateTopNCalibrationEvent(t, r, grade)
 
 	slog.Debug("trace: process complete",
 		"trace_id", t.TraceID,
@@ -468,6 +469,17 @@ func (s *Service) updateCooccurrence(t *Trace, r *answer.AnswerResult) {
 		return
 	}
 
+	// subject/intent 均未解析出（如裸调 POST /answer 跳过了 /session/turn，或
+	// 解析本身失败）时，question_terms 会退化成对问题原文的字面分词——这只是
+	// 兜底容错，不是一个可信的"同一类问题"身份，用它继续聚合会把彼此无关的
+	// 问题在 confident_count 上悄悄混在一起（2026-08-24 实测案例：4 条 KP 混杂
+	// 的空四元组 ActivationBundle）。四元组两个字段都缺失时直接放弃这次聚合，
+	// 宁可这条 trace 的信号丢失，也不让它污染共现累积。
+	if t.Subject == "" && t.Intent == "" {
+		slog.Debug("trace: cooccurrence skipped (empty subject and intent)", "trace_id", t.TraceID)
+		return
+	}
+
 	slog.Debug("trace: cooccurrence update",
 		"trace_id", t.TraceID,
 		"quality", t.RetrievalQuality,
@@ -753,11 +765,87 @@ func citedFactIDsByEvidence(evidence []retrieval.Evidence, citations []string) m
 	return result
 }
 
+// citedUnitIDs returns the deduplicated unit_ids Answer actually cited —
+// used by generateTopNCalibrationEvent's pool_rescued payload so Study's
+// coefficient replay knows which pool candidates were the ones that had to
+// land within N (docs/design/topn-coefficient-convergence.md 第 5 节).
+func citedUnitIDs(es *retrieval.EvidenceSet, citations []string) []string {
+	byFact := make(map[string]string, len(es.DirectEvidence)+len(es.Supporting))
+	for _, e := range es.DirectEvidence {
+		byFact[e.FactID] = e.UnitID
+	}
+	for _, e := range es.Supporting {
+		byFact[e.FactID] = e.UnitID
+	}
+	seen := make(map[string]bool, len(citations))
+	var out []string
+	for _, fid := range citations {
+		uid, ok := byFact[fid]
+		if !ok || seen[uid] {
+			continue
+		}
+		seen[uid] = true
+		out = append(out, uid)
+	}
+	return out
+}
+
 func directEvidenceOf(es *retrieval.EvidenceSet) []retrieval.Evidence {
 	if es == nil {
 		return nil
 	}
 	return es.DirectEvidence
+}
+
+// generateTopNCalibrationEvent emits a topn_calibration learning_event when
+// this trace's EvidenceSet carries a CompletenessClass — only slow/full-path
+// traces that ran the pool-widen retry chain in
+// answer.checkSlowPathSufficiency set this
+// (docs/design/topn-coefficient-convergence.md 第 3 节). Study scans these
+// events into topn_calibration_samples to compute top-N/目录检索系数的建议值
+// (docs/impl/v1/topn-coefficient-convergence.md 阶段 B/C) — reporting only,
+// not yet feeding any automatic adjustment.
+func (s *Service) generateTopNCalibrationEvent(t *Trace, r *answer.AnswerResult, grade gradeResult) {
+	es := r.EvidenceSet
+	if es == nil || es.CompletenessClass == "" {
+		return
+	}
+
+	rankProxyLower := 0
+	rankProxyIsInterval := false
+	switch es.CompletenessClass {
+	case retrieval.CompletenessTight:
+		if grade.CitedRankMax >= 0 {
+			rankProxyLower = grade.CitedRankMax
+		}
+	case retrieval.CompletenessPoolRescued:
+		rankProxyLower = es.WidenedToN
+		rankProxyIsInterval = true
+	}
+
+	payload := map[string]interface{}{
+		"n_at_query_time":           es.TopNAtBuild,
+		"coefficient_at_query_time": es.CoefficientAtBuild,
+		"completeness_class":        es.CompletenessClass,
+		"rank_proxy_lower":          rankProxyLower,
+		"rank_proxy_is_interval":    rankProxyIsInterval,
+		"candidate_pool_size":       es.CandidatePoolSize,
+	}
+	if es.CompletenessClass == retrieval.CompletenessPoolRescued {
+		if pool := es.CalibrationPoolSnapshot(es.WidenedToN); len(pool) > 0 {
+			payload["pool_snapshot"] = pool
+		}
+		payload["cited_unit_ids"] = citedUnitIDs(es, r.Citations)
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("trace: marshal topn_calibration payload failed", "trace_id", t.TraceID, "error", err)
+		return
+	}
+	if _, err := s.store.SaveLearningEvent(t.TraceID, "topn_calibration", string(payloadJSON)); err != nil {
+		slog.Error("trace: save topn_calibration event failed", "trace_id", t.TraceID, "error", err)
+	}
 }
 
 func (s *Service) generateLearningEvents(t *Trace, r *answer.AnswerResult) {

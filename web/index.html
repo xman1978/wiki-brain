@@ -3818,6 +3818,28 @@ function recallSuggestion(s) {
   return msgs.join(' ');
 }
 
+// topNSuggestionCardHtml renders the top-N / 目录检索系数自收敛建议
+// (docs/design/topn-coefficient-convergence.md) — 只展示建议值与回测命中率，
+// 不接入自动调整（docs/impl/v1/topn-coefficient-convergence.md 阶段 C）。
+function topNSuggestionCardHtml(t) {
+  t = t || {};
+  function pct(x) { return x != null ? (x * 100).toFixed(1) + '%' : '-'; }
+  var sampleCount = (t.tight_count || 0) + (t.pool_rescued_count || 0);
+  return '<h2 style="margin:0 0 10px">Top-N / 目录检索系数建议（不自动生效）</h2>\
+    <div class="study-summary-grid">\
+      <div class="summary-stat"><div class="ss-val">' + (t.current_n != null ? t.current_n : '-') + ' → ' + (t.suggested_n_data_sufficient ? t.suggested_n : '数据不足') + '</div><div class="ss-label">Top-N 当前 → 建议</div></div>\
+      <div class="summary-stat"><div class="ss-val">' + (t.current_coefficient != null ? t.current_coefficient : '-') + ' → ' + (t.suggested_coefficient_data_sufficient ? t.suggested_coefficient.toFixed(2) : '数据不足') + '</div><div class="ss-label">目录检索系数 当前 → 建议</div></div>\
+      <div class="summary-stat confident"><div class="ss-val">' + pct(t.backtest_hit_rate_at_current) + '</div><div class="ss-label">当前 N 回测命中率</div></div>\
+      <div class="summary-stat confident"><div class="ss-val">' + (t.suggested_n_data_sufficient ? pct(t.backtest_hit_rate_at_suggested) : '-') + '</div><div class="ss-label">建议 N 回测命中率（目标 ' + pct(t.target_hit_rate) + '）</div></div>\
+    </div>\
+    <div style="font-size:11px;color:var(--text-3);margin-top:12px;line-height:1.6">\
+      校准样本（最近 ' + (t.sample_window_days || 0) + ' 天，共 ' + sampleCount + ' 条用于计算建议值）：\
+      首次即充分 ' + (t.tight_count || 0) + ' · 候选池扩展救回 ' + (t.pool_rescued_count || 0) + ' · 内容扩展救回 ' + (t.content_rescued_count || 0) + '（不计入校准）· \
+      候选池提前耗尽 ' + (t.pool_exhausted_count || 0) + '（右删失，不计入）· 扩池后仍不充分 ' + (t.gap_at_2n_count || 0) + '（知识缺口，不计入）。\
+      建议值仅供参考，尚未接入自动调整；样本不足时不给出建议，继续沿用当前生效值。\
+    </div>';
+}
+
 function renderStudyReport(report, container) {
   S.studyReport = report;
   var s = report.summary || {};
@@ -3851,7 +3873,10 @@ function renderStudyReport(report, container) {
         <div class="summary-stat"><div class="ss-val">' + (s.cited_count ? ((s.outline_citation_rate||0)*100).toFixed(0)+'%' : '-') + '</div><div class="ss-label">目录结果检索命中率</div></div>\
         <div class="summary-stat"><div class="ss-val">' + (s.cited_count ? '第 ' + ((s.cited_avg_rank||0)+1).toFixed(1) + ' 名' : '-') + '</div><div class="ss-label">TopN 命中范围（平均排名）</div></div>\
       </div>\
-      <div style="font-size:12px;color:var(--text-2);margin-top:12px;line-height:1.6">' + esc(recallSuggestion(s)) + '</div></div>\
+      <div style="font-size:12px;color:var(--text-2);margin-top:12px;line-height:1.6">' + esc(recallSuggestion(s)) + '</div>\
+      <div style="border-top:1px solid var(--border-2,rgba(128,128,128,.2));margin:18px 0 14px"></div>\
+      ' + topNSuggestionCardHtml(report.topn_suggestion) + '\
+    </div>\
     ' + (lc.length ? '<div class="study-card"><h2>ActivationLink 候选 (' + lc.length + ')</h2><div class="table-wrap"><table>\
       <thead><tr><th>问题主题</th><th>所属概念</th><th>命中</th><th>置信</th><th>纯度</th><th>广度</th><th>短路径</th><th>推荐</th></tr></thead>\
       <tbody>' + lcPage.map(function(c) {

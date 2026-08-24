@@ -572,7 +572,7 @@ func (s *Service) finishFastPath(ctx context.Context, workQC QueryContext, hits 
 	}
 
 	if s.cfg.Retrieval.FastPathVerify {
-		sufficient, needsDeep, _, err := s.VerifyEvidenceSufficient(ctx, workQC.Question, es)
+		sufficient, needsDeep, _, _, err := s.VerifyEvidenceSufficient(ctx, workQC.Question, es)
 		if err != nil {
 			slog.Warn("retrieval: fast path verify failed, falling back to slow path", "error", err)
 			return nil, activationHits, false
@@ -607,6 +607,15 @@ func (s *Service) SlowPathVerifyEnabled() bool {
 	return s.cfg != nil && s.cfg.Retrieval.SlowPathVerify
 }
 
+// PoolWidenEnabled reports whether Answer should attempt the candidate-pool
+// widen retry (N→2N, docs/design/topn-coefficient-convergence.md 第 3 节)
+// when content-widening still leaves evidence insufficient. Defaults off —
+// this adds an extra rerank+verify round-trip on an already-insufficient
+// trace, so it's opt-in during the data-collection phase.
+func (s *Service) PoolWidenEnabled() bool {
+	return s.cfg != nil && s.cfg.Retrieval.PoolWidenEnabled
+}
+
 // VerifyEvidenceSufficient implements docs/impl/v1/retrieval.md 步骤 2a/2b:
 // a single LLM call judging whether the assembled evidence independently
 // and completely answers the question. Used by the fast path (before
@@ -620,10 +629,10 @@ func (s *Service) SlowPathVerifyEnabled() bool {
 // require resolving an intermediate fact from the evidence (a
 // classification/lookup) before the stated rule applies correctly — see
 // fast_verify.md 第三步. needsDeep is only meaningful when sufficient=true.
-func (s *Service) VerifyEvidenceSufficient(ctx context.Context, question string, es *EvidenceSet) (sufficient bool, needsDeep bool, reason string, err error) {
+func (s *Service) VerifyEvidenceSufficient(ctx context.Context, question string, es *EvidenceSet) (sufficient bool, needsDeep bool, reason string, contentWidened bool, err error) {
 	sufficient, needsDeep, reason, err = s.verifyEvidenceSufficientOnce(ctx, question, es)
 	if err != nil || sufficient {
-		return sufficient, needsDeep, reason, err
+		return sufficient, needsDeep, reason, false, err
 	}
 
 	// Fallback: a sufficient=false verdict may be an artifact of evidence
@@ -638,20 +647,59 @@ func (s *Service) VerifyEvidenceSufficient(ctx context.Context, question string,
 	// (mined) content and still contributes to the fallback attempt.
 	widened, changed := s.widenEvidenceToFullUnits(es)
 	if !changed {
-		return sufficient, needsDeep, reason, nil
+		return sufficient, needsDeep, reason, false, nil
 	}
 	slog.Info("retrieval: evidence verify insufficient, retrying with full KU content", "reason", reason)
 	fbSufficient, fbNeedsDeep, fbReason, fbErr := s.verifyEvidenceSufficientOnce(ctx, question, widened)
 	if fbErr != nil {
 		slog.Warn("retrieval: full-KU evidence verify retry failed, keeping original verdict", "error", fbErr)
-		return sufficient, needsDeep, reason, nil
+		return sufficient, needsDeep, reason, false, nil
 	}
 	if fbSufficient {
 		slog.Info("retrieval: full-KU evidence verify retry judged sufficient, mining had dropped needed content", "reason", fbReason)
 		*es = *widened
-		return fbSufficient, fbNeedsDeep, fbReason, nil
+		return fbSufficient, fbNeedsDeep, fbReason, true, nil
 	}
-	return sufficient, needsDeep, reason, nil
+	return sufficient, needsDeep, reason, false, nil
+}
+
+// WidenAndRetry re-runs Step 7-10 against a wider slice of the pre-truncation
+// RRF-merged candidate pool ([0, 2N) instead of [0, N)) — for use when the
+// sufficiency judge (VerifyEvidenceSufficient, including its content-widen
+// retry) still finds the original top-N insufficient
+// (docs/design/topn-coefficient-convergence.md 第 3 节). ok=false means there
+// was no wider pool to try (candidatePool missing, or it never had more than
+// N candidates to begin with) — the caller should keep the original
+// insufficient verdict and not treat this as an error.
+func (s *Service) WidenAndRetry(ctx context.Context, es *EvidenceSet) (widened *EvidenceSet, ok bool, err error) {
+	if es.TopNAtBuild <= 0 || len(es.candidatePool) <= es.TopNAtBuild {
+		return nil, false, nil
+	}
+	widerN := es.TopNAtBuild * 2
+	pool := es.candidatePool
+	if len(pool) > widerN {
+		pool = pool[:widerN]
+	} else {
+		widerN = len(pool)
+	}
+
+	expanded, err := s.expandCandidatesToPoints(pool)
+	if err != nil {
+		return nil, false, fmt.Errorf("retrieval: widen and retry: expand candidates to points: %w", err)
+	}
+
+	qc := QueryContext{Question: es.Question, Subject: es.Subject, Intent: es.Intent, Audience: es.Audience, Constraint: es.Constraint}
+	noopEmit := func(string, string, string, int64) {}
+	newEs, err := s.rerankAndBuildEvidenceSet(ctx, qc, expanded, noopEmit, nil, false)
+	if err != nil {
+		return nil, false, fmt.Errorf("retrieval: widen and retry: rerank: %w", err)
+	}
+	newEs.candidatePool = es.candidatePool
+	newEs.CandidatePoolSize = es.CandidatePoolSize
+	newEs.TopNAtBuild = es.TopNAtBuild
+	newEs.CoefficientAtBuild = es.CoefficientAtBuild
+	newEs.WidenedToN = widerN
+	return newEs, true, nil
 }
 
 // verifyEvidenceSufficientOnce is the single fast_verify.md call — factored
@@ -879,11 +927,15 @@ func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, source
 		"fts", len(ftsQuestion), "fts_tuple", len(ftsTuple), "tuple_query", tupleText)
 	emit("fts", "done", fmt.Sprintf("%d+%d 条", len(ftsQuestion), len(ftsTuple)), time.Since(ftsStart).Milliseconds())
 
-	// Step 6: RRF merge（outline + fts(question) + fts(四元组)）
-	merged := s.rrfMerge(outlineCandidates, ftsQuestion, ftsTuple)
-	slog.Info("retrieval: step6 rrf merge done", "merged", len(merged))
+	// Step 6: RRF merge（outline + fts(question) + fts(四元组)）— returns the
+	// FULL sorted pool (mergedRank assigned across all of it, not just the
+	// eventual top-N); truncation happens below so the untruncated pool can
+	// be kept for the pool-widen retry / calibration snapshot
+	// (docs/design/topn-coefficient-convergence.md).
+	fullPool := s.rrfMerge(outlineCandidates, ftsQuestion, ftsTuple)
+	slog.Info("retrieval: step6 rrf merge done", "merged", len(fullPool))
 
-	if len(merged) == 0 {
+	if len(fullPool) == 0 {
 		emit("screen", "done", "0 条", 0)
 		emit("rerank", "done", "0 直接 · 0 间接", 0)
 		return &EvidenceSet{
@@ -902,19 +954,33 @@ func (s *Service) recallFromSources(ctx context.Context, qc QueryContext, source
 		}, nil
 	}
 
+	topN := s.currentRerankTopN()
+	truncated := fullPool
+	if len(truncated) > topN {
+		truncated = truncated[:topN]
+	}
+
 	// rrfMerge/ftsRecall pick each KU's single best-scoring KP as that KU's
 	// stand-in candidate — a shortcut for ranking the KU, not a claim that
 	// this is the only KP worth judging. Expanding here restores the KU's
 	// full current KP set before judging, so a KU that wins its way into the
 	// top-N by one KP's score doesn't silently hide its other KPs (which may
 	// be the ones that actually answer the question) from the judge.
-	expanded, err := s.expandCandidatesToPoints(merged)
+	expanded, err := s.expandCandidatesToPoints(truncated)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: expand candidates to points: %w", err)
 	}
-	slog.Info("retrieval: step6b expand candidates to points done", "units", len(merged), "points", len(expanded))
+	slog.Info("retrieval: step6b expand candidates to points done", "units", len(truncated), "points", len(expanded))
 
-	return s.rerankAndBuildEvidenceSet(ctx, qc, expanded, emit, progress, lastResort)
+	es, err := s.rerankAndBuildEvidenceSet(ctx, qc, expanded, emit, progress, lastResort)
+	if err != nil {
+		return nil, err
+	}
+	es.candidatePool = fullPool
+	es.CandidatePoolSize = len(fullPool)
+	es.TopNAtBuild = topN
+	es.CoefficientAtBuild = s.cfg.Retrieval.OutlineRRFBoost
+	return es, nil
 }
 
 // rerankAndBuildEvidenceSet runs Steps 7-10 (Rerank through EvidenceSet
@@ -1508,13 +1574,19 @@ func (s *Service) ftsRecall(queryText string, sourceIDs []string, path string) (
 // Step 6: RRF merge across any number of ranked lists (outline, fts, fts_tuple, …).
 // Nil/empty lists are skipped. Path label is taken from each list's candidates'
 // sourcePaths[0], falling back to "fts".
+// rrfMerge returns the FULL sorted candidate list (mergedRank assigned across
+// all of it) — it no longer truncates to rerank_top_n itself; callers slice
+// to the N they need. This lets recallFromSources keep the untruncated pool
+// around for the pool-widen retry / calibration snapshot
+// (docs/design/topn-coefficient-convergence.md).
 func (s *Service) rrfMerge(lists ...[]candidate) []candidate {
-	const k = 60
+	const k = RRFK
 
 	type mergedCandidate struct {
 		candidate
-		rrfScore float64
-		paths    map[string]bool
+		rrfScore   float64
+		paths      map[string]bool
+		rankByPath map[string]int
 	}
 	merged := make(map[string]*mergedCandidate)
 
@@ -1539,14 +1611,16 @@ func (s *Service) rrfMerge(lists ...[]candidate) []candidate {
 			if m, ok := merged[c.unitID]; ok {
 				m.rrfScore += rrfScore
 				m.paths[pathName] = true
+				m.rankByPath[pathName] = rank
 				if c.pointID != "" && m.pointID == "" {
 					m.pointID = c.pointID
 				}
 			} else {
 				merged[c.unitID] = &mergedCandidate{
-					candidate: c,
-					rrfScore:  rrfScore,
-					paths:     map[string]bool{pathName: true},
+					candidate:  c,
+					rrfScore:   rrfScore,
+					paths:      map[string]bool{pathName: true},
+					rankByPath: map[string]int{pathName: rank},
 				}
 			}
 		}
@@ -1573,6 +1647,7 @@ func (s *Service) rrfMerge(lists ...[]candidate) []candidate {
 		m.candidate.score = m.rrfScore
 		m.candidate.sourcePaths = paths
 		m.candidate.recallOrigins = paths
+		m.candidate.rankByPath = m.rankByPath
 		result = append(result, m.candidate)
 	}
 
@@ -1590,15 +1665,18 @@ func (s *Service) rrfMerge(lists ...[]candidate) []candidate {
 		result[i].mergedRank = i
 	}
 
+	return result
+}
+
+// currentRerankTopN reads the configured rerank_top_n, applying the same
+// <=0 fallback rrfMerge used to enforce internally before truncation moved
+// to recallFromSources.
+func (s *Service) currentRerankTopN() int {
 	topN := s.cfg.Retrieval.RerankTopN
 	if topN <= 0 {
 		topN = 20
 	}
-	if len(result) > topN {
-		result = result[:topN]
-	}
-
-	return result
+	return topN
 }
 
 // expandCandidatesToPoints turns each of rrfMerge's top-N KU-level

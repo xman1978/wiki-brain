@@ -637,6 +637,46 @@ func (s *Service) SetSummary(sourceID, summary string) error {
 	return s.store.UpdateSummary(sourceID, summary)
 }
 
+// RegenerateOutlineSummary re-runs outline_summary.md for a single outline
+// node whose summary is missing (e.g. GenerateOutlineSummaries silently
+// dropped it during import because the LLM's batched JSON response omitted
+// that node's id — see docs/impl/v1/retrieval.md 目录检索). Unlike
+// UpdateOutlineSummary (human-supplied text), this calls the LLM the same
+// way the import pipeline does, then persists + reindexes through the same
+// path. No-ops if the node already has a non-empty summary.
+func (s *Service) RegenerateOutlineSummary(ctx context.Context, sourceID, outlineID string) (*Outline, error) {
+	src, err := s.store.GetByID(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("source: regenerate outline summary: get source: %w", err)
+	}
+	target, err := s.store.GetOutlineByID(sourceID, outlineID)
+	if err != nil {
+		return nil, fmt.Errorf("source: regenerate outline summary: get outline: %w", err)
+	}
+	if target.Summary.Valid && strings.TrimSpace(target.Summary.String) != "" {
+		return target, nil
+	}
+
+	mdPath := filepath.Join(s.baseDir, src.MarkdownPath)
+	content, err := os.ReadFile(mdPath)
+	if err != nil {
+		return nil, fmt.Errorf("source: regenerate outline summary: read markdown: %w", err)
+	}
+
+	mc, err := s.extractionModel()
+	if err != nil {
+		return nil, fmt.Errorf("source: regenerate outline summary: extraction model: %w", err)
+	}
+
+	nodes := []Outline{*target}
+	GenerateOutlineSummaries(ctx, s.llmClient, nodes, string(content), mc, s.cfg.Source.OutlineSummaryConcurrency)
+	if !nodes[0].Summary.Valid || strings.TrimSpace(nodes[0].Summary.String) == "" {
+		return nil, fmt.Errorf("source: regenerate outline summary: LLM still returned no summary for %s", outlineID)
+	}
+
+	return s.UpdateOutlineSummary(sourceID, outlineID, nodes[0].Summary.String)
+}
+
 // UpdateOutlineSummary lets a human correct/enrich a single directory
 // (source_outlines) node's summary. Scoped to sourceID to prevent
 // cross-source edits (outline_id belonging to a different source_id is

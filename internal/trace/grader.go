@@ -18,6 +18,11 @@ type gradeResult struct {
 	CitedCount        int
 	OutlineCitedCount int
 	CitedRankSum      int
+	// CitedRankMax is the worst (largest) mergedRank among cited evidence —
+	// the conservative R* proxy for top-N/系数自收敛 calibration
+	// (docs/design/topn-coefficient-convergence.md 第 2 节). -1 when no
+	// full-path evidence was cited.
+	CitedRankMax int
 }
 
 func gradeQuality(r *answer.AnswerResult) gradeResult {
@@ -34,7 +39,7 @@ func gradeQuality(r *answer.AnswerResult) gradeResult {
 
 	kpnCited, cited := kpnCitationCounts(r.EvidenceSet, r.Citations)
 	directPointIDs := directCitedPointIDs(r.EvidenceSet, r.Citations)
-	outlineCited, rankSum := recallCitationStats(r.EvidenceSet, r.Citations)
+	outlineCited, rankSum, rankMax := recallCitationStats(r.EvidenceSet, r.Citations)
 
 	if len(directPointIDs) > 0 {
 		return gradeResult{
@@ -44,14 +49,15 @@ func gradeQuality(r *answer.AnswerResult) gradeResult {
 			CitedCount:        cited,
 			OutlineCitedCount: outlineCited,
 			CitedRankSum:      rankSum,
+			CitedRankMax:      rankMax,
 		}
 	}
 
 	if len(r.EvidenceSet.Supporting) > 0 {
-		return gradeResult{Quality: QualityPartial, KPNCitedCount: kpnCited, CitedCount: cited, OutlineCitedCount: outlineCited, CitedRankSum: rankSum}
+		return gradeResult{Quality: QualityPartial, KPNCitedCount: kpnCited, CitedCount: cited, OutlineCitedCount: outlineCited, CitedRankSum: rankSum, CitedRankMax: rankMax}
 	}
 
-	return gradeResult{Quality: QualityGap, KPNCitedCount: kpnCited, CitedCount: cited, OutlineCitedCount: outlineCited, CitedRankSum: rankSum}
+	return gradeResult{Quality: QualityGap, KPNCitedCount: kpnCited, CitedCount: cited, OutlineCitedCount: outlineCited, CitedRankSum: rankSum, CitedRankMax: rankMax}
 }
 
 // kpnCitationCounts reports, among the fact_ids Answer actually cited, how many
@@ -96,9 +102,10 @@ func kpnCitationCounts(es *retrieval.EvidenceSet, citations []string) (kpnCited,
 // (2026-08-09 决策，见 chat). Fast-path evidence bypasses rrfMerge, so its
 // RecallPaths/MergedRank are always zero-value — only path_type=full trace
 // carries meaningful signal here.
-func recallCitationStats(es *retrieval.EvidenceSet, citations []string) (outlineCited, rankSum int) {
+func recallCitationStats(es *retrieval.EvidenceSet, citations []string) (outlineCited, rankSum, rankMax int) {
+	rankMax = -1
 	if es.PathType != retrieval.PathTypeFull {
-		return 0, 0
+		return 0, 0, rankMax
 	}
 	type recallInfo struct {
 		paths []string
@@ -123,6 +130,9 @@ func recallCitationStats(es *retrieval.EvidenceSet, citations []string) (outline
 		}
 		seen[fid] = true
 		rankSum += info.rank
+		if info.rank > rankMax {
+			rankMax = info.rank
+		}
 		for _, p := range info.paths {
 			if p == "outline" {
 				outlineCited++
@@ -130,7 +140,7 @@ func recallCitationStats(es *retrieval.EvidenceSet, citations []string) (outline
 			}
 		}
 	}
-	return outlineCited, rankSum
+	return outlineCited, rankSum, rankMax
 }
 
 func directCitedPointIDs(es *retrieval.EvidenceSet, citations []string) []string {

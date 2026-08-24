@@ -94,7 +94,7 @@ func TestBuildObservedConditions_TupleNormEnabled_MergesParaphrases(t *testing.T
 	seedTraceQuad(t, db, "t1", "a1", "p1", "如何报销差旅费")
 	seedTraceQuad(t, db, "t2", "a2", "p1", "怎么报销差旅费")
 
-	svcEnabled := NewService(store, testConfig(), activationSvc, nil, 0, 0, 0, true)
+	svcEnabled := NewService(store, testConfig(), activationSvc, nil, 0, 0, 0, true, 0, 0)
 	conds, err := svcEnabled.buildObservedConditions("p1")
 	if err != nil {
 		t.Fatalf("buildObservedConditions (enabled): %v", err)
@@ -106,7 +106,7 @@ func TestBuildObservedConditions_TupleNormEnabled_MergesParaphrases(t *testing.T
 		t.Fatalf("expected merged condition SuccessCount=2, got %d", conds[0].SuccessCount)
 	}
 
-	svcDisabled := NewService(store, testConfig(), activationSvc, nil, 0, 0, 0, false)
+	svcDisabled := NewService(store, testConfig(), activationSvc, nil, 0, 0, 0, false, 0, 0)
 	condsRaw, err := svcDisabled.buildObservedConditions("p1")
 	if err != nil {
 		t.Fatalf("buildObservedConditions (disabled): %v", err)
@@ -138,7 +138,7 @@ func TestBuildObservedConditions_TupleNormEnabled_NoDomainSkipsNormalization(t *
 	seedTraceQuad(t, db, "t1", "a1", "p1", "如何报销差旅费")
 	seedTraceQuad(t, db, "t2", "a2", "p1", "怎么报销差旅费")
 
-	svc := NewService(store, testConfig(), activationSvc, nil, 0, 0, 0, true)
+	svc := NewService(store, testConfig(), activationSvc, nil, 0, 0, 0, true, 0, 0)
 	conds, err := svc.buildObservedConditions("p1")
 	if err != nil {
 		t.Fatalf("buildObservedConditions: %v", err)

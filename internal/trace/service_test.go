@@ -31,6 +31,7 @@ func TestProcessTrace_Confident(t *testing.T) {
 		HasAnswer: true,
 		Path:      "short",
 		EvidenceSet: &retrieval.EvidenceSet{
+			Subject: "互斥锁",
 			DirectEvidence: []retrieval.Evidence{
 				{FactID: "f1", PointID: "p1"},
 			},
@@ -156,6 +157,7 @@ func TestProcessTrace_DuplicateQuestion_NoDuplicateCooccurrence(t *testing.T) {
 		Citations: []string{"f1"},
 		Path:      "short",
 		EvidenceSet: &retrieval.EvidenceSet{
+			Subject: "互斥锁",
 			DirectEvidence: []retrieval.Evidence{
 				{FactID: "f1", PointID: "p1"},
 			},
@@ -171,6 +173,7 @@ func TestProcessTrace_DuplicateQuestion_NoDuplicateCooccurrence(t *testing.T) {
 		Citations: []string{"f1"},
 		Path:      "short",
 		EvidenceSet: &retrieval.EvidenceSet{
+			Subject: "互斥锁",
 			DirectEvidence: []retrieval.Evidence{
 				{FactID: "f1", PointID: "p1"},
 			},
@@ -205,6 +208,7 @@ func TestProcessTrace_Partial_UpdatesHitOnly(t *testing.T) {
 		Citations: []string{"f2"},
 		Path:      "deep",
 		EvidenceSet: &retrieval.EvidenceSet{
+			Subject: "并发",
 			DirectEvidence: []retrieval.Evidence{
 				{FactID: "f1", PointID: "p1"},
 			},

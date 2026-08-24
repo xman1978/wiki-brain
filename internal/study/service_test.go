@@ -57,7 +57,7 @@ func testConfidenceConfig() activation.ConfidenceConfig {
 func TestService_Run_Empty(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
-	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, 0, false)
+	svc := NewService(store, testConfig(), newTestActivationSvc(db), nil, 0, 0, 0, false, 0, 0)
 
 	result, err := svc.Run()
 	if err != nil {
@@ -92,7 +92,7 @@ func TestService_Run_WithData(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, 0, false)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, 0, false, 0, 0)
 
 	// Seed prerequisite data
 	seedSource(t, db, "src1")
@@ -185,7 +185,7 @@ func TestService_GapThresholdWarning(t *testing.T) {
 	store := NewStore(db)
 	cfg := testConfig()
 	cfg.GapHitThreshold = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, 0, false)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, 0, false, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -217,7 +217,7 @@ func TestService_RecommendationLogic(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, 0, false)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, 0, false, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")

@@ -160,7 +160,7 @@ type RetrievalConfig struct {
 	// allowed a bigger batch.
 	RerankJudgeBatchMaxCandidates int `yaml:"rerank_judge_batch_max_candidates"`
 	RerankJudgeConcurrency        int `yaml:"rerank_judge_concurrency"`
-	ActivationMatchTop         int     `yaml:"activation_match_top"`
+	ActivationMatchTop            int `yaml:"activation_match_top"`
 	// OutlineRRFBoost multiplies the RRF score contributed by the outline
 	// (目录) recall path in rrfMerge, to reflect its higher observed hit rate
 	// vs. fts/fts_tuple. 1.0 or unset (<=0) means no boost (RRF unweighted).
@@ -173,7 +173,14 @@ type RetrievalConfig struct {
 	// sufficient=false the answer layer refuses with the no-evidence
 	// fallback instead of letting near-miss evidence (wrong system /
 	// wrong intent) be rewritten into a confident answer.
-	SlowPathVerify   bool    `yaml:"slow_path_verify"`
+	SlowPathVerify bool `yaml:"slow_path_verify"`
+	// PoolWidenEnabled gates the candidate-pool widen retry (N→2N) that
+	// Answer's checkSlowPathSufficiency runs when the content-widen retry
+	// still leaves evidence insufficient
+	// (docs/design/topn-coefficient-convergence.md 第 3 节). Off by default —
+	// this is the data-collection phase for the top-N/系数自收敛 mechanism,
+	// not yet feeding an automatic adjustment.
+	PoolWidenEnabled bool    `yaml:"pool_widen_enabled"`
 	FastPathFallback bool    `yaml:"fast_path_fallback"`
 	WikiMinScore     float64 `yaml:"wiki_min_score"`
 	// WikiMaxCandidates caps how many wiki-index/concept-matched candidate
@@ -314,6 +321,14 @@ type StudyConfig struct {
 	// ObservedConditionsMax caps ActivationLink observed_conditions groups
 	// (docs/superpowers/specs/2026-07-22-activation-observed-conditions-design.md).
 	ObservedConditionsMax int `yaml:"observed_conditions_max"`
+	// —— top-N / 目录检索系数自收敛建议（docs/design/topn-coefficient-convergence.md，
+	// docs/impl/v1/topn-coefficient-convergence.md 阶段 C）——只计算/展示建议值，
+	// 不接入自动调整。数值未预设合理默认，先跑数据观察分布再定。
+	TopNTargetHitRate         float64 `yaml:"topn_target_hit_rate"`
+	TopNMin                   int     `yaml:"topn_min"`
+	TopNCoefficientMin        float64 `yaml:"topn_coefficient_min"`
+	TopNCoefficientGridStep   float64 `yaml:"topn_coefficient_grid_step"`
+	TopNCoefficientGridRadius int     `yaml:"topn_coefficient_grid_radius"`
 	// —— subject 同义词挖掘（V1 新增，
 	// docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md）——
 	SynonymGapMin         int  `yaml:"synonym_gap_min"`
@@ -439,14 +454,14 @@ func applyEnvOverrides(cfg *Config) {
 	}
 
 	intOverrides := map[string]*int{
-		"WB_SERVER_PORT":            &cfg.Server.Port,
-		"WB_SERVER_MAX_CONCURRENCY": &cfg.Server.MaxConcurrency,
-		"WB_QUEUE_BUFFER_SIZE":      &cfg.Queue.BufferSize,
-		"WB_QUEUE_WORKERS":          &cfg.Queue.Workers,
+		"WB_SERVER_PORT":               &cfg.Server.Port,
+		"WB_SERVER_MAX_CONCURRENCY":    &cfg.Server.MaxConcurrency,
+		"WB_QUEUE_BUFFER_SIZE":         &cfg.Queue.BufferSize,
+		"WB_QUEUE_WORKERS":             &cfg.Queue.Workers,
 		"WB_SOURCE_UPLOAD_CONCURRENCY": &cfg.Source.UploadConcurrency,
-		"WB_LOGGING_MAX_SIZE_MB":    &cfg.Logging.MaxSizeMB,
-		"WB_LOGGING_MAX_BACKUPS":    &cfg.Logging.MaxBackups,
-		"WB_LOGGING_MAX_AGE_DAYS":   &cfg.Logging.MaxAgeDays,
+		"WB_LOGGING_MAX_SIZE_MB":       &cfg.Logging.MaxSizeMB,
+		"WB_LOGGING_MAX_BACKUPS":       &cfg.Logging.MaxBackups,
+		"WB_LOGGING_MAX_AGE_DAYS":      &cfg.Logging.MaxAgeDays,
 	}
 
 	for env, ptr := range intOverrides {

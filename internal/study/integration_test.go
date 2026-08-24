@@ -207,7 +207,7 @@ func TestIntegration_StudyReportFromSeedDB(t *testing.T) {
 	cfg.CreateConfidenceMin = 0.2 // lower thresholds for single-pass data
 	cfg.CreateWidthMax = 1.0
 	cfg.WikiKPMin = 2
-	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, 0, false)
+	svc := NewService(store, cfg, newTestActivationSvc(db), nil, 0, 0, 0, false, 0, 0)
 
 	result, err := svc.Run()
 	if err != nil {

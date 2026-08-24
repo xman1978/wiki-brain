@@ -428,6 +428,7 @@ func TestGenerateActivationEvents_RecordOutcomeFailure_DoesNotAbortTrace(t *test
 		HasAnswer: true,
 		Path:      "short",
 		EvidenceSet: &retrieval.EvidenceSet{
+			Subject:        "住宿标准",
 			PathType:       retrieval.PathTypeFast,
 			ActivationHits: []retrieval.ActivationHit{{LinkID: "link1", PointID: "p1", MatchScore: 0.9}},
 			DirectEvidence: []retrieval.Evidence{{FactID: "f1", PointID: "p1"}},

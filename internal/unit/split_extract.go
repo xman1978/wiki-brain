@@ -16,7 +16,7 @@ import (
 
 const (
 	promptVersionBoundaryExtract   = "v3"
-	promptVersionPointExtract      = "v7"
+	promptVersionPointExtract      = "v8"
 	promptVersionPointCoverageFill = "v1"
 	// promptVersionSplitExtract tags candidates produced by the two-step
 	// boundary+point split pipeline — derived from the two prompts' own
@@ -95,7 +95,7 @@ func (s *Service) extractSegmentOutputSplit(ctx context.Context, sourceID, sourc
 			continue
 		}
 
-		center, points, ok, err := s.extractPointsForSplitUnit(ctx, sourceTitle, sourceSummary, u, unitContent)
+		center, points, ok, err := s.extractPointsForSplitUnit(ctx, sourceTitle, sourceSummary, seg.OutlinePath, u, unitContent)
 		if err != nil {
 			return extractOutput{}, false, fmt.Errorf("split point extraction for unit %s lines %d-%d: %w", u.UnitID, u.LineStart, u.LineEnd, err)
 		}
@@ -119,10 +119,19 @@ func (s *Service) extractSegmentOutputSplit(ctx context.Context, sourceID, sourc
 // only (差旅费报销制度 incident: a 住宿费-flavored fallback center left the
 // entire 第六条交通费用 half of the unit with zero points). The point model
 // derives the center from the full content itself.
-func (s *Service) extractPointsForSplitUnit(ctx context.Context, sourceTitle, sourceSummary string, u llmUnit, unitContent string) (string, []llmPoint, bool, error) {
+//
+// outlinePath (root→leaf directory titles) is ownership context, not a
+// substitute for content: when the unit's own lines omit the section heading
+// (e.g. a subsidy table split from "第七条伙食补贴"), the path keeps center/KP
+// labeling from inventing a sibling topic like 住宿补贴.
+func (s *Service) extractPointsForSplitUnit(ctx context.Context, sourceTitle, sourceSummary, outlinePath string, u llmUnit, unitContent string) (string, []llmPoint, bool, error) {
+	if strings.TrimSpace(outlinePath) == "" {
+		outlinePath = emptyOutlinePath
+	}
 	vars := map[string]string{
 		"source_title":    sourceTitle,
 		"source_summary":  emptyOr(sourceSummary, "（无摘要）"),
+		"outline_path":    outlinePath,
 		"unit_line_start": strconv.Itoa(u.LineStart),
 		"unit_line_end":   strconv.Itoa(u.LineEnd),
 		"unit_content":    unitContent,

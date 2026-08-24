@@ -45,7 +45,7 @@ func TestScanActivationBundles_CrossesCreationGate_CreatesBundle(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, bundleTestConfig(), activationSvc, nil, 0, 0, 0, false)
+	svc := NewService(store, bundleTestConfig(), activationSvc, nil, 0, 0, 0, false, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -85,7 +85,7 @@ func TestScanActivationBundles_BelowThreshold_NoBundleCreated(t *testing.T) {
 	db := setupTestDB(t)
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, bundleTestConfig(), activationSvc, nil, 0, 0, 0, false)
+	svc := NewService(store, bundleTestConfig(), activationSvc, nil, 0, 0, 0, false, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -114,7 +114,7 @@ func TestScanActivationBundles_RepeatedScan_RefreshesInsteadOfDuplicating(t *tes
 	db := setupTestDB(t)
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, bundleTestConfig(), activationSvc, nil, 0, 0, 0, false)
+	svc := NewService(store, bundleTestConfig(), activationSvc, nil, 0, 0, 0, false, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -159,7 +159,7 @@ func TestScanActivationBundles_RepeatedScan_PreservesLiveOutcomeCounts(t *testin
 	db := setupTestDB(t)
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, bundleTestConfig(), activationSvc, nil, 0, 0, 0, false)
+	svc := NewService(store, bundleTestConfig(), activationSvc, nil, 0, 0, 0, false, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -248,7 +248,7 @@ func TestScanActivationBundles_DifferentMemberCounts_MergeUnderSameCanonicalTupl
 	db := setupTestDB(t)
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
-	svc := NewService(store, bundleTestConfig(), activationSvc, nil, 0, 0, 0, false)
+	svc := NewService(store, bundleTestConfig(), activationSvc, nil, 0, 0, 0, false, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -283,7 +283,7 @@ func TestWeakenBundlesWithExpiredCoreMembers_CoreExpired_Weakens(t *testing.T) {
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0, 0, false)
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0, 0, false, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -324,7 +324,7 @@ func TestWeakenBundlesWithExpiredCoreMembers_FringeExpired_NoStateChange(t *test
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0, 0, false)
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0, 0, false, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")
@@ -368,7 +368,7 @@ func TestWeakenBundlesWithExpiredCoreMembers_CandidateBundle_NoStateChange(t *te
 	store := NewStore(db)
 	activationSvc := newTestActivationSvc(db)
 	cfg := testConfig()
-	svc := NewService(store, cfg, activationSvc, nil, 0, 0, 0, false)
+	svc := NewService(store, cfg, activationSvc, nil, 0, 0, 0, false, 0, 0)
 
 	seedSource(t, db, "src1")
 	seedDomain(t, db, "dom1", "D")

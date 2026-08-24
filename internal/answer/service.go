@@ -118,13 +118,21 @@ func (s *Service) checkSlowPathSufficiency(ctx context.Context, es *retrieval.Ev
 		return nil, verifyOutcome{}
 	}
 	start := time.Now()
-	ok, needsDeep, reason, err := s.retSvc.VerifyEvidenceSufficient(ctx, es.Question, es)
+	ok, needsDeep, reason, contentWidened, err := s.retSvc.VerifyEvidenceSufficient(ctx, es.Question, es)
 	outcome := verifyOutcome{ran: true, sufficient: ok, needsDeep: needsDeep, reason: reason, durationMs: time.Since(start).Milliseconds(), err: err}
 	if err != nil {
 		slog.Warn("answer: slow path verify error, proceeding with generation", "error", err)
 		return nil, outcome
 	}
 	if ok {
+		// docs/design/topn-coefficient-convergence.md 第 3 节结果分类：内容
+		// 扩展救回的样本跟候选排序无关，标成 content_rescued，不进 N/系数校准，
+		// 只作为独立的证据挖掘质量诊断；否则是 tight（首次即充分）。
+		if contentWidened {
+			es.CompletenessClass = retrieval.CompletenessContentRescued
+		} else {
+			es.CompletenessClass = retrieval.CompletenessTight
+		}
 		if needsDeep && es.Path == "short" {
 			slog.Info("answer: slow path verify judged needs_deep, upgrading to deep",
 				"question", es.Question, "reason", reason)
@@ -132,11 +140,57 @@ func (s *Service) checkSlowPathSufficiency(ctx context.Context, es *retrieval.Ev
 		}
 		return nil, outcome
 	}
+
+	// 内容扩展（VerifyEvidenceSufficient 内部）已经试过且失败——按
+	// docs/design/topn-coefficient-convergence.md 第 3 节，再试一次候选池
+	// 扩展（N→2N）。只有 RRF merge 阶段确实召回了比 N 更多候选时才有意义，
+	// WidenAndRetry 内部会核对这个门槛。
+	if s.retSvc != nil && s.retSvc.PoolWidenEnabled() {
+		widened, widenedOK, werr := s.retSvc.WidenAndRetry(ctx, es)
+		if werr != nil {
+			slog.Warn("answer: pool widen retry failed, keeping original verdict", "error", werr)
+		}
+		// widenedOK==false means there was no pool beyond N to begin with
+		// (RRF merge total <= N) — out of scope for this mechanism per
+		// docs/design/topn-coefficient-convergence.md 第 3 节's 门槛条件:
+		// that's a recall problem, not an N/系数 problem. CompletenessClass
+		// stays unset and Trace won't emit a calibration sample for it.
+		if widenedOK {
+			if len(widened.DirectEvidence) > 0 || len(widened.Supporting) > 0 {
+				wStart := time.Now()
+				wOK, wNeedsDeep, wReason, _, wErr := s.retSvc.VerifyEvidenceSufficient(ctx, widened.Question, widened)
+				if wErr == nil && wOK {
+					*es = *widened
+					es.CompletenessClass = retrieval.CompletenessPoolRescued
+					outcome = verifyOutcome{ran: true, sufficient: true, needsDeep: wNeedsDeep, reason: wReason, durationMs: outcome.durationMs + time.Since(wStart).Milliseconds()}
+					if wNeedsDeep && es.Path == "short" {
+						es.Path = "deep"
+					}
+					slog.Info("answer: pool widen retry judged sufficient", "question", es.Question, "widened_to_n", widened.WidenedToN)
+					return nil, outcome
+				}
+			}
+			// Still insufficient (either no evidence survived rerank on the
+			// wider window, or the re-verify still failed). Distinguish a
+			// real negative (widened all the way to 2N) from a right-censored
+			// one (candidate pool ran out before reaching 2N — WidenAndRetry
+			// clamps WidenedToN to the pool size in that case).
+			es.WidenedToN = widened.WidenedToN
+			es.CandidatePoolSize = widened.CandidatePoolSize
+			if widened.WidenedToN >= es.TopNAtBuild*2 {
+				es.CompletenessClass = retrieval.CompletenessGapAt2N
+			} else {
+				es.CompletenessClass = retrieval.CompletenessPoolExhaustedBefore
+			}
+		}
+	}
+
 	slog.Info("answer: slow path verify judged evidence insufficient, refusing",
 		"question", es.Question,
 		"direct", len(es.DirectEvidence),
 		"supporting", len(es.Supporting),
-		"reason", reason)
+		"reason", reason,
+		"completeness_class", es.CompletenessClass)
 	return s.handleNoneWithReason(es, reason), outcome
 }
 

@@ -44,6 +44,12 @@ func TestBuildSegments_BasicLeafNodes(t *testing.T) {
 	if segments[0].Title != "Chapter 1" {
 		t.Errorf("segment[0].Title = %q, want Chapter 1", segments[0].Title)
 	}
+	if segments[0].OutlinePath != "Root / Chapter 1" {
+		t.Errorf("segment[0].OutlinePath = %q, want Root / Chapter 1", segments[0].OutlinePath)
+	}
+	if segments[1].OutlinePath != "Root / Chapter 2" {
+		t.Errorf("segment[1].OutlinePath = %q, want Root / Chapter 2", segments[1].OutlinePath)
+	}
 	if segments[0].LineStart != 1 || segments[0].LineEnd != 30 {
 		t.Errorf("segment[0] range = %d-%d, want 1-30", segments[0].LineStart, segments[0].LineEnd)
 	}

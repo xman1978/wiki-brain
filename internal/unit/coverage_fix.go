@@ -92,7 +92,11 @@ func (s *Service) FixCoverageGap(ctx context.Context, sourceID string, lineStart
 	}
 	unitContent := sliceLinesWithLineNumbers(mdLines, lineStart, lineEnd)
 
-	center, points, ok, err := s.extractPointsForSplitUnit(ctx, src.Title, src.Summary.String, u, unitContent)
+	outlinePath := emptyOutlinePath
+	if outlineID != "" {
+		outlinePath = outlinePathForID(outlines, outlineID)
+	}
+	center, points, ok, err := s.extractPointsForSplitUnit(ctx, src.Title, src.Summary.String, outlinePath, u, unitContent)
 	if err != nil {
 		return nil, fmt.Errorf("unit: fix coverage gap: extract points: %w", err)
 	}

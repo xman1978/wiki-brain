@@ -2,8 +2,12 @@
 """
 MVP 验收测试方案第 4 节「问答准确率测试集」自动化脚本。
 
-用途：逐题向运行中的 wiki-brain 服务发送 A/T/G 组共 80 题（POST /answer，
-short 路径），自动核对：
+用途：逐题向运行中的 wiki-brain 服务发送 A/T/G 组共 80 题（经 ask_via_session
+走 POST /sessions -> POST /session/turn -> POST /answer/stream，each 题各自新建
+session，short 路径；2026-08-24 改为经 session 解析 subject/intent/audience/
+constraint，不再裸调 POST /answer——裸调不解析四元组会污染
+question_kp_cooccurrence/bundle_trigger_cooccurrence 的分组，详见
+test/v1/v1_common.py ask_via_session 的说明），自动核对：
   - direct 命中：EvidenceSet.direct_evidence 的来源是否落在期望文档
   - 关键词覆盖：从「期望答案要点」抽取的数字/代码片段是否出现在回答正文中
     （这是可自动化的正确性代理指标，不能替代 test/mvp/mvp-acceptance-test-plan.md
@@ -160,6 +164,79 @@ def http_post_json(base_url, path, payload, timeout=180):
         return json.loads(resp.read().decode("utf-8")), resp.status
 
 
+def http_post_sse(base_url, path, payload, timeout=180):
+    """消费 POST /answer/stream 的 SSE 响应，返回 event:result 携带的 AnswerResult
+    JSON（与非流式 POST /answer 响应同构）。见 test/v1/v1_common.py 同名函数。
+    """
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base_url}{path}",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    result = None
+    error = None
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        event_type = None
+        data_lines = []
+        for raw_line in resp:
+            line = raw_line.decode("utf-8", "replace").rstrip("\r\n")
+            if line.startswith("event: "):
+                event_type = line[len("event: "):]
+                data_lines = []
+            elif line.startswith("data: "):
+                data_lines.append(line[len("data: "):])
+            elif line == "":
+                if event_type == "result" and data_lines:
+                    try:
+                        result = json.loads("\n".join(data_lines))
+                    except json.JSONDecodeError:
+                        pass
+                elif event_type == "error":
+                    error = "\n".join(data_lines)
+                event_type, data_lines = None, []
+    if result is None and error:
+        raise RuntimeError(f"/answer/stream error event: {error}")
+    return result
+
+
+def ask_via_session(base_url, question, deep=False, timeout=180):
+    """真实客户端路径：POST /sessions -> POST /session/turn（解析
+    subject/intent/audience/constraint）-> POST /answer/stream（把这四个字段
+    带进检索）。裸 POST /answer 不解析这四个字段，会让 question_kp_cooccurrence
+    /bundle_trigger_cooccurrence 按空字面量分组，污染共现累积——2026-08-24 改为
+    统一走这条路径，不再裸调 POST /answer（详见 test/v1/v1_common.py 同名函数
+    的说明）。每题各自新建 session（不共享会话，模拟独立单轮提问）。
+
+    返回 result：与非流式 POST /answer 响应同构的 AnswerResult dict；
+    action != "retrieve"（如触发 clarify）时返回 None。
+    """
+    sess, _ = http_post_json(base_url, "/sessions", {}, timeout=timeout)
+    session_id = sess["session_id"]
+
+    turn, _ = http_post_json(
+        base_url, "/session/turn", {"session_id": session_id, "user_input": question}, timeout=timeout
+    )
+    if turn.get("action") != "retrieve":
+        return None
+
+    eq = turn.get("expanded_query") or {}
+    payload = {
+        "question": eq.get("expanded_question") or question,
+        "deep": deep,
+        "session_id": session_id,
+        "subject": eq.get("subject") or "",
+        "intent": eq.get("intent") or "",
+        "audience": eq.get("audience") or "",
+        "constraint": eq.get("constraint") or "",
+        "domain_ids": eq.get("domain_ids") or [],
+        "domain_resolved": True,
+        "follow_up": bool(eq.get("follow_up")),
+    }
+    return http_post_sse(base_url, "/answer/stream", payload, timeout=timeout)
+
+
 def fetch_source_titles(base_url):
     """GET /sources 分页拉全量，建 source_id -> title 映射，用于 direct_hit 判定。"""
     id_to_title = {}
@@ -196,10 +273,9 @@ def evidence_source_ids(evidence_list):
 
 
 def run_question(base_url, row, id_to_title, timeout):
-    payload = {"question": row["question"], "deep": False}
     t0 = time.time()
     try:
-        result, status = http_post_json(base_url, "/answer", payload, timeout=timeout)
+        result = ask_via_session(base_url, row["question"], deep=False, timeout=timeout)
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "ignore")
         return {
@@ -209,6 +285,8 @@ def run_question(base_url, row, id_to_title, timeout):
         }
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         return {**row, "domain": domain_of(row["id"]), "error": str(e)}
+    if result is None:
+        return {**row, "domain": domain_of(row["id"]), "error": "session turn did not retrieve (clarify/interrupted)"}
     latency = time.time() - t0
 
     content = result.get("content", "")

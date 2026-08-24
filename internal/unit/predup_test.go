@@ -252,6 +252,43 @@ func TestExtractSegmentOutputSplitSkipsDeliberatePointRejection(t *testing.T) {
 	}
 }
 
+// TestExtractSegmentOutputSplitPassesOutlinePathToPointExtract covers scheme A:
+// unit_point_extract receives the full root→leaf outline path so center/KP
+// labeling can stay anchored when a unit's own lines omit the section title
+// (差旅费第七条伙食补贴 table split from its heading).
+func TestExtractSegmentOutputSplitPassesOutlinePathToPointExtract(t *testing.T) {
+	svc, fake, _ := setupPreInsertDedupTestService(t, 0.1, 1)
+	mdLines := []string{"(二)补贴标准", "| 全体员工（酒店） | 80 |"}
+	wantPath := "第三章出差期间发生的住宿费、交通费与伙食补贴 / 伙食补贴计算方式及分级标准"
+	seg := Segment{
+		Title:       "伙食补贴计算方式及分级标准",
+		OutlinePath: wantPath,
+		LineStart:   1,
+		LineEnd:     2,
+	}
+	fake.SetResponse("unit_boundary_extract.md", llm.FakeResponse{Output: `{
+		"units": [{"content": ["[1] (二)补贴标准", "[2] | 全体员工（酒店） | 80 |"]}]
+	}`})
+	fake.SetResponse("unit_point_extract.md", llm.FakeResponse{
+		Output: `{"center":"差旅伙食补贴标准","points":[{"content":"全体员工在直辖市酒店伙食补贴为80元。","type":"rule","content_theme":"伙食补贴标准","object":"全体员工","scope":"通用"}]}`,
+	})
+
+	if _, ok, err := svc.extractSegmentOutputSplit(t.Context(), "src-1", "差旅费报销制度", "", seg, mdLines); err != nil || !ok {
+		t.Fatalf("extractSegmentOutputSplit: ok=%v err=%v", ok, err)
+	}
+
+	var gotPath string
+	for _, c := range fake.Calls() {
+		if c.PromptFile == "unit_point_extract.md" {
+			gotPath = c.Vars["outline_path"]
+			break
+		}
+	}
+	if gotPath != wantPath {
+		t.Fatalf("unit_point_extract outline_path = %q, want %q", gotPath, wantPath)
+	}
+}
+
 func TestPublishCandidatesPublishesUnitsAndPointsWithSemanticsTogether(t *testing.T) {
 	svc, fake, db := setupReuploadExtractionFixture(t)
 	oldID := insertCurrentIndexedUnit(t, svc, db, "src-1")

@@ -225,7 +225,8 @@ func main() {
 	traceSvc.SetSynthesisOutcomeWriter(wikiSvc)
 	retrievalSvc.SetSynthesisOutcomeWriter(traceSvc)
 	studySvc := study.NewService(studyStore, cfg.Study, activationSvc, wikiSvc, cfg.Wiki.RecompileNewKPMin, cfg.Wiki.QualifyingMinDaysActive,
-		cfg.Retrieval.QuestionTupleNormIdleDays, cfg.Retrieval.QuestionTupleNormEnabled)
+		cfg.Retrieval.QuestionTupleNormIdleDays, cfg.Retrieval.QuestionTupleNormEnabled,
+		cfg.Retrieval.RerankTopN, cfg.Retrieval.OutlineRRFBoost)
 
 	entrySvc := entry.NewService(entryStore, entry.Config{
 		AddEventMin:       cfg.Study.EntryAddEventMin,

@@ -13,8 +13,51 @@ import (
 type Segment struct {
 	OutlineID sql.NullString
 	Title     string
-	LineStart int
-	LineEnd   int
+	// OutlinePath is the root→leaf outline title chain joined with " / "
+	// (same format as Store.GetOutlinePath). Fed to unit_point_extract as
+	// ownership context so center/KP labeling stays anchored when a unit's
+	// own lines omit the section heading. Empty OutlineID → "（无目录）".
+	OutlinePath string
+	LineStart   int
+	LineEnd     int
+}
+
+const emptyOutlinePath = "（无目录）"
+
+// outlinePathForID walks parent_id upward and joins titles root→leaf with
+// " / ". Missing id or broken chain returns emptyOutlinePath.
+func outlinePathForID(outlines []source.Outline, outlineID string) string {
+	if outlineID == "" {
+		return emptyOutlinePath
+	}
+	byID := make(map[string]source.Outline, len(outlines))
+	for _, o := range outlines {
+		byID[o.OutlineID] = o
+	}
+	var titles []string
+	id := outlineID
+	for depth := 0; id != "" && depth < 32; depth++ {
+		o, ok := byID[id]
+		if !ok {
+			break
+		}
+		titles = append([]string{o.Title}, titles...)
+		if !o.ParentID.Valid {
+			break
+		}
+		id = o.ParentID.String
+	}
+	if len(titles) == 0 {
+		return emptyOutlinePath
+	}
+	return strings.Join(titles, " / ")
+}
+
+func outlinePathForNullID(outlines []source.Outline, outlineID sql.NullString) string {
+	if !outlineID.Valid {
+		return emptyOutlinePath
+	}
+	return outlinePathForID(outlines, outlineID.String)
 }
 
 // BuildSegments 将 outline 叶节点转为提取分段。
@@ -28,11 +71,13 @@ func BuildSegments(outlines []source.Outline, markdownLines []string, segmentMax
 
 	candidates := make([]Segment, 0, len(leaves))
 	for _, leaf := range leaves {
+		oid := sql.NullString{String: leaf.OutlineID, Valid: true}
 		candidates = append(candidates, Segment{
-			OutlineID: sql.NullString{String: leaf.OutlineID, Valid: true},
-			Title:     leaf.Title,
-			LineStart: leaf.LineStart,
-			LineEnd:   leaf.LineEnd,
+			OutlineID:   oid,
+			Title:       leaf.Title,
+			OutlinePath: outlinePathForID(outlines, leaf.OutlineID),
+			LineStart:   leaf.LineStart,
+			LineEnd:     leaf.LineEnd,
 		})
 	}
 	// 补上没有任何叶节点认领的行区间（如标题误判把后续内容并入错误的标题辖区、
@@ -96,11 +141,13 @@ func uncoveredSegments(leaves []source.Outline, outlines []source.Outline, markd
 		if !hasContent {
 			continue
 		}
+		oid := matchOutlineByLineRange(outlines, gap.start, gap.end)
 		segs = append(segs, Segment{
-			OutlineID: matchOutlineByLineRange(outlines, gap.start, gap.end),
-			Title:     "未识别标题内容",
-			LineStart: gap.start,
-			LineEnd:   gap.end,
+			OutlineID:   oid,
+			Title:       "未识别标题内容",
+			OutlinePath: outlinePathForNullID(outlines, oid),
+			LineStart:   gap.start,
+			LineEnd:     gap.end,
 		})
 	}
 	return segs
@@ -237,6 +284,7 @@ func mergeSmallSegments(segments []Segment, outlines []source.Outline, lines []s
 		}
 		if merged {
 			cur.OutlineID = matchOutlineByLineRange(outlines, cur.LineStart, cur.LineEnd)
+			cur.OutlinePath = outlinePathForNullID(outlines, cur.OutlineID)
 		}
 		forward = append(forward, cur)
 	}
@@ -250,6 +298,7 @@ func mergeSmallSegments(segments []Segment, outlines []source.Outline, lines []s
 			leafBoundaryKey(*last, outlines) == leafBoundaryKey(*prev, outlines) {
 			prev.LineEnd = last.LineEnd
 			prev.OutlineID = matchOutlineByLineRange(outlines, prev.LineStart, prev.LineEnd)
+			prev.OutlinePath = outlinePathForNullID(outlines, prev.OutlineID)
 			forward = forward[:len(forward)-1]
 		}
 	}

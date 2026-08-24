@@ -82,6 +82,12 @@ type Report struct {
 	// reports — is the distribution narrowing, is the exploration-budget
 	// share going down.
 	Convergence ConvergenceSection `json:"convergence"`
+
+	// TopNSuggestion is the top-N/目录检索系数自收敛建议
+	// (docs/design/topn-coefficient-convergence.md,
+	// docs/impl/v1/topn-coefficient-convergence.md 阶段 C) — reporting only,
+	// not applied to any running configuration.
+	TopNSuggestion TopNSuggestion `json:"topn_suggestion"`
 }
 
 // ConvergenceSection is generateReport's "convergence" report item.

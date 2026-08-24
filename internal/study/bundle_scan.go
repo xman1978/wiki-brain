@@ -36,6 +36,15 @@ func (s *Service) scanActivationBundles() error {
 		traceIDs := make([]string, 0, len(newTraces))
 		for _, t := range newTraces {
 			traceIDs = append(traceIDs, t.TraceID)
+			// subject/intent 均缺失时（裸调 POST /answer 跳过了 session 四元组
+			// 解析，或解析本身失败）放弃聚合，理由同 trace.Service.updateCooccurrence
+			// 的同款守卫：没有主体/意图锚定，不同问题会被当成同一触发轴归并，
+			// 2026-08-24 实测炸出过 4 条 KP 混杂的空四元组 Bundle。仍然计入
+			// traceIDs/MarkBundleDedup——这条 trace 的四元组不会再变，标记过一次
+			// 之后不需要每轮都重新判定跳过.
+			if t.Subject == "" && t.Intent == "" {
+				continue
+			}
 			domainIDs, err := s.store.DomainIDsForPoints(t.DirectPointIDs)
 			if err != nil {
 				slog.Error("study: domain ids for bundle trigger trace failed", "trace_id", t.TraceID, "error", err)

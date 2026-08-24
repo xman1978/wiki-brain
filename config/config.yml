@@ -102,6 +102,7 @@ retrieval:
   fast_path:              true   # false 时激活层只记录命中、不走快路径（灰度开关）
   fast_path_verify:       true   # 快路径证据充分性校验开关（false 时跳过校验，仅灰度/评估用）
   slow_path_verify:       true   # 慢路径答题前充分性校验：sufficient=false 时拒答（防近邻概念串台）
+  pool_widen_enabled:     true   # 充分性校验判不充分时，候选池 N→2N 扩展重试（docs/design/topn-coefficient-convergence.md 第3节）
   fast_path_fallback:     true   # 快路径回答失败时自动回落慢路径
   wiki_min_score:         2.0    # Wiki 直答的 Bleve 最低分（Wiki 模块未实现前不生效）
   wiki_max_candidates:    3      # 直答候选序列长度上限（词法+概念入口合并去重后依次尝试，首个 sufficient=true 即停；设 1 退化为原 top-1 行为）

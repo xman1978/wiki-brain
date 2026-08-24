@@ -40,9 +40,17 @@ type Service struct {
 	// recomputePageRelations (docs/impl/v1/wiki.md 步骤 7b) — zero value on
 	// first Run scans the whole history once.
 	lastRelationScanAt time.Time
+	// currentRerankTopN/currentOutlineCoefficient mirror
+	// retrieval.rerank_top_n/outline_rrf_boost — same precedent as
+	// questionTupleNormIdleDays above: owned by RetrievalConfig, consumed
+	// here so the top-N/系数建议值报告
+	// (docs/design/topn-coefficient-convergence.md) can show "建议值 vs 当前
+	// 值" without Study holding a *retrieval.Service.
+	currentRerankTopN         int
+	currentOutlineCoefficient float64
 }
 
-func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.Service, wikiSvc *wiki.Service, recompileNewKPMin, qualifyingMinDaysActive int, questionTupleNormIdleDays int, questionTupleNormEnabled bool) *Service {
+func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.Service, wikiSvc *wiki.Service, recompileNewKPMin, qualifyingMinDaysActive int, questionTupleNormIdleDays int, questionTupleNormEnabled bool, currentRerankTopN int, currentOutlineCoefficient float64) *Service {
 	return &Service{
 		store:                     store,
 		cfg:                       cfg,
@@ -52,6 +60,8 @@ func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.
 		qualifyingMinDaysActive:   qualifyingMinDaysActive,
 		questionTupleNormIdleDays: questionTupleNormIdleDays,
 		questionTupleNormEnabled:  questionTupleNormEnabled,
+		currentRerankTopN:         currentRerankTopN,
+		currentOutlineCoefficient: currentOutlineCoefficient,
 	}
 }
 
@@ -103,6 +113,10 @@ func (s *Service) Run() (*RunResult, error) {
 	gapEventsProcessed, err := s.aggregateGaps()
 	if err != nil {
 		return nil, fmt.Errorf("study: aggregate gaps: %w", err)
+	}
+
+	if err := s.processTopNCalibrationEvents(); err != nil {
+		slog.Error("study: process topn_calibration events failed", "error", err)
 	}
 
 	if err := s.recomputePageRelations(); err != nil {
@@ -220,6 +234,11 @@ func (s *Service) generateReport(actions LearningActionsSummary, entryScan entry
 		slog.Error("study: build convergence report section failed", "error", err)
 	}
 
+	topNSuggestion, err := s.buildTopNSuggestionSection(periodDays)
+	if err != nil {
+		slog.Error("study: build topn_suggestion report section failed", "error", err)
+	}
+
 	report := &Report{
 		ReportID:                 reportID,
 		GeneratedAt:              time.Now().UTC(),
@@ -233,6 +252,7 @@ func (s *Service) generateReport(actions LearningActionsSummary, entryScan entry
 		WikiDraftReflow:          wikiDraftReflow,
 		QuestionComplexity:       questionComplexity,
 		Convergence:              convergence,
+		TopNSuggestion:           topNSuggestion,
 	}
 
 	content, err := json.Marshal(report)

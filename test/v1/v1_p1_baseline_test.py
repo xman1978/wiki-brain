@@ -2,7 +2,11 @@
 """
 V1 验收测试方案（test/v1/v1-acceptance-test-plan.md）P1：慢路径基线。
 
-跑 A+T+B+C+D+G 组主问法（单轮 POST /answer, deep=false），核对：
+跑 A+T+B+C+D+G 组主问法（单轮会话，经 ask_via_session 走 POST /sessions ->
+POST /session/turn -> POST /answer/stream，deep=false，每题各自新建 session；
+2026-08-24 改为经 session 解析 subject/intent/audience/constraint，不再裸调
+POST /answer——原因见 v1_common.py ask_via_session 的说明：裸调不解析四元组，
+会污染 question_kp_cooccurrence/bundle_trigger_cooccurrence 的分组），核对：
   - 此时应全部 path_type=full（尚无 verified 链接，P1 阶段本就在 P2 学习转化之前跑）；
   - A/D/G 组（B 组暂不强制，见下）按制度域/技术域分别统计 direct_hit 与关键词覆盖率——
     这两个是自动化代理指标，不能替代方案要求的人工核对"回答要点是否正确"，报告里留了
@@ -175,12 +179,13 @@ def run_question(base_url, db_path, row, id_to_title, markdown_cache, markdown_l
     if not row["question"]:
         return {**row, "domain": c.domain_of(row["id"]), "error": "题库缺少问题文本"}
 
-    payload = {"question": row["question"], "deep": False}
     t0 = time.time()
     try:
-        result, _status = c.http_post_json(base_url, "/answer", payload, timeout=timeout)
+        _turn, result = c.ask_via_session(base_url, row["question"], deep=False, timeout=timeout)
     except Exception as e:
         return {**row, "domain": c.domain_of(row["id"]), "error": str(e)}
+    if result is None:
+        return {**row, "domain": c.domain_of(row["id"]), "error": "session turn did not retrieve (clarify/interrupted)"}
     latency = time.time() - t0
 
     content = result.get("content", "")

@@ -63,7 +63,79 @@ type EvidenceSet struct {
 	// Deliberately excluded from evidence_snapshot (json:"-"): the doc's
 	// persisted shape has no content field, only wiki_page_id/cited_point_ids.
 	WikiAnswerContent string `json:"-"`
+
+	// —— top-N / 目录检索系数自收敛校准（docs/design/topn-coefficient-convergence.md）——
+	// 只在 PathType==PathTypeFull 且慢路径充分性判断（checkSlowPathSufficiency）
+	// 跑过之后才有意义；Fast/Wiki path 不涉及候选截断，这些字段留零值。
+	//
+	// CompletenessClass 是这条 trace 在证据充分性判断 + 候选池扩展重试链路上
+	// 落入的五类结果之一，见下方常量。
+	CompletenessClass string `json:"completeness_class,omitempty"`
+	// CandidatePoolSize 是 Step 6 RRF merge 产出、任何截断之前的候选总数。
+	CandidatePoolSize int `json:"candidate_pool_size,omitempty"`
+	// TopNAtBuild/CoefficientAtBuild 是这次查询实际生效的 N 与目录检索系数
+	// （即便后续触发了池扩展重试，这里仍记录扩展前的原始 N，扩展后的边界见
+	// WidenedToN）。
+	TopNAtBuild        int     `json:"top_n_at_build,omitempty"`
+	CoefficientAtBuild float64 `json:"coefficient_at_build,omitempty"`
+	// WidenedToN 非零时表示这条 trace 触发过候选池扩展重试，值是扩展后使用的
+	// 候选数上限（通常是 2*TopNAtBuild）。
+	WidenedToN int `json:"widened_to_n,omitempty"`
+
+	// candidatePool 是 Step 6 RRF merge 排序后、任何截断之前的候选全集
+	// （含 mergedRank/rankByPath），供 WidenAndRetry 与
+	// CalibrationPoolSnapshot 使用。不导出到 JSON——只在同一次查询的生命周期
+	// 内使用，不应该随 evidence_snapshot 持久化。
+	candidatePool []candidate
 }
+
+// CompletenessClass 的取值（docs/design/topn-coefficient-convergence.md 第 3 节）。
+const (
+	CompletenessTight               = "tight"
+	CompletenessContentRescued      = "content_rescued"
+	CompletenessPoolRescued         = "pool_rescued"
+	CompletenessPoolExhaustedBefore = "pool_exhausted_before_2n"
+	CompletenessGapAt2N             = "gap_at_2n"
+)
+
+// PoolCandidateSnapshot is one candidate from the pre-truncation RRF-merged
+// pool, carrying enough to replay ranking under an alternate
+// outline_score_coefficient offline (docs/design/topn-coefficient-convergence.md
+// 第 5 节) — RankByPath is this candidate's 0-based rank within each recall
+// path's own ranked list (before RRF combination), keyed by path name
+// ("outline"/"fts"/"fts_tuple").
+type PoolCandidateSnapshot struct {
+	UnitID     string         `json:"unit_id"`
+	PointID    string         `json:"point_id"`
+	MergedRank int            `json:"merged_rank"`
+	RankByPath map[string]int `json:"rank_by_path,omitempty"`
+}
+
+// CalibrationPoolSnapshot returns the pre-truncation candidate pool (up to
+// limit entries; limit<=0 means no cap) for persisting alongside a
+// pool_rescued calibration sample, so Study can replay alternate
+// coefficients offline without re-running recall. Returns nil when this
+// EvidenceSet never carried a pool (Fast/Wiki paths, or GapReasonNoCandidates
+// early-return).
+func (es *EvidenceSet) CalibrationPoolSnapshot(limit int) []PoolCandidateSnapshot {
+	pool := es.candidatePool
+	if limit > 0 && len(pool) > limit {
+		pool = pool[:limit]
+	}
+	if len(pool) == 0 {
+		return nil
+	}
+	out := make([]PoolCandidateSnapshot, len(pool))
+	for i, c := range pool {
+		out[i] = PoolCandidateSnapshot{UnitID: c.unitID, PointID: c.pointID, MergedRank: c.mergedRank, RankByPath: c.rankByPath}
+	}
+	return out
+}
+
+// RRFK is rrfMerge's reciprocal-rank-fusion constant, exported so Study's
+// offline coefficient replay (docs/impl/v1/topn-coefficient-convergence.md
+// 阶段 C) recomputes scores identically to the live merge.
+const RRFK = 60
 
 // PathType values (docs/impl/v1/retrieval.md, docs/impl/v1/trace.md).
 const (
@@ -209,4 +281,9 @@ type candidate struct {
 	recallOrigins []string // rrfMerge 产出的真实召回路径，如 "outline"/"fts"；一旦写入后续阶段不再覆盖，供 Evidence.RecallPaths 使用
 	origin        string   // "" (rerank，默认) / OriginKPNExpansion，见 buildEvidence
 	mergedRank    int      // 该候选在 rrfMerge 最终排序里的位置（0-based，topN 截断前）
+	// rankByPath 是该候选在各召回路径自己的排名列表里的 0-based 排名（RRF 合并
+	// 之前），键为路径名（"outline"/"fts"/"fts_tuple"）。供 Study 离线重放
+	// 不同 outline_score_coefficient 时重算 RRF 分数用
+	// （docs/design/topn-coefficient-convergence.md 第 5 节）。
+	rankByPath map[string]int
 }
