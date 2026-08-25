@@ -211,6 +211,22 @@ type RetrievalConfig struct {
 	ExploreRateLow        float64 `yaml:"explore_rate_low"`
 	ExploreRateSelfGraded float64 `yaml:"explore_rate_self_graded"`
 	ExploreRateTrusted    float64 `yaml:"explore_rate_trusted"`
+
+	// —— 主题→source 绑定（source_affinity，2026-08-25 新增，会话讨论）——
+	// 默认关闭：新机制，先不改变现有行为，观测后再打开。命中时跳过 Step2
+	// domainPreFilter + Step3 sourceSemanticFilter 两步 LLM 调用。不套用
+	// ActivationLink 的 Beta 置信度机制——见 migration 068 顶部注释。
+	SourceAffinityEnabled bool `yaml:"source_affinity_enabled"`
+	// SourceAffinityLocalSimMin 是 subject 归一化 Tier 2（本地词集 Jaccard
+	// 相似度）的命中阈值，0-1，未设置默认 0.8。
+	SourceAffinityLocalSimMin float64 `yaml:"source_affinity_local_sim_min"`
+	// SourceAffinityFailureMax：绑定命中但证据不充分的连续次数达到此值即删除
+	// 绑定（熔断），未设置默认 2。
+	SourceAffinityFailureMax int `yaml:"source_affinity_failure_max"`
+	// SourceAffinityIdleDays：subject_norms/source_affinity 行超过此天数未再
+	// 命中，由 Study 周期清理（study.md 步骤 4 同款 idle 清理惯例，同
+	// QuestionTupleNormIdleDays）。<=0 跳过清理。
+	SourceAffinityIdleDays int `yaml:"source_affinity_idle_days"`
 }
 
 // EvidenceConfig — docs/impl/v1/evidence.md 配置项.

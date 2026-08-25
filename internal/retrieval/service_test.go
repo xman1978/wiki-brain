@@ -217,7 +217,7 @@ func TestSourceSemanticFilter(t *testing.T) {
 	}
 
 	fake.SetResponse("source_filter.md", llm.FakeResponse{
-		Output: `{"source_ids": ["s1"]}`,
+		Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s2", "relevant": false, "analysis": "no match"}]}`,
 	})
 
 	filtered, err := svc.sourceSemanticFilter(context.Background(), QueryContext{Question: "linear equation"}, candidates)
@@ -238,7 +238,7 @@ func TestSourceSemanticFilterEmptyFallback(t *testing.T) {
 	}
 
 	fake.SetResponse("source_filter.md", llm.FakeResponse{
-		Output: `{"source_ids": []}`,
+		Output: `{"results": [{"candidate_id": "s1", "relevant": false, "analysis": "no match"}, {"candidate_id": "s2", "relevant": false, "analysis": "no match"}]}`,
 	})
 
 	filtered, err := svc.sourceSemanticFilter(context.Background(), QueryContext{Question: "random question"}, candidates)
@@ -1117,11 +1117,11 @@ func TestRetrieveEndToEnd(t *testing.T) {
 	})
 	// Source filter → s1
 	fake.SetResponse("source_filter.md", llm.FakeResponse{
-		Output: `{"source_ids": ["s1"]}`,
+		Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`,
 	})
 	// Outline filter fallback
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{
-		Output: `{"outline_ids": ["o2"]}`,
+		Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`,
 	})
 	// Rerank — accept all as direct for simplicity
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
@@ -1161,12 +1161,13 @@ func TestRetrieveEndToEnd_NoCandidatesGapReason(t *testing.T) {
 		Output: `{"domain_ids": ["d1"]}`,
 	})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{
-		Output: `{"source_ids": ["s1"]}`,
+		Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`,
 	})
-	// Low-scoring outlines fall back to this LLM classifier; returning no
-	// ids means outline recall found nothing either.
+	// Low-scoring outlines fall back to this LLM classifier; returning
+	// relevant:false for every outline means outline recall found nothing
+	// either.
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{
-		Output: `{"outline_ids": []}`,
+		Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": false, "analysis": "no match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`,
 	})
 
 	es, err := svc.Retrieve(context.Background(), "purple dinosaur spacecraft maintenance manual")
@@ -1195,10 +1196,10 @@ func TestRetrieveEndToEnd_JudgeFilteredGapReason(t *testing.T) {
 		Output: `{"domain_ids": ["d1"]}`,
 	})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{
-		Output: `{"source_ids": ["s1"]}`,
+		Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`,
 	})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{
-		Output: `{"outline_ids": ["o2"]}`,
+		Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`,
 	})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
 		Output: `{"results": [{"candidate_id": "c1", "relevant": false, "analysis": "证据主题与问题不匹配"}]}`,

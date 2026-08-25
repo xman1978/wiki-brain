@@ -15,7 +15,7 @@ func TestTupleNormalizer_Tier1ExactMatch_TouchesLastHit(t *testing.T) {
 
 	ctx := context.Background()
 	// First ask creates the canonical record.
-	s1, i1, a1, c1, err := n.Normalize(ctx, []string{"dom1"}, "奖金制度", "查询规则", "全体员工", "2026年")
+	s1, i1, a1, c1, _, _, err := n.Normalize(ctx, []string{"dom1"}, "奖金制度", "查询规则", "全体员工", "2026年")
 	if err != nil {
 		t.Fatalf("first normalize: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestTupleNormalizer_Tier1ExactMatch_TouchesLastHit(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Second ask, exact same normalized tuple, should hit tier 1 and touch last_hit_at.
-	s2, i2, a2, c2, err := n.Normalize(ctx, []string{"dom1"}, "奖金制度", "查询规则", "全体员工", "2026年")
+	s2, i2, a2, c2, _, _, err := n.Normalize(ctx, []string{"dom1"}, "奖金制度", "查询规则", "全体员工", "2026年")
 	if err != nil {
 		t.Fatalf("second normalize: %v", err)
 	}
@@ -62,13 +62,13 @@ func TestTupleNormalizer_Tier2LocalSimilarity_AboveAndBelowThreshold(t *testing.
 
 	ctx := context.Background()
 	// Seed a canonical tuple.
-	if _, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "年假申请流程说明", "如何申请", "全体员工", ""); err != nil {
+	if _, _, _, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "年假申请流程说明", "如何申请", "全体员工", ""); err != nil {
 		t.Fatalf("seed normalize: %v", err)
 	}
 
 	// A near-duplicate wording (high token overlap) should hit tier 2 and
 	// return the canonical tuple, not create a new row.
-	s2, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "年假申请流程", "如何申请", "全体员工", "")
+	s2, _, _, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "年假申请流程", "如何申请", "全体员工", "")
 	if err != nil {
 		t.Fatalf("near-dup normalize: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestTupleNormalizer_Tier2LocalSimilarity_AboveAndBelowThreshold(t *testing.
 
 	// A clearly unrelated tuple should miss tier 1/2 and (no LLM client wired)
 	// fall through to insert a new record.
-	s3, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "差旅报销标准", "查询限额", "出差员工", "")
+	s3, _, _, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "差旅报销标准", "查询限额", "出差员工", "")
 	if err != nil {
 		t.Fatalf("unrelated normalize: %v", err)
 	}
@@ -110,11 +110,11 @@ func TestTupleNormalizer_NoLocalSimMatch_FallsThroughToLLMTier(t *testing.T) {
 	n.SetLLMClient(fake)
 
 	ctx := context.Background()
-	if _, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "差旅报销标准是什么", "查询", "员工", ""); err != nil {
+	if _, _, _, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "差旅报销标准是什么", "查询", "员工", ""); err != nil {
 		t.Fatalf("seed normalize: %v", err)
 	}
 
-	s2, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "差旅费报销规定", "咨询", "在职人员", "")
+	s2, _, _, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "差旅费报销规定", "咨询", "在职人员", "")
 	if err != nil {
 		t.Fatalf("second normalize: %v", err)
 	}
@@ -136,11 +136,11 @@ func TestTupleNormalizer_LLMNoMatch_InsertsNewRecord(t *testing.T) {
 	n.SetLLMClient(fake)
 
 	ctx := context.Background()
-	if _, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "差旅报销标准", "查询", "员工", ""); err != nil {
+	if _, _, _, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "差旅报销标准", "查询", "员工", ""); err != nil {
 		t.Fatalf("seed normalize: %v", err)
 	}
 
-	if _, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "年假申请流程", "查询", "员工", ""); err != nil {
+	if _, _, _, _, _, _, err := n.Normalize(ctx, []string{"dom1"}, "年假申请流程", "查询", "员工", ""); err != nil {
 		t.Fatalf("second normalize: %v", err)
 	}
 
@@ -159,7 +159,7 @@ func TestTupleNormalizer_NewRecord_OneRowPerDomain(t *testing.T) {
 	n := NewTupleNormalizer(store, TupleNormConfig{})
 
 	ctx := context.Background()
-	if _, _, _, _, err := n.Normalize(ctx, []string{"dom1", "dom2"}, "奖金制度", "查询", "全体员工", ""); err != nil {
+	if _, _, _, _, _, _, err := n.Normalize(ctx, []string{"dom1", "dom2"}, "奖金制度", "查询", "全体员工", ""); err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
 

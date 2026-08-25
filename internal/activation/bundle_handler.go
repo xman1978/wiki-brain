@@ -192,13 +192,21 @@ func (h *Handler) getBundle(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) bundleQuestions(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	qs, err := h.svc.Store().ListBundleCreatedFromQuestions(id)
+	matched, err := h.svc.Store().ListBundleMatchedQuestions(id)
 	if err != nil {
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if qs == nil {
-		qs = []LinkQuestion{}
+	if matched == nil {
+		matched = []LinkQuestion{}
 	}
-	foundation.WriteJSON(w, http.StatusOK, qs)
+	createdFrom, err := h.svc.Store().ListBundleCreatedFromQuestions(id)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if createdFrom == nil {
+		createdFrom = []LinkQuestion{}
+	}
+	foundation.WriteJSON(w, http.StatusOK, LinkQuestions{Matched: matched, CreatedFrom: createdFrom})
 }

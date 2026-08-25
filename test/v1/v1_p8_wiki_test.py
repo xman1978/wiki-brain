@@ -113,7 +113,7 @@ REUPLOAD_FIXTURES = {
         "new_title_suffix": "（微改-P8触发重编译）",
     },
     "tech": {
-        "base_title": "Oracle 19c RAC 集群安装部署维护环境",
+        "base_title": "Oracle 19c RAC 集群安装部署维护",
         "new_title_suffix": "（微改-P8触发重编译）",
     },
 }
@@ -197,7 +197,8 @@ def compile_page(base_url, entry_ids, claims=None, tensions=None):
 
 def verify_page_draft(base_url, page_id):
     page = c.http_get_json(base_url, f"/wiki/pages/{page_id}")
-    source_point_ids = set(json.loads(page.get("source_point_ids") or "[]"))
+    raw_spids = page.get("source_point_ids") or []
+    source_point_ids = set(json.loads(raw_spids) if isinstance(raw_spids, str) else raw_spids)
     content = page.get("content", "") or ""
     cited_ids_in_content = set(re.findall(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", content))
     off_whitelist = cited_ids_in_content - source_point_ids

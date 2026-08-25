@@ -67,7 +67,16 @@ F1_PRE_DEFAULT_VARIANTS = [
 ]
 
 # 不再有"确认集"（无人工确认动作）；仅保留 reject 驳回集与欠采样对照组。
-REJECT_IDS = ["A2", "T13"]
+# 2026-08-25 改选：A2/T13 的答案天然横跨多个 KP，命中
+# internal/trace/service.go updateCooccurrence 里 2026-08-24 新加的规则——
+# confident trace 引用 >1 个 point_id 时整条跳过 ActivationLink 的
+# cooccurrence 累积（只喂给 ActivationBundle，避免抢跑 Bundle 的联合累积，
+# 见 docs/design/activation-bundle.md）——导致它们在当前设计下永远不会形成
+# 独占归属的 ActivationLink，reject 断言无从验证。改选 A9、T15：两者答案均
+# 稳定命中单一 KP，历史多次运行都能形成独占链接（T15 通常自然收敛至
+# verified，A9 停留 candidate），能分别覆盖"reject 已 verified 链接"与
+# "reject 仍是 candidate 的链接"两种场景。
+REJECT_IDS = ["A9", "T15"]
 CONTROL_IDS = ["A11"]  # 刻意欠采样，验证"证据不足不会自然收敛"
 CONVERGENCE_DEMO_IDS = ["A1"]  # 第 2 轮额外复现，争取自然跨过 serving_confidence_min
 NATURALLY_OBSERVED_IDS = [

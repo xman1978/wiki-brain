@@ -26,9 +26,37 @@ func TestGradeQuality_Confident(t *testing.T) {
 	}
 }
 
-func TestGradeQuality_Partial(t *testing.T) {
+// A citation landing only in Supporting (not DirectEvidence) is still a
+// confident, correctly-resolved answer — rerank's direct/supporting split is
+// a rank bucket, not a correctness judgment (see directCitedPointIDs doc
+// comment) — so this grades confident, not partial.
+func TestGradeQuality_CitedSupportingOnly_Confident(t *testing.T) {
 	r := &answer.AnswerResult{
 		Citations: []string{"f3"},
+		EvidenceSet: &retrieval.EvidenceSet{
+			DirectEvidence: []retrieval.Evidence{
+				{FactID: "f1", PointID: "p1"},
+			},
+			Supporting: []retrieval.Evidence{
+				{FactID: "f3", PointID: "p3"},
+			},
+		},
+	}
+	g := gradeQuality(r)
+	if g.Quality != QualityConfident {
+		t.Errorf("expected confident, got %s", g.Quality)
+	}
+	if len(g.DirectPointIDs) != 1 || g.DirectPointIDs[0] != "p3" {
+		t.Errorf("expected DirectPointIDs=[p3], got %v", g.DirectPointIDs)
+	}
+}
+
+// Partial still applies when nothing cited resolves to either bucket but
+// Supporting evidence exists (the true "cited something we don't recognize,
+// but retrieval found related material" case).
+func TestGradeQuality_Partial(t *testing.T) {
+	r := &answer.AnswerResult{
+		Citations: []string{"unknown"},
 		EvidenceSet: &retrieval.EvidenceSet{
 			DirectEvidence: []retrieval.Evidence{
 				{FactID: "f1", PointID: "p1"},
@@ -63,7 +91,9 @@ func TestGradeQuality_Gap_NilEvidenceSet(t *testing.T) {
 	}
 }
 
-func TestGradeQuality_DirectNotCited(t *testing.T) {
+// DirectEvidence exists but wasn't cited; what was cited (f99) resolves via
+// Supporting instead — still confident under the union lookup.
+func TestGradeQuality_DirectNotCited_SupportingCited_Confident(t *testing.T) {
 	r := &answer.AnswerResult{
 		Citations: []string{"f99"},
 		EvidenceSet: &retrieval.EvidenceSet{
@@ -76,8 +106,11 @@ func TestGradeQuality_DirectNotCited(t *testing.T) {
 		},
 	}
 	g := gradeQuality(r)
-	if g.Quality != QualityPartial {
-		t.Errorf("expected partial (direct not cited), got %s", g.Quality)
+	if g.Quality != QualityConfident {
+		t.Errorf("expected confident, got %s", g.Quality)
+	}
+	if len(g.DirectPointIDs) != 1 || g.DirectPointIDs[0] != "p99" {
+		t.Errorf("expected DirectPointIDs=[p99], got %v", g.DirectPointIDs)
 	}
 }
 

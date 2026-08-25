@@ -41,7 +41,8 @@ RECALL_MIN_RATIO = 0.70
 
 FASTPATH_IDS = ["A1", "A9", "A12", "T8", "T12", "T15"]
 FULL_ONLY_IDS = ["A2", "T13"]  # M8: P2 reject 后 conditions 已清空、status=candidate（不是
-# deprecated），无可服务条件应走 full
+# deprecated）；硬要求是这条 ActivationLink 本身不再被激活，但 ActivationBundle 是
+# 独立轴不受 reject 影响，若另有 verified Bundle 覆盖，走 fast 也算通过（不强制 full）
 F1_PRE_ID = "F1_PRE"
 F1_PRE_BASELINE = "达梦怎么查询会话执行情况"
 F1_PRE_M4_PROBE = "达梦在Windows环境下怎么查询会话执行情况？"
@@ -117,6 +118,7 @@ def ask_once(base_url, conn, question, id_to_title=None, expected_titles=None, k
             "found_terms": [],
             "trace_id": None,
             "activation_link_ids": [],
+            "activation_bundle_ids": [],
             "direct_point_ids": [],
             "event_types": None,
             "error": f"未走到 retrieve（action={turn.get('action')}）",
@@ -137,6 +139,7 @@ def ask_once(base_url, conn, question, id_to_title=None, expected_titles=None, k
     events = c.db_learning_events_for_trace(conn, trace["trace_id"]) if trace else []
     direct_point_ids = json.loads(trace["direct_point_ids"] or "[]") if trace else []
     activation_link_ids = json.loads(trace["activation_link_ids"] or "[]") if trace else []
+    activation_bundle_ids = json.loads(trace["activation_bundle_ids"] or "[]") if trace else []
     eq = turn.get("expanded_query") or {}
 
     return {
@@ -149,6 +152,7 @@ def ask_once(base_url, conn, question, id_to_title=None, expected_titles=None, k
         "found_terms": found_terms,
         "trace_id": trace["trace_id"] if trace else None,
         "activation_link_ids": activation_link_ids,
+        "activation_bundle_ids": activation_bundle_ids,
         "direct_point_ids": direct_point_ids,
         "event_types": [e["event_type"] for e in events] if trace else None,
         "subject": eq.get("subject") or "",
@@ -290,7 +294,7 @@ def run_m1(base_url, conn, full_text, id_to_title, timeout, delay, repeats):
             r = ask_once(base_url, conn, question, id_to_title, expected_titles, key_terms, timeout)
             print(
                 f"  第{i+1}次: path_type={r['path_type']} 耗时={r['latency_s']}s "
-                f"direct_hit={r['direct_hit']} links={r['activation_link_ids']} events={r['event_types']}"
+                f"direct_hit={r['direct_hit']} links={r['activation_link_ids']} bundles={r['activation_bundle_ids']} events={r['event_types']}"
             )
             runs.append(r)
             time.sleep(delay)
@@ -305,7 +309,7 @@ def run_m2(base_url, conn, id_to_title, timeout, delay):
         question = M2_NORMALIZE[rid]
         print(f"\n--- {rid}: {question} ---")
         r = ask_once(base_url, conn, question, id_to_title, timeout=timeout)
-        print(f"  path_type={r['path_type']} links={r['activation_link_ids']}")
+        print(f"  path_type={r['path_type']} links={r['activation_link_ids']} bundles={r['activation_bundle_ids']}")
         report[rid] = r
         time.sleep(delay)
     return report
@@ -327,7 +331,7 @@ def run_m3(base_url, conn, full_text, extra_phrasings, id_to_title, timeout, del
             r = ask_once(base_url, conn, question, id_to_title, expected_titles, key_terms, timeout)
             print(
                 f"  第{i+1}次: path_type={r['path_type']} 耗时={r['latency_s']}s "
-                f"links={r['activation_link_ids']} subject={r.get('subject')!r}"
+                f"links={r['activation_link_ids']} bundles={r['activation_bundle_ids']} subject={r.get('subject')!r}"
             )
             runs.append(r)
             time.sleep(delay)
@@ -367,7 +371,7 @@ def run_m4(base_url, db_path, timeout):
     conn = c.open_db(db_path)
     r = ask_once(base_url, conn, F1_PRE_M4_PROBE, timeout=timeout)
     conn.close()
-    print(f"  path_type={r['path_type']} constraint={r.get('constraint')!r} links={r['activation_link_ids']}")
+    print(f"  path_type={r['path_type']} constraint={r.get('constraint')!r} links={r['activation_link_ids']} bundles={r['activation_bundle_ids']}")
     return r
 
 
@@ -425,8 +429,12 @@ def run_m5_gating(base_url, conn, full_text, extra_phrasings, timeout, delay, re
 
 
 def _is_fast_hit(r):
-    """已培养问法召回：快路径且激活到至少一条链接。"""
-    return r.get("path_type") == "fast" and bool(r.get("activation_link_ids"))
+    """已培养问法召回：快路径且激活到至少一条 ActivationLink 或 ActivationBundle
+    （两者各自独立轴，reject/清空一方不影响另一方仍可服务快路径，
+    见 docs/design/activation-bundle.md「11. 验证环节的实际接线」）。"""
+    return r.get("path_type") == "fast" and bool(
+        r.get("activation_link_ids") or r.get("activation_bundle_ids")
+    )
 
 
 def _looks_like_honest_gap(text):
@@ -620,7 +628,7 @@ def run_m8(base_url, conn, full_text, id_to_title, timeout, delay):
         row = load_row_by_id(full_text, rid)
         question = c.question_variants(row)[0]
         r = ask_once(base_url, conn, question, id_to_title, timeout=timeout)
-        print(f"{rid}（reject 后 conditions 清空，应 full）: path_type={r['path_type']} links={r['activation_link_ids']}")
+        print(f"{rid}（reject 后 conditions 清空，link 不应再激活；full 或 bundle 命中均可）: path_type={r['path_type']} links={r['activation_link_ids']} bundles={r['activation_bundle_ids']}")
         report["full_only"][rid] = r
         time.sleep(delay)
 
@@ -631,7 +639,7 @@ def run_m8(base_url, conn, full_text, id_to_title, timeout, delay):
     row = load_row_by_id(full_text, "A11")
     q = c.question_variants(row)[0]
     r = ask_once(base_url, conn, q, id_to_title, timeout=timeout)
-    print(f"A11 重问: path_type={r['path_type']}（candidate 可记信号但不走快路径 → 期望 full） links={r['activation_link_ids']}")
+    print(f"A11 重问: path_type={r['path_type']}（candidate 可记信号但不走快路径 → 期望 full） links={r['activation_link_ids']} bundles={r['activation_bundle_ids']}")
     for lid in r.get("activation_link_ids") or []:
         for link in all_links:
             if link["link_id"] == lid:
@@ -657,7 +665,7 @@ def run_v4(base_url, db_path, full_text, id_to_title, timeout):
         conn = c.open_db(db_path)
         r = ask_once(base_url, conn, question, id_to_title, timeout=timeout)
         conn.close()
-        print(f"  A1 path_type={r['path_type']} links={r['activation_link_ids']}（期望 fast，且不因关闭校验报错）")
+        print(f"  A1 path_type={r['path_type']} links={r['activation_link_ids']} bundles={r['activation_bundle_ids']}（期望 fast，且不因关闭校验报错）")
         return r
     finally:
         set_fast_path_verify(True)
@@ -751,12 +759,25 @@ def summarize(m1, m2, m3, m4, m5, e3, m6m7, m8, v4, baseline, repeats):
         verdicts["M6"] = m6_ok
         verdicts["M7"] = m7_ok
 
-    # M8
+    # M8：reject 清空的是该 KP 归属 ActivationLink 的 observed_conditions，硬要求是
+    # 这条 Link 本身不得再被激活；ActivationBundle 是独立轴，不受这次 reject 影响，
+    # 若另有 verified Bundle 覆盖同一问题，走 fast 是预期行为，不算失败——只有
+    # "既没有 Bundle 覆盖、又不是 full" 才是真正的守门失效（见
+    # docs/design/activation-bundle.md「11. 验证环节的实际接线」）。
     m8_ok = True
     for rid, r in m8["full_only"].items():
-        ok = r["path_type"] == "full"
+        link_clear = not r["activation_link_ids"]
+        bundle_served = bool(r["activation_bundle_ids"])
+        ok = link_clear and (r["path_type"] == "full" or bundle_served)
         m8_ok = m8_ok and ok
-        print(f"M8 {rid} reject清空条件→full: {'PASS' if ok else 'FAIL'}（实际 {r['path_type']}）")
+        reason = (
+            "full" if r["path_type"] == "full" else
+            ("fast via bundle" if bundle_served else "fast，无 bundle 覆盖")
+        )
+        print(
+            f"M8 {rid} reject清空条件→link 不再激活: {'PASS' if ok else 'FAIL'}"
+            f"（实际 path_type={r['path_type']}，link_clear={link_clear}，判定={reason}）"
+        )
     a11 = m8["a11_candidate"]
     print(
         f"M8 A11: path_type={a11['ask']['path_type']} activated={a11['activated_link_statuses']} "

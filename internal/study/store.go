@@ -134,6 +134,7 @@ func (s *Store) CooccurrenceLabelsForPoint(pointID string) ([]string, error) {
 // ConfidentTraceQuadruple is one confident citation of a point — the unit of
 // observed_conditions induction (replaces per-field unions).
 type ConfidentTraceQuadruple struct {
+	TraceID       string
 	Subject       string
 	Intent        string
 	Audience      string
@@ -147,7 +148,7 @@ type ConfidentTraceQuadruple struct {
 // ConfidentTraceFieldValues, 2026-07-21). Used by buildObservedConditions.
 func (s *Store) ConfidentTraceQuadruples(pointID string) ([]ConfidentTraceQuadruple, error) {
 	rows, err := s.db.Query(`
-		SELECT t.subject, t.intent, t.audience, t.constraint_text, t.question_terms, t.created_at
+		SELECT t.trace_id, t.subject, t.intent, t.audience, t.constraint_text, t.question_terms, t.created_at
 		FROM traces t
 		WHERE t.retrieval_quality = 'confident'
 		  AND EXISTS (SELECT 1 FROM json_each(t.direct_point_ids) je WHERE je.value = ?)
@@ -160,12 +161,62 @@ func (s *Store) ConfidentTraceQuadruples(pointID string) ([]ConfidentTraceQuadru
 	var out []ConfidentTraceQuadruple
 	for rows.Next() {
 		var q ConfidentTraceQuadruple
-		if err := rows.Scan(&q.Subject, &q.Intent, &q.Audience, &q.Constraint, &q.QuestionTerms, &q.CreatedAt); err != nil {
+		if err := rows.Scan(&q.TraceID, &q.Subject, &q.Intent, &q.Audience, &q.Constraint, &q.QuestionTerms, &q.CreatedAt); err != nil {
 			return nil, fmt.Errorf("study store: confident trace quadruples scan: %w", err)
 		}
 		out = append(out, q)
 	}
 	return out, rows.Err()
+}
+
+// TraceTupleNorm is one trace's cached canonicalization result (migration
+// 067) — see trace_tuple_norm_cache.sql for why this exists: a trace's own
+// (subject, intent, audience, constraint) text never changes once written,
+// so NormalizeTuple's tiered judgment for it only needs to run once, ever,
+// not once per Study run per consumer (ActivationLink rebuild, Bundle member
+// roster rebuild).
+type TraceTupleNorm struct {
+	Subject        string
+	Intent         string
+	Audience       string
+	Constraint     string
+	IntentRaw      string
+	ConstraintRaw  string
+}
+
+// GetTraceTupleNorm looks up a previously cached canonicalization for
+// traceID. Returns found=false on a cache miss (never normalized before, or
+// domainIDs was empty at normalize time so nothing was cached).
+func (s *Store) GetTraceTupleNorm(traceID string) (TraceTupleNorm, bool, error) {
+	var n TraceTupleNorm
+	err := s.db.QueryRow(`
+		SELECT subject, intent, audience, constraint_text, intent_raw, constraint_raw
+		FROM trace_tuple_norm_cache WHERE trace_id = ?`, traceID).
+		Scan(&n.Subject, &n.Intent, &n.Audience, &n.Constraint, &n.IntentRaw, &n.ConstraintRaw)
+	if err == sql.ErrNoRows {
+		return TraceTupleNorm{}, false, nil
+	}
+	if err != nil {
+		return TraceTupleNorm{}, false, fmt.Errorf("study store: get trace tuple norm: %w", err)
+	}
+	return n, true, nil
+}
+
+// SaveTraceTupleNorm persists traceID's canonicalization result the first
+// (and only) time it is computed. INSERT OR IGNORE — if two goroutines/Study
+// steps race to normalize the same trace, whichever wins first stands; the
+// canonical answer NormalizeTuple gives for identical input is stable enough
+// that this race doesn't matter (see migration 067 comment).
+func (s *Store) SaveTraceTupleNorm(traceID string, n TraceTupleNorm) error {
+	_, err := s.db.Exec(`
+		INSERT OR IGNORE INTO trace_tuple_norm_cache
+			(trace_id, subject, intent, audience, constraint_text, intent_raw, constraint_raw)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		traceID, n.Subject, n.Intent, n.Audience, n.Constraint, n.IntentRaw, n.ConstraintRaw)
+	if err != nil {
+		return fmt.Errorf("study store: save trace tuple norm: %w", err)
+	}
+	return nil
 }
 
 // DomainIDsForPoint 经 knowledge_points.source_id 反查 point 所属的

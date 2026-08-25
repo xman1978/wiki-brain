@@ -1446,7 +1446,7 @@ func (s *Service) gatherDirectAnswerCandidates(ctx context.Context, question str
 		candidates = append(candidates, hit.ID)
 	}
 
-	titleHits, err := s.matchPageTitle(question)
+	titleHits, err := s.matchPageTitle(question, domainIDs)
 	if err != nil {
 		slog.Warn("wiki: page title containment lookup failed, continuing with lexical candidates only", "error", err)
 	}
@@ -1679,8 +1679,8 @@ func renderPageCandidateList(pages []PageCandidate) string {
 // it was compiled from (see gatherDirectAnswerCandidates comment) — so a
 // question mentioning the page's subject but not its exact wording (or the
 // wiki index's aliases/trigger_questions) still finds the page.
-func (s *Service) matchPageTitle(question string) ([]string, error) {
-	pages, err := s.store.ListPublishedPagesForRecognition(nil)
+func (s *Service) matchPageTitle(question string, domainIDs []string) ([]string, error) {
+	pages, err := s.store.ListPublishedPagesForRecognition(domainIDs)
 	if err != nil {
 		return nil, fmt.Errorf("wiki: list published pages for title match: %w", err)
 	}

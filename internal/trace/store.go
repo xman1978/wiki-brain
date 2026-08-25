@@ -27,6 +27,10 @@ func (s *Store) SaveTrace(t *Trace) error {
 	if err != nil {
 		return fmt.Errorf("trace store: marshal activation_link_ids: %w", err)
 	}
+	bundleIDsJSON, err := json.Marshal(nonNilStrings(t.ActivationBundleIDs))
+	if err != nil {
+		return fmt.Errorf("trace store: marshal activation_bundle_ids: %w", err)
+	}
 
 	hasFeedback := 0
 	if t.HasFeedback {
@@ -34,12 +38,12 @@ func (s *Store) SaveTrace(t *Trace) error {
 	}
 
 	_, err = s.db.Exec(`INSERT INTO traces (trace_id, answer_id, question, question_hash, question_terms,
-		retrieval_quality, path, path_type, activation_link_ids, subject, intent, audience, constraint_text,
+		retrieval_quality, path, path_type, activation_link_ids, activation_bundle_ids, subject, intent, audience, constraint_text,
 		direct_point_ids, kpn_cited_count, cited_count, outline_cited_count, cited_rank_sum,
 		has_feedback, feedback_type, feedback_content)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.TraceID, t.AnswerID, t.Question, t.QuestionHash, t.QuestionTerms,
-		t.RetrievalQuality, t.Path, t.PathType, string(linkIDsJSON), t.Subject, t.Intent, t.Audience, t.ConstraintText,
+		t.RetrievalQuality, t.Path, t.PathType, string(linkIDsJSON), string(bundleIDsJSON), t.Subject, t.Intent, t.Audience, t.ConstraintText,
 		string(pointIDsJSON), t.KPNCitedCount, t.CitedCount, t.OutlineCitedCount, t.CitedRankSum, hasFeedback,
 		nullString(t.FeedbackType), nullString(t.FeedbackContent),
 	)
@@ -69,10 +73,10 @@ func (s *Store) SaveAuditPlaceholder(question, subject, intent, audience, constr
 
 	traceID := uuid.New().String()
 	_, err = s.db.Exec(`INSERT INTO traces (trace_id, answer_id, question, question_hash, question_terms,
-		retrieval_quality, path, path_type, activation_link_ids, subject, intent, audience, constraint_text,
+		retrieval_quality, path, path_type, activation_link_ids, activation_bundle_ids, subject, intent, audience, constraint_text,
 		direct_point_ids, kpn_cited_count, cited_count, outline_cited_count, cited_rank_sum,
 		has_feedback, feedback_type, feedback_content)
-		VALUES (?, ?, ?, '', '', 'unknown', 'audit', 'audit', '[]', ?, ?, ?, ?, '[]', 0, 0, 0, 0, 0, NULL, NULL)`,
+		VALUES (?, ?, ?, '', '', 'unknown', 'audit', 'audit', '[]', '[]', ?, ?, ?, ?, '[]', 0, 0, 0, 0, 0, NULL, NULL)`,
 		traceID, answerID, question, subject, intent, audience, constraint,
 	)
 	if err != nil {
@@ -86,18 +90,19 @@ func (s *Store) GetTrace(traceID string) (*Trace, error) {
 		t               Trace
 		pointIDsStr     string
 		linkIDsStr      string
+		bundleIDsStr    string
 		hasFeedbackInt  int
 		feedbackType    sql.NullString
 		feedbackContent sql.NullString
 	)
 	err := s.db.QueryRow(`SELECT trace_id, answer_id, question, question_hash, question_terms,
-		retrieval_quality, path, path_type, activation_link_ids, subject, intent, audience, constraint_text,
+		retrieval_quality, path, path_type, activation_link_ids, activation_bundle_ids, subject, intent, audience, constraint_text,
 		direct_point_ids, kpn_cited_count, cited_count, outline_cited_count, cited_rank_sum,
 		has_feedback, feedback_type, feedback_content,
 		created_at, updated_at
 		FROM traces WHERE trace_id = ?`, traceID).
 		Scan(&t.TraceID, &t.AnswerID, &t.Question, &t.QuestionHash, &t.QuestionTerms,
-			&t.RetrievalQuality, &t.Path, &t.PathType, &linkIDsStr, &t.Subject, &t.Intent, &t.Audience, &t.ConstraintText,
+			&t.RetrievalQuality, &t.Path, &t.PathType, &linkIDsStr, &bundleIDsStr, &t.Subject, &t.Intent, &t.Audience, &t.ConstraintText,
 			&pointIDsStr, &t.KPNCitedCount, &t.CitedCount, &t.OutlineCitedCount, &t.CitedRankSum, &hasFeedbackInt,
 			&feedbackType, &feedbackContent, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
@@ -112,6 +117,9 @@ func (s *Store) GetTrace(traceID string) (*Trace, error) {
 	}
 	if err := json.Unmarshal([]byte(linkIDsStr), &t.ActivationLinkIDs); err != nil {
 		return nil, fmt.Errorf("trace store: unmarshal activation_link_ids: %w", err)
+	}
+	if err := json.Unmarshal([]byte(bundleIDsStr), &t.ActivationBundleIDs); err != nil {
+		return nil, fmt.Errorf("trace store: unmarshal activation_bundle_ids: %w", err)
 	}
 	t.HasFeedback = hasFeedbackInt == 1
 	t.FeedbackType = feedbackType.String

@@ -13,7 +13,7 @@ func TestStore_CreateBundle_And_GetByID(t *testing.T) {
 	b := &ActivationBundle{
 		ClusterFingerprint:  "fp1",
 		RepresentativeTerms: "topic intent",
-		ObservedConditions:  []ObservedCondition{NormalizeObservedCondition("s", "i", "a", "c", "", time.Now())},
+		ObservedConditions:  []ObservedCondition{NormalizeObservedCondition("s", "i", "a", "c", "", "", "", time.Now())},
 		Members:             []BundleMember{{PointID: "p1"}, {PointID: "p2"}, {PointID: "p3"}},
 	}
 	if err := s.CreateBundle(b); err != nil {
@@ -54,7 +54,7 @@ func TestStore_ListMatchableBundles_ExcludesDeprecated(t *testing.T) {
 		t.Fatalf("set dead to deprecated: %v", err)
 	}
 
-	got, err := s.ListMatchableBundles()
+	got, err := s.ListMatchableBundles(nil)
 	if err != nil {
 		t.Fatalf("list matchable bundles: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestStore_UpdateBundleMembers_OverwritesSets(t *testing.T) {
 	if err := s.CreateBundle(b); err != nil {
 		t.Fatalf("create bundle: %v", err)
 	}
-	newConds := []ObservedCondition{NormalizeObservedCondition("s2", "i2", "a2", "c2", "", time.Now())}
+	newConds := []ObservedCondition{NormalizeObservedCondition("s2", "i2", "a2", "c2", "", "", "", time.Now())}
 	newMembers := []BundleMember{{PointID: "p1"}, {PointID: "p2"}, {PointID: "p3"}}
 	if err := s.UpdateBundleMembers(b.BundleID, newMembers, newConds); err != nil {
 		t.Fatalf("update bundle members: %v", err)
@@ -102,7 +102,7 @@ func TestStore_UpdateBundleMembers_DerivesAndPersistsStatus(t *testing.T) {
 		t.Fatalf("status = %q, want candidate on creation", b.Status)
 	}
 
-	confident := NormalizeObservedCondition("s2", "i2", "a2", "c2", "", time.Now())
+	confident := NormalizeObservedCondition("s2", "i2", "a2", "c2", "", "", "", time.Now())
 	confident.SuccessCount = 50
 	if err := s.UpdateBundleMembers(b.BundleID, b.Members, []ObservedCondition{confident}); err != nil {
 		t.Fatalf("update bundle members: %v", err)
@@ -177,7 +177,7 @@ func TestStore_RecordBundleOutcome_IncrementsMatchedCondition(t *testing.T) {
 	s := NewStore(db)
 	s.SetConfidenceConfig(ConfidenceConfig{ServingConfidenceMin: 0.6, AuditSampleMin: 1000})
 
-	cond := NormalizeObservedCondition("退休金", "计算", "普通用户", "", "", time.Now())
+	cond := NormalizeObservedCondition("退休金", "计算", "普通用户", "", "", "", "", time.Now())
 	b := &ActivationBundle{
 		ClusterFingerprint: "fp1",
 		ObservedConditions: []ObservedCondition{cond},
@@ -243,7 +243,7 @@ func TestStore_RefreshBundleMembers_PreservesLiveOutcomeCounts(t *testing.T) {
 	s := NewStore(db)
 	s.SetConfidenceConfig(ConfidenceConfig{ServingConfidenceMin: 0.6, AuditSampleMin: 1000})
 
-	cond := NormalizeObservedCondition("退休金", "计算", "普通用户", "", "", time.Now())
+	cond := NormalizeObservedCondition("退休金", "计算", "普通用户", "", "", "", "", time.Now())
 	b := &ActivationBundle{
 		ClusterFingerprint: "fp1",
 		ObservedConditions: []ObservedCondition{cond},
@@ -292,7 +292,7 @@ func TestStore_RefreshBundleMembers_PreservesLiveOutcomeCounts(t *testing.T) {
 	// re-derived (fresh SuccessCount from that rebuild's own trace count,
 	// deliberately different from the live-accumulated 5, to prove it gets
 	// ignored).
-	rebuiltCond := NormalizeObservedCondition("退休金", "计算", "普通用户", "", "", time.Now())
+	rebuiltCond := NormalizeObservedCondition("退休金", "计算", "普通用户", "", "", "", "", time.Now())
 	rebuiltCond.SuccessCount = 30
 	rebuiltMembers := []BundleMember{
 		{PointID: "p1", SuccessCount: 9, FailureCount: 1, LastSeenAt: time.Now()},

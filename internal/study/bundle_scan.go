@@ -52,7 +52,7 @@ func (s *Service) scanActivationBundles() error {
 			}
 			subject, intent, audience, constraint := t.Subject, t.Intent, t.Audience, t.Constraint
 			if len(domainIDs) > 0 {
-				ns, ni, na, nc, err := s.activationSvc.NormalizeTuple(ctx, domainIDs, subject, intent, audience, constraint)
+				ns, ni, na, nc, _, _, err := s.normalizeTupleCached(t.TraceID, domainIDs, subject, intent, audience, constraint)
 				if err != nil {
 					slog.Warn("study: bundle trigger tuple normalization failed, using raw quad", "trace_id", t.TraceID, "error", err)
 				} else {
@@ -162,6 +162,12 @@ func (s *Service) buildBundleObservedConditionsAndMembers(ctx context.Context, s
 	}
 
 	var matched []BundleScanTraceRow
+	// matchedIntentRaw/matchedConstraintRaw carry each matched trace's own
+	// (pre-Terms-bagging) wording alongside it, so the ObservedConditions
+	// built below can store real text instead of the sorted term bag — same
+	// gap that was already fixed for question_tuple_norms (docs/impl/v1/
+	// activation-bundle.md 步骤 4 编注).
+	var matchedIntentRaw, matchedConstraintRaw []string
 	for _, t := range allTraces {
 		tDomainIDs, err := s.store.DomainIDsForPoints(t.DirectPointIDs)
 		if err != nil {
@@ -169,16 +175,20 @@ func (s *Service) buildBundleObservedConditionsAndMembers(ctx context.Context, s
 			continue
 		}
 		nSubject, nIntent, nAudience, nConstraint := t.Subject, t.Intent, t.Audience, t.Constraint
+		nIntentRaw, nConstraintRaw := t.Intent, t.Constraint
 		if len(tDomainIDs) > 0 {
-			ns, ni, na, nc, err := s.activationSvc.NormalizeTuple(ctx, tDomainIDs, t.Subject, t.Intent, t.Audience, t.Constraint)
+			ns, ni, na, nc, nir, ncr, err := s.normalizeTupleCached(t.TraceID, tDomainIDs, t.Subject, t.Intent, t.Audience, t.Constraint)
 			if err != nil {
 				slog.Warn("study: member roster tuple normalization failed, using raw quad", "trace_id", t.TraceID, "error", err)
 			} else {
 				nSubject, nIntent, nAudience, nConstraint = ns, ni, na, nc
+				nIntentRaw, nConstraintRaw = nir, ncr
 			}
 		}
 		if nSubject == subject && nIntent == intent && nAudience == audience && nConstraint == constraint {
 			matched = append(matched, t)
+			matchedIntentRaw = append(matchedIntentRaw, nIntentRaw)
+			matchedConstraintRaw = append(matchedConstraintRaw, nConstraintRaw)
 		}
 	}
 	if len(matched) == 0 {
@@ -214,8 +224,9 @@ func (s *Service) buildBundleObservedConditionsAndMembers(ctx context.Context, s
 	}
 
 	var conds []activation.ObservedCondition
-	for _, t := range matched {
-		conds = activation.MergeObservedConditions(conds, activation.NormalizeObservedCondition(subject, intent, audience, constraint, "", t.CreatedAt), 50)
+	for i, t := range matched {
+		add := activation.NormalizeObservedCondition(subject, intent, audience, constraint, matchedIntentRaw[i], matchedConstraintRaw[i], "", t.CreatedAt)
+		conds = activation.MergeObservedConditions(conds, add, 50)
 	}
 	return conds, members, nil
 }

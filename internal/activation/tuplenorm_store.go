@@ -20,17 +20,24 @@ type QuestionTupleNorm struct {
 	Intent         string
 	Audience       string
 	ConstraintText string
-	Vector         sql.NullString
-	LastHitAt      time.Time
-	CreatedAt      time.Time
+	// IntentRaw/ConstraintRaw hold text.Normalize output before text.Terms
+	// tokenizes+sorts it (migration 064) — Tier 3's LLM judgment reads these
+	// instead of Intent/ConstraintText so it sees word order/context instead
+	// of a sorted token bag; Tier 1/2 continue to compare Intent/
+	// ConstraintText unchanged (docs/impl/v1/retrieval.md 步骤 2, 2026-08-24).
+	IntentRaw     string
+	ConstraintRaw string
+	Vector        sql.NullString
+	LastHitAt     time.Time
+	CreatedAt     time.Time
 }
 
-const tupleNormColumns = `norm_id, domain_id, subject, intent, audience, constraint_text, vector, last_hit_at, created_at`
+const tupleNormColumns = `norm_id, domain_id, subject, intent, audience, constraint_text, intent_raw, constraint_raw, vector, last_hit_at, created_at`
 
 func scanTupleNorm(row interface{ Scan(...interface{}) error }) (*QuestionTupleNorm, error) {
 	var n QuestionTupleNorm
 	if err := row.Scan(&n.NormID, &n.DomainID, &n.Subject, &n.Intent, &n.Audience, &n.ConstraintText,
-		&n.Vector, &n.LastHitAt, &n.CreatedAt); err != nil {
+		&n.IntentRaw, &n.ConstraintRaw, &n.Vector, &n.LastHitAt, &n.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &n, nil
@@ -115,9 +122,9 @@ func (s *Store) InsertTupleNorm(n *QuestionTupleNorm) error {
 		n.CreatedAt = now
 	}
 	_, err := s.db.Exec(`INSERT INTO question_tuple_norms
-		(norm_id, domain_id, subject, intent, audience, constraint_text, vector, last_hit_at, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		n.NormID, n.DomainID, n.Subject, n.Intent, n.Audience, n.ConstraintText, n.Vector, n.LastHitAt, n.CreatedAt)
+		(norm_id, domain_id, subject, intent, audience, constraint_text, intent_raw, constraint_raw, vector, last_hit_at, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		n.NormID, n.DomainID, n.Subject, n.Intent, n.Audience, n.ConstraintText, n.IntentRaw, n.ConstraintRaw, n.Vector, n.LastHitAt, n.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("activation store: insert tuple norm: %w", err)
 	}

@@ -44,9 +44,11 @@ func sortBundleMatchesByMatchedByThenRecency(results []BundleMatch) {
 type BundleMatcher struct {
 	store *Store
 
+	// cache is keyed by domainCacheKey(domainIDs) — same domain-sharded cache
+	// design as Matcher (2026-08-25), so a query scoped to one domain doesn't
+	// pay to scan every domain's bundles.
 	mu    sync.RWMutex
-	cache []ActivationBundle
-	valid bool
+	cache map[string][]ActivationBundle
 
 	// confidenceCfg / randFloat mirror Matcher's — same shared tiering core
 	// (docs/impl/v1/activation.md「置信度分档判定」), applied over
@@ -68,41 +70,45 @@ func (m *BundleMatcher) SetConfidenceConfig(cfg ConfidenceConfig) {
 
 func (m *BundleMatcher) InvalidateCache() {
 	m.mu.Lock()
-	m.valid = false
 	m.cache = nil
 	m.mu.Unlock()
 }
 
-func (m *BundleMatcher) loadCache() ([]ActivationBundle, error) {
+func (m *BundleMatcher) loadCache(domainIDs []string) ([]ActivationBundle, error) {
+	key := domainCacheKey(domainIDs)
+
 	m.mu.RLock()
-	if m.valid {
-		out := m.cache
+	if bundles, ok := m.cache[key]; ok {
 		m.mu.RUnlock()
-		return out, nil
+		return bundles, nil
 	}
 	m.mu.RUnlock()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.valid {
-		return m.cache, nil
+	if bundles, ok := m.cache[key]; ok {
+		return bundles, nil
 	}
-	bundles, err := m.store.ListMatchableBundles()
+	bundles, err := m.store.ListMatchableBundles(domainIDs)
 	if err != nil {
 		return nil, err
 	}
-	m.cache = bundles
-	m.valid = true
+	if m.cache == nil {
+		m.cache = make(map[string][]ActivationBundle)
+	}
+	m.cache[key] = bundles
 	return bundles, nil
 }
 
 // Match scores bundles against the Session ExpandedQuery — same hard-gate +
 // exact-match shape as Matcher.Match, just over
 // ActivationBundle.ObservedConditions.
-func (m *BundleMatcher) Match(_ context.Context, query session.ExpandedQuery, cfg MatchConfig) ([]BundleMatch, error) {
+// domainIDs scopes the candidate scan (2026-08-25, domain-sharded cache) —
+// pass nil/empty when the query's domain is unresolved.
+func (m *BundleMatcher) Match(_ context.Context, query session.ExpandedQuery, domainIDs []string, cfg MatchConfig) ([]BundleMatch, error) {
 	cfg = cfg.withDefaults()
 
-	bundles, err := m.loadCache()
+	bundles, err := m.loadCache(domainIDs)
 	if err != nil {
 		return nil, err
 	}

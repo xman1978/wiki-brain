@@ -219,6 +219,24 @@ EvidenceItem 新增：
   归一化的消费方之一——Wiki 检索侧的 Concept/Fact 识别入口是语义识别，
   不消费四元组，见 wiki.md「检索接入」；此处归一化机制仅服务于
   activation.Matcher/BundleMatcher 两个消费方。）
+  **2026-08-24 改判：Tier 3 LLM 判断改用未分词的原始短语，Tier 1/2 与
+  canonical 存储的词袋表示不变**——根因是 `intent`/`constraint` 两个字段
+  在写入 `question_tuple_norms` 前经过 `text.Terms`（gse 分词 + 停用词过滤
+  + 字母序排序 + 空格拼接），Tier 1 精确匹配、Tier 2 Jaccard 都是基于这个
+  排序后的词袋算的，这对两者而言是必需机制（词序不敏感的比较、token 级
+  重合度）；但 Tier 3 LLM 判断语义等价时，喂给它的如果也是这个排序词袋
+  （例如"回款 客户 催收"），会丢失原始短语的词序/上下文信息，模型无法
+  再利用词序判断语义（例如两个词序不同但语义有别的短语，排序后会先一步
+  坍缩成同一字符串，模型看到时已经无法区分）。`subject`/`audience` 两个
+  字段本身只做 `text.Normalize`/`NormalizeCompact`（不分词不排序），不受
+  此次改动影响。
+  落地方式：`question_tuple_norms` 新增 `intent_raw`/`constraint_raw` 两列
+  （migration 063），存 `text.Normalize` 后、`text.Terms` 分词前的原始短语，
+  随 canonical 记录同步写入（首次落库、Tier 1/2 命中替换时都更新）；这两
+  列只供 Tier 3 组装 prompt 时使用，不参与 `idx_qtn_domain_exact` 索引、
+  不参与 Tier 2 Jaccard 计算，Tier 1/2 的比较逻辑与现有词袋列完全不变。
+  Tier 3 判断结果的写回（第 4 步"全部未命中则新建 canonical 记录"）依旧
+  是整行一起写，词袋列与原始短语列同时落库，不存在两者不同步的窗口。
   **2026-08-20 新增第二个调用方**：`activation.TupleNormalizer.Normalize`
   此前只在这里（查询侧 `tryFastPath`）生效；现在 Study 构建/刷新
   `activation_links.observed_conditions` 时（`study.md`「归一化接入构建

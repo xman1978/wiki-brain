@@ -3,8 +3,10 @@ package study
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +16,14 @@ import (
 	"github.com/jxman78/wiki-brain/internal/retrieval"
 	"github.com/jxman78/wiki-brain/internal/wiki"
 )
+
+// ErrAlreadyRunning is returned by Run when another Run call (scheduled tick
+// or a manual POST /study/run) is still in flight. Run's real-data execution
+// time is minutes, and neither the Scheduler's ticker nor the HTTP handler
+// previously guarded against overlap, so a manual call landing mid-tick would
+// run concurrently with the scheduled one and contend for the same SQLite
+// rows/writes instead of being told to retry later.
+var ErrAlreadyRunning = errors.New("study: a run is already in progress")
 
 type Service struct {
 	store                   *Store
@@ -48,6 +58,17 @@ type Service struct {
 	// 值" without Study holding a *retrieval.Service.
 	currentRerankTopN         int
 	currentOutlineCoefficient float64
+	// retrievalSvc is held (unlike the plain-value precedent above) because
+	// subject_norms/source_affinity idle cleanup (evictIdleSourceAffinity)
+	// needs an actual method call, not a passthrough config value — same
+	// shape as activationSvc.CleanIdleTupleNorms just owned by a different
+	// package (docs/impl/v1/retrieval.md, source_affinity 2026-08-25 会话讨论).
+	retrievalSvc *retrieval.Service
+	// sourceAffinityIdleDays is retrieval.source_affinity_idle_days, same
+	// precedent as questionTupleNormIdleDays.
+	sourceAffinityIdleDays int
+	// runMu ensures at most one Run() executes at a time (see ErrAlreadyRunning).
+	runMu sync.Mutex
 }
 
 func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.Service, wikiSvc *wiki.Service, recompileNewKPMin, qualifyingMinDaysActive int, questionTupleNormIdleDays int, questionTupleNormEnabled bool, currentRerankTopN int, currentOutlineCoefficient float64) *Service {
@@ -65,6 +86,15 @@ func NewService(store *Store, cfg config.StudyConfig, activationSvc *activation.
 	}
 }
 
+// SetSourceAffinityCleanup wires source_affinity's periodic idle cleanup
+// (docs/impl/v1/study.md 步骤 4 同款 idle 清理惯例). Unset or
+// sourceAffinityIdleDays<=0 means evictIdle skips this cleanup entirely —
+// nil-safe, mirrors SetEntrySvc's optionality.
+func (s *Service) SetSourceAffinityCleanup(retrievalSvc *retrieval.Service, idleDays int) {
+	s.retrievalSvc = retrievalSvc
+	s.sourceAffinityIdleDays = idleDays
+}
+
 // SetEntrySvc wires the (optional) concept-candidate scan appended to this
 // Ticker's task chain (docs/impl/v1/concept-evolution.md 步骤 2, run after
 // study.md's own step 6 and before report generation). Run still works
@@ -80,6 +110,11 @@ func (s *Service) SetEntrySvc(c *entry.Service) {
 // cycle, per "单步异常记录 error 日志，不中断本轮后续步骤"; steps 1/7 keep
 // MVP's abort-on-error behavior unchanged.
 func (s *Service) Run() (*RunResult, error) {
+	if !s.runMu.TryLock() {
+		return nil, ErrAlreadyRunning
+	}
+	defer s.runMu.Unlock()
+
 	start := time.Now()
 
 	candidatesFlagged, err := s.store.ScanCandidates(
@@ -711,6 +746,36 @@ func (s *Service) tryCreateLink(questionTerms, pointID string, createdFrom []str
 	return true, nil
 }
 
+// normalizeTupleCached is the shared entry point buildObservedConditions
+// (ActivationLink) and buildBundleObservedConditionsAndMembers
+// (ActivationBundle) both use to canonicalize a trace's four-tuple
+// (migration 067, trace_tuple_norm_cache). A trace's own (subject, intent,
+// audience, constraint) text is fixed once written, so NormalizeTuple's
+// tiered judgment for it needs to run at most once, ever — every Study run
+// before this cache existed re-ran the full Tier1/2/3 judgment (including a
+// real LLM call on Tier3) for every historical trace on every single cycle,
+// which is what made a single Run() take minutes once trace volume grew
+// (2026-08-25 root-cause analysis). Cache hit ⇒ zero calls into
+// activation.Service at all, not even the (cheap) Tier1 SQL lookup.
+func (s *Service) normalizeTupleCached(traceID string, domainIDs []string, subject, intent, audience, constraint string) (normSubject, normIntent, normAudience, normConstraint, intentRaw, constraintRaw string, err error) {
+	if cached, ok, cacheErr := s.store.GetTraceTupleNorm(traceID); cacheErr == nil && ok {
+		return cached.Subject, cached.Intent, cached.Audience, cached.Constraint, cached.IntentRaw, cached.ConstraintRaw, nil
+	} else if cacheErr != nil {
+		slog.Warn("study: trace tuple norm cache lookup failed, normalizing fresh", "trace_id", traceID, "error", cacheErr)
+	}
+
+	ns, ni, na, nc, nir, ncr, nerr := s.activationSvc.NormalizeTuple(context.Background(), domainIDs, subject, intent, audience, constraint)
+	if nerr != nil {
+		return "", "", "", "", "", "", nerr
+	}
+	if saveErr := s.store.SaveTraceTupleNorm(traceID, TraceTupleNorm{
+		Subject: ns, Intent: ni, Audience: na, Constraint: nc, IntentRaw: nir, ConstraintRaw: ncr,
+	}); saveErr != nil {
+		slog.Warn("study: save trace tuple norm cache failed", "trace_id", traceID, "error", saveErr)
+	}
+	return ns, ni, na, nc, nir, ncr, nil
+}
+
 // buildObservedConditions turns every confident citing trace into an observed
 // condition group (no keyword intersection / whitelist union).
 //
@@ -748,15 +813,20 @@ func (s *Service) buildObservedConditions(pointID string) ([]activation.Observed
 	var conds []activation.ObservedCondition
 	for _, q := range quads {
 		subject, intent, audience, constraint := q.Subject, q.Intent, q.Audience, q.Constraint
+		// intentRaw/constraintRaw default to the trace's own (already
+		// unbagged) quad text; only overwritten when tuple normalization
+		// actually ran and returned a canonical match/insert's raw wording.
+		intentRaw, constraintRaw := q.Intent, q.Constraint
 		if len(domainIDs) > 0 {
-			ns, ni, na, nc, nerr := s.activationSvc.NormalizeTuple(context.Background(), domainIDs, subject, intent, audience, constraint)
+			ns, ni, na, nc, nir, ncr, nerr := s.normalizeTupleCached(q.TraceID, domainIDs, subject, intent, audience, constraint)
 			if nerr != nil {
 				slog.Warn("study: tuple normalization failed, using raw quad", "point_id", pointID, "error", nerr)
 			} else {
 				subject, intent, audience, constraint = ns, ni, na, nc
+				intentRaw, constraintRaw = nir, ncr
 			}
 		}
-		add := activation.NormalizeObservedCondition(subject, intent, audience, constraint, q.QuestionTerms, q.CreatedAt)
+		add := activation.NormalizeObservedCondition(subject, intent, audience, constraint, intentRaw, constraintRaw, q.QuestionTerms, q.CreatedAt)
 		conds = activation.MergeObservedConditions(conds, add, max)
 	}
 	return conds, nil
@@ -767,7 +837,10 @@ func (s *Service) buildObservedConditions(pointID string) ([]activation.Observed
 // 服务"已经由 mean(cond) 持续表达，不需要另一条基于created_at/status_changed_at
 // 的独立淘汰规则；question_tuple_norms 的 idle 清理与置信度机制无关，原样保留).
 func (s *Service) evictIdle(actions *LearningActionsSummary) error {
-	return s.evictIdleTupleNorms()
+	if err := s.evictIdleTupleNorms(); err != nil {
+		return err
+	}
+	return s.evictIdleSourceAffinity()
 }
 
 // pruneConditions implements docs/impl/v1/study.md 步骤 3「收敛剪枝」
@@ -864,6 +937,29 @@ func (s *Service) evictIdleTupleNorms() error {
 	}
 	if n > 0 {
 		slog.Info("study: cleaned idle question tuple norms", "count", n)
+	}
+	return nil
+}
+
+// evictIdleSourceAffinity cleans up subject_norms/source_affinity rows whose
+// last_hit_at/updated_at is older than sourceAffinityIdleDays
+// (source_affinity 2026-08-25 会话讨论). Same no-op guard shape as
+// evictIdleTupleNorms — <=0 or unwired skips cleanup entirely.
+func (s *Service) evictIdleSourceAffinity() error {
+	if s.sourceAffinityIdleDays <= 0 || s.retrievalSvc == nil {
+		return nil
+	}
+	nSubjects, err := s.retrievalSvc.CleanIdleSubjectNorms(s.sourceAffinityIdleDays)
+	if err != nil {
+		slog.Error("study: clean idle subject norms failed", "error", err)
+	} else if nSubjects > 0 {
+		slog.Info("study: cleaned idle subject norms", "count", nSubjects)
+	}
+	nAffinity, err := s.retrievalSvc.CleanIdleSourceAffinity(s.sourceAffinityIdleDays)
+	if err != nil {
+		slog.Error("study: clean idle source affinity failed", "error", err)
+	} else if nAffinity > 0 {
+		slog.Info("study: cleaned idle source affinity", "count", nAffinity)
 	}
 	return nil
 }

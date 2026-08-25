@@ -53,31 +53,33 @@ func (n *TupleNormalizer) SetLLMClient(c llm.LLMClient) {
 // qc.DomainResolved guard in Retrieval's tryFastPath) but Normalize itself
 // also degrades safely by falling through to tier 5 (new record — a no-op
 // since Insert also requires domainIDs).
-func (n *TupleNormalizer) Normalize(ctx context.Context, domainIDs []string, subject, intent, audience, constraint string) (normSubject, normIntent, normAudience, normConstraint string, err error) {
+func (n *TupleNormalizer) Normalize(ctx context.Context, domainIDs []string, subject, intent, audience, constraint string) (normSubject, normIntent, normAudience, normConstraint, intentRaw, constraintRaw string, err error) {
 	qSubject := text.Normalize(subject)
-	qIntent := text.Terms(text.Normalize(intent))
+	qIntentNorm := text.Normalize(intent)
+	qIntent := text.Terms(qIntentNorm)
 	qAudience := text.NormalizeCompact(audience)
-	qConstraint := text.Terms(text.Normalize(constraint))
+	qConstraintNorm := text.Normalize(constraint)
+	qConstraint := text.Terms(qConstraintNorm)
 
 	if len(domainIDs) == 0 {
-		return qSubject, qIntent, qAudience, qConstraint, nil
+		return qSubject, qIntent, qAudience, qConstraint, qIntentNorm, qConstraintNorm, nil
 	}
 
 	// Tier 1: exact match.
 	exact, err := n.store.FindExactMatch(domainIDs, qSubject, qIntent, qAudience, qConstraint)
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("activation: tuple norm tier1: %w", err)
+		return "", "", "", "", "", "", fmt.Errorf("activation: tuple norm tier1: %w", err)
 	}
 	if exact != nil {
 		if err := n.store.TouchLastHit(exact.NormID); err != nil {
 			slog.Warn("activation: tuple norm touch last hit failed", "norm_id", exact.NormID, "error", err)
 		}
-		return exact.Subject, exact.Intent, exact.Audience, exact.ConstraintText, nil
+		return exact.Subject, exact.Intent, exact.Audience, exact.ConstraintText, exact.IntentRaw, exact.ConstraintRaw, nil
 	}
 
 	candidates, err := n.store.ListCandidatesByDomain(domainIDs, 200)
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("activation: tuple norm list candidates: %w", err)
+		return "", "", "", "", "", "", fmt.Errorf("activation: tuple norm list candidates: %w", err)
 	}
 
 	// Tier 2: local token-Jaccard similarity, computed per-field then
@@ -100,13 +102,14 @@ func (n *TupleNormalizer) Normalize(ctx context.Context, domainIDs []string, sub
 			if err := n.store.TouchLastHit(match.NormID); err != nil {
 				slog.Warn("activation: tuple norm touch last hit failed", "norm_id", match.NormID, "error", err)
 			}
-			return match.Subject, match.Intent, match.Audience, match.ConstraintText, nil
+			return match.Subject, match.Intent, match.Audience, match.ConstraintText, match.IntentRaw, match.ConstraintRaw, nil
 		}
 	}
 
-	// Tier 3: LLM batch judgment over the candidate set.
+	// Tier 3: LLM batch judgment over the candidate set. Uses the raw
+	// (Normalize-only, pre-Terms) intent/constraint text — see judgeLLM.
 	if n.llmClient != nil && len(candidates) > 0 {
-		matched, idx, err := n.judgeLLM(ctx, qSubject, qIntent, qAudience, qConstraint, candidates)
+		matched, idx, err := n.judgeLLM(ctx, qSubject, qIntentNorm, qAudience, qConstraintNorm, candidates)
 		if err != nil {
 			slog.Warn("activation: tuple norm LLM tier failed, falling through to new record", "error", err)
 		} else if matched && idx >= 0 && idx < len(candidates) {
@@ -114,15 +117,19 @@ func (n *TupleNormalizer) Normalize(ctx context.Context, domainIDs []string, sub
 			if err := n.store.TouchLastHit(match.NormID); err != nil {
 				slog.Warn("activation: tuple norm touch last hit failed", "norm_id", match.NormID, "error", err)
 			}
-			return match.Subject, match.Intent, match.Audience, match.ConstraintText, nil
+			return match.Subject, match.Intent, match.Audience, match.ConstraintText, match.IntentRaw, match.ConstraintRaw, nil
 		}
 	}
 
 	// Tier 4: no tier matched — this becomes the new canonical tuple.
-	return n.insertNew(domainIDs, qSubject, qIntent, qAudience, qConstraint)
+	subj, in, aud, cons, err := n.insertNew(domainIDs, qSubject, qIntent, qAudience, qConstraint, qIntentNorm, qConstraintNorm)
+	if err != nil {
+		return "", "", "", "", "", "", err
+	}
+	return subj, in, aud, cons, qIntentNorm, qConstraintNorm, nil
 }
 
-func (n *TupleNormalizer) insertNew(domainIDs []string, subject, intent, audience, constraint string) (string, string, string, string, error) {
+func (n *TupleNormalizer) insertNew(domainIDs []string, subject, intent, audience, constraint, intentRaw, constraintRaw string) (string, string, string, string, error) {
 	now := time.Now().UTC()
 	for _, d := range domainIDs {
 		norm := &QuestionTupleNorm{
@@ -131,6 +138,8 @@ func (n *TupleNormalizer) insertNew(domainIDs []string, subject, intent, audienc
 			Intent:         intent,
 			Audience:       audience,
 			ConstraintText: constraint,
+			IntentRaw:      intentRaw,
+			ConstraintRaw:  constraintRaw,
 			LastHitAt:      now,
 			CreatedAt:      now,
 		}
@@ -199,15 +208,22 @@ type tupleNormLLMResult struct {
 	CandidateIndex int  `json:"candidate_index"`
 }
 
-func (n *TupleNormalizer) judgeLLM(ctx context.Context, subject, intent, audience, constraint string, candidates []QuestionTupleNorm) (bool, int, error) {
-	queryJSON, err := json.Marshal(tupleNormLLMQuery{Subject: subject, Intent: intent, Audience: audience, Constraint: constraint})
+// judgeLLM feeds the model intentRaw/constraintRaw (text.Normalize output,
+// pre-text.Terms) rather than the sorted token bag used by Tier 1/2 — the
+// bag form loses word order/context (e.g. it can collapse two phrases that
+// differ in meaning only by token order into the same string before the
+// model ever sees them), which a semantic-equivalence judgment needs.
+// subject/audience are unaffected: they are never Terms-tokenized to begin
+// with (docs/impl/v1/retrieval.md 步骤 2, 2026-08-24 改判).
+func (n *TupleNormalizer) judgeLLM(ctx context.Context, subject, intentRaw, audience, constraintRaw string, candidates []QuestionTupleNorm) (bool, int, error) {
+	queryJSON, err := json.Marshal(tupleNormLLMQuery{Subject: subject, Intent: intentRaw, Audience: audience, Constraint: constraintRaw})
 	if err != nil {
 		return false, -1, fmt.Errorf("marshal query tuple: %w", err)
 	}
 
 	cands := make([]tupleNormLLMCandidate, len(candidates))
 	for i, c := range candidates {
-		cands[i] = tupleNormLLMCandidate{Index: i, Subject: c.Subject, Intent: c.Intent, Audience: c.Audience, Constraint: c.ConstraintText}
+		cands[i] = tupleNormLLMCandidate{Index: i, Subject: c.Subject, Intent: c.IntentRaw, Audience: c.Audience, Constraint: c.ConstraintRaw}
 	}
 	candsJSON, err := json.Marshal(cands)
 	if err != nil {
@@ -218,7 +234,15 @@ func (n *TupleNormalizer) judgeLLM(ctx context.Context, subject, intent, audienc
 		"query_tuple": string(queryJSON),
 		"candidates":  string(candsJSON),
 	}
-	raw, err := n.llmClient.CompleteJSON(ctx, "tuple_norm_match.md", vars, "tuple_norm_match")
+	// purpose must be one of the canonical categories bound in
+	// llm_purpose_bindings (classification/default/extraction/reasoning) —
+	// routing.RoutingClient.resolve looks this string up verbatim, and a
+	// prompt-file-shaped purpose like "tuple_norm_match" has no binding, so
+	// every call silently failed with ErrNotConfigured and fell through to
+	// "treat as no match, insert a new canonical tuple" (see judgeLLM's
+	// caller). "classification" matches every other equivalence-judgment
+	// call site in this codebase (fast_verify.md, question_domain_match.md).
+	raw, err := n.llmClient.CompleteJSON(ctx, "tuple_norm_match.md", vars, "classification")
 	if err != nil {
 		return false, -1, fmt.Errorf("tuple_norm_match completion: %w", err)
 	}

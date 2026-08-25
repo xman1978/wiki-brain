@@ -224,9 +224,11 @@ func main() {
 	retrievalSvc.SetAuditOutcomeWriter(traceSvc)
 	traceSvc.SetSynthesisOutcomeWriter(wikiSvc)
 	retrievalSvc.SetSynthesisOutcomeWriter(traceSvc)
+	traceSvc.SetSourceAffinityWriter(retrievalSvc)
 	studySvc := study.NewService(studyStore, cfg.Study, activationSvc, wikiSvc, cfg.Wiki.RecompileNewKPMin, cfg.Wiki.QualifyingMinDaysActive,
 		cfg.Retrieval.QuestionTupleNormIdleDays, cfg.Retrieval.QuestionTupleNormEnabled,
 		cfg.Retrieval.RerankTopN, cfg.Retrieval.OutlineRRFBoost)
+	studySvc.SetSourceAffinityCleanup(retrievalSvc, cfg.Retrieval.SourceAffinityIdleDays)
 
 	entrySvc := entry.NewService(entryStore, entry.Config{
 		AddEventMin:       cfg.Study.EntryAddEventMin,

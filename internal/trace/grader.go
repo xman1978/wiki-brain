@@ -143,10 +143,22 @@ func recallCitationStats(es *retrieval.EvidenceSet, citations []string) (outline
 	return outlineCited, rankSum, rankMax
 }
 
+// directCitedPointIDs resolves cited fact_ids to point_ids using the union of
+// DirectEvidence and Supporting — a multi-step full-path answer regularly
+// cites only Supporting evidence (rerank's direct/supporting split is a rank
+// bucket, not a correctness judgment; e.g. the deep-reasoning cases where the
+// model finds its answer in a supporting fact), and treating those citations
+// as "no direct evidence" wrongly downgrades an otherwise confident answer to
+// partial, which then suppresses the activation_gap learning signal for it.
 func directCitedPointIDs(es *retrieval.EvidenceSet, citations []string) []string {
-	directFactToPoint := make(map[string]string, len(es.DirectEvidence))
+	directFactToPoint := make(map[string]string, len(es.DirectEvidence)+len(es.Supporting))
 	for _, e := range es.DirectEvidence {
 		directFactToPoint[e.FactID] = e.PointID
+	}
+	for _, e := range es.Supporting {
+		if _, ok := directFactToPoint[e.FactID]; !ok {
+			directFactToPoint[e.FactID] = e.PointID
+		}
 	}
 
 	seen := make(map[string]bool)

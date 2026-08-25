@@ -22,7 +22,27 @@ type Service struct {
 	observedConditionsMax int
 	correctionWeight      int
 	synthesisWriter       SynthesisOutcomeWriter
+	sourceAffinityWriter  SourceAffinityWriter
 	llmClient             llm.LLMClient
+}
+
+// SourceAffinityWriter is implemented by *retrieval.Service — the write side
+// of the subject→source routing shortcut (2026-08-25 会话讨论,
+// internal/retrieval/subject_affinity.go). Trace calls this after a
+// full-path answer grades confident, passing the source_ids its
+// DirectPointIDs' evidence actually came from — this is the only place a
+// source_affinity binding gets created or reinforced; the shortcut's own
+// read path never writes success itself (recall returning non-empty isn't
+// the same as the answer having actually cited it).
+type SourceAffinityWriter interface {
+	RecordSourceAffinityOutcome(subject string, sourceIDs []string) error
+}
+
+// SetSourceAffinityWriter wires the hand-off target (usually
+// *retrieval.Service). Unset means no source_affinity bindings are ever
+// created — nil-safe, mirrors SetSynthesisOutcomeWriter.
+func (s *Service) SetSourceAffinityWriter(w SourceAffinityWriter) {
+	s.sourceAffinityWriter = w
 }
 
 // ObservedConditionEnricher is implemented by activation.Service — optional so
@@ -126,6 +146,7 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 
 	pathType := retrieval.PathTypeFull
 	var activationLinkIDs []string
+	var activationBundleIDs []string
 	var intent, audience, constraintText string
 	if r.EvidenceSet != nil {
 		if r.EvidenceSet.PathType != "" {
@@ -134,30 +155,34 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 		for _, hit := range r.EvidenceSet.ActivationHits {
 			activationLinkIDs = append(activationLinkIDs, hit.LinkID)
 		}
+		for _, hit := range r.EvidenceSet.BundleHits {
+			activationBundleIDs = append(activationBundleIDs, hit.BundleID)
+		}
 		intent = r.EvidenceSet.Intent
 		audience = r.EvidenceSet.Audience
 		constraintText = r.EvidenceSet.Constraint
 	}
 
 	t := &Trace{
-		TraceID:           uuid.New().String(),
-		AnswerID:          r.AnswerID,
-		Question:          r.Question,
-		QuestionHash:      hash,
-		QuestionTerms:     groupKey,
-		RetrievalQuality:  grade.Quality,
-		Path:              r.Path,
-		PathType:          pathType,
-		ActivationLinkIDs: activationLinkIDs,
-		Subject:           subject,
-		Intent:            intent,
-		Audience:          audience,
-		ConstraintText:    constraintText,
-		DirectPointIDs:    directPointIDs,
-		KPNCitedCount:     grade.KPNCitedCount,
-		CitedCount:        grade.CitedCount,
-		OutlineCitedCount: grade.OutlineCitedCount,
-		CitedRankSum:      grade.CitedRankSum,
+		TraceID:             uuid.New().String(),
+		AnswerID:            r.AnswerID,
+		Question:            r.Question,
+		QuestionHash:        hash,
+		QuestionTerms:       groupKey,
+		RetrievalQuality:    grade.Quality,
+		Path:                r.Path,
+		PathType:            pathType,
+		ActivationLinkIDs:   activationLinkIDs,
+		ActivationBundleIDs: activationBundleIDs,
+		Subject:             subject,
+		Intent:              intent,
+		Audience:            audience,
+		ConstraintText:      constraintText,
+		DirectPointIDs:      directPointIDs,
+		KPNCitedCount:       grade.KPNCitedCount,
+		CitedCount:          grade.CitedCount,
+		OutlineCitedCount:   grade.OutlineCitedCount,
+		CitedRankSum:        grade.CitedRankSum,
 	}
 
 	if err := s.store.SaveTrace(t); err != nil {
@@ -170,6 +195,7 @@ func (s *Service) ProcessTrace(r *answer.AnswerResult) {
 	s.generateBundleActivationEvents(t, r, grade)
 	s.updateCooccurrence(t, r)
 	s.enrichObservedConditions(t)
+	s.recordSourceAffinity(t, r)
 	s.generateLearningEvents(t, r)
 	s.generateTopNCalibrationEvent(t, r, grade)
 
@@ -409,11 +435,74 @@ func (s *Service) enrichObservedConditions(t *Trace) {
 
 	s.detectSubjectSynonymGaps(t)
 
+	// 2026-08-24: mirrors the updateCooccurrence guard above — a multi-point
+	// confident answer is Bundle's input, not Link's. Strengthening every
+	// point's individual Link here would keep N Links independently
+	// accumulating confidence for a question that should instead converge
+	// on one Bundle.
+	if len(t.DirectPointIDs) > 1 {
+		return
+	}
+
 	if err := s.enricher.EnrichFromConfidentFullPath(
 		t.DirectPointIDs, t.Subject, t.Intent, t.Audience, t.ConstraintText, t.QuestionTerms,
 		s.observedConditionsMax,
 	); err != nil {
 		slog.Error("trace: observed condition enrich failed", "trace_id", t.TraceID, "error", err)
+	}
+}
+
+// recordSourceAffinity writes the subject→source binding signal
+// (2026-08-25 会话讨论, internal/retrieval/subject_affinity.go) — the only
+// place a source_affinity row gets created or reinforced. Gated the same way
+// as enrichObservedConditions (full path, confident, direct points non-empty)
+// but does not share its len(DirectPointIDs)>1 Bundle guard: a multi-point
+// confident answer can legitimately span several sources, and each one is
+// independent success signal for its own source, not competing evidence for
+// one Link the way ActivationLink's per-point condition would be.
+func (s *Service) recordSourceAffinity(t *Trace, r *answer.AnswerResult) {
+	if s.sourceAffinityWriter == nil {
+		return
+	}
+	if t.RetrievalQuality != QualityConfident || t.PathType != retrieval.PathTypeFull {
+		return
+	}
+	if len(t.DirectPointIDs) == 0 || t.Subject == "" {
+		return
+	}
+	es := r.EvidenceSet
+	if es == nil {
+		return
+	}
+
+	pointToSource := make(map[string]string, len(es.DirectEvidence)+len(es.Supporting))
+	for _, ev := range append(append([]retrieval.Evidence{}, es.DirectEvidence...), es.Supporting...) {
+		if ev.PointID == "" || ev.SourceRef == nil {
+			continue
+		}
+		var ref retrieval.SourceRef
+		if err := json.Unmarshal(ev.SourceRef, &ref); err != nil || ref.SourceID == "" {
+			continue
+		}
+		pointToSource[ev.PointID] = ref.SourceID
+	}
+
+	seen := make(map[string]bool)
+	var sourceIDs []string
+	for _, pid := range t.DirectPointIDs {
+		sid, ok := pointToSource[pid]
+		if !ok || seen[sid] {
+			continue
+		}
+		seen[sid] = true
+		sourceIDs = append(sourceIDs, sid)
+	}
+	if len(sourceIDs) == 0 {
+		return
+	}
+
+	if err := s.sourceAffinityWriter.RecordSourceAffinityOutcome(t.Subject, sourceIDs); err != nil {
+		slog.Error("trace: record source affinity failed", "trace_id", t.TraceID, "error", err)
 	}
 }
 
@@ -456,6 +545,22 @@ func (s *Service) updateCooccurrence(t *Trace, r *answer.AnswerResult) {
 
 	switch t.RetrievalQuality {
 	case QualityConfident:
+		// 2026-08-24: a confident trace citing more than one point is a
+		// joint/combined answer to this question, not N independent
+		// single-point answers to it. Feeding every point into the
+		// question_kp_cooccurrence table here spins up N independently
+		// accumulating ActivationLinks that always out-race
+		// ActivationBundle's own slower joint-tuple accumulation
+		// (bundle_trigger_cooccurrence via NewMultiPointConfidentTraces),
+		// so a genuinely 1-to-many question never actually gets served by
+		// a Bundle — see docs/design/activation-bundle.md. Multi-point
+		// confident traces are Bundle's input exclusively; Link only
+		// accumulates true 1-to-1 (question, point) cooccurrence.
+		if len(t.DirectPointIDs) > 1 {
+			slog.Debug("trace: cooccurrence skipped (multi-point confident trace, bundle-only)",
+				"trace_id", t.TraceID, "point_ids", t.DirectPointIDs)
+			return
+		}
 		pointIDs = t.DirectPointIDs
 	case QualityPartial:
 		pointIDs = supportingCitedPointIDs(r.EvidenceSet, r.Citations)
@@ -560,16 +665,20 @@ func (s *Service) generateActivationEvents(t *Trace, r *answer.AnswerResult, gra
 		return
 	}
 
-	directSet := make(map[string]bool, len(grade.DirectPointIDs))
-	for _, pid := range grade.DirectPointIDs {
-		directSet[pid] = true
-	}
+	// role classification (direct vs supporting) is decided strictly from
+	// which bucket the cited fact_id actually lived in — grade.DirectPointIDs
+	// is a broader "confidently grounded" set (union of both buckets, see
+	// directCitedPointIDs) used for quality/cooccurrence, not for this.
 	var supportingEvidence []retrieval.Evidence
 	if r.EvidenceSet != nil {
 		supportingEvidence = r.EvidenceSet.Supporting
 	}
 	factsByPoint := citedFactIDsByEvidence(directEvidenceOf(r.EvidenceSet), r.Citations)
 	supportingFactsByPoint := citedFactIDsByEvidence(supportingEvidence, r.Citations)
+	directSet := make(map[string]bool, len(factsByPoint))
+	for pid := range factsByPoint {
+		directSet[pid] = true
+	}
 
 	for _, hit := range hits {
 		if directSet[hit.PointID] {
@@ -653,8 +762,12 @@ func (s *Service) generateBundleActivationEvents(t *Trace, r *answer.AnswerResul
 		return
 	}
 
-	directSet := make(map[string]bool, len(grade.DirectPointIDs))
-	for _, pid := range grade.DirectPointIDs {
+	// Same strict-direct-bucket derivation as generateActivationEvents —
+	// grade.DirectPointIDs is the broader confidence-grading set, not the
+	// direct/supporting role split.
+	factsByPoint := citedFactIDsByEvidence(directEvidenceOf(r.EvidenceSet), r.Citations)
+	directSet := make(map[string]bool, len(factsByPoint))
+	for pid := range factsByPoint {
 		directSet[pid] = true
 	}
 	var supportingEvidence []retrieval.Evidence

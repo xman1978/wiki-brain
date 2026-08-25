@@ -103,7 +103,7 @@ func TestMatcher_ExploringTier_SamplingBoundary(t *testing.T) {
 
 	matcher.randFloat = func() float64 { return 0.0 }
 	matcher.InvalidateCache()
-	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestMatcher_ExploringTier_SamplingBoundary(t *testing.T) {
 
 	matcher.randFloat = func() float64 { return 1.0 }
 	matcher.InvalidateCache()
-	matches, err = matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err = matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestMatcher_TrustedTier_AuditSampledBoundary(t *testing.T) {
 
 	matcher.randFloat = func() float64 { return 0.0 }
 	matcher.InvalidateCache()
-	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestMatcher_TrustedTier_AuditSampledBoundary(t *testing.T) {
 
 	matcher.randFloat = func() float64 { return 1.0 }
 	matcher.InvalidateCache()
-	matches, err = matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err = matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestMatcher_OwningConditionRouting_RespectsTier(t *testing.T) {
 	now := time.Now().UTC()
 	question := "住宿费用怎么算"
 	qq := text.Terms(text.Normalize(question))
-	add := NormalizeObservedCondition("住宿", "", "", "", qq, now)
+	add := NormalizeObservedCondition("住宿", "", "", "", "", "", qq, now)
 	if err := svc.AppendObservedCondition(l.LinkID, add, 50); err != nil {
 		t.Fatalf("append: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestMatcher_OwningConditionRouting_RespectsTier(t *testing.T) {
 	query := session.ExpandedQuery{
 		Subject: "完全不同", Intent: "完全不同", ExpandedQuestion: question,
 	}
-	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}

@@ -495,8 +495,13 @@ func (s *Store) TouchLastUsed(linkIDs []string) error {
 // implicitly — deprecated is defined purely by "target KP lifecycle !=
 // current" (see confidence.go deriveStatus), and this query's lifecycle
 // JOIN already achieves exactly that filter.
-func (s *Store) ListMatchableLinksForCurrentKP() ([]ActivationLink, error) {
-	return s.listLinksForCurrentKP(StatusVerified, StatusCandidate)
+//
+// domainIDs scopes the scan to sources in those domains via a JOIN on
+// sources.domain_id (2026-08-25, Matcher's domain-sharded cache) — empty
+// domainIDs means unresolved domain and loads every link system-wide, same
+// as before this scoping was added.
+func (s *Store) ListMatchableLinksForCurrentKP(domainIDs []string) ([]ActivationLink, error) {
+	return s.listLinksForCurrentKP(domainIDs, StatusVerified, StatusCandidate)
 }
 
 // ListVerifiedConditionGroups loads observed_conditions from verified links
@@ -574,12 +579,12 @@ func (s *Store) FormatVerifiedConditionGroups(domainIDs []string, limit int) (st
 	return b.String(), len(conds), nil
 }
 
-func (s *Store) listLinksForCurrentKP(statuses ...string) ([]ActivationLink, error) {
+func (s *Store) listLinksForCurrentKP(domainIDs []string, statuses ...string) ([]ActivationLink, error) {
 	if len(statuses) == 0 {
 		return nil, nil
 	}
 	placeholders := ""
-	args := make([]interface{}, 0, len(statuses)+1)
+	args := make([]interface{}, 0, len(statuses)+len(domainIDs)+1)
 	for i, st := range statuses {
 		if i > 0 {
 			placeholders += ", "
@@ -589,10 +594,25 @@ func (s *Store) listLinksForCurrentKP(statuses ...string) ([]ActivationLink, err
 	}
 	args = append(args, "current")
 
-	rows, err := s.db.Query(`SELECT `+linkColumnsPrefixed("al")+`
+	query := `SELECT ` + linkColumnsPrefixed("al") + `
 		FROM activation_links al
-		JOIN knowledge_points kp ON kp.point_id = al.point_id
-		WHERE al.status IN (`+placeholders+`) AND kp.lifecycle = ?`, args...)
+		JOIN knowledge_points kp ON kp.point_id = al.point_id`
+	if len(domainIDs) > 0 {
+		query += `
+		JOIN sources src ON src.source_id = kp.source_id`
+	}
+	query += `
+		WHERE al.status IN (` + placeholders + `) AND kp.lifecycle = ?`
+	if len(domainIDs) > 0 {
+		ph := make([]string, len(domainIDs))
+		for i, id := range domainIDs {
+			ph[i] = "?"
+			args = append(args, id)
+		}
+		query += ` AND src.domain_id IN (` + strings.Join(ph, ",") + `)`
+	}
+
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("activation store: list matchable links: %w", err)
 	}

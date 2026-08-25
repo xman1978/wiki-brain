@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -136,8 +137,31 @@ func (s *Store) ListBundlesByStatus(statuses []string, limit, offset int) ([]Act
 // single owning KP to lifecycle-filter by — member/fringe lifecycle currency
 // is enforced separately by Study's per-tick lifecycle sweep, not at Match
 // time).
-func (s *Store) ListMatchableBundles() ([]ActivationBundle, error) {
-	rows, err := s.db.Query(`SELECT `+bundleColumns+` FROM activation_bundles WHERE status != ?`, BundleStatusDeprecated)
+//
+// domainIDs scopes the scan to bundles with at least one member point in
+// those domains (2026-08-25, BundleMatcher's domain-sharded cache) — checked
+// via json_each over the JSON-encoded member_point_ids column (same pattern
+// as the trace/study json_each queries elsewhere in this codebase), since
+// membership isn't a normalized junction table. Empty domainIDs means
+// unresolved domain and loads every bundle system-wide, same as before this
+// scoping was added.
+func (s *Store) ListMatchableBundles(domainIDs []string) ([]ActivationBundle, error) {
+	args := []interface{}{BundleStatusDeprecated}
+	query := `SELECT ` + bundleColumns + ` FROM activation_bundles WHERE status != ?`
+	if len(domainIDs) > 0 {
+		ph := make([]string, len(domainIDs))
+		for i, id := range domainIDs {
+			ph[i] = "?"
+			args = append(args, id)
+		}
+		query += ` AND EXISTS (
+			SELECT 1 FROM json_each(activation_bundles.member_point_ids) je
+			JOIN knowledge_points kp ON kp.point_id = json_extract(je.value, '$.point_id')
+			JOIN sources src ON src.source_id = kp.source_id
+			WHERE src.domain_id IN (` + strings.Join(ph, ",") + `)
+		)`
+	}
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("activation store: list matchable bundles: %w", err)
 	}
@@ -400,6 +424,22 @@ func (s *Store) TouchBundleLastUsed(bundleID string) error {
 		return fmt.Errorf("activation store: touch bundle last used: %w", err)
 	}
 	return nil
+}
+
+// ListBundleMatchedQuestions returns traces whose activation_bundle_ids
+// contain bundleID — mirrors Store.ListMatchedQuestions for ActivationLink
+// (docs/impl/v1/activation-bundle.md「命中问法」).
+func (s *Store) ListBundleMatchedQuestions(bundleID string) ([]LinkQuestion, error) {
+	rows, err := s.db.Query(`
+		SELECT t.trace_id, t.question, t.created_at, t.path_type, t.retrieval_quality
+		FROM traces t, json_each(t.activation_bundle_ids) AS j
+		WHERE j.value = ?
+		ORDER BY t.created_at ASC`, bundleID)
+	if err != nil {
+		return nil, fmt.Errorf("activation store: list bundle matched questions: %w", err)
+	}
+	defer rows.Close()
+	return scanLinkQuestions(rows)
 }
 
 // ListBundleCreatedFromQuestions resolves created_from — a JSON array of

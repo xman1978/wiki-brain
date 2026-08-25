@@ -17,10 +17,10 @@ func TestHandlerRetrieve(t *testing.T) {
 		Output: `{"domain_ids": ["d1"]}`,
 	})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{
-		Output: `{"source_ids": ["s1"]}`,
+		Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`,
 	})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{
-		Output: `{"outline_ids": ["o2"]}`,
+		Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`,
 	})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
 		Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`,

@@ -40,10 +40,17 @@ func (c MatchConfig) withDefaults() MatchConfig {
 type Matcher struct {
 	store *Store
 
-	mu       sync.RWMutex
-	cache    []ActivationLink
-	synonyms *SynonymResolver
-	valid    bool
+	// mu guards cache/synonyms/synonymsValid together (2026-08-25, domain-
+	// sharded cache): cache is keyed by domainCacheKey(domainIDs) so each
+	// distinct domain combination Match() sees loads and invalidates
+	// independently, instead of one global scan-everything blob — a query
+	// scoped to one domain no longer pays for every other domain's links.
+	// InvalidateCache clears the whole map: any write can affect any shard's
+	// candidate set, and shard keys are cheap to rebuild lazily.
+	mu            sync.RWMutex
+	cache         map[string][]ActivationLink
+	synonyms      *SynonymResolver
+	synonymsValid bool
 
 	// confidenceCfg / randFloat drive the 2026-08-13 tiering + explore/audit
 	// sampling (docs/impl/v1/activation.md「置信度分档判定」). randFloat
@@ -69,37 +76,68 @@ func (m *Matcher) SetConfidenceConfig(cfg ConfidenceConfig) {
 
 func (m *Matcher) InvalidateCache() {
 	m.mu.Lock()
-	m.valid = false
 	m.cache = nil
+	m.synonymsValid = false
 	m.mu.Unlock()
 }
 
-func (m *Matcher) loadCache() ([]ActivationLink, error) {
+// domainCacheKey derives a stable map key for a domain-scoped cache shard —
+// order-independent (sorted) so callers passing the same domain set in a
+// different order share a shard. Empty domainIDs (unresolved domain) maps to
+// its own reserved key, distinct from any real domain_id.
+func domainCacheKey(domainIDs []string) string {
+	if len(domainIDs) == 0 {
+		return "\x00all"
+	}
+	sorted := append([]string(nil), domainIDs...)
+	sort.Strings(sorted)
+	return strings.Join(sorted, "\x1f")
+}
+
+func (m *Matcher) loadCache(domainIDs []string) ([]ActivationLink, error) {
+	key := domainCacheKey(domainIDs)
+
 	m.mu.RLock()
-	if m.valid {
-		out := m.cache
+	if links, ok := m.cache[key]; ok {
 		m.mu.RUnlock()
-		return out, nil
+		return links, nil
 	}
 	m.mu.RUnlock()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.valid {
-		return m.cache, nil
+	if links, ok := m.cache[key]; ok {
+		return links, nil
 	}
-	links, err := m.store.ListMatchableLinksForCurrentKP()
+	links, err := m.store.ListMatchableLinksForCurrentKP(domainIDs)
 	if err != nil {
 		return nil, err
+	}
+	if err := m.ensureSynonymsLocked(); err != nil {
+		return nil, err
+	}
+	if m.cache == nil {
+		m.cache = make(map[string][]ActivationLink)
+	}
+	m.cache[key] = links
+	return links, nil
+}
+
+// ensureSynonymsLocked (re)loads the subject-synonym table if it hasn't been
+// loaded since the last InvalidateCache — synonyms are global, not
+// domain-scoped, so they don't participate in the per-domain cache shards.
+// Caller must hold m.mu (write lock).
+func (m *Matcher) ensureSynonymsLocked() error {
+	if m.synonymsValid {
+		return nil
 	}
 	synonyms, err := m.store.ListActiveSynonyms()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	m.synonyms.Load(synonyms)
-	m.cache = links
-	m.valid = true
-	return links, nil
+	m.synonymsValid = true
+	return nil
 }
 
 // Match scores activation links against the Session ExpandedQuery using
@@ -109,10 +147,14 @@ func (m *Matcher) loadCache() ([]ActivationLink, error) {
 //
 // Empty observed_conditions falls back to question_terms equality only when
 // the link has never observed a non-empty audience/constraint gate.
-func (m *Matcher) Match(_ context.Context, query session.ExpandedQuery, cfg MatchConfig) ([]LinkMatch, error) {
+//
+// domainIDs scopes the candidate scan to those domains (2026-08-25,
+// domain-sharded cache) — pass nil/empty when the query's domain is
+// unresolved to scan every domain, same as before this scoping was added.
+func (m *Matcher) Match(_ context.Context, query session.ExpandedQuery, domainIDs []string, cfg MatchConfig) ([]LinkMatch, error) {
 	cfg = cfg.withDefaults()
 
-	links, err := m.loadCache()
+	links, err := m.loadCache(domainIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -327,15 +369,19 @@ func MatchConditionGroups(conds []ObservedCondition, querySubject, qi, qa, qc st
 // This is a separate consumer from Match() (2026-08-12 修订：Match 本身不再
 // 使用同义词模糊匹配，但 gap-mining 仍然需要用同义词归一化去判断"是不是仅仅
 // 因为措辞不同才没命中"，因此这里保留自己的同义词归一化计算，不再复用
-// BuildQueryConditionTerms). Ensures the resolver is warm (loads the cache if
-// Match hasn't run yet in this process). Returns the representative group's
-// normalized Subject (hit_count-highest among qualifying groups) as
-// observedSubject.
+// BuildQueryConditionTerms). Ensures the resolver is warm (loads synonyms if
+// Match hasn't run yet in this process) — this only needs the global synonym
+// table, not a domain-scoped link scan, so it doesn't go through loadCache.
+// Returns the representative group's normalized Subject (hit_count-highest
+// among qualifying groups) as observedSubject.
 func (m *Matcher) SubjectOnlyMiss(conds []ObservedCondition, subject, intent, audience, constraint string) (observedSubject string, ok bool) {
 	if len(conds) == 0 {
 		return "", false
 	}
-	if _, err := m.loadCache(); err != nil {
+	m.mu.Lock()
+	err := m.ensureSynonymsLocked()
+	m.mu.Unlock()
+	if err != nil {
 		return "", false
 	}
 

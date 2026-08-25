@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/search/query"
@@ -38,6 +37,7 @@ type Service struct {
 	auditWriter        AuditOutcomeWriter
 	synthesisWriter    SynthesisOutcomeWriter
 	synthesisRandFloat func() float64
+	subjectNormalizer  *SubjectNormalizer
 }
 
 // AuditOutcomeWriter is implemented by trace.Service — mirrors the
@@ -88,6 +88,10 @@ const (
 )
 
 func NewService(store *Store, llmClient llm.LLMClient, unitsIdx, pointsIdx, outlinesIdx bleve.Index, cfg *config.Config, activationSvc *activation.Service, evidenceSvc *evidence.Service, wikiSvc *wiki.Service) *Service {
+	subjectNormalizer := NewSubjectNormalizer(store, SubjectNormConfig{
+		LocalSimMin: cfg.Retrieval.SourceAffinityLocalSimMin,
+	})
+	subjectNormalizer.SetLLMClient(llmClient)
 	return &Service{
 		store:              store,
 		llmClient:          llmClient,
@@ -99,6 +103,7 @@ func NewService(store *Store, llmClient llm.LLMClient, unitsIdx, pointsIdx, outl
 		evidenceSvc:        evidenceSvc,
 		wikiSvc:            wikiSvc,
 		synthesisRandFloat: rand.Float64,
+		subjectNormalizer:  subjectNormalizer,
 	}
 }
 
@@ -279,7 +284,7 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 	// docs/impl/v1/retrieval.md 步骤 2。
 	workQC := qc
 	if s.cfg.Retrieval.QuestionTupleNormEnabled && qc.DomainResolved && len(qc.DomainIDs) > 0 {
-		normSubject, normIntent, normAudience, normConstraint, err := s.activationSvc.NormalizeTuple(ctx, qc.DomainIDs, qc.Subject, qc.Intent, qc.Audience, qc.Constraint)
+		normSubject, normIntent, normAudience, normConstraint, _, _, err := s.activationSvc.NormalizeTuple(ctx, qc.DomainIDs, qc.Subject, qc.Intent, qc.Audience, qc.Constraint)
 		if err != nil {
 			slog.Warn("retrieval: question tuple normalization failed, using raw session tuple", "error", err)
 		} else {
@@ -301,6 +306,10 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 	// 步骤 2「命中优先级」，同 RetrieveWithProgress 里 Wiki∥ActivationLink
 	// 已有的并行写法）；两边都返回后按连续置信度（tier/mean）择一，不是写死
 	// 的层级顺序。
+	var matchDomainIDs []string
+	if workQC.DomainResolved {
+		matchDomainIDs = workQC.DomainIDs
+	}
 	var linkMatches []activation.LinkMatch
 	var linkErr error
 	var bundleCand bundleCandidate
@@ -309,11 +318,11 @@ func (s *Service) tryFastPath(ctx context.Context, qc QueryContext) (*EvidenceSe
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		linkMatches, linkErr = s.activationSvc.Match(ctx, expandedQuery, matchCfg)
+		linkMatches, linkErr = s.activationSvc.Match(ctx, expandedQuery, matchDomainIDs, matchCfg)
 	}()
 	go func() {
 		defer wg.Done()
-		bundleCand, bundleOK = s.resolveBundleCandidate(ctx, expandedQuery, matchCfg)
+		bundleCand, bundleOK = s.resolveBundleCandidate(ctx, expandedQuery, matchDomainIDs, matchCfg)
 	}()
 	wg.Wait()
 
@@ -806,6 +815,10 @@ func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progres
 		}
 	}
 
+	if es, ok := s.trySourceAffinityShortcut(ctx, qc, emit, progress); ok {
+		return es, nil
+	}
+
 	// Step 2: Domain pre-filter
 	domainStart := time.Now()
 	candidateSources, err := s.domainPreFilter(ctx, qc)
@@ -835,6 +848,17 @@ func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progres
 			retryQC.Intent = parsed.Intent
 			slog.Info("retrieval: empty result, retrying with extracted subject/intent",
 				"subject", parsed.Subject, "intent", parsed.Intent)
+
+			// Subject affinity shortcut, second attempt (2026-08-25): the
+			// original qc entering this function had no subject to look a
+			// binding up under (bare POST /answer, no upstream session
+			// parsing — trySourceAffinityShortcut's first attempt above
+			// no-ops whenever qc.Subject == ""), so retry it now that this
+			// fallback's own reparse has produced one.
+			if es, ok := s.trySourceAffinityShortcut(ctx, retryQC, emit, progress); ok {
+				return es, nil
+			}
+
 			es, err = s.filterAndRecall(ctx, retryQC, candidateSources, emit, progress, false)
 			if err != nil {
 				return nil, err
@@ -1149,23 +1173,39 @@ func (s *Service) domainPreFilter(ctx context.Context, qc QueryContext) ([]Sourc
 	return sources, nil
 }
 
-// Step 3: Source semantic filter
+// sourceFilterCandidate is one source_filter.md candidate item — mirrors
+// rerankJudgeCandidate's shape (a small JSON-friendly struct rather than a
+// hand-built text list) so it packs through the same splitJudgeBatches sizing
+// logic.
+type sourceFilterCandidate struct {
+	CandidateID string `json:"candidate_id"`
+	Title       string `json:"title"`
+	Summary     string `json:"summary,omitempty"`
+}
+
+func sourceFilterCandidateID(c sourceFilterCandidate) string { return c.CandidateID }
+
+// Step 3: Source semantic filter (2026-08-25 改为分批并发调用，复用
+// judge_batch.go 的批量核心 — 见 docs 讨论：候选 source 数量随导入文件增长，
+// 原先把全部候选一次性塞进一个 LLM 调用的 prompt 大小和延迟会跟着线性增长；
+// 现在按字符数/条数上限拆批、有界并发调用，单次调用大小和总墙钟延迟都不再
+// 随语料量无界增长). LLM 整体失败（或返回缺失过多以致某批次最终报错）时
+// fail-open：保留全部候选，交给后续 outline/FTS 召回与证据判断兜底，语义与
+// 分批前一致。
 func (s *Service) sourceSemanticFilter(ctx context.Context, qc QueryContext, candidates []SourceInfo) ([]SourceInfo, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}
 
-	var sourceList strings.Builder
-	for _, src := range candidates {
+	items := make([]sourceFilterCandidate, len(candidates))
+	bySourceID := make(map[string]SourceInfo, len(candidates))
+	for i, src := range candidates {
 		summary := ""
 		if src.Summary.Valid {
 			summary = src.Summary.String
 		}
-		if summary != "" {
-			fmt.Fprintf(&sourceList, "[%s] 标题：%s / 概述：%s\n", src.SourceID, src.Title, summary)
-		} else {
-			fmt.Fprintf(&sourceList, "[%s] 标题：%s\n", src.SourceID, src.Title)
-		}
+		items[i] = sourceFilterCandidate{CandidateID: src.SourceID, Title: src.Title, Summary: summary}
+		bySourceID[src.SourceID] = src
 	}
 
 	subject := qc.Subject
@@ -1185,38 +1225,51 @@ func (s *Service) sourceSemanticFilter(ctx context.Context, qc QueryContext, can
 		constraint = "（无）"
 	}
 
-	resp, err := s.llmClient.CompleteJSON(ctx, "source_filter.md", map[string]string{
-		"question":    qc.Question,
-		"subject":     subject,
-		"intent":      intent,
-		"audience":    audience,
-		"constraint":  constraint,
-		"source_list": sourceList.String(),
-	}, "classification")
+	callBatch := func(ctx context.Context, batch []sourceFilterCandidate) (map[string]string, error) {
+		payload, err := json.Marshal(batch)
+		if err != nil {
+			return nil, fmt.Errorf("retrieval: source filter payload: %w", err)
+		}
+		resp, err := s.llmClient.CompleteJSON(ctx, "source_filter.md", map[string]string{
+			"question":   qc.Question,
+			"subject":    subject,
+			"intent":     intent,
+			"audience":   audience,
+			"constraint": constraint,
+			"candidates": string(payload),
+		}, "classification")
+		if err != nil {
+			return nil, fmt.Errorf("retrieval: source filter llm: %w", err)
+		}
+		var result struct {
+			Results []struct {
+				CandidateID string `json:"candidate_id"`
+				Relevant    bool   `json:"relevant"`
+			} `json:"results"`
+		}
+		if err := json.Unmarshal(resp, &result); err != nil {
+			return nil, fmt.Errorf("retrieval: source filter parse: %w", err)
+		}
+		out := make(map[string]string, len(result.Results))
+		for _, r := range result.Results {
+			if r.Relevant {
+				out[r.CandidateID] = "relevant"
+			} else {
+				out[r.CandidateID] = "irrelevant"
+			}
+		}
+		return out, nil
+	}
+
+	results, err := runJudgeBatches(ctx, items, s.rerankJudgeBatchMaxChars(), s.rerankJudgeBatchMaxCandidates(), s.rerankJudgeConcurrency(), sourceFilterCandidateID, "relevant", callBatch)
 	if err != nil {
 		slog.Warn("retrieval: source filter failed, using all candidates", "error", err)
 		return candidates, nil
 	}
 
-	var result struct {
-		SourceIDs []string `json:"source_ids"`
-	}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		slog.Warn("retrieval: source filter parse failed, using all candidates", "error", err)
-		return candidates, nil
-	}
-
-	if len(result.SourceIDs) == 0 {
-		return candidates, nil
-	}
-
-	idSet := make(map[string]bool, len(result.SourceIDs))
-	for _, id := range result.SourceIDs {
-		idSet[id] = true
-	}
 	var filtered []SourceInfo
 	for _, src := range candidates {
-		if idSet[src.SourceID] {
+		if results[src.SourceID] == "relevant" {
 			filtered = append(filtered, src)
 		}
 	}
@@ -1358,21 +1411,31 @@ func (s *Service) outlineRecall(ctx context.Context, qc QueryContext, sourceIDs 
 	return candidates, nil
 }
 
+// outlineFilterCandidate is one outline_filter.md candidate item, mirroring
+// sourceFilterCandidate's shape. Flattened across every low-FTS-score source
+// in one candidate pool (2026-08-25) instead of one goroutine+LLM call per
+// source — a domain with many low-scoring sources no longer means an
+// unbounded number of concurrent LLM calls; call count is now bounded by
+// splitJudgeBatches' char/count caps regardless of source count. OutlineID is
+// globally unique (source_outlines primary key) so items from different
+// sources can share one flat candidate pool without collision; Level carries
+// the outline depth that the old per-source indented text list conveyed.
+type outlineFilterCandidate struct {
+	CandidateID string `json:"candidate_id"`
+	Title       string `json:"title"`
+	Level       int    `json:"level,omitempty"`
+	Keywords    string `json:"keywords,omitempty"`
+}
+
+func outlineFilterCandidateID(c outlineFilterCandidate) string { return c.CandidateID }
+
 func (s *Service) outlineLLMFallback(ctx context.Context, qc QueryContext, sourceIDs []string) ([]string, error) {
 	outlines, err := s.store.GetOutlinesBySourceIDs(sourceIDs)
 	if err != nil {
 		return nil, err
 	}
-
-	// Group outlines by source
-	bySource := make(map[string][]OutlineInfo)
-	for _, o := range outlines {
-		bySource[o.SourceID] = append(bySource[o.SourceID], o)
-	}
-
-	type result struct {
-		outlineIDs []string
-		err        error
+	if len(outlines) == 0 {
+		return nil, nil
 	}
 
 	subject := qc.Subject
@@ -1384,50 +1447,63 @@ func (s *Service) outlineLLMFallback(ctx context.Context, qc QueryContext, sourc
 		intent = "（未提取）"
 	}
 
-	var mu sync.Mutex
-	var allIDs []string
-	var wg sync.WaitGroup
-
-	for sid, sourceOutlines := range bySource {
-		_ = sid
-		wg.Add(1)
-		go func(ols []OutlineInfo) {
-			defer wg.Done()
-			var outlineList strings.Builder
-			for _, o := range ols {
-				indent := strings.Repeat("  ", o.Level-1)
-				line := fmt.Sprintf("[%s] %s%s", o.OutlineID, indent, o.Title)
-				if o.Summary.Valid && o.Summary.String != "" {
-					line += " / 关键词：" + o.Summary.String
-				}
-				outlineList.WriteString(line + "\n")
-			}
-
-			resp, err := s.llmClient.CompleteJSON(ctx, "outline_filter.md", map[string]string{
-				"question":     qc.Question,
-				"subject":      subject,
-				"intent":       intent,
-				"outline_list": outlineList.String(),
-			}, "classification")
-			if err != nil {
-				slog.Warn("retrieval: outline llm fallback failed for source", "error", err)
-				return
-			}
-
-			var parsed struct {
-				OutlineIDs []string `json:"outline_ids"`
-			}
-			if err := json.Unmarshal(resp, &parsed); err != nil {
-				slog.Warn("retrieval: outline llm parse failed", "error", err)
-				return
-			}
-
-			mu.Lock()
-			allIDs = append(allIDs, parsed.OutlineIDs...)
-			mu.Unlock()
-		}(sourceOutlines)
+	items := make([]outlineFilterCandidate, len(outlines))
+	for i, o := range outlines {
+		keywords := ""
+		if o.Summary.Valid {
+			keywords = o.Summary.String
+		}
+		items[i] = outlineFilterCandidate{CandidateID: o.OutlineID, Title: o.Title, Level: o.Level, Keywords: keywords}
 	}
-	wg.Wait()
+
+	callBatch := func(ctx context.Context, batch []outlineFilterCandidate) (map[string]string, error) {
+		payload, err := json.Marshal(batch)
+		if err != nil {
+			return nil, fmt.Errorf("retrieval: outline filter payload: %w", err)
+		}
+		resp, err := s.llmClient.CompleteJSON(ctx, "outline_filter.md", map[string]string{
+			"question":   qc.Question,
+			"subject":    subject,
+			"intent":     intent,
+			"candidates": string(payload),
+		}, "classification")
+		if err != nil {
+			return nil, fmt.Errorf("retrieval: outline filter llm: %w", err)
+		}
+		var result struct {
+			Results []struct {
+				CandidateID string `json:"candidate_id"`
+				Relevant    bool   `json:"relevant"`
+			} `json:"results"`
+		}
+		if err := json.Unmarshal(resp, &result); err != nil {
+			return nil, fmt.Errorf("retrieval: outline filter parse: %w", err)
+		}
+		out := make(map[string]string, len(result.Results))
+		for _, r := range result.Results {
+			if r.Relevant {
+				out[r.CandidateID] = "relevant"
+			} else {
+				out[r.CandidateID] = "irrelevant"
+			}
+		}
+		return out, nil
+	}
+
+	// LLM 失败/最终报错时保持原有 fail-open 语义：outlineRecall 只把返回的 ID
+	// 追加进 FTS 已召回的结果，一个 error 上抛后由调用方 slog.Warn 后继续（见
+	// outlineRecall 的 4.2 步骤），不需要在这里额外 fallback。
+	results, err := runJudgeBatches(ctx, items, s.rerankJudgeBatchMaxChars(), s.rerankJudgeBatchMaxCandidates(), s.rerankJudgeConcurrency(), outlineFilterCandidateID, "irrelevant", callBatch)
+	if err != nil {
+		return nil, err
+	}
+
+	var allIDs []string
+	for _, o := range outlines {
+		if results[o.OutlineID] == "relevant" {
+			allIDs = append(allIDs, o.OutlineID)
+		}
+	}
 	return allIDs, nil
 }
 
@@ -2099,18 +2175,21 @@ func judgeContextDefaults(qc QueryContext) (subject, intent, audience, constrain
 // vendor's evidence out of an otherwise-stable candidate pool). This
 // mirrors the same completeness check internal/evidence/service.go's
 // validateCoverage already does for evidence_mine.md.
-const rerankJudgeCoverageRetries = 2
+// rerankJudgeCoverageRetries / missingCandidateIDs / runRerankJudgeBatches
+// are now thin wrappers over judge_batch.go's generic
+// judgeBatchCoverageRetries/missingJudgeIDs/runJudgeBatches — the packing +
+// bounded-concurrency + missing-id-retry core is shared with
+// sourceSemanticFilter and outlineLLMFallback (2026-08-25), so scaling
+// behavior (bounded prompt size per call, bounded concurrent calls) doesn't
+// have to be reimplemented per LLM classification step.
+const rerankJudgeCoverageRetries = judgeBatchCoverageRetries
+
+func rerankCandidateID(c rerankJudgeCandidate) string { return c.CandidateID }
 
 // missingCandidateIDs returns the candidate_ids present in batch but absent
 // from results.
 func missingCandidateIDs(batch []rerankJudgeCandidate, results map[string]string) []string {
-	var missing []string
-	for _, c := range batch {
-		if _, ok := results[c.CandidateID]; !ok {
-			missing = append(missing, c.CandidateID)
-		}
-	}
-	return missing
+	return missingJudgeIDs(batch, results, rerankCandidateID)
 }
 
 // fan-out used by both rerank_relevance.md and rerank_classify.md.
@@ -2122,87 +2201,7 @@ func missingCandidateIDs(batch []rerankJudgeCandidate, results map[string]string
 // classify) so a dropped candidate degrades to "kept but unclassified"
 // rather than silently disappearing.
 func (s *Service) runRerankJudgeBatches(ctx context.Context, candidates []rerankJudgeCandidate, defaultForMissing string, callBatch func(ctx context.Context, batch []rerankJudgeCandidate) (map[string]string, error)) (map[string]string, error) {
-	batches := splitRerankJudgeBatches(candidates, s.rerankJudgeBatchMaxChars(), s.rerankJudgeBatchMaxCandidates())
-	if len(batches) == 0 {
-		return nil, nil
-	}
-	batchSizes := make([]int, len(batches))
-	for i, b := range batches {
-		batchSizes[i] = len(b)
-	}
-	slog.Info("retrieval: rerank judge batches", "batch_count", len(batches), "batch_sizes", batchSizes, "concurrency", s.rerankJudgeConcurrency())
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	concurrency := s.rerankJudgeConcurrency()
-	sem := make(chan struct{}, concurrency)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	results := make(map[string]string)
-	var firstErr error
-	var errOnce sync.Once
-
-launchBatches:
-	for i, batch := range batches {
-		i, batch := i, batch
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-			break launchBatches
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() { <-sem }()
-			batchStart := time.Now()
-			var batchResults map[string]string
-			var err error
-			var missing []string
-			for attempt := 0; attempt < rerankJudgeCoverageRetries; attempt++ {
-				batchResults, err = callBatch(ctx, batch)
-				if err != nil {
-					break
-				}
-				missing = missingCandidateIDs(batch, batchResults)
-				if len(missing) == 0 {
-					break
-				}
-				slog.Warn("retrieval: rerank judge batch missing candidate_id(s) in response, retrying",
-					"batch_index", i, "attempt", attempt, "missing", missing)
-			}
-			batchMs := time.Since(batchStart).Milliseconds()
-			if err != nil {
-				slog.Info("retrieval: rerank judge batch timing", "batch_index", i, "batch_size", len(batch), "duration_ms", batchMs, "error", err)
-				errOnce.Do(func() {
-					firstErr = err
-					cancel()
-				})
-				return
-			}
-			if len(missing) > 0 {
-				slog.Warn("retrieval: rerank judge batch still missing candidate_id(s) after retries, defaulting",
-					"batch_index", i, "missing", missing, "default", defaultForMissing)
-				for _, cid := range missing {
-					batchResults[cid] = defaultForMissing
-				}
-			}
-			slog.Info("retrieval: rerank judge batch timing", "batch_index", i, "batch_size", len(batch), "duration_ms", batchMs)
-			mu.Lock()
-			for cid, v := range batchResults {
-				results[cid] = v
-			}
-			mu.Unlock()
-		}()
-	}
-	wg.Wait()
-	if firstErr != nil {
-		return nil, firstErr
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return results, nil
+	return runJudgeBatches(ctx, candidates, s.rerankJudgeBatchMaxChars(), s.rerankJudgeBatchMaxCandidates(), s.rerankJudgeConcurrency(), rerankCandidateID, defaultForMissing, callBatch)
 }
 
 func (s *Service) judgeRelevanceExtractedEvidence(ctx context.Context, qc QueryContext, subject, intent, audience, constraint string, candidates []rerankJudgeCandidate) (map[string]bool, error) {
@@ -2324,69 +2323,7 @@ func (s *Service) rerankJudgeConcurrency() int {
 // judging semantics (each candidate is judged independently), so
 // reordering across batches is safe.
 func splitRerankJudgeBatches(candidates []rerankJudgeCandidate, maxChars, maxCandidates int) [][]rerankJudgeCandidate {
-	if len(candidates) == 0 {
-		return nil
-	}
-	if maxChars <= 0 {
-		maxChars = defaultRerankJudgeBatchMaxChars
-	}
-	if maxCandidates <= 0 {
-		maxCandidates = defaultRerankJudgeBatchMaxCandidates
-	}
-
-	type sizedCandidate struct {
-		candidate rerankJudgeCandidate
-		chars     int
-	}
-	sized := make([]sizedCandidate, len(candidates))
-	totalChars := 0
-	for i, c := range candidates {
-		itemJSON, _ := json.Marshal(c)
-		n := utf8.RuneCount(itemJSON)
-		sized[i] = sizedCandidate{candidate: c, chars: n}
-		totalChars += n
-	}
-	sort.SliceStable(sized, func(i, j int) bool { return sized[i].chars > sized[j].chars })
-
-	numBatches := (totalChars + maxChars - 1) / maxChars
-	if byCount := (len(candidates) + maxCandidates - 1) / maxCandidates; byCount > numBatches {
-		numBatches = byCount
-	}
-	if numBatches < 1 {
-		numBatches = 1
-	}
-	batches := make([][]rerankJudgeCandidate, numBatches)
-	batchChars := make([]int, numBatches)
-
-	for _, item := range sized {
-		best := -1
-		for b := 0; b < len(batches); b++ {
-			if len(batches[b]) >= maxCandidates {
-				continue
-			}
-			if len(batches[b]) > 0 && batchChars[b]+item.chars > maxChars {
-				continue
-			}
-			if best == -1 || batchChars[b] < batchChars[best] {
-				best = b
-			}
-		}
-		if best == -1 {
-			batches = append(batches, nil)
-			batchChars = append(batchChars, 0)
-			best = len(batches) - 1
-		}
-		batches[best] = append(batches[best], item.candidate)
-		batchChars[best] += item.chars
-	}
-
-	nonEmpty := make([][]rerankJudgeCandidate, 0, len(batches))
-	for _, b := range batches {
-		if len(b) > 0 {
-			nonEmpty = append(nonEmpty, b)
-		}
-	}
-	return nonEmpty
+	return splitJudgeBatches(candidates, maxChars, maxCandidates)
 }
 
 type rerankJudgeCandidate struct {

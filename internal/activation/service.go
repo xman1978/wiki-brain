@@ -33,9 +33,9 @@ func (s *Service) SetTupleNormalizer(n *TupleNormalizer) {
 // NormalizeTuple is Retrieval's entry point into the tuple-normalization
 // layer (docs/impl/v1/retrieval.md 步骤 2), mirroring Match's passthrough
 // shape so Retrieval only depends on this package's public surface.
-func (s *Service) NormalizeTuple(ctx context.Context, domainIDs []string, subject, intent, audience, constraint string) (string, string, string, string, error) {
+func (s *Service) NormalizeTuple(ctx context.Context, domainIDs []string, subject, intent, audience, constraint string) (normSubject, normIntent, normAudience, normConstraint, intentRaw, constraintRaw string, err error) {
 	if s.tupleNormalizer == nil {
-		return "", "", "", "", fmt.Errorf("activation: tuple normalizer not configured")
+		return "", "", "", "", "", "", fmt.Errorf("activation: tuple normalizer not configured")
 	}
 	return s.tupleNormalizer.Normalize(ctx, domainIDs, subject, intent, audience, constraint)
 }
@@ -56,12 +56,15 @@ func (s *Service) BundleMatcher() *BundleMatcher {
 }
 
 // MatchBundles is阶段 6 只读 API 和 Study 显影扫描共用的入口 — 阶段 1 没有
-// Retrieval 消费者，两者是仅有的调用方。
-func (s *Service) MatchBundles(ctx context.Context, query session.ExpandedQuery, cfg MatchConfig) ([]BundleMatch, error) {
+// Retrieval 消费者，两者是仅有的调用方。domainIDs scopes the BundleMatcher's
+// domain-sharded cache (2026-08-25) — pass nil/empty when the query's domain
+// is unresolved (Study's显影扫描 always passes nil, scanning every domain,
+// same as before this scoping was added).
+func (s *Service) MatchBundles(ctx context.Context, query session.ExpandedQuery, domainIDs []string, cfg MatchConfig) ([]BundleMatch, error) {
 	if s.bundleMatcher == nil {
 		return nil, nil
 	}
-	return s.bundleMatcher.Match(ctx, query, cfg)
+	return s.bundleMatcher.Match(ctx, query, domainIDs, cfg)
 }
 
 func (s *Service) Store() *Store {
@@ -70,12 +73,14 @@ func (s *Service) Store() *Store {
 
 // Match is Retrieval's entry point into the activation layer
 // (docs/impl/v1/retrieval.md 步骤 2): a thin passthrough to the Matcher so
-// Retrieval only needs one dependency on this package.
-func (s *Service) Match(ctx context.Context, query session.ExpandedQuery, cfg MatchConfig) ([]LinkMatch, error) {
+// Retrieval only needs one dependency on this package. domainIDs scopes the
+// Matcher's domain-sharded cache (2026-08-25) — pass nil/empty when the
+// query's domain is unresolved.
+func (s *Service) Match(ctx context.Context, query session.ExpandedQuery, domainIDs []string, cfg MatchConfig) ([]LinkMatch, error) {
 	if s.matcher == nil {
 		return nil, nil
 	}
-	return s.matcher.Match(ctx, query, cfg)
+	return s.matcher.Match(ctx, query, domainIDs, cfg)
 }
 
 // CreateLink is idempotent on point_id: a second call for a point that
@@ -588,7 +593,7 @@ func (s *Service) EnrichFromConfidentFullPath(pointIDs []string, subject, intent
 	if len(pointIDs) == 0 {
 		return nil
 	}
-	add := NormalizeObservedCondition(subject, intent, audience, constraint, questionTerms, time.Now().UTC())
+	add := NormalizeObservedCondition(subject, intent, audience, constraint, intent, constraint, questionTerms, time.Now().UTC())
 	for _, pid := range pointIDs {
 		link, err := s.store.GetByPointID(pid)
 		if err != nil {

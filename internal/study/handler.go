@@ -2,6 +2,7 @@ package study
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -30,6 +31,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 func (h *Handler) runStudy(w http.ResponseWriter, r *http.Request) {
 	result, err := h.svc.Run()
 	if err != nil {
+		if errors.Is(err, ErrAlreadyRunning) {
+			foundation.WriteError(w, http.StatusConflict, err.Error())
+			return
+		}
 		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

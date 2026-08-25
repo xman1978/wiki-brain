@@ -23,6 +23,16 @@ type ObservedCondition struct {
 	Intent              string    `json:"intent"`
 	Audience            string    `json:"audience"`
 	Constraint          string    `json:"constraint"`
+	// IntentRaw/ConstraintRaw carry the text.Normalize-only (pre-Terms) form
+	// of intent/constraint — mirrors QuestionTupleNorm.IntentRaw/ConstraintRaw
+	// (docs/impl/v1/retrieval.md 步骤 2). Intent/Constraint above are the
+	// sorted term-bag used for exact-match dedup key/lookup; a semantic LLM
+	// judgment over stored conditions needs the original wording (word order
+	// and phrasing), which the bag form throws away — same gap that was
+	// already fixed for question_tuple_norms, mirrored here for
+	// ActivationLink/ActivationBundle's own observed_conditions.
+	IntentRaw           string    `json:"intent_raw,omitempty"`
+	ConstraintRaw       string    `json:"constraint_raw,omitempty"`
 	QuestionTerms       string    `json:"question_terms,omitempty"`
 	FirstSeenAt         time.Time `json:"first_seen_at"`
 	LastSeenAt          time.Time `json:"last_seen_at"`
@@ -37,15 +47,28 @@ type ObservedCondition struct {
 }
 
 // NormalizeObservedCondition builds a dedupe-ready tuple from raw Session fields.
-func NormalizeObservedCondition(subject, intent, audience, constraint, questionTerms string, now time.Time) ObservedCondition {
+// intentRaw/constraintRaw are the original (pre-Terms-bagging) wording of
+// intent/constraint — pass "" when unavailable (falls back to Normalize-only
+// derived from intent/constraint themselves, same as before this field
+// existed) rather than the sorted term bag, so a future semantic judgment
+// against this condition still has real wording to read.
+func NormalizeObservedCondition(subject, intent, audience, constraint, intentRaw, constraintRaw, questionTerms string, now time.Time) ObservedCondition {
 	if now.IsZero() {
 		now = time.Now().UTC()
+	}
+	if intentRaw == "" {
+		intentRaw = text.Normalize(intent)
+	}
+	if constraintRaw == "" {
+		constraintRaw = text.Normalize(constraint)
 	}
 	c := ObservedCondition{
 		Subject:       text.Normalize(subject),
 		Intent:        text.Terms(text.Normalize(intent)),
 		Audience:      text.NormalizeCompact(audience),
 		Constraint:    text.Terms(text.Normalize(constraint)),
+		IntentRaw:     intentRaw,
+		ConstraintRaw: constraintRaw,
 		QuestionTerms: questionTerms,
 		FirstSeenAt:   now,
 		LastSeenAt:    now,
@@ -109,6 +132,12 @@ func MergeObservedConditions(existing []ObservedCondition, add ObservedCondition
 		}
 		if add.QuestionTerms != "" {
 			prev.QuestionTerms = add.QuestionTerms
+		}
+		if add.IntentRaw != "" {
+			prev.IntentRaw = add.IntentRaw
+		}
+		if add.ConstraintRaw != "" {
+			prev.ConstraintRaw = add.ConstraintRaw
 		}
 		prev.KnownQuestionTerms = mergeKnownQuestionTerms(prev.KnownQuestionTerms, add.QuestionTerms)
 		byKey[k] = prev

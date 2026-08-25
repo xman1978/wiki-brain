@@ -1,6 +1,7 @@
 package study
 
 import (
+	"errors"
 	"log/slog"
 	"time"
 )
@@ -59,6 +60,10 @@ func (s *Scheduler) executeOnce() {
 	start := time.Now()
 	result, err := s.svc.Run()
 	if err != nil {
+		if errors.Is(err, ErrAlreadyRunning) {
+			slog.Info("study: scheduled run skipped, a run is already in progress")
+			return
+		}
 		slog.Error("study: scheduled run failed", "error", err)
 		return
 	}

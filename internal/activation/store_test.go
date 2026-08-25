@@ -239,7 +239,7 @@ func TestService_DerivedStatus_TracksConditionConfidence(t *testing.T) {
 	// Re-accumulate a condition and boost it again, then deprecate via KP
 	// lifecycle — deprecated must win over whatever the condition confidence
 	// says.
-	if err := store.AppendObservedCondition(l.LinkID, NormalizeObservedCondition("住宿", "", "", "", "", time.Now().UTC()), 50); err != nil {
+	if err := store.AppendObservedCondition(l.LinkID, NormalizeObservedCondition("住宿", "", "", "", "", "", "", time.Now().UTC()), 50); err != nil {
 		t.Fatalf("append condition: %v", err)
 	}
 	fresh, err := svc.GetLink(l.LinkID)

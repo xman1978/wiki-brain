@@ -331,7 +331,11 @@ func TestProcessTrace_FullPath_MergedConceptAnchor_CountsAsNull(t *testing.T) {
 	}
 }
 
-func TestProcessTrace_FullPath_PartialNoHits_NoActivationGap(t *testing.T) {
+// A full-path answer citing only Supporting evidence (no ActivationHits) now
+// grades confident — see directCitedPointIDs — so it DOES produce
+// activation_gap, the fuel signal for creating a future ActivationLink over
+// that point.
+func TestProcessTrace_FullPath_SupportingOnlyCited_ProducesActivationGap(t *testing.T) {
 	svc, store, db := setupService(t)
 	insertTestAnswer(t, db, "a-full-2")
 	insertTestKP(t, db, "p2")
@@ -352,8 +356,8 @@ func TestProcessTrace_FullPath_PartialNoHits_NoActivationGap(t *testing.T) {
 	svc.ProcessTrace(r)
 
 	events, err := store.ListLearningEvents("activation_gap", 0, 20)
-	if err != nil || len(events) != 0 {
-		t.Fatalf("expected no activation_gap for partial quality, got %d (err=%v)", len(events), err)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("expected 1 activation_gap event, got %d (err=%v)", len(events), err)
 	}
 }
 

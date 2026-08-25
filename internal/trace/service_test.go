@@ -196,7 +196,10 @@ func TestProcessTrace_DuplicateQuestion_NoDuplicateCooccurrence(t *testing.T) {
 	}
 }
 
-func TestProcessTrace_Partial_UpdatesHitOnly(t *testing.T) {
+// Citing only a Supporting-bucket fact now grades confident (see
+// directCitedPointIDs) rather than partial, so cooccurrence increments
+// confident_count for that point, not just hit_count.
+func TestProcessTrace_SupportingOnlyCited_UpdatesConfidentCooccurrence(t *testing.T) {
 	svc, store, db := setupService(t)
 	insertTestAnswer(t, db, "a-005")
 	insertTestKP(t, db, "p1")
@@ -227,8 +230,8 @@ func TestProcessTrace_Partial_UpdatesHitOnly(t *testing.T) {
 	if coocs[0].HitCount != 1 {
 		t.Errorf("expected hit_count=1, got %d", coocs[0].HitCount)
 	}
-	if coocs[0].ConfidentCount != 0 {
-		t.Errorf("partial should not increment confident_count, got %d", coocs[0].ConfidentCount)
+	if coocs[0].ConfidentCount != 1 {
+		t.Errorf("expected confident_count=1, got %d", coocs[0].ConfidentCount)
 	}
 }
 

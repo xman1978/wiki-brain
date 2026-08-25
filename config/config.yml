@@ -121,6 +121,13 @@ retrieval:
   explore_rate_self_graded: 0.10  # self_graded 档：本轮被抽样安排一次独立核实的概率
   explore_rate_trusted:     0.03  # trusted 档：本轮被抽样安排一次独立核实（定期复查防漂移）的概率
 
+  # 主题→source 绑定（source_affinity，2026-08-25 会话讨论，见 migration 068）
+  # 命中时跳过 Step2 domainPreFilter + Step3 sourceSemanticFilter 两步 LLM 调用
+  source_affinity_enabled:        true  # 总开关
+  source_affinity_local_sim_min:  0.8   # subject 归一化 Tier2 本地词集 Jaccard 相似度命中阈值（0-1）
+  source_affinity_failure_max:    2     # 绑定命中但证据不充分的连续次数达到此值即删除绑定（熔断，无 Beta 置信度）
+  source_affinity_idle_days:      90    # subject_norms/source_affinity 行超过该天数未命中由 Study 周期清理
+
 # Evidence 模块挖掘
 evidence:
   enabled:              false

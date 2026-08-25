@@ -753,8 +753,7 @@
     <button class="nav-item" onclick="openFileDrawer()" title="文件管理"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span class="nav-label">文件</span></button>
     <button class="nav-item" onclick="openStudyView()" title="学习报告"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg></span><span class="nav-label">学习报告</span></button>
     <button class="nav-item" onclick="openActivationView()" title="激活链接"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M13 2 4.5 13H11l-1 9 9.5-12H13l0-8Z"/></svg></span><span class="nav-label">激活链接</span><span class="nav-badge hidden" id="activationPendingBadge">0</span></button>
-    <button class="nav-item" onclick="openWikiView()" title="Wiki"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M2 4.5A2.5 2.5 0 0 1 4.5 2H9a3 3 0 0 1 3 3v17a3 3 0 0 0-3-3H2Z"/><path d="M22 4.5A2.5 2.5 0 0 0 19.5 2H15a3 3 0 0 0-3 3v17a3 3 0 0 1 3-3h7Z"/></svg></span><span class="nav-label">Wiki</span><span class="nav-badge hidden" id="wikiPendingBadge">0</span></button>
-    <button class="nav-item" onclick="openConceptView()" title="知识领域"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg></span><span class="nav-label">知识领域</span><span class="nav-badge hidden" id="conceptPendingBadge">0</span></button>
+    <button class="nav-item" onclick="openConceptView()" title="知识领域"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg></span><span class="nav-label">知识领域</span><span class="nav-badge hidden" id="conceptPendingBadge">0</span><span class="nav-badge hidden" id="wikiPendingBadge">0</span></button>
     <button class="nav-item" onclick="openLlmView()" title="模型设置"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg></span><span class="nav-label">模型设置</span></button>
   </div>
 
@@ -956,7 +955,7 @@
     </div>
   </div>
   <div class="panel-tabs">
-    <button class="panel-tab active" data-activation-tab="domain" onclick="switchActivationTab('domain')">按领域浏览</button>
+    <button class="panel-tab active" data-activation-tab="domain" onclick="switchActivationTab('domain')">激活链接</button>
     <button class="panel-tab" data-activation-tab="bundle" onclick="switchActivationTab('bundle')">组合链路</button>
   </div>
   <div class="drawer-body" style="display:flex;overflow:hidden" id="activationTabPane-domain">
@@ -975,36 +974,59 @@
     </div>
   </div>
   <!-- 组合链路（ActivationBundle，docs/impl/v1/activation-bundle.md）：一组知识点合在一起
-       对同一类问题管不管用，区别于单知识点的激活链接。阶段 1 只读，无待确认队列。 -->
-  <div class="drawer-body hidden" id="activationTabPane-bundle" style="display:block;overflow-y:auto;padding:16px 20px">
-    <div style="font-size:12px;color:var(--text-3);margin-bottom:10px">组合链路把一组知识点当作整体，记录它们合在一起对同一类问题是否管用——区别于激活链接只记单个知识点。当前阶段只读，晋升/降权全部自动，没有人工确认队列。</div>
-    <div style="display:flex;gap:6px;margin-bottom:10px">
-      <select id="bundleStatusFilter" onchange="loadBundleList()" style="font-size:12px">
-        <option value="">全部</option>
-        <option value="candidate">candidate</option>
-        <option value="verified">verified</option>
-        <option value="deprecated">deprecated</option>
-      </select>
+       对同一类问题管不管用，区别于单知识点的激活链接。按知识领域划分，卡片风格/分页与
+       激活链接一致。阶段 1 只读，无待确认队列。 -->
+  <div class="drawer-body hidden" style="display:flex;overflow:hidden" id="activationTabPane-bundle">
+    <div class="domain-rail" id="bundleDomainRail">
+      <div class="domain-rail-head">
+        <input class="domain-rail-search" id="bundleDomainRailSearch" placeholder="搜索领域…" oninput="filterBundleDomainRail(this.value)" />
+      </div>
+      <div class="domain-rail-list" id="bundleDomainRailList">
+        <div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">加载中...</div>
+      </div>
     </div>
-    <div id="bundleList"><div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div></div>
+    <div class="domain-main">
+      <div class="domain-concept-pane" id="bundleDomainPane" style="flex:1;overflow-y:auto">
+        <div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>
+      </div>
+    </div>
   </div>
 </div>
 
-<!-- ── WIKI DRAWER OVERLAY（按知识领域分类：左侧领域 rail → 右侧全部 Wiki 卡片
-     → 点击打开详情弹窗做发布/重编译/归档等操作）──────────────────────────── -->
-<div class="file-overlay hidden" id="wikiOverlay" onclick="closeWikiView()"></div>
+<!-- ── 知识领域 / Wiki 合并 DRAWER OVERLAY（词条、Wiki 作为同一页面的两个页签，
+     都沿用左侧领域 rail → 右侧卡片网格这套布局）─────────────────────────── -->
+<div class="file-overlay hidden" id="conceptOverlay" onclick="closeConceptView()"></div>
 
-<!-- ── WIKI DRAWER ───────────────────────────────────────── -->
-<div class="file-drawer split-drawer" id="wikiDrawer" style="width:min(980px,96vw)">
+<!-- ── KNOWLEDGE DOMAIN DRAWER（词条 / Wiki 两个页签）──── -->
+<div class="file-drawer split-drawer" id="conceptDrawer" style="width:min(980px,96vw)">
   <div class="drawer-header">
-    <span>Wiki</span>
+    <span>知识领域</span>
     <div style="display:flex;gap:6px;align-items:center">
-      <button class="btn btn-sm btn-primary" onclick="openManualWikiCompilePicker()" title="人工手动指定主题范围，检索知识点并直接触发编译（未经 Study 推荐）">+ 生成 Wiki</button>
-      <button class="btn btn-sm" onclick="loadWikiCatalog()">刷新</button>
-      <button class="btn-ghost" onclick="closeWikiView()">✕</button>
+      <button class="btn btn-sm" onclick="knowledgeRefreshCurrentTab()">刷新</button>
+      <button class="btn-ghost" onclick="closeConceptView()">✕</button>
     </div>
   </div>
-  <div class="drawer-body" style="display:flex;overflow:hidden">
+  <div class="panel-tabs">
+    <button class="panel-tab active" data-knowledge-tab="entries" onclick="switchKnowledgeTab('entries')">词条</button>
+    <button class="panel-tab" data-knowledge-tab="wiki" onclick="switchKnowledgeTab('wiki')">Wiki</button>
+  </div>
+  <div class="drawer-body" style="display:flex;overflow:hidden" id="knowledgeTabPane-entries">
+    <div class="domain-rail" id="domainRail">
+      <div class="domain-rail-head">
+        <input class="domain-rail-search" id="domainRailSearch" placeholder="搜索领域…" oninput="filterDomainRail(this.value)" />
+        <button class="btn btn-sm btn-primary" style="width:100%" onclick="openDomainCreateForm()">+ 新增领域</button>
+      </div>
+      <div class="domain-rail-list" id="domainRailList">
+        <div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">加载中...</div>
+      </div>
+    </div>
+    <div class="domain-main">
+      <div class="domain-concept-pane" id="domainConceptPane" style="flex:1;overflow-y:auto">
+        <div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>
+      </div>
+    </div>
+  </div>
+  <div class="drawer-body hidden" style="display:flex;overflow:hidden" id="knowledgeTabPane-wiki">
     <div class="domain-rail" id="wikiDomainRail">
       <div class="domain-rail-head">
         <input class="domain-rail-search" id="wikiDomainRailSearch" placeholder="搜索领域…" oninput="filterWikiDomainRail(this.value)" />
@@ -1039,36 +1061,6 @@
 <!-- ── 组合链路（ActivationBundle）详情弹窗 ── -->
 <div class="modal-overlay hidden" id="bundleModal" onclick="if(event.target===this)closeBundleModal()">
   <div class="modal-box" id="bundleModalContent" style="width:560px"></div>
-</div>
-
-<!-- ── CONCEPT EVOLUTION DRAWER OVERLAY ──────────────────── -->
-<div class="file-overlay hidden" id="conceptOverlay" onclick="closeConceptView()"></div>
-
-<!-- ── KNOWLEDGE DOMAIN DRAWER（领域 / 概念，含演化候选卡片）──── -->
-<div class="file-drawer split-drawer" id="conceptDrawer" style="width:min(920px,96vw)">
-  <div class="drawer-header">
-    <span>知识领域</span>
-    <div style="display:flex;gap:6px;align-items:center">
-      <button class="btn btn-sm" onclick="loadDomainRail()">刷新</button>
-      <button class="btn-ghost" onclick="closeConceptView()">✕</button>
-    </div>
-  </div>
-  <div class="drawer-body" style="display:flex;overflow:hidden">
-    <div class="domain-rail" id="domainRail">
-      <div class="domain-rail-head">
-        <input class="domain-rail-search" id="domainRailSearch" placeholder="搜索领域…" oninput="filterDomainRail(this.value)" />
-        <button class="btn btn-sm btn-primary" style="width:100%" onclick="openDomainCreateForm()">+ 新增领域</button>
-      </div>
-      <div class="domain-rail-list" id="domainRailList">
-        <div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">加载中...</div>
-      </div>
-    </div>
-    <div class="domain-main">
-      <div class="domain-concept-pane" id="domainConceptPane" style="flex:1;overflow-y:auto">
-        <div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">加载中...</div>
-      </div>
-    </div>
-  </div>
 </div>
 
 <!-- ── CONCEPT DETAIL / EDIT MODAL（已确认概念：改名/改描述/增删知识点）── -->
@@ -4223,39 +4215,167 @@ function switchActivationTab(tab) {
 function activationRefreshCurrentTab() {
   var tab = S.activationTab || 'domain';
   if (tab === 'domain') loadActivationDomainRail();
-  else if (tab === 'bundle') loadBundleList();
+  else if (tab === 'bundle') loadBundleDomainRail();
 }
 
 // ── 组合链路（ActivationBundle，docs/impl/v1/activation-bundle.md 步骤 5） ──────
-async function loadBundleList() {
-  var el = document.getElementById('bundleList');
-  var status = document.getElementById('bundleStatusFilter') ? document.getElementById('bundleStatusFilter').value : '';
-  var rows = [];
+// 布局对齐激活链接：左侧领域 rail → 右侧组合链路卡片（沿用 domain-concept-card
+// 卡片样式）→ 分页；一个 Bundle 挂到某领域，只要其任一成员 point_id 属于该
+// 领域下的知识点（复用 getDomainPointIds，与激活链接同一套按领域取 KP 逻辑）。
+async function loadBundleDomainRail() {
   try {
-    var q = '/activation-bundles?limit=200' + (status ? '&status=' + encodeURIComponent(status) : '');
-    var r = await api('GET', q);
-    rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
-  } catch (e) { rows = []; }
-  if (!rows.length) {
-    el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无组合链路</div>';
+    var r = await api('GET', '/domains');
+    S.bundleDomainList = (r.ok && Array.isArray(r.data)) ? r.data : [];
+  } catch (e) { S.bundleDomainList = []; }
+  if (!S.bundleDomainSelectedId || !S.bundleDomainList.some(function(d) { return d.domain_id === S.bundleDomainSelectedId; })) {
+    S.bundleDomainSelectedId = (S.bundleDomainList[0] && S.bundleDomainList[0].domain_id) || null;
+  }
+  await refreshBundleDomainStats();
+  renderBundleDomainRail();
+  renderBundleDomainPane();
+}
+
+async function refreshBundleDomainStats() {
+  var domains = S.bundleDomainList || [];
+  S.bundleDomainStats = S.bundleDomainStats || {};
+  await Promise.all(domains.map(async function(d) {
+    var bundles = [];
+    try { bundles = await fetchBundlesForDomain(d.domain_id); } catch (e) { bundles = []; }
+    S.bundleDomainStats[d.domain_id] = { total: bundles.length };
+  }));
+}
+
+function filterBundleDomainRail(v) { S.bundleDomainFilter = v; renderBundleDomainRail(); }
+
+function renderBundleDomainRail() {
+  var list = document.getElementById('bundleDomainRailList');
+  if (!list) return;
+  var f = (S.bundleDomainFilter || '').trim().toLowerCase();
+  var items = (S.bundleDomainList || []).filter(function(d) { return !f || (d.name || '').toLowerCase().indexOf(f) !== -1; });
+  if (!items.length) {
+    list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">暂无领域</div>';
     return;
   }
-  rows.sort(function(a, b) { return activationConfirmStatusSort(a.status) - activationConfirmStatusSort(b.status); });
-  el.innerHTML = rows.map(function(b) {
-    var badgeCls = 'status-' + activationConfirmStatus(b.status);
-    var label = activationConfirmStatusLabel(b.status);
-    // 核心/路肩不再是存的两个数组，是按 tier 从 members[] 派生（2026-08-13，
-    // docs/impl/v1/activation-bundle.md「成员置信度」）：core_member_point_ids
-    // 已由后端算好（tier=self_graded/trusted），路肩 = members 总数减核心数。
-    var totalN = (b.members || []).length;
-    var coreN = (b.core_member_point_ids || []).length;
-    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer" onclick="selectBundle(\'' + esc(b.bundle_id) + '\')">\
-      <div style="min-width:0">\
-        <div style="font-size:13px;font-weight:600">' + esc(b.representative_terms || '(未命名)') + '<span class="dcc-status-badge ' + badgeCls + '" style="margin-left:8px">' + esc(label) + '</span></div>\
-        <div style="font-size:12px;color:var(--text-3);margin-top:2px">核心成员 ' + coreN + ' · 路肩 ' + (totalN - coreN) + ' · 采纳 ' + (b.adopt_count||0) + ' / 失败 ' + (b.fail_count||0) + (b.last_used_at ? ' · 最近使用 ' + dateStr(b.last_used_at) : '') + '</div>\
-      </div>\
+  list.innerHTML = items.map(function(d) {
+    var stats = (S.bundleDomainStats || {})[d.domain_id] || {};
+    var count = stats.total != null ? stats.total : 0;
+    return '<div class="domain-rail-item' + (d.domain_id === S.bundleDomainSelectedId ? ' active' : '') + '" onclick="selectBundleDomainRail(\'' + esc(d.domain_id) + '\')">\
+      <span class="domain-rail-name">' + esc(d.name) + '</span>\
+      <span class="domain-rail-count">' + count + '</span>\
     </div>';
   }).join('');
+}
+
+function selectBundleDomainRail(domainId) {
+  S.bundleDomainSelectedId = domainId;
+  S.bundlePage = 0;
+  renderBundleDomainRail();
+  renderBundleDomainPane();
+}
+
+function setBundlePage(page) {
+  S.bundlePage = clampGridPage(page, (S.bundleList || []).length, S.bundlePageSize);
+  renderBundleGrid();
+}
+
+function setBundlePageSize(size) {
+  var n = parseInt(size, 10);
+  if (!n || n < 1) return;
+  S.bundlePageSize = n;
+  S.bundlePage = 0;
+  renderBundleGrid();
+}
+
+async function fetchBundlesForDomain(domainId) {
+  var pointIds = await getDomainPointIds(domainId);
+  if (!pointIds.length) return [];
+  var pointIdSet = {};
+  pointIds.forEach(function(id) { pointIdSet[id] = true; });
+  var rows = [];
+  try {
+    var r = await api('GET', '/activation-bundles?limit=200');
+    rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+  } catch (e) { rows = []; }
+  return rows.filter(function(b) {
+    return (b.members || []).some(function(m) { return pointIdSet[m.point_id]; });
+  });
+}
+
+async function renderBundleDomainPane() {
+  var pane = document.getElementById('bundleDomainPane');
+  if (!pane) return;
+  var d = (S.bundleDomainList || []).find(function(x) { return x.domain_id === S.bundleDomainSelectedId; });
+  if (!d) {
+    pane.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">请先在「知识领域」中新增领域</div>';
+    return;
+  }
+  var domainId = d.domain_id;
+  pane.innerHTML = '\
+    <div style="min-width:0">\
+      <div style="font-size:16px;font-weight:700">' + esc(d.name) + '</div>\
+      <div style="font-size:12.5px;color:var(--text-2);margin-top:4px">' + esc(d.description || '暂无简介') + '</div>\
+      <div style="display:flex;gap:14px;margin-top:8px;font-size:12px;color:var(--text-3)">\
+        <span>组合链路 <b style="color:var(--text)" id="bundleDomainCount">…</b></span>\
+      </div>\
+    </div>\
+    <div class="domain-concept-grid" id="bundleDomainGrid" style="margin-top:12px"><div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">加载中...</div></div>\
+    <div id="bundlePager"></div>';
+
+  var bundles = [];
+  try { bundles = await fetchBundlesForDomain(domainId); }
+  catch (e) { bundles = []; }
+  if (S.bundleDomainSelectedId !== domainId) return;
+
+  bundles.sort(function(a, b) {
+    var sa = activationConfirmStatusSort(a.status);
+    var sb = activationConfirmStatusSort(b.status);
+    if (sa !== sb) return sa - sb;
+    return String(b.last_used_at || '').localeCompare(String(a.last_used_at || ''));
+  });
+  S.bundleList = bundles;
+  S.bundleDomainStats = S.bundleDomainStats || {};
+  S.bundleDomainStats[domainId] = { total: bundles.length };
+  renderBundleDomainRail();
+
+  var countEl = document.getElementById('bundleDomainCount');
+  if (countEl) countEl.textContent = String(bundles.length);
+
+  S.bundlePage = 0;
+  renderBundleGrid();
+}
+
+function renderBundleGrid() {
+  var grid = document.getElementById('bundleDomainGrid');
+  if (!grid) return;
+  var bundles = S.bundleList || [];
+  var pageSize = S.bundlePageSize || 12;
+  var page = clampGridPage(S.bundlePage || 0, bundles.length, pageSize);
+  S.bundlePage = page;
+  var pageItems = bundles.slice(page * pageSize, page * pageSize + pageSize);
+
+  grid.innerHTML = pageItems.length
+    ? pageItems.map(renderBundleCardHtml).join('')
+    : '<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">该领域下还没有组合链路</div>';
+
+  var pagerEl = document.getElementById('bundlePager');
+  if (pagerEl) pagerEl.innerHTML = bundles.length ? gridPagerHtml(bundles.length, page, pageSize, 'setBundlePage', 'setBundlePageSize') : '';
+}
+
+function renderBundleCardHtml(b) {
+  var confirmStatus = activationConfirmStatus(b.status);
+  var label = activationConfirmStatusLabel(b.status);
+  var cls = confirmStatus === 'confirmed' ? 'confirmed' : 'candidate status-' + confirmStatus;
+  var badgeCls = 'status-' + confirmStatus;
+  // 核心/路肩不再是存的两个数组，是按 tier 从 members[] 派生（2026-08-13，
+  // docs/impl/v1/activation-bundle.md「成员置信度」）：core_member_point_ids
+  // 已由后端算好（tier=self_graded/trusted），路肩 = members 总数减核心数。
+  var totalN = (b.members || []).length;
+  var coreN = (b.core_member_point_ids || []).length;
+  return '<div class="domain-concept-card ' + cls + '" onclick="selectBundle(\'' + esc(b.bundle_id) + '\')">\
+    <div class="dcc-top"><div class="dcc-name">' + esc(b.representative_terms || '(未命名)') + '</div><span class="dcc-status-badge ' + badgeCls + '">' + esc(label) + '</span></div>\
+    <div class="dcc-desc">核心成员 ' + coreN + ' · 路肩 ' + (totalN - coreN) + (b.last_used_at ? ' · 最近使用 ' + dateStr(b.last_used_at) : '') + '</div>\
+    <div class="dcc-kp">采纳 ' + (b.adopt_count || 0) + ' / 失败 ' + (b.fail_count || 0) + '</div>\
+  </div>';
 }
 
 async function selectBundle(bundleId) {
@@ -4347,21 +4467,25 @@ async function toggleBundleQuestionsSection(bundleId) {
   body.innerHTML = '<div style="color:var(--text-3);font-size:12px">加载中...</div>';
   try {
     var r = await api('GET', '/activation-bundles/' + encodeURIComponent(bundleId) + '/questions');
-    if (!r.ok || !Array.isArray(r.data)) { body.innerHTML = '<div style="color:var(--red);font-size:12px">加载失败</div>'; return; }
+    if (!r.ok || !r.data) { body.innerHTML = '<div style="color:var(--red);font-size:12px">加载失败</div>'; return; }
     if (S.bundleDetailCache && S.bundleDetailCache.bundleId === bundleId) S.bundleDetailCache.questions = r.data;
     body.innerHTML = renderBundleQuestionsHtml(r.data);
   } catch (e) {
     body.innerHTML = '<div style="color:var(--red);font-size:12px">加载失败：' + esc(e.message) + '</div>';
   }
 }
-function renderBundleQuestionsHtml(list) {
-  if (!list || !list.length) return '<div style="font-size:12px;color:var(--text-3)">暂无</div>';
-  return list.map(function(q) {
-    return '<div style="font-size:12px;padding:6px 8px;background:var(--bg-2);border-radius:6px;margin-bottom:6px">\
-      <div>' + esc(q.question || '') + '</div>\
-      <div style="color:var(--text-3);margin-top:2px">' + dateStr(q.created_at) + '</div>\
-    </div>';
-  }).join('');
+function renderBundleQuestionsHtml(data) {
+  function items(list) {
+    if (!list || !list.length) return '<div style="font-size:12px;color:var(--text-3)">暂无</div>';
+    return list.map(function(q) {
+      return '<div style="font-size:12px;padding:6px 8px;background:var(--bg-2);border-radius:6px;margin-bottom:6px">\
+        <div>' + esc(q.question || '') + '</div>\
+        <div style="color:var(--text-3);margin-top:2px">' + dateStr(q.created_at) + (q.path_type ? ' · ' + esc(q.path_type) : '') + (q.retrieval_quality ? ' · ' + esc(q.retrieval_quality) : '') + '</div>\
+      </div>';
+    }).join('');
+  }
+  return '<div class="lazy-subhead">匹配命中</div>' + items(data.matched)
+    + '<div class="lazy-subhead">创建依据</div>' + items(data.created_from);
 }
 
 async function loadActivationDomainRail() {
@@ -4431,8 +4555,9 @@ function setActivationLinkPageSize(size) {
   renderActivationLinkGrid();
 }
 
-// 领域下的激活链接 = 该领域概念挂载的 KP 对应的 activation_links（一对一）。
-async function fetchActivationLinksForDomain(domainId) {
+// 领域下的知识点 point_id 集合 = 该领域概念挂载的全部 KP。激活链接与组合链路
+// 按领域划分共用这一套取法（一个是精确对应，一个是成员相交）。
+async function getDomainPointIds(domainId) {
   var conceptsR = await api('GET', '/entries?domain_id=' + encodeURIComponent(domainId));
   var entries = (conceptsR.ok && Array.isArray(conceptsR.data)) ? conceptsR.data : [];
   if (!entries.length) return [];
@@ -4447,6 +4572,12 @@ async function fetchActivationLinksForDomain(domainId) {
       if (pt.point_id && !seen[pt.point_id]) { seen[pt.point_id] = true; pointIds.push(pt.point_id); }
     });
   });
+  return pointIds;
+}
+
+// 领域下的激活链接 = 该领域概念挂载的 KP 对应的 activation_links（一对一）。
+async function fetchActivationLinksForDomain(domainId) {
+  var pointIds = await getDomainPointIds(domainId);
   if (!pointIds.length) return [];
   var lr = await api('GET', '/activation-links?point_ids=' + pointIds.map(encodeURIComponent).join(','));
   return (lr.ok && Array.isArray(lr.data)) ? lr.data : [];
@@ -4796,14 +4927,10 @@ var WIKI_STATUS_LABELS = {
   error: '出错'
 };
 
+// 知识领域 / Wiki 已合并为一个页面的两个页签（词条 / Wiki），openWikiView
+// 仅作为「直接跳到 Wiki 页签」的别名保留，供引用徽标等既有调用点使用。
 function openWikiView() {
-  document.getElementById('wikiDrawer').classList.add('open');
-  document.getElementById('wikiOverlay').classList.remove('hidden');
-  loadWikiCatalog();
-}
-function closeWikiView() {
-  document.getElementById('wikiDrawer').classList.remove('open');
-  document.getElementById('wikiOverlay').classList.add('hidden');
+  openConceptView('wiki');
 }
 
 // 从 Answer 引用徽标跳转到某个已发布 Wiki 页面：选中其所属知识领域后打开详情。
@@ -4906,12 +5033,15 @@ function renderWikiDomainPane() {
     return;
   }
   pane.innerHTML = '\
-    <div style="min-width:0">\
-      <div style="font-size:16px;font-weight:700">' + esc(d.name) + '</div>\
-      <div style="font-size:12.5px;color:var(--text-2);margin-top:4px">' + esc(d.description || '暂无简介') + '</div>\
-      <div style="display:flex;gap:14px;margin-top:8px;font-size:12px;color:var(--text-3)">\
-        <span>Wiki <b style="color:var(--text)">' + (d.wiki_count || 0) + '</b></span>\
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">\
+      <div style="min-width:0">\
+        <div style="font-size:16px;font-weight:700">' + esc(d.name) + '</div>\
+        <div style="font-size:12.5px;color:var(--text-2);margin-top:4px">' + esc(d.description || '暂无简介') + '</div>\
+        <div style="display:flex;gap:14px;margin-top:8px;font-size:12px;color:var(--text-3)">\
+          <span>Wiki <b style="color:var(--text)">' + (d.wiki_count || 0) + '</b></span>\
+        </div>\
       </div>\
+      <button class="btn btn-sm btn-primary" onclick="openManualWikiCompilePicker()" title="人工手动指定主题范围，检索知识点并直接触发编译（未经 Study 推荐）">+ 生成 Wiki</button>\
     </div>\
     <div class="domain-concept-grid" id="wikiDomainGrid" style="margin-top:12px"></div>\
     <div id="wikiCatalogPager"></div>';
@@ -6175,15 +6305,33 @@ async function deleteWikiEntryDraftPage(pageId) {
 
 // ═══════════════════════════════════════════════════════
 // CONCEPT EVOLUTION VIEW (docs/impl/v1/concept-evolution.md 步骤 5)
+// 知识领域 / Wiki 合并为一个页面的两个页签：词条（domainRail/domainConceptPane）
+// / Wiki（wikiDomainRail/wikiDomainPane），布局与切换机制对齐激活链接页面
+// 的「按领域浏览 / 组合链路」两个页签。
 // ═══════════════════════════════════════════════════════
-function openConceptView() {
+function openConceptView(tab) {
   document.getElementById('conceptDrawer').classList.add('open');
   document.getElementById('conceptOverlay').classList.remove('hidden');
-  loadDomainRail();
+  switchKnowledgeTab(tab || S.knowledgeTab || 'entries');
 }
 function closeConceptView() {
   document.getElementById('conceptDrawer').classList.remove('open');
   document.getElementById('conceptOverlay').classList.add('hidden');
+}
+function switchKnowledgeTab(tab) {
+  if (tab !== 'entries' && tab !== 'wiki') tab = 'entries';
+  S.knowledgeTab = tab;
+  document.querySelectorAll('[data-knowledge-tab]').forEach(function(t) { t.classList.toggle('active', t.dataset.knowledgeTab === tab); });
+  ['entries', 'wiki'].forEach(function(t) {
+    var pane = document.getElementById('knowledgeTabPane-' + t);
+    if (pane) pane.classList.toggle('hidden', t !== tab);
+  });
+  knowledgeRefreshCurrentTab();
+}
+function knowledgeRefreshCurrentTab() {
+  var tab = S.knowledgeTab || 'entries';
+  if (tab === 'entries') loadDomainRail();
+  else if (tab === 'wiki') loadWikiCatalog();
 }
 
 // ═══════════════════════════════════════════════════════

@@ -50,8 +50,8 @@ func (f *fakeAuditWriter) callCount() int {
 // direct evidence — mirrors TestRetrieveEndToEnd's setup.
 func setResponsesForFullSlowPathSuccess(fake *llm.FakeClient) {
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据说明线性方程定义，可直接回答"}]}`})
 }
@@ -129,8 +129,8 @@ func TestAuditTrial_SlowPathFailure_NoEventWritten(t *testing.T) {
 	// which is a legitimate disagreement, not a dropped sample). Per 步骤
 	// 2c: no WriteAuditOutcome call, no partial event, only a warn log.
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"source_ids": ["s1"]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"outline_ids": ["o2"]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`})
 
 	qc := QueryContext{Question: "linear equations"}
 	hit := ActivationHit{LinkID: "link-1", PointID: "p1", Tier: "trusted", AuditSampled: true}

@@ -28,7 +28,7 @@ func TestMatcher_ExactQuadrupleReproduced_ScoresOne(t *testing.T) {
 		Intent:           "标准",
 		ExpandedQuestion: "住宿费用标准是多少",
 	}
-	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestMatcher_KnownQuestionTermsShortcut_BypassesFourTupleGate(t *testing.T) 
 	// Record this literal question against a four-tuple that will NOT match
 	// the query below — mirrors a slow-path enrichment call whose extracted
 	// intent doesn't match what the next ask extracts.
-	add := NormalizeObservedCondition("住宿 费用", "标准", "", "", qq, time.Now().UTC())
+	add := NormalizeObservedCondition("住宿 费用", "标准", "", "", "", "", qq, time.Now().UTC())
 	if err := svc.AppendObservedCondition(l.LinkID, add, 50); err != nil {
 		t.Fatalf("append observed condition: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestMatcher_KnownQuestionTermsShortcut_BypassesFourTupleGate(t *testing.T) 
 		Intent:           "完全不同的意图",
 		ExpandedQuestion: question,
 	}
-	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestMatcher_ConstraintMismatch_ExcludedDespiteSubjectIntentMatch(t *testing
 		Constraint:       "产品乙",
 		ExpandedQuestion: "住宿费用标准是多少",
 	}
-	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestMatcher_ConstraintMustMatchExactly(t *testing.T) {
 		Constraint:       "产品甲 加班",
 		ExpandedQuestion: "住宿费用标准是多少",
 	}
-	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestMatcher_ConstraintMustMatchExactly(t *testing.T) {
 
 	// The exact same constraint text does match.
 	query.Constraint = "产品甲"
-	matches, err = matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err = matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestMatcher_AudienceGating(t *testing.T) {
 				Audience:         tc.audience,
 				ExpandedQuestion: "住宿标准",
 			}
-			matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+			matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 			if err != nil {
 				t.Fatalf("match: %v", err)
 			}
@@ -237,7 +237,7 @@ func TestMatcher_FallbackWhenQuadrupleMissing(t *testing.T) {
 	query := session.ExpandedQuery{
 		ExpandedQuestion: rawQuestion,
 	}
-	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestMatcher_IncludesCandidateAndVerified_ExcludesDeprecatedAndNonCurrentKP(
 	verifyLink(t, svc, stale)
 
 	query := session.ExpandedQuery{Subject: "住宿", ExpandedQuestion: "住宿标准"}
-	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestMatcher_CacheInvalidatesOnLifecycleDeprecate(t *testing.T) {
 	}
 
 	query := session.ExpandedQuery{Subject: "住宿", ExpandedQuestion: "住宿标准"}
-	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestMatcher_CacheInvalidatesOnLifecycleDeprecate(t *testing.T) {
 		t.Fatalf("invalidate cache: %v", err)
 	}
 
-	matches, err = matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err = matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match after lifecycle change: %v", err)
 	}
@@ -361,7 +361,7 @@ func TestMatcher_CacheInvalidatesOnLifecycleChange(t *testing.T) {
 	verifyLink(t, svc, l)
 
 	query := session.ExpandedQuery{Subject: "住宿", ExpandedQuestion: "住宿标准"}
-	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestMatcher_CacheInvalidatesOnLifecycleChange(t *testing.T) {
 		t.Fatalf("invalidate cache: %v", err)
 	}
 
-	matches, err = matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err = matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match after lifecycle change: %v", err)
 	}
@@ -410,7 +410,7 @@ func TestMatcher_SubjectMustMatchExactly_SupersetNoLongerMatches(t *testing.T) {
 		Subject:          "数据库 句柄 限制",
 		ExpandedQuestion: "数据库句柄数限制是多少",
 	}
-	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -440,7 +440,7 @@ func TestMatcher_SubjectOverlap_CoreWordMissingFromQuery_Excluded(t *testing.T) 
 		Subject:          "数据库 句柄",
 		ExpandedQuestion: "数据库句柄是什么",
 	}
-	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestMatcher_AudienceEitherObservedGroupMatches(t *testing.T) {
 				Audience:         audience,
 				ExpandedQuestion: "住宿标准",
 			}
-			matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+			matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 			if err != nil {
 				t.Fatalf("match: %v", err)
 			}
@@ -489,7 +489,7 @@ func TestMatcher_AudienceEitherObservedGroupMatches(t *testing.T) {
 	}
 
 	query := session.ExpandedQuery{Subject: "住宿", Audience: "财务", ExpandedQuestion: "住宿标准"}
-	matches, err := matcher.Match(context.Background(), query, MatchConfig{})
+	matches, err := matcher.Match(context.Background(), query, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -524,7 +524,7 @@ func TestMatcher_NoCrossProductAcrossGroups(t *testing.T) {
 	// Cross: subject of A + intent of B
 	matches, err := matcher.Match(context.Background(), session.ExpandedQuery{
 		Subject: "招待费报销", Intent: "查询标准", ExpandedQuestion: "x",
-	}, MatchConfig{})
+	}, nil, MatchConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,7 +535,7 @@ func TestMatcher_NoCrossProductAcrossGroups(t *testing.T) {
 	// Exact group A
 	matches, err = matcher.Match(context.Background(), session.ExpandedQuery{
 		Subject: "招待费报销", Intent: "查询期限", ExpandedQuestion: "x",
-	}, MatchConfig{})
+	}, nil, MatchConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +594,7 @@ func TestMatcher_SubjectOnlyMiss_DetectsCandidateWhenOtherDimensionsAgree(t *tes
 	// No synonym registered yet — Match itself should miss.
 	matches, err := matcher.Match(context.Background(), session.ExpandedQuery{
 		Subject: "差旅报销", ExpandedQuestion: "差旅报销怎么处理",
-	}, MatchConfig{})
+	}, nil, MatchConfig{})
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}

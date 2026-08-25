@@ -1,0 +1,108 @@
+## 神通数据库优化
+
+# 一、性能跟踪
+## 1. 输出 SQL 执行记录
+/u01/oscar/admin/oa.conf
+DEBUG_PRINT_SQL=2
+## 2. 查询会话执行情况
+```
+SELECT SID,USERNAME,STATUS,SQL_EXEC_START,PREV_EXEC_START,EVENT,CURRENT_SQL,PREV_SQL,USER_IP, BLOCKING_SESSION
+FROM V$SESSION WHERE username='EZOFFICE'
+ORDER BY EVENT DESC;
+```
+
+## 3. 查询锁阻塞语句
+```
+-- 检查数据库是否存在堵塞问题
+SELECT C.SESSION_ID,
+C.BLOCKER_IS_VALID,
+C.WAIT_EVENT,
+C.BLOCKER_PID,
+C.BLOCKER_SESSION_ID,
+S.SQL_EXEC_START,
+S.SQL_EXEC_START::TIMESTAMP-SYSDATE::TIMESTAMP "EXPEND TIME",
+SUBSTR(S.CURRENT_SQL, 0, 60) CURRENT_SQL,
+SUBSTR(S.PREV_SQL, 0, 60) PREV_SQL
+FROM V$SESSION S, V$WAIT_CHAINS C
+WHERE C.SESSION_ID = S.SID
+ORDER BY BLOCKER_IS_VALID;
+--查看Session卡在了哪些表
+SELECT CH.SESSION_ID,
+CL.RELNAME,
+SE.RELID,
+LO.XID,
+S.SQL_EXEC_START,
+S.SQL_EXEC_START::TIMESTAMP-SYSDATE::TIMESTAMP "EXPEND TIME",
+S.PREV_EXEC_START,
+SUBSTR(S.CURRENT_SQL, 0, 60) CURRENT_SQL,
+SUBSTR(S.PREV_SQL, 0, 60) PREV_SQL
+FROM V$SESSION      S,
+V$WAIT_CHAINS  CH,
+V$LOCK         LO,
+V_SEGMENT_INFO SE,
+V_SYS_CLASS    CL
+WHERE CH.SESSION_ID = S.SID
+AND CL.OID = SE.RELID
+AND LO.SID = SE.SEGID
+AND CH.TXN_ID = LO.XID
+AND CH.BLOCKER_IS_VALID = 'f';
+--通过下述视图查看等待源和等待者正在执行的sql语句，
+SELECT PATH,SESSION_ID,BLOCKER_SESSION_ID,WAIT_ID,WAIT_EVENT,P1,P1_TEXT,P2,P2_TEXT,P3,P3_TEXT,P4,P4_TEXT,NUM_WAITERS
+FROM (
+SELECT LEVEL, SYS_CONNECT_BY_PATH(SESSION_ID,'>') AS PATH, * FROM V$WAIT_CHAINS
+START WITH BLOCKER_SESSION_ID IS NULL
+CONNECT BY PRIOR SESSION_ID = BLOCKER_SESSION_ID)
+ORDER BY "LEVEL", PATH;
+--杀掉数据库会话
+kill session sid abort;
+```
+
+## 4. 查看耗时语句
+修改 shentong/admin/oa.conf 配置文件
+**纪录最耗时的sql语句的个数（不能设置太大，严重影响性能）**
+TOP_COST_SQL_LIST_LEN=0
+执行下列语句查询
+select * from v$sqlstat order by elapsed_time desc
+修改 shentong/admin/oa.conf 配置文件
+#调试选项，打印输入的SQL语句
+#0不打印SQL语句
+#1打印Session号和SQL语句到控制台，每行最多打印79个字符
+#2以LOG级别打印Session号和SQL语句到控制台，并输出到日志文件中
+#3打印SQL语句到控制台，每行最多打印79个字符
+#4以LOG级别打印SQL语句到控制台，并输出到日志文件中
+#5直接打印SQL语句控制台
+DEBUG_PRINT_SQL=0
+#调试选项，打印执行时间超过指定值的语句到控制台和日志文件，单位为毫秒
+MIN_SQL_TRACE_TIME=1
+Sql 语句输出到 shentong/log/OA 目录下的日志文件中
+# 二、数据库设置
+## 1. 内存设置
+
+| 参数 | 描述 | 默认值 | 最小值 | 最大值 |
+| --- | --- | --- | --- | --- |
+| BUF_DATA_BUFFER_PAGES | 数据缓冲区的页数（页大小为 8192） | 4096 | 8 | 0x7FFFFFF |
+| SORT_MEM | 用于排序内存大小（KB） | 8192 | 64 | 0x1000000 |
+| LOG_READ_BUFFER | 日志读取缓冲区的页数（页大小 512） | 0x400 | 0x20 | 0x1000000 |
+| LOG_WRITE_BUFFER | 日志写入缓冲区的页数（页大小 512） | 0x1000 | 0x20 | 0x1000000 |
+
+## 2. 并发连接数限制
+
+| 参数 | 描述 | 默认值 | 最大值 |
+| --- | --- | --- | --- |
+| MAX_CONNECTIONS | 数据库最大连接数 | 128 | 65535 |
+| SUPERUSER_RESERVED_CONNECTIONS | 超级管理员最大连接数 | 2 |  |
+
+## 3. 磁盘 IO
+
+| 参数 | 描述 |
+| --- | --- |
+| FILE_IO_OPTION | BUFFER: 使用磁盘缓存，对批量写入操作，BUFFER 优于 DIRECT； DIRECT：直接写入磁盘，对大量随机写入操作，DIRECT 方式更好。 |
+| ENABLE_NATIVE_IO | 使用异步 IO，如果 FILE_IO_OPTION 使用 BUFFER 方式，由于使用的是模拟异步，ENABLE_NATIVE_IO 设置将被忽略；对于使用 DIRECT 方式，建议开启异步 IO。 |
+
+## 4. 计算统计信息
+exec dbms_utility.ANALYZE_SCHEMA ('EZOFFICE','COMPUTE');
+exec dbms_utility.ANALYZE_INDEX('STATE');
+exec dbms_utility.ANALYZE_INDEX('CLEAN');
+## 5. 开启自动计算统计信息
+/u01/oscar/admin/oa.conf
+ENABLE_AUTO_STAT = true

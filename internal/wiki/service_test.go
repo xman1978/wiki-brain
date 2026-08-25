@@ -670,8 +670,8 @@ func TestTryDirectAnswer_TopNRetriesNextCandidateOnInsufficient(t *testing.T) {
 func TestCompile_AggregatesObservedConditions(t *testing.T) {
 	svc, _, db, _ := setupTestService(t)
 
-	cond1 := activation.NormalizeObservedCondition("database performance tuning", "troubleshoot", "dba", "production", "qterm1", time.Now())
-	cond2 := activation.NormalizeObservedCondition("index rebuild strategy", "howto", "dba", "", "qterm2", time.Now())
+	cond1 := activation.NormalizeObservedCondition("database performance tuning", "troubleshoot", "dba", "production", "", "", "qterm1", time.Now())
+	cond2 := activation.NormalizeObservedCondition("index rebuild strategy", "howto", "dba", "", "", "", "qterm2", time.Now())
 	setObservedConditions(t, db, "link-p1", []activation.ObservedCondition{cond1})
 	setObservedConditions(t, db, "link-p2", []activation.ObservedCondition{cond2})
 

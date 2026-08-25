@@ -108,8 +108,8 @@ type bundleCandidate struct {
 // re-verification, not a Bundle merge; see docs/design/activation-bundle.md
 // 改判). A miss here is simply "no Bundle candidate this round" — the caller
 // falls back to whatever the Link side resolved, or the slow path.
-func (s *Service) resolveBundleCandidate(ctx context.Context, expandedQuery session.ExpandedQuery, matchCfg activation.MatchConfig) (bundleCandidate, bool) {
-	matches, err := s.activationSvc.MatchBundles(ctx, expandedQuery, matchCfg)
+func (s *Service) resolveBundleCandidate(ctx context.Context, expandedQuery session.ExpandedQuery, domainIDs []string, matchCfg activation.MatchConfig) (bundleCandidate, bool) {
+	matches, err := s.activationSvc.MatchBundles(ctx, expandedQuery, domainIDs, matchCfg)
 	if err != nil {
 		slog.Warn("retrieval: bundle match failed", "error", err)
 		return bundleCandidate{}, false
