@@ -69,7 +69,7 @@ func TestIntegrationAnswerQuality(t *testing.T) {
 	rebuildIndexes(t, database, idxMgr, testdataDir)
 
 	retStore := retrieval.NewStore(database)
-	retSvc := retrieval.NewService(retStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, nil, nil, nil)
+	retSvc := retrieval.NewService(retStore, llmClient, idxMgr.Units, idxMgr.Points, cfg, nil, nil, nil)
 
 	ansStore := NewStore(database)
 	q := queue.New(100)

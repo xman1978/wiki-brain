@@ -34,21 +34,50 @@ def fetch_all_results(base_url, limit=2000):
 
 def check_three_essentials(results):
     """object_id/reason 对所有 result 都该有；event_ids 只对"由 learning_events
-    驱动"的动作有意义——reason=manual_reject 是人工直接调 POST
-    /activation-links/:id/reject 触发的 prune_condition（2026-08-13 起
-    confirm 端点已不存在，唯一的人工动作只剩 reject），背后没有 learning_event
-    （人的点击就是原因本身），这类 result 没有 event_ids 是正常的，不能算审计缺口。"""
+    驱动"的动作有意义——不是每个动作背后都有 learning_event：
+
+    - reason=manual_reject 是人工直接调 POST /activation-links/:id/reject 触发
+      的 prune_condition（2026-08-13 起 confirm 端点已不存在，唯一的人工动作只
+      剩 reject），背后没有 learning_event（人的点击就是原因本身）。
+    - entry_add_candidate / entry_merge_candidate 有三种合法来源
+      （internal/entry/service.go）：
+        1. 跨 Source KPN 聚类匹配（reason 以"跨 Source KPN 匹配"开头，
+           service.go:146）——内容驱动的统计聚类，不经过 learning_events。
+        2. 概念对共现合并（reason 以"概念对共现"开头，service.go:625）——同样
+           是内容驱动的统计，不经过 learning_events。
+        3. 人工手动新增/确认概念（reason 为"人工手动新增概念候选"
+           或以"人工确认新增概念"开头，service.go:206/754）——人工直接触发。
+      只有 service.go:413 那条真正由 learning_events 共现驱动的
+      entry_add_candidate 会带 event_ids，这类不豁免，仍然要求非空。
+    这类 result 没有 event_ids 是正常的，不能算审计缺口。"""
+    NON_EVENT_ENTRY_REASON_PREFIXES = (
+        "跨 Source KPN 匹配",
+        "概念对共现",
+        "人工确认新增概念",
+    )
+    NON_EVENT_ENTRY_REASON_EXACT = (
+        "人工手动新增概念候选",
+    )
     missing = []
     for r in results:
         event_ids = r.get("event_ids")
         reason = r.get("reason") or ""
+        action = r.get("action") or ""
         is_manual = reason.startswith("manual_")
+        is_non_event_entry_candidate = (
+            action in ("entry_add_candidate", "entry_merge_candidate")
+            and (
+                reason in NON_EVENT_ENTRY_REASON_EXACT
+                or reason.startswith(NON_EVENT_ENTRY_REASON_PREFIXES)
+            )
+        )
+        is_exempt = is_manual or is_non_event_entry_candidate
         problems = []
         if not r.get("object_id"):
             problems.append("object_id 缺失")
         if not reason:
             problems.append("reason 缺失")
-        if not event_ids and not is_manual:
+        if not event_ids and not is_exempt:
             problems.append("event_ids 缺失/空")
         if problems:
             missing.append({"result_id": r["result_id"], "action": r["action"], "reason": reason, "problems": problems})

@@ -346,7 +346,7 @@ const (
 	promptVersionExtractRetry = "v7" // unit_extract_retry.md
 	promptVersionGapExtract   = "v1" // unit_gap_extract.md
 	promptVersionKPNExtract   = "v2" // kpn_extract.md
-	promptVersionKPNCross     = "v3" // kpn_cross_match.md
+	promptVersionKPNCross     = "v4" // kpn_cross_match.md
 )
 
 type llmUnit struct {

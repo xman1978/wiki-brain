@@ -114,12 +114,18 @@ func setupTestService(t *testing.T) (*Service, *llm.FakeClient, *Store) {
 	fake := llm.NewFakeClient()
 	cfg := &config.Config{
 		Retrieval: config.RetrievalConfig{
-			OutlineFTSMinScore: 0.5,
-			RerankTopN:         20,
+			RerankTopN: 20,
+			// Tests in this package wire fake responses to rerank_relevance.md
+			// (the analysis-carrying variant) and assert on its two-step
+			// judge/analysis behavior — production defaults to the concise
+			// variant (2026-08-26 决策，见 config.go RerankRelevanceDebugAnalysis
+			// 注释) for speed, but that's a config default choice, not what
+			// these tests are exercising.
+			RerankRelevanceDebugAnalysis: true,
 		},
 	}
 
-	svc := NewService(store, fake, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, nil, nil, nil)
+	svc := NewService(store, fake, idxMgr.Units, idxMgr.Points, cfg, nil, nil, nil)
 	return svc, fake, store
 }
 
@@ -197,7 +203,7 @@ func TestDomainPreFilterZeroMatchFallback(t *testing.T) {
 		Output: `{"domain_ids": ["d2"]}`,
 	})
 
-	svc := NewService(store, fake, nil, nil, nil, &config.Config{}, nil, nil, nil)
+	svc := NewService(store, fake, nil, nil, &config.Config{}, nil, nil, nil)
 
 	sources, err := svc.domainPreFilter(context.Background(), QueryContext{Question: "something"})
 	if err != nil {
@@ -217,7 +223,7 @@ func TestSourceSemanticFilter(t *testing.T) {
 	}
 
 	fake.SetResponse("source_filter.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s2", "relevant": false, "analysis": "no match"}]}`,
+		Output: `{"relevant_ids": ["s1"]}`,
 	})
 
 	filtered, err := svc.sourceSemanticFilter(context.Background(), QueryContext{Question: "linear equation"}, candidates)
@@ -238,7 +244,7 @@ func TestSourceSemanticFilterEmptyFallback(t *testing.T) {
 	}
 
 	fake.SetResponse("source_filter.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "s1", "relevant": false, "analysis": "no match"}, {"candidate_id": "s2", "relevant": false, "analysis": "no match"}]}`,
+		Output: `{"relevant_ids": []}`,
 	})
 
 	filtered, err := svc.sourceSemanticFilter(context.Background(), QueryContext{Question: "random question"}, candidates)
@@ -581,6 +587,11 @@ func TestRerank_AllIrrelevantSkipsClassifyCall(t *testing.T) {
 
 func TestRerankUsesPersistedSemanticsAndRunsJudgeBatchesConcurrently(t *testing.T) {
 	svc, tracker, candidates := setupPersistedSemanticRerank(t, 1, 2)
+	// Distinct objects per unit so rerankObjectGroupKey's same-object pooling
+	// doesn't collapse them into one batch — this test is about maxChars=1
+	// forcing every candidate into its own batch.
+	setRerankObject(t, svc.store, "u1", "出差员工A")
+	setRerankObject(t, svc.store, "u2", "出差员工B")
 
 	got, _, err := svc.rerank(t.Context(), QueryContext{Question: "差旅住宿限额是多少？"}, candidates)
 	if err != nil {
@@ -637,7 +648,7 @@ func TestRerankConsumesSemanticsAfterShadowReparentSwap(t *testing.T) {
 	}
 
 	tracker := &rerankJudgeTrackingLLM{}
-	svc := NewService(store, tracker, nil, nil, nil, &config.Config{}, nil, nil, nil)
+	svc := NewService(store, tracker, nil, nil, &config.Config{Retrieval: config.RetrievalConfig{RerankRelevanceDebugAnalysis: true}}, nil, nil, nil)
 	kept, _, err := svc.rerank(t.Context(), QueryContext{Question: "What is the hotel limit?"}, []candidate{{
 		unitID: "shadow-u1", pointID: "shadow-p1", sourceID: "target-1", lineStart: 1, lineEnd: 2, score: 1,
 	}})
@@ -665,6 +676,12 @@ func TestRerankJudgeBatchBudgetCountsCompactJSONRunesAndDelimiters(t *testing.T)
 	candidates = append(candidates, candidate{
 		unitID: "u3", pointID: "p3", sourceID: "s2", lineStart: 1, lineEnd: 30, score: 0.25,
 	})
+	// Empty objects so rerankObjectGroupKey treats every candidate as its own
+	// keyless singleton (no grouping, no cross-key isolation) — this test is
+	// about maxChars-based splitting on its own.
+	setRerankObject(t, svc.store, "u1", "")
+	setRerankObject(t, svc.store, "u2", "")
+	setRerankObject(t, svc.store, "u3", "")
 
 	centers, err := svc.store.GetUnitCenters([]string{"u1", "u2"})
 	if err != nil {
@@ -674,8 +691,8 @@ func TestRerankJudgeBatchBudgetCountsCompactJSONRunesAndDelimiters(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := buildRerankJudgeCandidate("c1", "Algebra", centers["u1"], "p1", points["u1"])
-	second := buildRerankJudgeCandidate("c2", "Algebra", centers["u2"], "p2", points["u2"])
+	first := buildRerankJudgeCandidate("c1", "Algebra", centers["u1"], "p1", "u1", points["u1"])
+	second := buildRerankJudgeCandidate("c2", "Algebra", centers["u2"], "p2", "u2", points["u2"])
 	firstJSON, err := json.Marshal(first)
 	if err != nil {
 		t.Fatal(err)
@@ -774,6 +791,20 @@ func insertRerankSemantic(t *testing.T, store *Store, unitID, promptVersion stri
 		WHERE unit_id = ?`,
 		promptVersion, unitID)
 	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setRerankObject overrides a unit's object field after insertRerankSemantic
+// has stamped the shared test default — used by tests that assert on batch
+// splitting mechanics (byte/count budgets) independent of rerank's
+// same-object pooling (rerankObjectGroupKey, 2026-08-26 决策): every unit in
+// the shared test fixture gets the same object by default, which would
+// otherwise pool them into one batch regardless of the configured
+// maxChars/maxCandidates being tested.
+func setRerankObject(t *testing.T, store *Store, unitID, object string) {
+	t.Helper()
+	if _, err := store.db.Exec(`UPDATE knowledge_points SET object = ? WHERE unit_id = ?`, object, unitID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1117,11 +1148,11 @@ func TestRetrieveEndToEnd(t *testing.T) {
 	})
 	// Source filter → s1
 	fake.SetResponse("source_filter.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`,
+		Output: `{"relevant_ids": ["s1"]}`,
 	})
 	// Outline filter fallback
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`,
+		Output: `{"node_ids": ["o2"]}`,
 	})
 	// Rerank — accept all as direct for simplicity
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
@@ -1161,13 +1192,13 @@ func TestRetrieveEndToEnd_NoCandidatesGapReason(t *testing.T) {
 		Output: `{"domain_ids": ["d1"]}`,
 	})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`,
+		Output: `{"relevant_ids": ["s1"]}`,
 	})
 	// Low-scoring outlines fall back to this LLM classifier; returning
 	// relevant:false for every outline means outline recall found nothing
 	// either.
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": false, "analysis": "no match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`,
+		Output: `{"node_ids": []}`,
 	})
 
 	es, err := svc.Retrieve(context.Background(), "purple dinosaur spacecraft maintenance manual")
@@ -1196,10 +1227,10 @@ func TestRetrieveEndToEnd_JudgeFilteredGapReason(t *testing.T) {
 		Output: `{"domain_ids": ["d1"]}`,
 	})
 	fake.SetResponse("source_filter.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`,
+		Output: `{"relevant_ids": ["s1"]}`,
 	})
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`,
+		Output: `{"node_ids": ["o2"]}`,
 	})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
 		Output: `{"results": [{"candidate_id": "c1", "relevant": false, "analysis": "证据主题与问题不匹配"}]}`,

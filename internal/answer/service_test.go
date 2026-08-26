@@ -321,7 +321,7 @@ func setupAnswerWithSlowPathVerify(t *testing.T, enabled bool) (*Service, *llm.F
 	cfg := &config.Config{}
 	cfg.Retrieval.SlowPathVerify = enabled
 	retStore := retrieval.NewStore(db)
-	retSvc := retrieval.NewService(retStore, fake, nil, nil, nil, cfg, nil, nil, nil)
+	retSvc := retrieval.NewService(retStore, fake, nil, nil, cfg, nil, nil, nil)
 	svc := NewService(store, fake, q, retSvc)
 	return svc, fake
 }

@@ -94,7 +94,7 @@ func TestIntegrationSessionFlow(t *testing.T) {
 	rebuildIndexes(t, database, idxMgr, testdataDir)
 
 	retStore := retrieval.NewStore(database)
-	retSvc := retrieval.NewService(retStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, nil, nil, nil)
+	retSvc := retrieval.NewService(retStore, llmClient, idxMgr.Units, idxMgr.Points, cfg, nil, nil, nil)
 	ansStore := answer.NewStore(database)
 	q := queue.New(100)
 	q.RegisterHandler(queue.TaskTypeTrace, func(payload interface{}) {})

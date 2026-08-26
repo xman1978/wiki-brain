@@ -4446,7 +4446,9 @@ function renderBundleDetail(d) {
     <div class="detail-row"><span class="dl">最近使用</span><span class="dv">' + (d.last_used_at ? dateStr(d.last_used_at) : '-') + '</span></div>\
     <h3 style="margin-top:14px;font-size:13px;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em">成员置信度（核心/路肩由 tier 派生）</h3>\
     ' + renderBundleMembersTable(d.members, d.core_member_point_ids, d.member_details) + '\
-    <div class="modal-actions" style="margin-top:14px;justify-content:flex-start"><button class="btn btn-sm" onclick="closeBundleModal()">关闭</button></div>\
+    <div class="modal-actions" style="margin-top:14px;justify-content:flex-start">\
+      <button class="btn btn-sm" style="color:var(--red)" onclick="clearAndRestartBundle(\'' + esc(d.bundle_id) + '\')">清空重来</button>\
+      <button class="btn btn-sm" onclick="closeBundleModal()">关闭</button></div>\
     <div class="lazy-section" id="bundleQuestionsSection">\
       <button type="button" class="lazy-section-head" onclick="toggleBundleQuestionsSection(\'' + esc(d.bundle_id) + '\')">\
         <span>命中问法</span><span class="chev">▾</span>\
@@ -4870,6 +4872,23 @@ async function clearAndRestartActivationLink(linkId) {
       if (S.wikiConceptId) loadConceptKPLinksSection(S.wikiConceptId);
       pollActivationPendingCount();
       if (document.getElementById('studyDrawer').classList.contains('open') && S.studyTab === 'overview') loadStudyReport();
+    }
+    else showAlert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
+  } catch(e) { showAlert('操作出错：' + e.message); }
+}
+
+// 组合链路的清空重来（镜像 clearAndRestartActivationLink，见
+// docs/impl/v1/activation-bundle.md「成员置信度」）：清空触发轴观测条件与
+// 全部成员的采纳/失败计数，成员名单本身不变，熟路不会消失。
+async function clearAndRestartBundle(bundleId) {
+  if (!(await showConfirm('确认清空该组合链路的全部观测条件与成员置信度？\n这不是"驳回候选"，是把触发轴与成员置信度一并归零重新积累——熟路本身不会消失，成员名单保留，后续新证据会重新计入。'))) return;
+  try {
+    var r = await api('POST', '/activation-bundles/' + bundleId + '/reject');
+    if (r.ok) {
+      selectBundle(bundleId);
+      if (document.getElementById('activationTabPane-bundle') && !document.getElementById('activationTabPane-bundle').classList.contains('hidden') && S.bundleDomainSelectedId) {
+        renderBundleDomainPane(S.bundleDomainSelectedId);
+      }
     }
     else showAlert('操作失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data)));
   } catch(e) { showAlert('操作出错：' + e.message); }

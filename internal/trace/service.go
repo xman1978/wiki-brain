@@ -36,6 +36,13 @@ type Service struct {
 // the same as the answer having actually cited it).
 type SourceAffinityWriter interface {
 	RecordSourceAffinityOutcome(subject string, sourceIDs []string) error
+	// RecordSourceAffinityFeedbackFailure records one circuit-breaker failure
+	// against subject→sourceIDs bindings (会话讨论 2026-08-26): explicit
+	// negative user feedback on a trace that relied on a source_affinity
+	// binding is the second input to the eviction mechanism, alongside the
+	// shortcut's own empty-recall failure (subject_affinity.go). Absence of
+	// feedback is not a signal either way and must never call this.
+	RecordSourceAffinityFeedbackFailure(subject string, sourceIDs []string) error
 }
 
 // SetSourceAffinityWriter wires the hand-off target (usually
@@ -49,11 +56,6 @@ func (s *Service) SetSourceAffinityWriter(w SourceAffinityWriter) {
 // trace tests without activation still run.
 type ObservedConditionEnricher interface {
 	EnrichFromConfidentFullPath(pointIDs []string, subject, intent, audience, constraint, questionTerms string, max int) error
-	// FindSynonymGapCandidate is the read-only diagnostic behind the
-	// subject_synonym_gap event (docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md):
-	// it reports whether pointID's existing link has an observed group whose
-	// intent/audience/constraint match but whose subject doesn't.
-	FindSynonymGapCandidate(pointID, subject, intent, audience, constraint string) (linkID, observedSubject string, ok bool, err error)
 	// RecordOutcome/RecordAuditOutcome (2026-08-13, docs/impl/v1/trace.md 步骤
 	// 3/3b/4) update the matched observed condition's success_count/
 	// failure_count (and, for the audit variant, audited_success_count/
@@ -418,10 +420,7 @@ func (s *Service) resolveUnitBinding(ctx context.Context, question, answerConten
 }
 
 // enrichObservedConditions appends this turn's Session quadruple onto links
-// for confidently cited points on the full path (slow path / fast fallback),
-// and — before appending — mines subject_synonym_gap candidates from links
-// that would have matched if not for the subject wording
-// (docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md).
+// for confidently cited points on the full path (slow path / fast fallback).
 func (s *Service) enrichObservedConditions(t *Trace) {
 	if s.enricher == nil {
 		return
@@ -432,8 +431,6 @@ func (s *Service) enrichObservedConditions(t *Trace) {
 	if len(t.DirectPointIDs) == 0 {
 		return
 	}
-
-	s.detectSubjectSynonymGaps(t)
 
 	// 2026-08-24: mirrors the updateCooccurrence guard above — a multi-point
 	// confident answer is Bundle's input, not Link's. Strengthening every
@@ -501,42 +498,13 @@ func (s *Service) recordSourceAffinity(t *Trace, r *answer.AnswerResult) {
 		return
 	}
 
+	if err := s.store.UpdateSourceAffinitySourceIDs(t.TraceID, sourceIDs); err != nil {
+		slog.Error("trace: persist source affinity source_ids failed", "trace_id", t.TraceID, "error", err)
+	}
+	t.SourceAffinitySourceIDs = sourceIDs
+
 	if err := s.sourceAffinityWriter.RecordSourceAffinityOutcome(t.Subject, sourceIDs); err != nil {
 		slog.Error("trace: record source affinity failed", "trace_id", t.TraceID, "error", err)
-	}
-}
-
-// detectSubjectSynonymGaps runs under the same eligibility gate as
-// enrichment (checked by the caller: full path, confident, direct points
-// non-empty) but is read-only. For each direct point with an existing
-// non-deprecated ActivationLink whose intent/audience/constraint match this
-// turn's query but whose subject doesn't (even after currently-registered
-// synonym canonicalization), it records one subject_synonym_gap learning
-// event — Study's aggregation input for confirming new synonym candidates
-// (docs/impl/v1/study.md 步骤 2a). Runs before EnrichFromConfidentFullPath so
-// the diagnostic reflects the link's state prior to this turn's own
-// enrichment (docs/impl/v1/trace.md 步骤 3).
-func (s *Service) detectSubjectSynonymGaps(t *Trace) {
-	for _, pid := range t.DirectPointIDs {
-		linkID, observedSubject, ok, err := s.enricher.FindSynonymGapCandidate(pid, t.Subject, t.Intent, t.Audience, t.ConstraintText)
-		if err != nil {
-			slog.Error("trace: subject synonym gap detection failed", "trace_id", t.TraceID, "point_id", pid, "error", err)
-			continue
-		}
-		if !ok {
-			continue
-		}
-		payload, _ := json.Marshal(map[string]interface{}{
-			"point_id":         pid,
-			"link_id":          linkID,
-			"query_subject":    normalize(t.Subject),
-			"observed_subject": observedSubject,
-			"question_terms":   t.QuestionTerms,
-		})
-		slog.Debug("trace: generating subject_synonym_gap event", "trace_id", t.TraceID, "point_id", pid, "link_id", linkID)
-		if _, err := s.store.SaveLearningEvent(t.TraceID, "subject_synonym_gap", string(payload)); err != nil {
-			slog.Error("trace: save subject_synonym_gap event failed", "trace_id", t.TraceID, "error", err)
-		}
 	}
 }
 
@@ -998,6 +966,16 @@ func (s *Service) SubmitFeedback(t *Trace, req FeedbackRequest) error {
 	slog.Debug("trace: feedback received", "trace_id", t.TraceID, "type", req.Type)
 	if err := s.store.UpdateFeedback(t.TraceID, req.Type, req.Content); err != nil {
 		return err
+	}
+
+	// source_affinity 淘汰机制的第二个输入（会话讨论 2026-08-26）：客户明确给
+	// 出负面反馈时，对这次回答实际用到的 subject→source 绑定记一次熔断失败；
+	// 没有反馈则忽略（既不算成功也不算失败），只有 negative 计入——correction
+	// 走的是下面 ActivationLink 的纠错权重，不是同一件事。
+	if req.Type == "negative" && s.sourceAffinityWriter != nil && t.Subject != "" && len(t.SourceAffinitySourceIDs) > 0 {
+		if err := s.sourceAffinityWriter.RecordSourceAffinityFeedbackFailure(t.Subject, t.SourceAffinitySourceIDs); err != nil {
+			slog.Error("trace: record source affinity feedback failure failed", "trace_id", t.TraceID, "error", err)
+		}
 	}
 
 	if req.Type == "negative" || req.Type == "correction" {

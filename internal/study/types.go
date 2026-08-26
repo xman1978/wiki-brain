@@ -242,10 +242,6 @@ type LearningActionsSummary struct {
 	// (2026-08-13, docs/design/activation-convergence.md 第 9 节): no more
 	// discrete state transitions to count — replaced by PrunedConditions
 	// below (docs/impl/v1/study.md 步骤 3「收敛剪枝」).
-	// SynonymCandidatesCreated counts subject_synonyms rows created this cycle
-	// (candidate or, when synonym_auto_promote=true, active) from
-	// subject_synonym_gap aggregation (docs/impl/v1/study.md 步骤 2a).
-	SynonymCandidatesCreated int `json:"synonym_candidates_created"`
 	// PrunedConditions is the total number of observed_conditions entries
 	// removed this cycle across all links by pruneConditions (docs/impl/v1/
 	// study.md 步骤 3).

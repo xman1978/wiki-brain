@@ -18,6 +18,7 @@ import (
 	"github.com/jxman78/wiki-brain/internal/activation"
 	"github.com/jxman78/wiki-brain/internal/evidence"
 	"github.com/jxman78/wiki-brain/internal/foundation/config"
+	"github.com/jxman78/wiki-brain/internal/foundation/index"
 	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 	"github.com/jxman78/wiki-brain/internal/rerank"
 	"github.com/jxman78/wiki-brain/internal/session"
@@ -29,7 +30,6 @@ type Service struct {
 	llmClient          llm.LLMClient
 	unitsIndex         bleve.Index
 	pointsIndex        bleve.Index
-	outlinesIndex      bleve.Index
 	cfg                *config.Config
 	activationSvc      *activation.Service
 	evidenceSvc        *evidence.Service
@@ -87,7 +87,7 @@ const (
 	defaultRerankJudgeConcurrency        = 4
 )
 
-func NewService(store *Store, llmClient llm.LLMClient, unitsIdx, pointsIdx, outlinesIdx bleve.Index, cfg *config.Config, activationSvc *activation.Service, evidenceSvc *evidence.Service, wikiSvc *wiki.Service) *Service {
+func NewService(store *Store, llmClient llm.LLMClient, unitsIdx, pointsIdx bleve.Index, cfg *config.Config, activationSvc *activation.Service, evidenceSvc *evidence.Service, wikiSvc *wiki.Service) *Service {
 	subjectNormalizer := NewSubjectNormalizer(store, SubjectNormConfig{
 		LocalSimMin: cfg.Retrieval.SourceAffinityLocalSimMin,
 	})
@@ -97,7 +97,6 @@ func NewService(store *Store, llmClient llm.LLMClient, unitsIdx, pointsIdx, outl
 		llmClient:          llmClient,
 		unitsIndex:         unitsIdx,
 		pointsIndex:        pointsIdx,
-		outlinesIndex:      outlinesIdx,
 		cfg:                cfg,
 		activationSvc:      activationSvc,
 		evidenceSvc:        evidenceSvc,
@@ -1183,8 +1182,6 @@ type sourceFilterCandidate struct {
 	Summary     string `json:"summary,omitempty"`
 }
 
-func sourceFilterCandidateID(c sourceFilterCandidate) string { return c.CandidateID }
-
 // Step 3: Source semantic filter (2026-08-25 改为分批并发调用，复用
 // judge_batch.go 的批量核心 — 见 docs 讨论：候选 source 数量随导入文件增长，
 // 原先把全部候选一次性塞进一个 LLM 调用的 prompt 大小和延迟会跟着线性增长；
@@ -1225,7 +1222,7 @@ func (s *Service) sourceSemanticFilter(ctx context.Context, qc QueryContext, can
 		constraint = "（无）"
 	}
 
-	callBatch := func(ctx context.Context, batch []sourceFilterCandidate) (map[string]string, error) {
+	callBatch := func(ctx context.Context, batch []sourceFilterCandidate) ([]string, error) {
 		payload, err := json.Marshal(batch)
 		if err != nil {
 			return nil, fmt.Errorf("retrieval: source filter payload: %w", err)
@@ -1242,26 +1239,15 @@ func (s *Service) sourceSemanticFilter(ctx context.Context, qc QueryContext, can
 			return nil, fmt.Errorf("retrieval: source filter llm: %w", err)
 		}
 		var result struct {
-			Results []struct {
-				CandidateID string `json:"candidate_id"`
-				Relevant    bool   `json:"relevant"`
-			} `json:"results"`
+			RelevantIDs []string `json:"relevant_ids"`
 		}
 		if err := json.Unmarshal(resp, &result); err != nil {
 			return nil, fmt.Errorf("retrieval: source filter parse: %w", err)
 		}
-		out := make(map[string]string, len(result.Results))
-		for _, r := range result.Results {
-			if r.Relevant {
-				out[r.CandidateID] = "relevant"
-			} else {
-				out[r.CandidateID] = "irrelevant"
-			}
-		}
-		return out, nil
+		return result.RelevantIDs, nil
 	}
 
-	results, err := runJudgeBatches(ctx, items, s.rerankJudgeBatchMaxChars(), s.rerankJudgeBatchMaxCandidates(), s.rerankJudgeConcurrency(), sourceFilterCandidateID, "relevant", callBatch)
+	matched, err := runMatchBatches(ctx, items, s.rerankJudgeBatchMaxChars(), s.rerankJudgeBatchMaxCandidates(), s.rerankJudgeConcurrency(), callBatch)
 	if err != nil {
 		slog.Warn("retrieval: source filter failed, using all candidates", "error", err)
 		return candidates, nil
@@ -1269,7 +1255,7 @@ func (s *Service) sourceSemanticFilter(ctx context.Context, qc QueryContext, can
 
 	var filtered []SourceInfo
 	for _, src := range candidates {
-		if results[src.SourceID] == "relevant" {
+		if matched[src.SourceID] {
 			filtered = append(filtered, src)
 		}
 	}
@@ -1285,81 +1271,17 @@ func (s *Service) outlineRecall(ctx context.Context, qc QueryContext, sourceIDs 
 		return nil, nil
 	}
 
-	// 目录召回按核心主题+意图整体匹配，而非裸问题文本——问题需经 session parser
-	// 解析才完整（如指代消解），裸问题字面匹配容易因同义/近义关键词误召回
-	// 场景不同的章节（如"实施"既出现在实施考核场景，也出现在销售代理场景）。
-	matchText := strings.TrimSpace(qc.Subject + " " + qc.Intent)
-	if matchText == "" {
-		matchText = qc.Question
-	}
-
-	threshold := s.cfg.Retrieval.OutlineFTSMinScore
-	if threshold <= 0 {
-		threshold = 0.5
-	}
-
-	// 4.1 FTS on outlines index
-	type sourceScore struct {
-		maxScore   float64
-		outlineIDs []string
-	}
-	scoreBySource := make(map[string]*sourceScore)
-	for _, sid := range sourceIDs {
-		scoreBySource[sid] = &sourceScore{}
-	}
-
-	q := bleve.NewMatchQuery(matchText)
-	searchReq := bleve.NewSearchRequest(q)
-	searchReq.Size = 100
-	searchReq.Fields = []string{"source_id", "outline_id"}
-
-	results, err := s.outlinesIndex.Search(searchReq)
+	// 2026-08-26 改判：去掉 FTS 对 Source 的预筛选，改为对全部 sourceIDs 直接
+	// 做 LLM per-source 匹配——FTS 对大纲标题的字面匹配无法理解语义，缩小的
+	// 范围有可能把正确节点挡在外面；step3 Source 过滤已经把候选 Source 收窄
+	// 到语义相关的范围，这里不需要再叠加一层不理解语义的字面过滤。
+	llmOutlineIDs, err := s.outlineLLMMatch(ctx, qc, sourceIDs)
 	if err != nil {
-		slog.Warn("retrieval: outline fts failed", "error", err)
-	} else {
-		for _, hit := range results.Hits {
-			sid, _ := hit.Fields["source_id"].(string)
-			ss, ok := scoreBySource[sid]
-			if !ok {
-				continue
-			}
-			if hit.Score > ss.maxScore {
-				ss.maxScore = hit.Score
-			}
-			ss.outlineIDs = append(ss.outlineIDs, hit.ID)
-		}
-	}
-
-	// Collect FTS hits from sources above threshold
-	var ftsOutlineIDs []string
-	var lowScoreSources []string
-	for sid, ss := range scoreBySource {
-		if ss.maxScore >= threshold {
-			ftsOutlineIDs = append(ftsOutlineIDs, ss.outlineIDs...)
-		} else {
-			lowScoreSources = append(lowScoreSources, sid)
-		}
-	}
-
-	// 4.2 LLM fallback for low-score sources
-	if len(lowScoreSources) > 0 {
-		llmOutlineIDs, err := s.outlineLLMFallback(ctx, qc, lowScoreSources)
-		if err != nil {
-			slog.Warn("retrieval: outline llm fallback error", "error", err)
-		} else {
-			ftsOutlineIDs = append(ftsOutlineIDs, llmOutlineIDs...)
-		}
-	}
-
-	if len(ftsOutlineIDs) == 0 {
+		slog.Warn("retrieval: outline llm match error", "error", err)
 		return nil, nil
 	}
-
-	// Expand to children and get units
-	var allOutlineIDs []string
-	sourceIDSet := make(map[string]bool)
-	for _, sid := range sourceIDs {
-		sourceIDSet[sid] = true
+	if len(llmOutlineIDs) == 0 {
+		return nil, nil
 	}
 
 	// Group outline IDs by source for child expansion
@@ -1372,12 +1294,13 @@ func (s *Service) outlineRecall(ctx context.Context, qc QueryContext, sourceIDs 
 	for _, o := range outlines {
 		outlineSourceMap[o.OutlineID] = o.SourceID
 	}
-	for _, oid := range ftsOutlineIDs {
+	for _, oid := range llmOutlineIDs {
 		if sid, ok := outlineSourceMap[oid]; ok {
 			outlinesBySource[sid] = append(outlinesBySource[sid], oid)
 		}
 	}
 
+	var allOutlineIDs []string
 	for sid, oids := range outlinesBySource {
 		children, err := s.store.GetChildOutlineIDs(oids, sid)
 		if err != nil {
@@ -1411,15 +1334,10 @@ func (s *Service) outlineRecall(ctx context.Context, qc QueryContext, sourceIDs 
 	return candidates, nil
 }
 
-// outlineFilterCandidate is one outline_filter.md candidate item, mirroring
-// sourceFilterCandidate's shape. Flattened across every low-FTS-score source
-// in one candidate pool (2026-08-25) instead of one goroutine+LLM call per
-// source — a domain with many low-scoring sources no longer means an
-// unbounded number of concurrent LLM calls; call count is now bounded by
-// splitJudgeBatches' char/count caps regardless of source count. OutlineID is
-// globally unique (source_outlines primary key) so items from different
-// sources can share one flat candidate pool without collision; Level carries
-// the outline depth that the old per-source indented text list conveyed.
+// outlineFilterCandidate is one outline_filter.md candidate item passed to
+// the LLM. OutlineID is globally unique (source_outlines primary key), but
+// as of 2026-08-26 each LLM call only ever sees the nodes belonging to one
+// source — see outlineLLMMatch.
 type outlineFilterCandidate struct {
 	CandidateID string `json:"candidate_id"`
 	Title       string `json:"title"`
@@ -1427,9 +1345,32 @@ type outlineFilterCandidate struct {
 	Keywords    string `json:"keywords,omitempty"`
 }
 
-func outlineFilterCandidateID(c outlineFilterCandidate) string { return c.CandidateID }
-
-func (s *Service) outlineLLMFallback(ctx context.Context, qc QueryContext, sourceIDs []string) ([]string, error) {
+// outlineLLMMatch hands each source's *entire* outline tree to the LLM in a
+// single call and asks it to directly return the node_ids it picked. This is
+// the sole outline-matching mechanism (2026-08-26 redesign): FTS pre-filtering
+// was dropped entirely — bleve keyword matching on outline titles doesn't
+// understand semantics, and a title-literal miss could silently exclude the
+// correct node before the LLM ever saw it; step3's source-level filter
+// already narrows sourceIDs to a semantically relevant set, so no further
+// literal-match narrowing is needed before the per-source LLM call. This also
+// replaced an earlier flat batch-of-5 independent relevant/irrelevant
+// classification across all sources. Two reasons this beats that scheme:
+//   - One call sees the whole tree for a source, so the model can reason
+//     about sibling/parent context (e.g. disambiguating near-duplicate
+//     section titles across versions) instead of judging each node in
+//     isolation inside an arbitrary 5-node batch.
+//   - "Return the ids you picked" needs no missing-item-id bookkeeping —
+//     there's nothing to silently omit and default, unlike the old
+//     relevant/irrelevant-per-node scheme which had to detect and retry
+//     batches that dropped an item from their response.
+//
+// Multiple sources still run concurrently (bounded by rerankJudgeConcurrency)
+// rather than sequentially, so a domain with many sources doesn't serialize
+// one LLM call after another. A single source's outline tree is never itself
+// split into batches — if a source's outline grows large enough to blow the
+// prompt budget, that's a case to revisit deliberately, not something to
+// silently reintroduce char-capped batching for.
+func (s *Service) outlineLLMMatch(ctx context.Context, qc QueryContext, sourceIDs []string) ([]string, error) {
 	outlines, err := s.store.GetOutlinesBySourceIDs(sourceIDs)
 	if err != nil {
 		return nil, err
@@ -1447,62 +1388,89 @@ func (s *Service) outlineLLMFallback(ctx context.Context, qc QueryContext, sourc
 		intent = "（未提取）"
 	}
 
-	items := make([]outlineFilterCandidate, len(outlines))
-	for i, o := range outlines {
+	nodesBySource := make(map[string][]outlineFilterCandidate)
+	validOutlineIDs := make(map[string]bool, len(outlines))
+	for _, o := range outlines {
 		keywords := ""
 		if o.Summary.Valid {
 			keywords = o.Summary.String
 		}
-		items[i] = outlineFilterCandidate{CandidateID: o.OutlineID, Title: o.Title, Level: o.Level, Keywords: keywords}
+		nodesBySource[o.SourceID] = append(nodesBySource[o.SourceID], outlineFilterCandidate{
+			CandidateID: o.OutlineID, Title: o.Title, Level: o.Level, Keywords: keywords,
+		})
+		validOutlineIDs[o.OutlineID] = true
 	}
 
-	callBatch := func(ctx context.Context, batch []outlineFilterCandidate) (map[string]string, error) {
-		payload, err := json.Marshal(batch)
-		if err != nil {
-			return nil, fmt.Errorf("retrieval: outline filter payload: %w", err)
-		}
-		resp, err := s.llmClient.CompleteJSON(ctx, "outline_filter.md", map[string]string{
-			"question":   qc.Question,
-			"subject":    subject,
-			"intent":     intent,
-			"candidates": string(payload),
-		}, "classification")
-		if err != nil {
-			return nil, fmt.Errorf("retrieval: outline filter llm: %w", err)
-		}
-		var result struct {
-			Results []struct {
-				CandidateID string `json:"candidate_id"`
-				Relevant    bool   `json:"relevant"`
-			} `json:"results"`
-		}
-		if err := json.Unmarshal(resp, &result); err != nil {
-			return nil, fmt.Errorf("retrieval: outline filter parse: %w", err)
-		}
-		out := make(map[string]string, len(result.Results))
-		for _, r := range result.Results {
-			if r.Relevant {
-				out[r.CandidateID] = "relevant"
-			} else {
-				out[r.CandidateID] = "irrelevant"
-			}
-		}
-		return out, nil
+	concurrency := s.rerankJudgeConcurrency()
+	if concurrency <= 0 {
+		concurrency = defaultRerankJudgeConcurrency
 	}
 
-	// LLM 失败/最终报错时保持原有 fail-open 语义：outlineRecall 只把返回的 ID
-	// 追加进 FTS 已召回的结果，一个 error 上抛后由调用方 slog.Warn 后继续（见
-	// outlineRecall 的 4.2 步骤），不需要在这里额外 fallback。
-	results, err := runJudgeBatches(ctx, items, s.rerankJudgeBatchMaxChars(), s.rerankJudgeBatchMaxCandidates(), s.rerankJudgeConcurrency(), outlineFilterCandidateID, "irrelevant", callBatch)
-	if err != nil {
-		return nil, err
-	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 	var allIDs []string
-	for _, o := range outlines {
-		if results[o.OutlineID] == "relevant" {
-			allIDs = append(allIDs, o.OutlineID)
+	var firstErr error
+	var errOnce sync.Once
+
+launchSources:
+	for sid, nodes := range nodesBySource {
+		sid, nodes := sid, nodes
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break launchSources
 		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			start := time.Now()
+
+			payload, err := json.Marshal(nodes)
+			if err != nil {
+				errOnce.Do(func() { firstErr = fmt.Errorf("retrieval: outline filter payload: %w", err); cancel() })
+				return
+			}
+			resp, err := s.llmClient.CompleteJSON(ctx, "outline_filter.md", map[string]string{
+				"question":   qc.Question,
+				"subject":    subject,
+				"intent":     intent,
+				"candidates": string(payload),
+			}, "classification")
+			if err != nil {
+				slog.Info("retrieval: outline filter timing", "source_id", sid, "nodes", len(nodes), "duration_ms", time.Since(start).Milliseconds(), "error", err)
+				errOnce.Do(func() { firstErr = fmt.Errorf("retrieval: outline filter llm: %w", err); cancel() })
+				return
+			}
+			var result struct {
+				NodeIDs []string `json:"node_ids"`
+			}
+			if err := json.Unmarshal(resp, &result); err != nil {
+				slog.Info("retrieval: outline filter timing", "source_id", sid, "nodes", len(nodes), "duration_ms", time.Since(start).Milliseconds(), "error", err)
+				errOnce.Do(func() { firstErr = fmt.Errorf("retrieval: outline filter parse: %w", err); cancel() })
+				return
+			}
+			slog.Info("retrieval: outline filter timing", "source_id", sid, "nodes", len(nodes), "selected", len(result.NodeIDs), "duration_ms", time.Since(start).Milliseconds())
+
+			mu.Lock()
+			for _, id := range result.NodeIDs {
+				if validOutlineIDs[id] {
+					allIDs = append(allIDs, id)
+				}
+			}
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return allIDs, nil
 }
@@ -1517,6 +1485,27 @@ func queryTupleText(qc QueryContext) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// expandedMatchQuery builds a disjunction of single-token match queries over
+// index.ExpandedTokens(text) instead of handing the raw text to
+// bleve.NewMatchQuery. A plain MatchQuery re-segments text with the full
+// domain dictionary, so a domain compound entry (e.g. "索引优化" in
+// config/dict/it.txt) can swallow a query term that appears standalone in
+// the indexed documents (e.g. "索引"), silently dropping otherwise-relevant
+// candidates from recall (see P13 test finding 2026-08-26). Expanding to the
+// union of full-dict and base-dict tokens and OR-ing them recovers those
+// sub-tokens without changing how documents themselves are indexed.
+func expandedMatchQuery(text string) query.Query {
+	tokens := index.ExpandedTokens(text)
+	if len(tokens) == 0 {
+		return bleve.NewMatchQuery(text)
+	}
+	qs := make([]query.Query, 0, len(tokens))
+	for _, t := range tokens {
+		qs = append(qs, bleve.NewMatchQuery(t))
+	}
+	return bleve.NewDisjunctionQuery(qs...)
 }
 
 // Step 5: FTS recall against units + points indexes for one query string.
@@ -1539,7 +1528,7 @@ func (s *Service) ftsRecall(queryText string, sourceIDs []string, path string) (
 	unitMap := make(map[string]*candidate)
 
 	// Search units index
-	uq := lifecycleCurrentQuery(bleve.NewMatchQuery(queryText))
+	uq := lifecycleCurrentQuery(expandedMatchQuery(queryText))
 	uReq := bleve.NewSearchRequest(uq)
 	uReq.Size = 100
 	uReq.Fields = []string{"unit_id", "source_id", "line_start", "line_end"}
@@ -1575,7 +1564,7 @@ func (s *Service) ftsRecall(queryText string, sourceIDs []string, path string) (
 	}
 
 	// Search points index
-	pq := lifecycleCurrentQuery(bleve.NewMatchQuery(queryText))
+	pq := lifecycleCurrentQuery(expandedMatchQuery(queryText))
 	pReq := bleve.NewSearchRequest(pq)
 	pReq.Size = 100
 	pReq.Fields = []string{"point_id", "unit_id", "source_id"}
@@ -1903,7 +1892,7 @@ func (s *Service) buildJudgeItems(candidates []candidate) ([]rerankJudgeCandidat
 	judgeItems := make([]rerankJudgeCandidate, 0, len(candidates))
 	for _, c := range candidates {
 		judgeItems = append(judgeItems, buildRerankJudgeCandidate(
-			c.candidateID, titleCache[c.sourceID], centersByUnit[c.unitID], c.pointID, pointsByUnit[c.unitID]))
+			c.candidateID, titleCache[c.sourceID], centersByUnit[c.unitID], c.pointID, c.unitID, pointsByUnit[c.unitID]))
 	}
 	return judgeItems, nil
 }
@@ -2008,7 +1997,7 @@ func sortedUnitIDs(ids map[string]struct{}) []string {
 // targetPointID isn't found in points (e.g. a lifecycle change raced the
 // query), fall back to the full unit's points rather than judging with an
 // empty payload.
-func buildRerankJudgeCandidate(candidateID, sourceTitle, center, targetPointID string, points []PointFact) rerankJudgeCandidate {
+func buildRerankJudgeCandidate(candidateID, sourceTitle, center, targetPointID, unitID string, points []PointFact) rerankJudgeCandidate {
 	var target *PointFact
 	for i := range points {
 		if points[i].PointID == targetPointID {
@@ -2045,6 +2034,7 @@ func buildRerankJudgeCandidate(candidateID, sourceTitle, center, targetPointID s
 		Object:       semantic.Object,
 		Scope:        semantic.Scope,
 		Points:       judgePoints,
+		UnitID:       unitID,
 	}
 }
 
@@ -2073,6 +2063,8 @@ func (s *Service) judgeRerankTwoStep(ctx context.Context, qc QueryContext, candi
 		emit("screen", "error", err.Error(), relevanceMs)
 		return nil, fmt.Errorf("retrieval: rerank two-step relevance: %w", err)
 	}
+
+	relevant = s.reconcileSiblingConsistency(ctx, qc, candidates, relevant)
 
 	roles := make(map[string]string, len(candidates))
 	var relevantItems []rerankJudgeCandidate
@@ -2103,6 +2095,77 @@ func (s *Service) judgeRerankTwoStep(ctx context.Context, qc QueryContext, candi
 		roles[cid] = role
 	}
 	return roles, nil
+}
+
+// reconcileSiblingConsistency is Direction A of the 2026-08-26 fix for a
+// production case where three sibling KPs under the same KU — all sharing
+// the identical object="营销中心" — were judged inconsistently by
+// rerank_relevance.md within the same relevance pass (two "relevant", one
+// correctly "irrelevant"; one candidate's own analysis text even stated the
+// object mismatch and then contradicted itself with "对象均匹配"). Reprobing
+// the exact same candidates against the live model in isolation (just that
+// small sibling group, no other candidates) reliably produced the correct,
+// consistent verdict every time — the inconsistency only showed up when the
+// group was judged alongside a larger, unrelated candidate pool. So instead
+// of trying to prompt-engineer away a model reasoning slip (that risks
+// re-introducing the "并列对象" regression ca3c126 already fixed), this
+// detects the disagreement structurally — same Object+Scope, different
+// verdicts, regardless of which KU each candidate came from — and re-judges
+// just that group on its own to get the consistent answer isolation was
+// shown to produce. Direction B (rerankObjectGroupKey packing hint) pools
+// every same-object candidate into the same batch to begin with (2026-08-26
+// 二次修订: 分组键从"仅同 KU"放宽为"跨全池同 object"，因为同 KU 版本仍留了一个
+// production 案例复现不出来——28 条候选混批时，模型会把"营销中心"合理化成"属于
+// 实施/销售相关角色范畴"来为错误的 relevant 判断找补，根源是同批里混了太多不
+// 相关 object 的候选，而不是同 KU 分组本身覆盖不到); this reconciliation is
+// the correctness safety net for when pooling still isn't enough (e.g. a
+// same-object group too large to fit one batch, or a group that agrees on a
+// wrong verdict with no internal disagreement to detect). A failed re-judge
+// call keeps the original verdicts rather than failing the whole rerank
+// step.
+func (s *Service) reconcileSiblingConsistency(ctx context.Context, qc QueryContext, candidates []rerankJudgeCandidate, relevant map[string]bool) map[string]bool {
+	groups := make(map[string][]rerankJudgeCandidate)
+	var order []string
+	for _, c := range candidates {
+		key := rerankObjectGroupKey(c)
+		if key == "" {
+			continue
+		}
+		if _, ok := groups[key]; !ok {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], c)
+	}
+
+	subject, intent, audience, constraint := judgeContextDefaults(qc)
+	for _, key := range order {
+		group := groups[key]
+		if len(group) < 2 {
+			continue
+		}
+		first := relevant[group[0].CandidateID]
+		mixed := false
+		for _, c := range group[1:] {
+			if relevant[c.CandidateID] != first {
+				mixed = true
+				break
+			}
+		}
+		if !mixed {
+			continue
+		}
+		slog.Info("retrieval: rerank sibling consistency conflict detected, re-judging in isolation",
+			"unit_id", group[0].UnitID, "object", group[0].Object, "scope", group[0].Scope, "candidates", len(group))
+		reconciled, err := s.judgeRelevanceExtractedEvidence(ctx, qc, subject, intent, audience, constraint, group)
+		if err != nil {
+			slog.Warn("retrieval: rerank sibling consistency re-judge failed, keeping original verdicts", "error", err)
+			continue
+		}
+		for cid, ok := range reconciled {
+			relevant[cid] = ok
+		}
+	}
+	return relevant
 }
 
 func (s *Service) judgeRelevanceBatches(ctx context.Context, qc QueryContext, candidates []rerankJudgeCandidate) (map[string]bool, error) {
@@ -2201,7 +2264,29 @@ func missingCandidateIDs(batch []rerankJudgeCandidate, results map[string]string
 // classify) so a dropped candidate degrades to "kept but unclassified"
 // rather than silently disappearing.
 func (s *Service) runRerankJudgeBatches(ctx context.Context, candidates []rerankJudgeCandidate, defaultForMissing string, callBatch func(ctx context.Context, batch []rerankJudgeCandidate) (map[string]string, error)) (map[string]string, error) {
-	return runJudgeBatches(ctx, candidates, s.rerankJudgeBatchMaxChars(), s.rerankJudgeBatchMaxCandidates(), s.rerankJudgeConcurrency(), rerankCandidateID, defaultForMissing, callBatch)
+	return runJudgeBatches(ctx, candidates, s.rerankJudgeBatchMaxChars(), s.rerankJudgeBatchMaxCandidates(), s.rerankJudgeConcurrency(), rerankCandidateID, rerankObjectGroupKey, defaultForMissing, callBatch)
+}
+
+// rerankObjectGroupKey groups a candidate with every other candidate in the
+// pool that shares the same (non-empty) object+scope — regardless of which
+// KU/document they came from — so the relevance judge sees them together
+// instead of interleaved with candidates carrying unrelated objects
+// (2026-08-26 决策，取代同一天更早那版只按同一 KU 分组的实现). This exists
+// because the same-KU version alone didn't fully fix the production
+// misjudgment it targeted: with 28 mixed-object candidates in one batch, the
+// model rationalized "营销中心" as "属于实施/销售相关角色范畴" to justify a
+// wrong "relevant" verdict — that kind of cross-object noise (渠道伙伴/营销
+// 团队/项目经理 all competing for the model's attention in one batch) is
+// exactly what pooling by object removes. It doesn't chase every possible
+// contamination source (still bounded by rerankJudgeBatchMaxCandidates), but
+// it removes the specific failure mode observed. reconcileSiblingConsistency
+// reuses the same key so its disagreement detection also spans the whole
+// pool, not just one KU's siblings.
+func rerankObjectGroupKey(c rerankJudgeCandidate) string {
+	if c.Object == "" {
+		return ""
+	}
+	return c.Object + "\x00" + c.Scope
 }
 
 func (s *Service) judgeRelevanceExtractedEvidence(ctx context.Context, qc QueryContext, subject, intent, audience, constraint string, candidates []rerankJudgeCandidate) (map[string]bool, error) {
@@ -2210,9 +2295,9 @@ func (s *Service) judgeRelevanceExtractedEvidence(ctx context.Context, qc QueryC
 		return nil, fmt.Errorf("retrieval: rerank relevance payload: %w", err)
 	}
 	slog.Debug("retrieval: rerank relevance payload", "payload", string(payload))
-	promptFile := "rerank_relevance.md"
-	if s.cfg != nil && s.cfg.Retrieval.RerankRelevanceConcise {
-		promptFile = "rerank_relevance_concise.md"
+	promptFile := "rerank_relevance_concise.md"
+	if s.cfg != nil && s.cfg.Retrieval.RerankRelevanceDebugAnalysis {
+		promptFile = "rerank_relevance.md"
 	}
 	resp, err := s.llmClient.CompleteJSON(ctx, promptFile, map[string]string{
 		"question":   qc.Question,
@@ -2281,7 +2366,7 @@ func (s *Service) judgeClassifyExtractedEvidence(ctx context.Context, qc QueryCo
 		if r.Role != "direct" && r.Role != "supporting" {
 			return nil, fmt.Errorf("retrieval: rerank classify invalid role: %s", r.Role)
 		}
-		slog.Info("retrieval: rerank classify analysis", "question", qc.Question, "candidate_id", r.CandidateID, "role", r.Role, "analysis", r.Analysis)
+		slog.Info("retrieval: rerank classify analysis", "question", qc.Question, "candidate_id", r.CandidateID, "role", r.Role)
 		roles[r.CandidateID] = r.Role
 	}
 	return roles, nil
@@ -2323,7 +2408,7 @@ func (s *Service) rerankJudgeConcurrency() int {
 // judging semantics (each candidate is judged independently), so
 // reordering across batches is safe.
 func splitRerankJudgeBatches(candidates []rerankJudgeCandidate, maxChars, maxCandidates int) [][]rerankJudgeCandidate {
-	return splitJudgeBatches(candidates, maxChars, maxCandidates)
+	return splitJudgeBatches(candidates, maxChars, maxCandidates, rerankObjectGroupKey)
 }
 
 type rerankJudgeCandidate struct {
@@ -2335,6 +2420,10 @@ type rerankJudgeCandidate struct {
 	Object       string             `json:"object"`
 	Scope        string             `json:"scope"`
 	Points       []rerankJudgePoint `json:"points"`
+	// UnitID is not sent to the LLM (json:"-") — it's carried through only so
+	// judgeRerankTwoStep can group sibling candidates from the same KU for
+	// the same-object consistency recheck (2026-08-26 决策，见该函数注释).
+	UnitID string `json:"-"`
 }
 
 type rerankJudgePoint struct {
@@ -2356,7 +2445,6 @@ type rerankClassifyResult struct {
 	Results []struct {
 		CandidateID string `json:"candidate_id"`
 		Role        string `json:"role"`
-		Analysis    string `json:"analysis"`
 	} `json:"results"`
 }
 

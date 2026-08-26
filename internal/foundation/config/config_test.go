@@ -41,7 +41,6 @@ source:
   segment_max_chars: 4000
   min_segment_chars: 400
 retrieval:
-  outline_fts_min_score: 0.5
   rerank_top_n: 20
 study:
   schedule_interval: "1h"

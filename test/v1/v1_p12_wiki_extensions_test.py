@@ -29,7 +29,8 @@ v1_p8_wiki_*.jsonl 拿 page_id，不重新培养信号。若找不到，提示�
   - `GET /wiki/pages/:id/relations` 结构正确（可为空——P8 的制度/技术两页
     分属不同领域，天然不会有 KPN 关系，为空是预期，不是失败）；
   - 写作草稿全生命周期：POST drafts → GET（evidence_index 非空）→
-    PATCH 内容 → 页面正文不受影响（无 draft → page 写回路径）→ DELETE；
+    PATCH 内容 → 页面正文同步更新（2026-08-19 定案：PATCH 即写回，见
+    CLAUDE.md）→ DELETE；
   - 回流来源标记：POST /sources 带 origin=wiki_draft + origin_page_id 时，
     DB 里 sources.origin/origin_page_id 正确落库；
   - GET /study/reports/latest 响应包含 question_complexity 板块。
@@ -76,9 +77,12 @@ def axis1_relations(base_url, page_id, label):
 
 
 def axis1_draft_lifecycle(base_url, page_id, label):
-    """草稿全生命周期 + 写回防护核对（docs/impl/v1/wiki.md「写作草稿」）。
+    """草稿全生命周期（docs/impl/v1/wiki.md「写作草稿」）。
     source_page_ids 单层化后恒为 [page_id]，本脚本不再核对"组装模式"（已
-    随两层架构删除）。"""
+    随两层架构删除）。2026-08-19 定案：PATCH 草稿只要 title/content 有实际
+    改动就会同步写回来源页面（internal/wiki/drafts.go UpdateDraft ->
+    SyncDraftToPage），不是"草稿隔离、不写回"——本脚本据此断言页面正文/
+    标题在草稿改写后应当被同步更新，而不是保持不变。"""
     page_before = c.http_get_json(base_url, f"/wiki/pages/{page_id}")
     content_before = page_before.get("content", "")
     title_before = page_before.get("title", "")
@@ -110,8 +114,8 @@ def axis1_draft_lifecycle(base_url, page_id, label):
     print(f"  {label} PATCH 草稿: HTTP {patch_status}")
 
     page_after = c.http_get_json(base_url, f"/wiki/pages/{page_id}")
-    unaffected = page_after.get("content") == content_before and page_after.get("title") == title_before
-    print(f"  {label} 页面正文/标题在草稿改写后是否不变: {'PASS' if unaffected else 'FAIL（发现写回！）'}")
+    synced = page_after.get("content") == new_content and page_after.get("title") == new_title
+    print(f"  {label} 页面正文/标题在草稿改写后是否同步写回: {'PASS' if synced else 'FAIL（未写回！）'}")
 
     del_resp, del_status = c.http_delete_json(base_url, f"/wiki/drafts/{draft_id}")
     print(f"  {label} DELETE 草稿: HTTP {del_status}")
@@ -122,7 +126,7 @@ def axis1_draft_lifecycle(base_url, page_id, label):
         "source_page_ids": source_page_ids,
         "source_page_ids_ok": source_page_ids == [page_id],
         "patch_status": patch_status,
-        "page_unaffected_by_draft_edit": unaffected,
+        "page_synced_from_draft_edit": synced,
         "delete_status": del_status,
     }
 
@@ -132,8 +136,10 @@ def axis1_reflow_origin_tagging(base_url, conn, origin_page_id):
     POST /sources 的 origin/origin_page_id 字段被正确透传落库——自体祖先
     排除本身的行为由 Go 单测覆盖（internal/unit/kpn_reflow_test.go），
     这里只测 API 入口。"""
+    import time
+
     SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
-    draft_export = SCRATCH_DIR / "reflow_draft_export.md"
+    draft_export = SCRATCH_DIR / f"reflow_draft_export_{int(time.time())}.md"
     draft_export.write_text("# 回流草稿导出\n\n这是 P12 测试用的最小回流内容，仅验证 origin 字段落库。\n", encoding="utf-8")
 
     resp, status = c.http_post_multipart_file(
@@ -221,7 +227,7 @@ def main():
     print("\n========== P12 通过标准核对 ==========")
     axis1_pass = (
         all(r["structure_ok"] for r in relations_report.values())
-        and all(not d.get("error") and d.get("page_unaffected_by_draft_edit") and d.get("source_page_ids_ok") for d in draft_report.values())
+        and all(not d.get("error") and d.get("page_synced_from_draft_edit") and d.get("source_page_ids_ok") for d in draft_report.values())
         and reflow_report.get("origin_tagged_correctly")
         and complexity_report.get("has_section")
     )

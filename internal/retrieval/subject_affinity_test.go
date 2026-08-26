@@ -64,7 +64,7 @@ func TestSourceAffinityShortcut_HitSkipsDomainAndSourceFilter(t *testing.T) {
 	}
 
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`,
+		Output: `{"node_ids": ["o2"]}`,
 	})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
 		Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`,
@@ -102,7 +102,7 @@ func TestSourceAffinityShortcut_FailureEvictsBinding(t *testing.T) {
 	// which outlineRecall treats as "no ids from that path", leaving
 	// candidates empty and evidence empty.
 	fake.SetResponse("outline_filter.md", llm.FakeResponse{
-		Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": false, "analysis": "no match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`,
+		Output: `{"node_ids": []}`,
 	})
 
 	qc := QueryContext{Question: "purple dinosaur spacecraft manual", Subject: "purple dinosaur spacecraft manual", DomainResolved: true, DomainIDs: []string{"d1"}}

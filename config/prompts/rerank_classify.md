@@ -1,5 +1,5 @@
 ---
-version: v3
+version: v4
 ---
 
 ## System
@@ -37,7 +37,7 @@ version: v3
 - 如果证据没有直接给出答案，但提供了定位答案所必需的上位标准、例外或计算变量，判 supporting。
 
 必须严格输出以下 json 结构：
-{"results":[{"candidate_id":"c1","role":"direct","analysis":"简要说明判断依据"}]}
+{"results":[{"candidate_id":"c1","role":"direct"}]}
 
 输出要求：
 
@@ -47,7 +47,6 @@ version: v3
 - 每个输入 candidate_id 必须在 results 中出现一次；
 - candidate_id 必须原样复制；
 - role 只能是 direct、supporting；
-- analysis 必须用一句话说明为什么得到该 role；
 - 不得输出 results 以外的顶层字段；
 - 不得遗漏任何候选证据。
 
@@ -73,11 +72,10 @@ version: v3
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["candidate_id", "role", "analysis"],
+        "required": ["candidate_id", "role"],
         "properties": {
           "candidate_id": { "type": "string" },
-          "role": { "type": "string", "enum": ["direct", "supporting"] },
-          "analysis": { "type": "string" }
+          "role": { "type": "string", "enum": ["direct", "supporting"] }
         }
       }
     }

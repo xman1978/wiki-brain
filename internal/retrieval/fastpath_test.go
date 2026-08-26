@@ -111,8 +111,8 @@ func TestRetrieve_FastPath_MultipleUnits_FallsBackToSlowPath(t *testing.T) {
 	seedVerifiedLink(t, activationSvc, qTerms, "p2")
 
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"relevant_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"node_ids": ["o2"]}`})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
@@ -170,8 +170,8 @@ func TestRetrieve_FastPathDisabled_StillRecordsHitsButUsesSlowPath(t *testing.T)
 	seedVerifiedLink(t, activationSvc, qTerms, "p1")
 
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"relevant_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"node_ids": ["o2"]}`})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
@@ -195,8 +195,8 @@ func TestRetrieve_ForceFull_SkipsFastPath(t *testing.T) {
 	seedVerifiedLink(t, activationSvc, qTerms, "p1")
 
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"relevant_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"node_ids": ["o2"]}`})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
@@ -216,8 +216,8 @@ func TestRetrieve_NoMatch_FallsBackToSlowPathWithEmptyHits(t *testing.T) {
 	svc, fake, _, _ := setupTestServiceWithActivation(t)
 
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"relevant_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"node_ids": ["o2"]}`})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
@@ -241,8 +241,8 @@ func TestRetrieveSlowPathWithProgress_BypassesFastPath(t *testing.T) {
 	seedVerifiedLink(t, activationSvc, qTerms, "p1")
 
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"relevant_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"node_ids": ["o2"]}`})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
@@ -285,8 +285,8 @@ func TestRetrieve_FastPathVerify_Insufficient_FallsBackToSlowPath(t *testing.T) 
 
 	fake.SetResponse("fast_verify.md", llm.FakeResponse{Output: `{"sufficient": false, "reason": "证据未覆盖问题的完整诉求"}`})
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"relevant_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"node_ids": ["o2"]}`})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
@@ -319,8 +319,8 @@ func TestRetrieve_FastPathVerify_MalformedResponse_FallsBackToSlowPath(t *testin
 
 	fake.SetResponse("fast_verify.md", llm.FakeResponse{Output: `not valid json`})
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"relevant_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"node_ids": ["o2"]}`})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "证据语义说明线性方程定义，可直接回答问题"}]}`})
 
@@ -350,8 +350,8 @@ func TestRetrieve_FastPath_NoCurrentKP_FallsBackToSlowPath(t *testing.T) {
 	store.db.Exec(`UPDATE knowledge_points SET lifecycle = 'superseded' WHERE point_id = 'p1'`)
 
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"relevant_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"node_ids": ["o2"]}`})
 
 	es, err := svc.RetrieveWithProgress(context.Background(), QueryContext{Question: question}, nil)
 	if err != nil {
@@ -386,8 +386,8 @@ func TestRetrieve_ExploringTierCondition_RecordsHitButFallsBackToFull(t *testing
 	}
 
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"relevant_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"node_ids": ["o2"]}`})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "matches"}]}`})
 
@@ -423,8 +423,8 @@ func TestRetrieve_SubjectJitter_MissesFastPath_FallsBackToFull(t *testing.T) {
 	}
 	_ = link
 
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"relevant_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"node_ids": ["o2"]}`})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "x"}]}`})
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "x"}]}`})
 
@@ -470,8 +470,8 @@ func TestRetrieve_FastPath_MultipleUnits_NoBundleCovers_FallsBackWithoutSideEffe
 	seedVerifiedLink(t, activationSvc, qTerms, "p2")
 
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"relevant_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"node_ids": ["o2"]}`})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`})
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "x"}]}`})
 
@@ -675,8 +675,8 @@ func TestRetrieve_FastPath_ConflictingVerifiedBundles_FallsBackToSlowPath(t *tes
 	}
 
 	fake.SetResponse("question_domain_match.md", llm.FakeResponse{Output: `{"domain_ids": ["d1"]}`})
-	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "s1", "relevant": true, "analysis": "match"}, {"candidate_id": "s3", "relevant": false, "analysis": "no match"}]}`})
-	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "o1", "relevant": false, "analysis": "no match"}, {"candidate_id": "o2", "relevant": true, "analysis": "match"}, {"candidate_id": "o3", "relevant": false, "analysis": "no match"}]}`})
+	fake.SetResponse("source_filter.md", llm.FakeResponse{Output: `{"relevant_ids": ["s1"]}`})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{Output: `{"node_ids": ["o2"]}`})
 	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "x"}]}`})
 	fake.SetResponse("rerank_classify.md", llm.FakeResponse{Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "x"}]}`})
 

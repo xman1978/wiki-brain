@@ -3,30 +3,31 @@ package trace
 import "time"
 
 type Trace struct {
-	TraceID             string    `json:"trace_id"`
-	AnswerID            string    `json:"answer_id"`
-	Question            string    `json:"question"`
-	QuestionHash        string    `json:"question_hash,omitempty"`
-	QuestionTerms       string    `json:"question_terms,omitempty"`
-	RetrievalQuality    string    `json:"retrieval_quality"`
-	Path                string    `json:"path,omitempty"`
-	PathType            string    `json:"path_type,omitempty"`
-	ActivationLinkIDs   []string  `json:"activation_link_ids,omitempty"`
-	ActivationBundleIDs []string  `json:"activation_bundle_ids,omitempty"`
-	Subject             string    `json:"subject,omitempty"`
-	Intent              string    `json:"intent,omitempty"`
-	Audience            string    `json:"audience,omitempty"`
-	ConstraintText      string    `json:"constraint_text,omitempty"`
-	DirectPointIDs      []string  `json:"direct_point_ids,omitempty"`
-	KPNCitedCount       int       `json:"kpn_cited_count"`
-	CitedCount          int       `json:"cited_count"`
-	OutlineCitedCount   int       `json:"outline_cited_count"`
-	CitedRankSum        int       `json:"cited_rank_sum"`
-	HasFeedback         bool      `json:"has_feedback"`
-	FeedbackType        string    `json:"feedback_type,omitempty"`
-	FeedbackContent     string    `json:"feedback_content,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at,omitempty"`
+	TraceID                 string    `json:"trace_id"`
+	AnswerID                string    `json:"answer_id"`
+	Question                string    `json:"question"`
+	QuestionHash            string    `json:"question_hash,omitempty"`
+	QuestionTerms           string    `json:"question_terms,omitempty"`
+	RetrievalQuality        string    `json:"retrieval_quality"`
+	Path                    string    `json:"path,omitempty"`
+	PathType                string    `json:"path_type,omitempty"`
+	ActivationLinkIDs       []string  `json:"activation_link_ids,omitempty"`
+	ActivationBundleIDs     []string  `json:"activation_bundle_ids,omitempty"`
+	Subject                 string    `json:"subject,omitempty"`
+	Intent                  string    `json:"intent,omitempty"`
+	Audience                string    `json:"audience,omitempty"`
+	ConstraintText          string    `json:"constraint_text,omitempty"`
+	DirectPointIDs          []string  `json:"direct_point_ids,omitempty"`
+	SourceAffinitySourceIDs []string  `json:"source_affinity_source_ids,omitempty"`
+	KPNCitedCount           int       `json:"kpn_cited_count"`
+	CitedCount              int       `json:"cited_count"`
+	OutlineCitedCount       int       `json:"outline_cited_count"`
+	CitedRankSum            int       `json:"cited_rank_sum"`
+	HasFeedback             bool      `json:"has_feedback"`
+	FeedbackType            string    `json:"feedback_type,omitempty"`
+	FeedbackContent         string    `json:"feedback_content,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at,omitempty"`
 }
 
 // PointSummary is a knowledge_point's identity + content, used by

@@ -215,7 +215,7 @@ func main() {
 	// KP lifecycle 变化、entry_id 归属变化通知 Wiki 标记 needs_recompile。
 	unitSvc.SetWikiEntryNotifier(wikiSvc)
 
-	retrievalSvc := retrieval.NewService(retrievalStore, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, activationSvc, evidenceSvc, wikiSvc)
+	retrievalSvc := retrieval.NewService(retrievalStore, llmClient, idxMgr.Units, idxMgr.Points, cfg, activationSvc, evidenceSvc, wikiSvc)
 	answerSvc := answer.NewService(answerStore, llmClient, q, retrievalSvc)
 	traceSvc := trace.NewService(traceStore, cfg.Study.EntryNullRatioMin)
 	traceSvc.SetLLMClient(llmClient)

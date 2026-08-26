@@ -16,6 +16,10 @@ var (
 	seg     gse.Segmenter
 	segOnce sync.Once
 	segErr  error
+
+	baseSeg     gse.Segmenter
+	baseSegOnce sync.Once
+	baseSegErr  error
 )
 
 func init() {
@@ -53,6 +57,61 @@ func InitSegmenter(dictFiles ...string) error {
 
 func ensureSegmenter() error {
 	return InitSegmenter()
+}
+
+// ensureBaseSegmenter loads gse's bundled base dictionary only, without any
+// of the domain-specific compound entries InitSegmenter's dictFiles add. Used
+// by ExpandedTokens to recover sub-tokens that a domain compound word (e.g.
+// "索引优化" in config/dict/it.txt) would otherwise swallow at query time,
+// causing a query for "达梦数据库怎么优化索引" to segment "索引" away into a
+// compound token that never matches documents where "索引" appears on its
+// own (see P13 test finding 2026-08-26).
+func ensureBaseSegmenter() error {
+	baseSegOnce.Do(func() {
+		baseSegErr = baseSeg.LoadDict()
+	})
+	return baseSegErr
+}
+
+// segmentBase splits input bytes using gse's base dictionary only (no
+// domain-specific compound entries).
+func segmentBase(input []byte) []string {
+	ensureBaseSegmenter()
+	segments := baseSeg.Segment(input)
+	result := make([]string, 0, len(segments))
+	for _, s := range segments {
+		text := s.Token().Text()
+		if text != "" && text != " " && text != "\n" && text != "\t" {
+			result = append(result, text)
+		}
+	}
+	return result
+}
+
+// ExpandedTokens returns the union of the full-dictionary (base + domain
+// compounds) and base-dictionary-only segmentations of text, deduplicated,
+// preserving first-seen order. Query-side use only — it recovers sub-tokens
+// that a domain compound dictionary entry would otherwise hide, so a query
+// containing "索引优化" still surfaces documents where "索引" appears alone.
+// Not used at index time: documents keep their normal full-dictionary
+// segmentation, so this only widens what a query can match, it never changes
+// what gets indexed.
+func ExpandedTokens(text string) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, 8)
+	for _, t := range Segment([]byte(text)) {
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	for _, t := range segmentBase([]byte(text)) {
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // Segment splits input bytes into word tokens using gse.

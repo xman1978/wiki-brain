@@ -71,7 +71,7 @@ func TestIntegrationRetrieval(t *testing.T) {
 	rebuildIndexes(t, database, idxMgr, testdataDir)
 
 	store := NewStore(database)
-	svc := NewService(store, llmClient, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, nil, nil, nil)
+	svc := NewService(store, llmClient, idxMgr.Units, idxMgr.Points, cfg, nil, nil, nil)
 
 	// Load questions
 	qData, err := os.ReadFile(filepath.Join(testdataDir, "retrieval_questions.json"))

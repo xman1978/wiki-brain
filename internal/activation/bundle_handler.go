@@ -9,12 +9,17 @@ import (
 	"github.com/jxman78/wiki-brain/internal/unit"
 )
 
-// Bundle read-only management API (docs/impl/v1/activation-bundle.md 步骤 5):
-// no confirm/reject — 阶段 1 的 auto_promote 默认 true，没有人工确认队列.
+// Bundle management API (docs/impl/v1/activation-bundle.md 步骤 5): no
+// confirm/reject queue — 阶段 1 的 auto_promote 默认 true — but the detail
+// page does offer the same「清空重来」action Link has, since Bundle carries
+// the identical confidence-accumulation risk (untrustworthy evidence baked
+// into observed_conditions/member counts) that Link's reject endpoint exists
+// to clear.
 func (h *Handler) registerBundleRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /activation-bundles", h.listBundles)
 	mux.HandleFunc("GET /activation-bundles/{id}", h.getBundle)
 	mux.HandleFunc("GET /activation-bundles/{id}/questions", h.bundleQuestions)
+	mux.HandleFunc("POST /activation-bundles/{id}/reject", h.resetBundle)
 }
 
 type bundleResp struct {
@@ -188,6 +193,19 @@ func (h *Handler) getBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	foundation.WriteJSON(w, http.StatusOK, h.toBundleResp(*b))
+}
+
+func (h *Handler) resetBundle(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	b, err := h.svc.ResetBundle(id)
+	if err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	foundation.WriteJSON(w, http.StatusOK, map[string]string{
+		"bundle_id": b.BundleID,
+		"status":    b.Status,
+	})
 }
 
 func (h *Handler) bundleQuestions(w http.ResponseWriter, r *http.Request) {

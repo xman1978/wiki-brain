@@ -87,24 +87,25 @@ func (s *Store) SaveAuditPlaceholder(question, subject, intent, audience, constr
 
 func (s *Store) GetTrace(traceID string) (*Trace, error) {
 	var (
-		t               Trace
-		pointIDsStr     string
-		linkIDsStr      string
-		bundleIDsStr    string
-		hasFeedbackInt  int
-		feedbackType    sql.NullString
-		feedbackContent sql.NullString
+		t                    Trace
+		pointIDsStr          string
+		linkIDsStr           string
+		bundleIDsStr         string
+		sourceAffinityIDsStr sql.NullString
+		hasFeedbackInt       int
+		feedbackType         sql.NullString
+		feedbackContent      sql.NullString
 	)
 	err := s.db.QueryRow(`SELECT trace_id, answer_id, question, question_hash, question_terms,
 		retrieval_quality, path, path_type, activation_link_ids, activation_bundle_ids, subject, intent, audience, constraint_text,
 		direct_point_ids, kpn_cited_count, cited_count, outline_cited_count, cited_rank_sum,
-		has_feedback, feedback_type, feedback_content,
+		has_feedback, feedback_type, feedback_content, source_affinity_source_ids,
 		created_at, updated_at
 		FROM traces WHERE trace_id = ?`, traceID).
 		Scan(&t.TraceID, &t.AnswerID, &t.Question, &t.QuestionHash, &t.QuestionTerms,
 			&t.RetrievalQuality, &t.Path, &t.PathType, &linkIDsStr, &bundleIDsStr, &t.Subject, &t.Intent, &t.Audience, &t.ConstraintText,
 			&pointIDsStr, &t.KPNCitedCount, &t.CitedCount, &t.OutlineCitedCount, &t.CitedRankSum, &hasFeedbackInt,
-			&feedbackType, &feedbackContent, &t.CreatedAt, &t.UpdatedAt)
+			&feedbackType, &feedbackContent, &sourceAffinityIDsStr, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -120,6 +121,11 @@ func (s *Store) GetTrace(traceID string) (*Trace, error) {
 	}
 	if err := json.Unmarshal([]byte(bundleIDsStr), &t.ActivationBundleIDs); err != nil {
 		return nil, fmt.Errorf("trace store: unmarshal activation_bundle_ids: %w", err)
+	}
+	if sourceAffinityIDsStr.Valid && sourceAffinityIDsStr.String != "" {
+		if err := json.Unmarshal([]byte(sourceAffinityIDsStr.String), &t.SourceAffinitySourceIDs); err != nil {
+			return nil, fmt.Errorf("trace store: unmarshal source_affinity_source_ids: %w", err)
+		}
 	}
 	t.HasFeedback = hasFeedbackInt == 1
 	t.FeedbackType = feedbackType.String
@@ -175,6 +181,21 @@ func (s *Store) UpdateFeedback(traceID, feedbackType, feedbackContent string) er
 		WHERE trace_id = ?`, feedbackType, feedbackContent, traceID)
 	if err != nil {
 		return fmt.Errorf("trace store: update feedback: %w", err)
+	}
+	return nil
+}
+
+// UpdateSourceAffinitySourceIDs persists the source_ids recordSourceAffinity
+// bound traceID's subject to, so a later feedback submission
+// (SubmitFeedback) can find them without the long-gone AnswerResult/
+// EvidenceSet. Called right after SaveTrace, from recordSourceAffinity.
+func (s *Store) UpdateSourceAffinitySourceIDs(traceID string, sourceIDs []string) error {
+	idsJSON, err := json.Marshal(nonNilStrings(sourceIDs))
+	if err != nil {
+		return fmt.Errorf("trace store: marshal source_affinity_source_ids: %w", err)
+	}
+	if _, err := s.db.Exec(`UPDATE traces SET source_affinity_source_ids = ? WHERE trace_id = ?`, string(idsJSON), traceID); err != nil {
+		return fmt.Errorf("trace store: update source_affinity_source_ids: %w", err)
 	}
 	return nil
 }

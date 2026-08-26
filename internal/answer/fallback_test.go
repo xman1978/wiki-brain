@@ -61,7 +61,6 @@ func setupFallbackTestService(t *testing.T, fastPathFallback bool) (*Service, *s
 
 	cfg := &config.Config{
 		Retrieval: config.RetrievalConfig{
-			OutlineFTSMinScore: 0.5,
 			RerankTopN:         20,
 			ActivationMatchTop: 5,
 			FastPath:           true,
@@ -84,7 +83,7 @@ func setupFallbackTestService(t *testing.T, fastPathFallback bool) (*Service, *s
 	}
 
 	retStore := retrieval.NewStore(db)
-	retSvc := retrieval.NewService(retStore, fake, idxMgr.Units, idxMgr.Points, idxMgr.Outlines, cfg, activationSvc, nil, nil)
+	retSvc := retrieval.NewService(retStore, fake, idxMgr.Units, idxMgr.Points, cfg, activationSvc, nil, nil)
 
 	store := NewStore(db)
 	q := queue.New(10)
@@ -167,7 +166,7 @@ func TestMaybeFallbackToSlowPath_SkipsWhenNotFastPath(t *testing.T) {
 func fakeRetrievalServiceWithFallback(t *testing.T, enabled bool) *retrieval.Service {
 	t.Helper()
 	cfg := &config.Config{Retrieval: config.RetrievalConfig{FastPathFallback: enabled}}
-	return retrieval.NewService(nil, nil, nil, nil, nil, cfg, nil, nil, nil)
+	return retrieval.NewService(nil, nil, nil, nil, cfg, nil, nil, nil)
 }
 
 func TestAnswerFromQuestion_FallbackDisabled_KeepsFastPathFailure(t *testing.T) {

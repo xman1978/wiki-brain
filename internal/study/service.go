@@ -129,10 +129,6 @@ func (s *Service) Run() (*RunResult, error) {
 		slog.Error("study: create candidates failed", "error", err)
 	}
 
-	if err := s.aggregateAndCreateSynonymCandidates(&actions); err != nil {
-		slog.Error("study: aggregate subject_synonym_gap failed", "error", err)
-	}
-
 	if err := s.evictIdle(&actions); err != nil {
 		slog.Error("study: evict idle links failed", "error", err)
 	}

@@ -182,10 +182,12 @@ func TestHandler_Reject(t *testing.T) {
 
 func TestHandler_Synonyms_ListGetConfirmReject(t *testing.T) {
 	handler, svc := setupHandler(t)
+	db := setupDBFromSvc(t, svc)
 
-	created, err := svc.CreateSynonymCandidate("", "证券市场", "股票市场", nil)
+	createdID := insertTestSynonym(t, db, "证券市场", "股票市场", SynonymStatusCandidate)
+	created, err := svc.GetSynonym(createdID)
 	if err != nil {
-		t.Fatalf("create synonym candidate: %v", err)
+		t.Fatalf("get created synonym: %v", err)
 	}
 
 	mux := http.NewServeMux()
@@ -244,11 +246,8 @@ func TestHandler_Synonyms_ListGetConfirmReject(t *testing.T) {
 	}
 
 	// Reject a second candidate.
-	created2, err := svc.CreateSynonymCandidate("", "二级市场", "股票市场", nil)
-	if err != nil {
-		t.Fatalf("create synonym candidate 2: %v", err)
-	}
-	req = httptest.NewRequest("POST", "/subject-synonyms/"+created2.SynonymID+"/reject", nil)
+	created2ID := insertTestSynonym(t, db, "二级市场", "股票市场", SynonymStatusCandidate)
+	req = httptest.NewRequest("POST", "/subject-synonyms/"+created2ID+"/reject", nil)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {

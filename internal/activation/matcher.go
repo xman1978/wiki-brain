@@ -26,31 +26,25 @@ func (c MatchConfig) withDefaults() MatchConfig {
 }
 
 // Matcher holds an in-memory cache of matchable (verified+candidate) links
-// whose KP is still lifecycle=current, plus the subject-dimension
-// SynonymResolver — kept only for SubjectOnlyMiss's subject_synonym_gap
-// mining diagnostic (docs/impl/v1/trace.md 步骤 3); Match() itself no longer
-// consumes synonyms (2026-08-12 修订，见下方 BuildQueryConditionTerms/
-// MatchConditionGroups：Match 的四元组比较改为全字段精确匹配，不再对 subject
-// 做同义词模糊匹配；subject_synonyms 表、gap-mining 挖掘链路、Wiki 概念页别名
-// 展示、预置数据导入均不受影响，继续复用同一份 SynonymResolver)。
+// whose KP is still lifecycle=current. Match() compares all four fields by
+// exact equality (2026-08-12 修订，见下方 BuildQueryConditionTerms/
+// MatchConditionGroups) — it does not consult subject_synonyms at all; that
+// table's other consumers (Wiki concept page alias display, preset data
+// import) query it directly via SQL, independent of this cache.
 // Cache invalidation is explicit — CreateLink / TransitionLink /
-// AppendObservedCondition / unit lifecycle notifier / synonym confirm-reject
-// call InvalidateCache; both the link cache and the synonym table reload
-// together on the next Match (one loadCache, one DB round trip pair).
+// AppendObservedCondition / unit lifecycle notifier call InvalidateCache.
 type Matcher struct {
 	store *Store
 
-	// mu guards cache/synonyms/synonymsValid together (2026-08-25, domain-
-	// sharded cache): cache is keyed by domainCacheKey(domainIDs) so each
-	// distinct domain combination Match() sees loads and invalidates
-	// independently, instead of one global scan-everything blob — a query
-	// scoped to one domain no longer pays for every other domain's links.
-	// InvalidateCache clears the whole map: any write can affect any shard's
-	// candidate set, and shard keys are cheap to rebuild lazily.
-	mu            sync.RWMutex
-	cache         map[string][]ActivationLink
-	synonyms      *SynonymResolver
-	synonymsValid bool
+	// mu guards cache (2026-08-25, domain-sharded cache): cache is keyed by
+	// domainCacheKey(domainIDs) so each distinct domain combination Match()
+	// sees loads and invalidates independently, instead of one global
+	// scan-everything blob — a query scoped to one domain no longer pays for
+	// every other domain's links. InvalidateCache clears the whole map: any
+	// write can affect any shard's candidate set, and shard keys are cheap to
+	// rebuild lazily.
+	mu    sync.RWMutex
+	cache map[string][]ActivationLink
 
 	// confidenceCfg / randFloat drive the 2026-08-13 tiering + explore/audit
 	// sampling (docs/impl/v1/activation.md「置信度分档判定」). randFloat
@@ -61,7 +55,7 @@ type Matcher struct {
 }
 
 func NewMatcher(store *Store) *Matcher {
-	return &Matcher{store: store, synonyms: NewSynonymResolver(), randFloat: rand.Float64}
+	return &Matcher{store: store, randFloat: rand.Float64}
 }
 
 // SetConfidenceConfig wires the retrieval.* confidence knobs
@@ -77,7 +71,6 @@ func (m *Matcher) SetConfidenceConfig(cfg ConfidenceConfig) {
 func (m *Matcher) InvalidateCache() {
 	m.mu.Lock()
 	m.cache = nil
-	m.synonymsValid = false
 	m.mu.Unlock()
 }
 
@@ -113,31 +106,11 @@ func (m *Matcher) loadCache(domainIDs []string) ([]ActivationLink, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := m.ensureSynonymsLocked(); err != nil {
-		return nil, err
-	}
 	if m.cache == nil {
 		m.cache = make(map[string][]ActivationLink)
 	}
 	m.cache[key] = links
 	return links, nil
-}
-
-// ensureSynonymsLocked (re)loads the subject-synonym table if it hasn't been
-// loaded since the last InvalidateCache — synonyms are global, not
-// domain-scoped, so they don't participate in the per-domain cache shards.
-// Caller must hold m.mu (write lock).
-func (m *Matcher) ensureSynonymsLocked() error {
-	if m.synonymsValid {
-		return nil
-	}
-	synonyms, err := m.store.ListActiveSynonyms()
-	if err != nil {
-		return err
-	}
-	m.synonyms.Load(synonyms)
-	m.synonymsValid = true
-	return nil
 }
 
 // Match scores activation links against the Session ExpandedQuery using
@@ -318,8 +291,10 @@ func containsTermString(set []string, terms string) bool {
 // 四元组四个字段在真实抽取中都存在措辞抖动，只对 subject 做模糊匹配、其余
 // 三项硬性精确匹配这套不对称设计站不住脚；且 round 2 模型辅助判断（原本
 // 专门覆盖"subject 同义词归一化后仍不中"这一种情况）随之一并移除。
-// subject_synonyms 表、gap-mining 挖掘链路（SubjectOnlyMiss）、Wiki 概念页
-// 别名展示、预置数据导入均不受影响，继续独立运作。
+// subject_synonyms 表、Wiki 概念页别名展示、预置数据导入均不受影响，继续
+// 独立运作（2026-08-26：gap-mining 挖掘链路 SubjectOnlyMiss 已删除——
+// TupleNormalizer 上线后，其触发窗口在真实流量下已被结构性清空，详见
+// docs/impl/v1/activation.md）。
 func BuildQueryConditionTerms(subject, intent, audience, constraint string) (querySubject, qi, qa, qc string) {
 	querySubject = text.Normalize(subject)
 	qi = text.Terms(text.Normalize(intent))
@@ -359,77 +334,6 @@ func MatchConditionGroups(conds []ObservedCondition, querySubject, qi, qa, qc st
 		return true
 	}
 	return false
-}
-
-// SubjectOnlyMiss reports whether any group in conds has intent/audience/
-// constraint all equal to the query's, but subject fails coreContained even
-// after synonym canonicalization — the diagnostic Trace's near-miss
-// detection uses to mine subject_synonym_gap candidates (docs/impl/v1/trace.md
-// 步骤 3, docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md).
-// This is a separate consumer from Match() (2026-08-12 修订：Match 本身不再
-// 使用同义词模糊匹配，但 gap-mining 仍然需要用同义词归一化去判断"是不是仅仅
-// 因为措辞不同才没命中"，因此这里保留自己的同义词归一化计算，不再复用
-// BuildQueryConditionTerms). Ensures the resolver is warm (loads synonyms if
-// Match hasn't run yet in this process) — this only needs the global synonym
-// table, not a domain-scoped link scan, so it doesn't go through loadCache.
-// Returns the representative group's normalized Subject (hit_count-highest
-// among qualifying groups) as observedSubject.
-func (m *Matcher) SubjectOnlyMiss(conds []ObservedCondition, subject, intent, audience, constraint string) (observedSubject string, ok bool) {
-	if len(conds) == 0 {
-		return "", false
-	}
-	m.mu.Lock()
-	err := m.ensureSynonymsLocked()
-	m.mu.Unlock()
-	if err != nil {
-		return "", false
-	}
-
-	qi := text.Terms(text.Normalize(intent))
-	qc := text.Terms(text.Normalize(constraint))
-	qa := text.NormalizeCompact(audience)
-	queryTopic := m.synonyms.Canonicalize(strings.TrimSpace(text.Normalize(subject) + " " + text.Normalize(intent)))
-	normalizedSubject := text.Normalize(subject)
-
-	var best ObservedCondition
-	found := false
-	for _, cond := range conds {
-		if qi != cond.Intent || qa != cond.Audience || qc != cond.Constraint {
-			continue
-		}
-		core := text.SplitTerms(text.Terms(m.synonyms.Canonicalize(cond.Subject)))
-		fullyMatched := false
-		if len(core) == 0 {
-			fullyMatched = queryTopic == ""
-		} else {
-			fullyMatched = queryTopic != "" && coreContained(core, queryTopic)
-		}
-		if fullyMatched {
-			continue // this group already Matches — not a miss
-		}
-		if cond.Subject == normalizedSubject {
-			// Contradiction guard: identical normalized subject failing
-			// coreContained shouldn't happen; skip rather than misreport.
-			continue
-		}
-		if !found || cond.SuccessCount > best.SuccessCount {
-			best = cond
-			found = true
-		}
-	}
-	if !found {
-		return "", false
-	}
-	return best.Subject, true
-}
-
-func coreContained(core map[string]struct{}, topicText string) bool {
-	for w := range core {
-		if !strings.Contains(topicText, w) {
-			return false
-		}
-	}
-	return true
 }
 
 func hasNonEmpty(set []string) bool {

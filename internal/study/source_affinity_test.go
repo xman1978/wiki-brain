@@ -15,7 +15,7 @@ import (
 func TestEvictIdleSourceAffinity_CleansOldRows(t *testing.T) {
 	db := setupTestDB(t)
 	retrievalStore := retrieval.NewStore(db)
-	retrievalSvc := retrieval.NewService(retrievalStore, nil, nil, nil, nil, &config.Config{}, nil, nil, nil)
+	retrievalSvc := retrieval.NewService(retrievalStore, nil, nil, nil, &config.Config{}, nil, nil, nil)
 
 	old := time.Now().UTC().AddDate(0, 0, -30)
 	if _, err := db.Exec(`INSERT INTO subject_norms (norm_id, domain_id, subject, last_hit_at, created_at) VALUES (?, ?, ?, ?, ?)`,

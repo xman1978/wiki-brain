@@ -591,3 +591,47 @@ func (s *Service) RecordSourceAffinityOutcome(subject string, sourceIDs []string
 	}
 	return nil
 }
+
+// RecordSourceAffinityFeedbackFailure implements trace.SourceAffinityWriter's
+// second write path (会话讨论 2026-08-26): explicit negative user feedback on
+// a trace that relied on a source_affinity binding counts as one
+// circuit-breaker failure against that binding, same counter/threshold the
+// shortcut's own empty-recall failure uses (trySourceAffinityShortcut).
+// Mirrors RecordSourceAffinityOutcome's per-domain grouping/normalization,
+// but calls RecordSourceAffinityFailure instead of Success.
+func (s *Service) RecordSourceAffinityFeedbackFailure(subject string, sourceIDs []string) error {
+	if !s.sourceAffinityEnabled() || subject == "" || len(sourceIDs) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	bySourceDomain := make(map[string][]string)
+	seen := make(map[string]bool, len(sourceIDs))
+	for _, sid := range sourceIDs {
+		if sid == "" || seen[sid] {
+			continue
+		}
+		seen[sid] = true
+		domainID, err := s.store.SourceDomainID(sid)
+		if err != nil {
+			slog.Warn("retrieval: source affinity domain lookup failed", "source_id", sid, "error", err)
+			continue
+		}
+		if domainID == "" {
+			continue
+		}
+		bySourceDomain[domainID] = append(bySourceDomain[domainID], sid)
+	}
+	maxFailures := s.sourceAffinityFailureMax()
+	for domainID, sids := range bySourceDomain {
+		subjectNorm, err := s.subjectNormalizer.Normalize(ctx, []string{domainID}, subject)
+		if err != nil {
+			slog.Warn("retrieval: source affinity subject normalize failed", "domain_id", domainID, "error", err)
+			continue
+		}
+		if err := s.store.RecordSourceAffinityFailure(domainID, subjectNorm, sids, maxFailures); err != nil {
+			slog.Warn("retrieval: record source affinity feedback failure failed", "domain_id", domainID, "error", err)
+		}
+	}
+	return nil
+}

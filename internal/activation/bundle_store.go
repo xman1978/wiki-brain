@@ -405,6 +405,30 @@ func (s *Store) deriveAndPersistBundleStatus(bundleID string) error {
 	return s.UpdateBundleStatus(bundleID, newStatus)
 }
 
+// ResetBundle implements the bundle-detail「清空重来」action (mirrors
+// Store's role in Service.Reject for ActivationLink, docs/impl/v1/
+// activation-bundle.md「成员置信度」): wipes BOTH confidence axes — the
+// trigger-axis ObservedConditions AND every member's SuccessCount/
+// FailureCount — back to zero, leaving the member point_id list itself
+// intact so accumulation can start over from the same membership rather
+// than losing it. Status is re-derived afterward (lands on candidate for
+// empty conditions, same as Link).
+func (s *Store) ResetBundle(bundleID string) error {
+	b, err := s.GetBundleByID(bundleID)
+	if err != nil {
+		return err
+	}
+	if b == nil {
+		return fmt.Errorf("activation store: reset bundle: bundle not found: %s", bundleID)
+	}
+	members := append([]BundleMember(nil), b.Members...)
+	for i := range members {
+		members[i].SuccessCount = 0
+		members[i].FailureCount = 0
+	}
+	return s.UpdateBundleMembers(bundleID, members, []ObservedCondition{})
+}
+
 // UpdateBundleStatus is a plain status setter (mirrors Store.UpdateStatus for
 // ActivationLink) — used both by deriveAndPersistBundleStatus and by
 // study/bundle_scan.go's lifecycle-driven direct deprecation.

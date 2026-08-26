@@ -144,7 +144,6 @@ type SourceConfig struct {
 }
 
 type RetrievalConfig struct {
-	OutlineFTSMinScore         float64 `yaml:"outline_fts_min_score"`
 	RerankTopN                 int     `yaml:"rerank_top_n"`
 	RerankExtractBatchMaxChars int     `yaml:"rerank_extract_batch_max_chars"`
 	RerankExtractBatchMaxUnits int     `yaml:"rerank_extract_batch_max_units"`
@@ -188,11 +187,14 @@ type RetrievalConfig struct {
 	// (docs/impl/v1/wiki.md 步骤 4; <=0 defaults to 3, 1 reproduces the
 	// original top-1-only behavior).
 	WikiMaxCandidates int `yaml:"wiki_max_candidates"`
-	// RerankRelevanceConcise 控制证据过滤阶段（rerank_relevance）要不要求模型
-	// 输出 analysis 分析字段。false（默认，含零值）用 rerank_relevance.md，
-	// 输出结果附一句话依据，便于调试排查；true 用 rerank_relevance_concise.md，
-	// 只输出 candidate_id/relevant，省去分析文本以缩短响应耗时。
-	RerankRelevanceConcise bool `yaml:"rerank_relevance_concise"`
+	// RerankRelevanceDebugAnalysis 控制证据过滤阶段（rerank_relevance）要不要求
+	// 模型输出 analysis 分析字段。false（默认，含零值）用
+	// rerank_relevance_concise.md，只输出 candidate_id/relevant，省去分析文本
+	// 以保证筛选速度；true 时切到 rerank_relevance.md，输出结果附一句话依据，
+	// 仅供调试排查判断依据时手动开启（2026-08-26 决策：默认必须是快速档，
+	// 零值就该是生产该用的那一档，而不是需要每次显式在 config.yml 里关掉调试
+	// 输出）。
+	RerankRelevanceDebugAnalysis bool `yaml:"rerank_relevance_debug_analysis"`
 
 	// —— 问题四元组归一化（2026-08-12 新增，docs/impl/v1/retrieval.md 步骤 2）——
 	// 默认关闭：新机制，先不改变现有行为，观测后再打开。
@@ -345,11 +347,6 @@ type StudyConfig struct {
 	TopNCoefficientMin        float64 `yaml:"topn_coefficient_min"`
 	TopNCoefficientGridStep   float64 `yaml:"topn_coefficient_grid_step"`
 	TopNCoefficientGridRadius int     `yaml:"topn_coefficient_grid_radius"`
-	// —— subject 同义词挖掘（V1 新增，
-	// docs/superpowers/specs/2026-07-24-activation-subject-synonym-design.md）——
-	SynonymGapMin         int  `yaml:"synonym_gap_min"`
-	SynonymGapDistinctMin int  `yaml:"synonym_gap_distinct_min"`
-	SynonymAutoPromote    bool `yaml:"synonym_auto_promote"`
 	// —— 概念演化（V1 新增，docs/impl/v1/concept-evolution.md 配置项）——
 	EntryNullRatioMin      float64 `yaml:"entry_null_ratio_min"`
 	EntryAddEventMin       int     `yaml:"entry_add_event_min"`
