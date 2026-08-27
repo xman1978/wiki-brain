@@ -141,6 +141,10 @@ func (s *Service) Run() (*RunResult, error) {
 		slog.Error("study: scan activation bundles failed", "error", err)
 	}
 
+	if err := s.processPendingSourceAffinityMatches(); err != nil {
+		slog.Error("study: process pending source affinity matches failed", "error", err)
+	}
+
 	gapEventsProcessed, err := s.aggregateGaps()
 	if err != nil {
 		return nil, fmt.Errorf("study: aggregate gaps: %w", err)
@@ -956,6 +960,30 @@ func (s *Service) evictIdleSourceAffinity() error {
 		slog.Error("study: clean idle source affinity failed", "error", err)
 	} else if nAffinity > 0 {
 		slog.Info("study: cleaned idle source affinity", "count", nAffinity)
+	}
+	return nil
+}
+
+// processPendingSourceAffinityMatches runs retrieval.Service's background
+// subject→source matcher (2026-08-27 改判，取代 source_affinity 的引用驱动
+// 绑定，见 docs/design/retrieval.md 第 14 节): each confident full-path
+// answer enqueues its normalized subject instead of directly binding the
+// sources it happened to cite; this step is where the actual full
+// sourceSemanticFilter-equivalent match against the domain's sources
+// happens, off the request path. Same no-op guard shape as
+// evictIdleSourceAffinity — s.retrievalSvc is the same field
+// SetSourceAffinityCleanup wires, unwired means the feature isn't set up.
+func (s *Service) processPendingSourceAffinityMatches() error {
+	if s.retrievalSvc == nil {
+		return nil
+	}
+	n, err := s.retrievalSvc.ProcessPendingSubjectMatches(context.Background())
+	if err != nil {
+		slog.Error("study: process pending source affinity matches failed", "error", err)
+		return nil
+	}
+	if n > 0 {
+		slog.Info("study: processed pending source affinity matches", "count", n)
 	}
 	return nil
 }

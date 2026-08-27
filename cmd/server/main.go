@@ -267,6 +267,15 @@ func main() {
 	q.RegisterHandlerWithWorkers(queue.TaskTypeUnitExtract, uploadConcurrency, func(payload interface{}) {
 		task := payload.(queue.UnitTask)
 
+		// Resolve the id that source_affinity backfill should tag *before*
+		// CompleteShadowSwap runs below — a successful swap deletes
+		// task.SourceID's row (it was the shadow), leaving only the target id
+		// alive. Not a shadow: resolvedSourceID is just task.SourceID itself.
+		resolvedSourceID := task.SourceID
+		if shadow, err := sourceStore.GetByID(task.SourceID); err == nil && shadow.ShadowOf.Valid {
+			resolvedSourceID = shadow.ShadowOf.String
+		}
+
 		unitsStatus := "completed"
 		if err := unitSvc.Extract(context.Background(), task.SourceID); errors.Is(err, unit.ErrExtractionInProgress) {
 			// A concurrent run already owns this source's extraction and its
@@ -293,6 +302,19 @@ func main() {
 			slog.Error("update units_status failed", "source_id", task.SourceID, "units_status", unitsStatus, "error", err)
 		}
 
+		if unitsStatus == "completed" {
+			// Best-effort proactive re-tagging (docs/design/retrieval.md 第 14
+			// 节 决策点 4): fire-and-forget, mirrors the existing
+			// conceptMatcher.MatchEntries precedent in source/service.go — not
+			// worth a 4th queue task type for a step whose only failure mode is
+			// "this source misses a cache prewarm," never a correctness issue.
+			go func(sourceID string) {
+				if err := retrievalSvc.BackfillSourceAffinityForSource(context.Background(), sourceID); err != nil {
+					slog.Warn("source affinity backfill failed", "source_id", sourceID, "error", err)
+				}
+			}(resolvedSourceID)
+		}
+
 		broadcaster.Close(task.SourceID)
 	})
 
@@ -314,6 +336,18 @@ func main() {
 	}
 	studyScheduler := study.NewScheduler(studySvc, studyInterval)
 	studyScheduler.Start()
+
+	// ── Session retention scheduler ─────────────────────
+	sessionRetentionDays := cfg.Session.RetentionDays
+	if sessionRetentionDays <= 0 {
+		sessionRetentionDays = 30
+	}
+	sessionCleanupInterval, err := time.ParseDuration(cfg.Session.CleanupInterval)
+	if err != nil {
+		sessionCleanupInterval = 24 * time.Hour
+	}
+	sessionScheduler := session.NewScheduler(sessionStore, sessionRetentionDays, sessionCleanupInterval)
+	sessionScheduler.Start()
 
 	// ── HTTP routes ─────────────────────────────────────
 	mux := foundation.NewRouter()
@@ -412,6 +446,7 @@ func main() {
 		defer cancel()
 
 		studyScheduler.Stop()
+		sessionScheduler.Stop()
 		q.Shutdown()
 
 		if err := srv.Shutdown(ctx); err != nil {

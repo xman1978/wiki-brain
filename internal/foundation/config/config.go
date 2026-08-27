@@ -22,6 +22,7 @@ type Config struct {
 	Evidence  EvidenceConfig  `yaml:"evidence"`
 	KPN       KPNConfig       `yaml:"kpn"`
 	Wiki      WikiConfig      `yaml:"wiki"`
+	Session   SessionConfig   `yaml:"session"`
 
 	// BootstrapLLM is populated from an optional llm: section in config.yml
 	// only for one-time import into the database at startup. Not used at runtime.
@@ -229,6 +230,11 @@ type RetrievalConfig struct {
 	// 命中，由 Study 周期清理（study.md 步骤 4 同款 idle 清理惯例，同
 	// QuestionTupleNormIdleDays）。<=0 跳过清理。
 	SourceAffinityIdleDays int `yaml:"source_affinity_idle_days"`
+	// SourceAffinityPendingBatchMax：pending_subject_affinity_match 每次
+	// Study tick 最多处理的待匹配主题数（2026-08-27 改判，取代直接引用
+	// 绑定），未设置默认 50——避免一个 domain 短时间内积累了很多不同主题时，
+	// 单次 tick 的耗时不可控；处理不完的留到下一轮。
+	SourceAffinityPendingBatchMax int `yaml:"source_affinity_pending_batch_max"`
 }
 
 // EvidenceConfig — docs/impl/v1/evidence.md 配置项.
@@ -304,6 +310,13 @@ type WikiConfig struct {
 	// ActivationLink/Bundle): a served answer that isn't sampled produces no
 	// synthesis event at all, see wiki.md 步骤 4a「未中选」.
 	SynthesisAuditRate float64 `yaml:"synthesis_audit_rate"`
+}
+
+type SessionConfig struct {
+	// RetentionDays: 更新时间早于此天数的会话（含其消息轮次）会被周期性清理删除。
+	RetentionDays int `yaml:"retention_days"`
+	// CleanupInterval: 清理任务的执行间隔，Go duration 字符串（如 "24h"）。
+	CleanupInterval string `yaml:"cleanup_interval"`
 }
 
 type StudyConfig struct {

@@ -461,6 +461,73 @@ Rerank 候选 content 切片前再校验一次 KU lifecycle（防扫描间隙状
 
 此外，MVP 沿用的 Domain 预过滤与 Source 语义过滤（`mvp/retrieval.md` 步骤 2-3）需追加 `sources.shadow_of IS NULL`，排除 reupload 期间正在处理的影子 Source——影子在换血完成前不应作为一个独立来源参与检索（见 `lifecycle.md` 步骤 2 的 Shadow Source 机制）。
 
+### 步骤 5a：Source 匹配从"问答绑定"改为"主题标签"（2026-08-27 定案，取代 2026-08-25 `source_affinity` 设计）
+
+**2026-08-25 原始实现**（migration 068，`internal/retrieval/subject_affinity.go`，此前未补记到本文档）：`trySourceAffinityShortcut`（挂在 `retrieveSlowPath` 最前面）用 `SubjectNormalizer`（Tier1 精确匹配 → Tier2 本地词集 Jaccard → Tier3 LLM 批量判断，与 `activation.TupleNormalizer` 同构但只归一化 `subject` 一个字段）把问题主题归一化后，查 `source_affinity` 表（`UNIQUE(domain_id, subject_norm, source_id)`）里绑定的 source 集合，命中即跳过 Step2 Domain 预过滤 + Step3 Source 语义过滤两次 LLM 调用。绑定新增只在慢路径答案被 Trace 判 confident 后、按 `Evidence.SourceRef` 反查 `Trace.DirectPointIDs` 真正引用到的 source_id 写入（`RecordSourceAffinityOutcome`，`internal/trace/service.go` 的 `recordSourceAffinity`），不是"候选通过就绑"；纠错靠 `(domain_id, subject_norm, source_id)` 逐行独立的 `consecutive_failures` 熔断计数器（`source_affinity_failure_max`，默认 2）。
+
+**2026-08-27 实测发现的缺陷**：用真实数据反复实测证实，`source_filter.md`（标题/摘要匹配）和完整慢路径（含 judge/引用判定）在给定问题各自真实主题的情况下都能正确召回该覆盖的全部文档——**匹配判断本身没有召回缺陷**。缺陷出在 `SubjectNormalizer` 把范围不同的问题（如"出差期间考勤"与"出差期间注意事项"）归一化到同一个 `subject_norm` 或各自建了窄绑定，导致后问的、范围更广的问题继承了先问的、范围更窄的问题留下的绑定。详细复现记录与另一个独立发现（`activation.TupleNormalizer` 存在同类问题，但判定为历史遗留、依赖 ActivationLink 自身置信度收敛自愈，不在本次改动范围内）见 `docs/design/retrieval.md` 第 14 节。
+
+**改判后的设计**（取代上一段"绑定表"模型，`source_affinity` 表结构预计随实现调整为标签表，具体 schema 留给实现阶段）：
+
+```text
+1. SubjectNormalizer 的 Tier2/Tier3 判断边界调整为"范围是否相同"而非
+   "措辞是否相似"——同范围不同措辞应归一化合并，不同范围即使字面
+   相似也必须保持独立、各自匹配；
+2. 后台异步任务（复用现有 domainPreFilter + sourceSemanticFilter /
+   source_filter.md 逻辑）把问题主题匹配到的 source 关系，从"实时挡在
+   查询路径上"改为"异步执行、结果持久化为主题标签"；
+3. trySourceAffinityShortcut 查询时改为：先按 subject_norm 精确匹配
+   source 已有标签 → 命中直接用（跳过两次 LLM 调用，行为与原设计一致）；
+   未命中 → 退回现有 domainPreFilter + sourceSemanticFilter 全量匹配
+   （不是直接判失败），并把这次匹配结果沉淀为新标签；
+4. source 新增/修改（source_process 流程末尾）时，新增一步：用该
+   domain 下已有的主题标签库对这一个 source 重新匹配、补打标签——
+   范围只是"这一个 source 对比已有标签库"，不是全量 source 重新扫描。
+```
+
+**沿用不变的部分**：`consecutive_failures` 熔断计数器沿用；`source_affinity_enabled`/`source_affinity_failure_max`/`source_affinity_local_sim_min` 等现有配置项语义不变。
+
+**明确不做的**：标签的引用率剔除机制（讨论中被否决，理由见 `docs/design/retrieval.md` 第 14 节"成本控制说明"——精确归一化本身保证了单个标签下的 source 集合有界，不需要额外剔除）；`activation.TupleNormalizer`（`question_tuple_norm_enabled`）不做任何调整。
+
+**2026-08-27 当天晚些时候二次改判（取代上一段"绑定/标签新增仍然是引用驱动"的口径，代码已完成，`go build`/`go vet`/`go test ./... -count=1` 全绿）**：用户否决了"引用驱动直接绑定"本身——这条路径只把**这次答案实际引用到的** source 绑定到主题上，范围太窄，不是"这个主题该对应哪些 source"的完整匹配；也否决了给绑定分信任等级（第一版实现曾加过 `origin` 列区分引用驱动/语义匹配驱动，命中时非引用驱动的绑定要多跑一次 `sourceSemanticFilter` 验证）——问题归一化主题精确匹配 source 标签，本身就足以定位 source，不需要额外验证。最终落地：
+
+```text
+1. migration 070 加的 origin 列已被 migration 071 撤销（ALTER TABLE
+   source_affinity DROP COLUMN origin）——现在只有一种绑定，来源不区分；
+
+2. trySourceAffinityShortcut 回到最初行为：命中直接跳过两次过滤，不再有
+   "非引用驱动需要再跑一次 sourceSemanticFilter" 的分支；
+
+3. RecordSourceAffinityOutcome（trace.SourceAffinityWriter 接口签名、
+   trace/service.go 的调用点和触发条件全部不变）内部行为改判：不再直接
+   为"这次答案引用到的" source 逐个调 RecordSourceAffinitySuccess，改为
+   反查这些 source 各自的 domain_id 后，对每个涉及到的 domain 调
+   EnqueuePendingSubjectMatch(domainID, subjectNorm) 入队；
+
+4. 新表 pending_subject_affinity_match（migration 072，
+   PRIMARY KEY(domain_id, subject_norm) 天然去重）承接入队的待匹配主题；
+   Study 的 Run()（internal/study/service.go）新增子步骤
+   processPendingSourceAffinityMatches，复用已有的 SetSourceAffinityCleanup
+   注入的 *retrieval.Service 引用，调用新增的
+   Service.ProcessPendingSubjectMatches(ctx)：每次按 queued_at ASC 取一批
+   （上限 retrieval.source_affinity_pending_batch_max，默认 50），对每条
+   用 ListSourcesByDomainIDs 取该 domain 下全部 source，构造
+   QueryContext{Subject: subjectNorm, DomainIDs: [domainID]} 直接调用现有
+   的 sourceSemanticFilter（无需新提示词，就是 source_filter.md 本身），
+   匹配到的 source 调 RecordSourceAffinitySuccess，处理完（不论匹配到
+   什么）都 DeletePendingSubjectMatch——一次性任务，不重试，该主题以后
+   再被问到会重新入队；
+
+5. source 新增/修改时的主动打标签（决策点 4，BackfillSourceAffinityForSource）
+   不变，也改调统一后的 RecordSourceAffinitySuccess（不再有
+   RecordSourceAffinityBackfill 专用方法）——两条写入路径现在完全对称，
+   都是"跑一次 sourceSemanticFilter 等价判断"，没有可信度差异。
+```
+
+`config/prompts/subject_norm_match.md`（决策点 1）追加了第三条判断规则："范围不同也不算等价"，判据是"回答所需的文档集合是否相同"而不是字面/语义相似度。`Tier2 LocalSimMin`（0.8）未改——实测过"出差期间考勤"/"出差注意事项"分词 Jaccard 约 0.2，这次的错误合并只发生在 Tier3（LLM），不是 Tier2。改写后用真实历史主题对（`data/wiki-brain.db` 里的真实 `subject_norms`）跑过真实 LLM 验证：范围不同的问题正确保持独立，同范围改写的问题仍正确合并。
+
+第 4 点异步重新匹配任务/主动打标签的执行载体：**不新增第四种队列 task 类型**。source 主动打标签用 fire-and-forget goroutine（挂在 `cmd/server/main.go` 的 `TaskTypeUnitExtract` handler 里，`unitsStatus=="completed"` 时触发，沿用 `internal/source/service.go:596` `go s.conceptMatcher.MatchEntries(...)` 这个已有先例，需要处理 Shadow Source 换血——必须在 `CompleteShadowSwap` **之前**先查一次 `sourceStore.GetByID(task.SourceID)` 拿到 `ShadowOf`，因为换血成功后 `task.SourceID`（影子 ID）这一行已被删除，标签必须打在存活的目标 source_id 上）；队列批量匹配复用 Study 已有的 `time.Ticker` 周期，不另起新的调度机制。异步队列仍然只有 `source_process`/`unit_extract`/`trace_write` 三种（CLAUDE.md 记录未变）。
+
 ### 步骤 6：Gap 诊断字段（gap_reason / filtered_evidence）
 
 仅慢路径产出（快路径命中即为 direct，不存在这两个字段的取值场景）；用于 study.md 定位「检索不到」还是「检索到但被判无关」两类知识盲区，见 study.md「knowledge_gaps 表扩展」。两处改动点：

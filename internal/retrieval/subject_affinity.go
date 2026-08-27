@@ -342,9 +342,14 @@ func (s *Store) GetSourceAffinitySources(domainIDs []string, subjectNorm string)
 }
 
 // RecordSourceAffinitySuccess upserts (domainID, subjectNorm, sourceID) with
-// consecutive_failures reset to 0 — called when Trace confirms a full-path
-// answer confidently cited evidence from sourceID under this subject
-// (creates the binding on first confirmation; no confidence threshold).
+// consecutive_failures reset to 0 — called both by the pending-subject
+// background matcher (ProcessPendingSubjectMatches) when a queued subject's
+// sourceSemanticFilter pass matches sourceID, and by the proactive re-tagging
+// path (BackfillSourceAffinityForSource) when a newly-ready source
+// semantically matches an existing subject tag. Both write paths run the
+// same kind of judgment (a source_filter.md-equivalent semantic match), so
+// there is a single trust tier — no verification step is skipped at query
+// time that either write path itself hasn't already performed.
 func (s *Store) RecordSourceAffinitySuccess(domainID, subjectNorm, sourceID string) error {
 	now := time.Now().UTC()
 	_, err := s.db.Exec(`INSERT INTO source_affinity
@@ -357,6 +362,39 @@ func (s *Store) RecordSourceAffinitySuccess(domainID, subjectNorm, sourceID stri
 		return fmt.Errorf("retrieval store: record source affinity success: %w", err)
 	}
 	return nil
+}
+
+// ListAllSubjectNorms returns every subject_norms row across domainIDs, with
+// no recency cap — the domain's full tag vocabulary. Deliberately does NOT
+// reuse ListSubjectNormCandidates: that method's 200-row/most-recently-hit
+// cap is tuned for the hot per-query Tier2 normalization path, where a
+// small, recent candidate pool is the right trade-off. Backfill
+// (BackfillSourceAffinityForSource) runs once per newly-ready source, off
+// the query hot path, and an idle tag is not necessarily a bad tag — it may
+// be idle precisely because no source was ever bound to it yet, which is
+// exactly the gap backfill exists to close. Reusing the capped/recency-
+// ordered method here would silently skip cold tags, defeating the purpose.
+func (s *Store) ListAllSubjectNorms(domainIDs []string) ([]SubjectNorm, error) {
+	if len(domainIDs) == 0 {
+		return nil, nil
+	}
+	ph, args := buildPlaceholders(domainIDs)
+	query := fmt.Sprintf(`SELECT %s FROM subject_norms WHERE domain_id IN (%s)`, subjectNormColumns, ph)
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval store: list all subject norms: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SubjectNorm
+	for rows.Next() {
+		n, err := scanSubjectNorm(rows)
+		if err != nil {
+			return nil, fmt.Errorf("retrieval store: scan subject norm: %w", err)
+		}
+		out = append(out, *n)
+	}
+	return out, rows.Err()
 }
 
 // RecordSourceAffinityFailure increments consecutive_failures for every
@@ -419,6 +457,123 @@ func (s *Service) CleanIdleSourceAffinity(days int) (int, error) {
 	return s.store.DeleteIdleSourceAffinity(days)
 }
 
+// ---- pending_subject_affinity_match store methods (migration 072) ----
+
+// PendingSubjectMatch is one row of pending_subject_affinity_match — a
+// (domain, normalized subject) pair a confident full-path answer touched,
+// queued for ProcessPendingSubjectMatches to run a full sourceSemanticFilter
+// pass against, not yet processed.
+type PendingSubjectMatch struct {
+	DomainID    string
+	SubjectNorm string
+	QueuedAt    time.Time
+}
+
+// EnqueuePendingSubjectMatch queues (domainID, subjectNorm) for background
+// matching — called by RecordSourceAffinityOutcome. ON CONFLICT DO NOTHING:
+// the same subject asked many times before it's processed still occupies
+// exactly one row, preserving the earliest queued_at (FIFO fairness) rather
+// than being pushed to the back of the queue on every repeat ask.
+func (s *Store) EnqueuePendingSubjectMatch(domainID, subjectNorm string) error {
+	_, err := s.db.Exec(`INSERT INTO pending_subject_affinity_match (domain_id, subject_norm, queued_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(domain_id, subject_norm) DO NOTHING`,
+		domainID, subjectNorm, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("retrieval store: enqueue pending subject match: %w", err)
+	}
+	return nil
+}
+
+// ListPendingSubjectMatches returns up to limit queued rows, oldest first.
+func (s *Store) ListPendingSubjectMatches(limit int) ([]PendingSubjectMatch, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.Query(`SELECT domain_id, subject_norm, queued_at FROM pending_subject_affinity_match
+		ORDER BY queued_at ASC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval store: list pending subject matches: %w", err)
+	}
+	defer rows.Close()
+
+	var out []PendingSubjectMatch
+	for rows.Next() {
+		var p PendingSubjectMatch
+		if err := rows.Scan(&p.DomainID, &p.SubjectNorm, &p.QueuedAt); err != nil {
+			return nil, fmt.Errorf("retrieval store: scan pending subject match: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// DeletePendingSubjectMatch removes a queued entry once ProcessPendingSubjectMatches
+// has handled it (matched or not — this is a one-shot task, not a retry queue;
+// the subject gets re-queued next time a confident answer touches it).
+func (s *Store) DeletePendingSubjectMatch(domainID, subjectNorm string) error {
+	_, err := s.db.Exec(`DELETE FROM pending_subject_affinity_match WHERE domain_id = ? AND subject_norm = ?`,
+		domainID, subjectNorm)
+	if err != nil {
+		return fmt.Errorf("retrieval store: delete pending subject match: %w", err)
+	}
+	return nil
+}
+
+// sourceAffinityPendingBatchMax resolves retrieval.source_affinity_pending_batch_max
+// with a default, mirroring sourceAffinityFailureMax's pattern.
+func (s *Service) sourceAffinityPendingBatchMax() int {
+	if s.cfg != nil && s.cfg.Retrieval.SourceAffinityPendingBatchMax > 0 {
+		return s.cfg.Retrieval.SourceAffinityPendingBatchMax
+	}
+	return 50
+}
+
+// ProcessPendingSubjectMatches is Study's periodic background matcher
+// (docs/design/retrieval.md 第 14 节，2026-08-27 改判): for each queued
+// (domain, normalized subject) pair, run a full sourceSemanticFilter pass
+// against every source in that domain — the exact same title/summary
+// relevance judgment sourceSemanticFilter already applies at query time
+// (source_filter.md), just moved off the request path — and bind whatever
+// matches. Processes up to sourceAffinityPendingBatchMax entries per call so
+// a domain that accumulates many distinct subjects between Study ticks
+// doesn't make a single tick's duration unbounded; the rest are picked up
+// next tick. Always dequeues a processed entry regardless of match outcome
+// — this is a one-shot task, not a retry queue (see DeletePendingSubjectMatch).
+func (s *Service) ProcessPendingSubjectMatches(ctx context.Context) (int, error) {
+	if !s.sourceAffinityEnabled() {
+		return 0, nil
+	}
+	pending, err := s.store.ListPendingSubjectMatches(s.sourceAffinityPendingBatchMax())
+	if err != nil {
+		return 0, fmt.Errorf("retrieval: list pending subject matches: %w", err)
+	}
+
+	processed := 0
+	for _, p := range pending {
+		sources, err := s.store.ListSourcesByDomainIDs([]string{p.DomainID})
+		if err != nil {
+			slog.Warn("retrieval: pending subject match source lookup failed", "domain_id", p.DomainID, "subject_norm", p.SubjectNorm, "error", err)
+		} else if len(sources) > 0 {
+			qc := QueryContext{Subject: p.SubjectNorm, DomainIDs: []string{p.DomainID}}
+			matched, ferr := s.sourceSemanticFilter(ctx, qc, sources)
+			if ferr != nil {
+				slog.Warn("retrieval: pending subject match source filter failed", "domain_id", p.DomainID, "subject_norm", p.SubjectNorm, "error", ferr)
+			}
+			for _, src := range matched {
+				if err := s.store.RecordSourceAffinitySuccess(p.DomainID, p.SubjectNorm, src.SourceID); err != nil {
+					slog.Warn("retrieval: record source affinity success failed", "domain_id", p.DomainID, "subject_norm", p.SubjectNorm, "source_id", src.SourceID, "error", err)
+				}
+			}
+		}
+		if err := s.store.DeletePendingSubjectMatch(p.DomainID, p.SubjectNorm); err != nil {
+			slog.Warn("retrieval: delete pending subject match failed", "domain_id", p.DomainID, "subject_norm", p.SubjectNorm, "error", err)
+		}
+		processed++
+	}
+	return processed, nil
+}
+
 // GetSourcesByIDs fetches SourceInfo rows for exactly the given source_ids —
 // used by retrieveSlowPath's affinity shortcut to turn a bound source_id set
 // back into the []SourceInfo shape recallFromSources expects.
@@ -476,13 +631,13 @@ func (s *Service) sourceAffinityFailureMax() int {
 
 // trySourceAffinityShortcut implements retrieveSlowPath's subject→source
 // routing shortcut (2026-08-25, config.Retrieval.SourceAffinityEnabled 门控,
-// 默认关闭): when a trusted-enough binding exists for this (domain,
-// normalized subject), skip Step2 (domainPreFilter) and Step3
-// (sourceSemanticFilter) — both LLM calls — and recall straight from the
-// bound source_id set. Only attempted when the domain is already resolved
-// (qc.DomainResolved) — an unresolved domain would need domainPreFilter's own
-// LLM domain match to even know which domain(s) to look the binding up
-// under, so there is nothing to skip in that case.
+// 默认关闭): when a binding exists for this (domain, normalized subject),
+// skip Step2 (domainPreFilter) and Step3 (sourceSemanticFilter) — both LLM
+// calls — and recall straight from the bound source_id set. Only attempted
+// when the domain is already resolved (qc.DomainResolved) — an unresolved
+// domain would need domainPreFilter's own LLM domain match to even know
+// which domain(s) to look the binding up under, so there is nothing to skip
+// in that case.
 //
 // Returns ok=false whenever the shortcut doesn't apply or doesn't pan out —
 // callers fall through to the normal domainPreFilter→filterAndRecall
@@ -491,10 +646,13 @@ func (s *Service) sourceAffinityFailureMax() int {
 // through, rather than returning the empty result — this is a routing
 // optimization, not a source of truth, so it must never be the reason a
 // question that the full pipeline could have answered comes back empty.
-// Success is deliberately not recorded here — creating/reinforcing a binding
-// requires Trace's post-answer confirmation that evidence was actually
-// cited (RecordSourceAffinityOutcome), not just "recall returned something
-// non-empty" (rerank/judge can still be wrong).
+// Every binding here was itself produced by a full sourceSemanticFilter-
+// equivalent match (either the pending-subject background matcher or the
+// proactive source re-tagging path, subject_affinity.go/
+// source_affinity_backfill.go) — there is a single trust tier, so a hit
+// skips both filters unconditionally; nothing is verified again here that
+// wasn't already verified when the binding was written (2026-08-27 改判，
+// 取代此前 migration 070 引入的 origin 信任分级).
 func (s *Service) trySourceAffinityShortcut(ctx context.Context, qc QueryContext, emit func(phase, status, detail string, dur int64), progress ProgressFunc) (*EvidenceSet, bool) {
 	if !s.sourceAffinityEnabled() || qc.Subject == "" || !qc.DomainResolved || len(qc.DomainIDs) == 0 {
 		return nil, false
@@ -544,11 +702,21 @@ func (s *Service) trySourceAffinityShortcut(ctx context.Context, qc QueryContext
 
 // RecordSourceAffinityOutcome implements trace.SourceAffinityWriter — Trace
 // calls this after a full-path answer is graded confident, passing the
-// source_ids its DirectPointIDs' evidence actually came from. Sources can
-// span more than one domain in principle, so sourceIDs are grouped by their
-// own domain_id and normalized/written per domain rather than assuming a
-// single caller-supplied domain. Non-fatal on lookup/normalize failure for
-// an individual source — logs and continues with the rest.
+// source_ids its DirectPointIDs' evidence actually came from — used here
+// only to resolve which domain(s) this subject belongs to, not to decide
+// which sources get bound (2026-08-27 改判，取代此前"直接把这次答案引用到
+// 的 source 绑定到主题上"的口径). Binding only the sources one particular
+// answer happened to cite under-covers the subject — a differently-scoped
+// later question asked under the same or a normalized-equal subject would
+// inherit that narrow set instead of getting its own complete match. Instead,
+// for each domain this subject touches, the normalized subject is enqueued
+// (EnqueuePendingSubjectMatch) for Study's periodic background matcher
+// (ProcessPendingSubjectMatches) to run a full sourceSemanticFilter pass
+// against every source in that domain — the same rigor sourceSemanticFilter
+// already applies at query time, just moved off the request path. Sources
+// can span more than one domain in principle, so sourceIDs are still grouped
+// by their own domain_id first. Non-fatal on lookup/normalize failure for an
+// individual source — logs and continues with the rest.
 //
 // No context parameter (mirrors activation.Service.EnrichFromConfidentFullPath,
 // the other ObservedConditionEnricher-style write path Trace calls): Trace's
@@ -560,13 +728,11 @@ func (s *Service) RecordSourceAffinityOutcome(subject string, sourceIDs []string
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	bySourceDomain := make(map[string][]string)
-	seen := make(map[string]bool, len(sourceIDs))
+	domainIDs := make(map[string]bool)
 	for _, sid := range sourceIDs {
-		if sid == "" || seen[sid] {
+		if sid == "" {
 			continue
 		}
-		seen[sid] = true
 		domainID, err := s.store.SourceDomainID(sid)
 		if err != nil {
 			slog.Warn("retrieval: source affinity domain lookup failed", "source_id", sid, "error", err)
@@ -575,18 +741,16 @@ func (s *Service) RecordSourceAffinityOutcome(subject string, sourceIDs []string
 		if domainID == "" {
 			continue
 		}
-		bySourceDomain[domainID] = append(bySourceDomain[domainID], sid)
+		domainIDs[domainID] = true
 	}
-	for domainID, sids := range bySourceDomain {
+	for domainID := range domainIDs {
 		subjectNorm, err := s.subjectNormalizer.Normalize(ctx, []string{domainID}, subject)
 		if err != nil {
 			slog.Warn("retrieval: source affinity subject normalize failed", "domain_id", domainID, "error", err)
 			continue
 		}
-		for _, sid := range sids {
-			if err := s.store.RecordSourceAffinitySuccess(domainID, subjectNorm, sid); err != nil {
-				slog.Warn("retrieval: record source affinity success failed", "domain_id", domainID, "source_id", sid, "error", err)
-			}
+		if err := s.store.EnqueuePendingSubjectMatch(domainID, subjectNorm); err != nil {
+			slog.Warn("retrieval: enqueue pending subject match failed", "domain_id", domainID, "subject_norm", subjectNorm, "error", err)
 		}
 	}
 	return nil

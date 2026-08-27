@@ -50,10 +50,12 @@ func TestSubjectNormalizer_TierExactAndNewRecord(t *testing.T) {
 }
 
 // TestSourceAffinityShortcut_HitSkipsDomainAndSourceFilter seeds a binding
-// directly (as if Trace had already confirmed it) and asserts the slow path
-// skips domainPreFilter/sourceSemanticFilter entirely — no fake response is
-// configured for question_domain_match.md or source_filter.md, so the test
-// would fail with "no response configured" if either were called.
+// directly via RecordSourceAffinitySuccess (as ProcessPendingSubjectMatches
+// or BackfillSourceAffinityForSource would after matching) and asserts the
+// slow path skips domainPreFilter/sourceSemanticFilter entirely — no fake
+// response is configured for question_domain_match.md or source_filter.md,
+// so the test would fail with "no response configured" if either were
+// called.
 func TestSourceAffinityShortcut_HitSkipsDomainAndSourceFilter(t *testing.T) {
 	svc, fake, store := setupTestService(t)
 	svc.cfg.Retrieval.SourceAffinityEnabled = true
@@ -131,5 +133,37 @@ func TestSourceAffinityShortcut_FailureEvictsBinding(t *testing.T) {
 	}
 	if len(sources) != 0 {
 		t.Fatalf("expected binding evicted after reaching failure max, got %v", sources)
+	}
+}
+
+// TestRecordSourceAffinityOutcome_EnqueuesPendingMatchNotDirectBinding
+// asserts the 2026-08-27 redesign: a confident full-path answer's citations
+// only resolve which domain(s) the subject belongs to — they no longer
+// directly bind those specific sources. The subject should land in
+// pending_subject_affinity_match instead, with source_affinity left
+// untouched until ProcessPendingSubjectMatches actually runs the full match.
+func TestRecordSourceAffinityOutcome_EnqueuesPendingMatchNotDirectBinding(t *testing.T) {
+	svc, _, store := setupTestService(t)
+	svc.cfg.Retrieval.SourceAffinityEnabled = true
+
+	if err := svc.RecordSourceAffinityOutcome("linear equations", []string{"s1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	subjectNorm := text.Normalize("linear equations")
+	sources, err := store.GetSourceAffinitySources([]string{"d1"}, subjectNorm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 0 {
+		t.Fatalf("expected no direct source_affinity binding yet, got %v", sources)
+	}
+
+	pending, err := store.ListPendingSubjectMatches(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].DomainID != "d1" || pending[0].SubjectNorm != subjectNorm {
+		t.Fatalf("expected one pending match (d1, %q), got %+v", subjectNorm, pending)
 	}
 }

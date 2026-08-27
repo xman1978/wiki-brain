@@ -126,6 +126,7 @@ retrieval:
   source_affinity_local_sim_min:  0.8   # subject 归一化 Tier2 本地词集 Jaccard 相似度命中阈值（0-1）
   source_affinity_failure_max:    2     # 绑定命中但证据不充分的连续次数达到此值即删除绑定（熔断，无 Beta 置信度）
   source_affinity_idle_days:      90    # subject_norms/source_affinity 行超过该天数未命中由 Study 周期清理
+  source_affinity_pending_batch_max: 50 # pending_subject_affinity_match 每次 Study tick 最多处理的待匹配主题数（2026-08-27 改判）
 
 # Evidence 模块挖掘
 evidence:
@@ -176,6 +177,11 @@ wiki:
                                        # 独立核实（复用 retrieval.md 步骤 2c
                                        # 的编排），未中选不产生任何 synthesis
                                        # 事件——audit-only，没有自评分支。
+
+# Session 模块（对话历史）
+session:
+  retention_days: 30       # 历史会话保留天数，超过此天数的会话（含消息轮次）自动清理
+  cleanup_interval: "24h"  # 清理任务执行间隔
 
 # Study 模块
 study:

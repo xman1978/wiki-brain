@@ -2,6 +2,7 @@ package session
 
 import (
 	"database/sql"
+	"fmt"
 	"sync"
 
 	"github.com/google/uuid"
@@ -135,6 +136,50 @@ func (s *Store) InsertTurn(sessionID, userInput, action, clarifyMsg string) erro
 func (s *Store) UpdateTitle(sessionID, title string) error {
 	_, err := s.db.Exec(`UPDATE sessions SET title = ? WHERE session_id = ? AND title = ''`, title, sessionID)
 	return err
+}
+
+// DeleteOlderThan removes sessions (and their turns, via ON DELETE CASCADE)
+// whose updated_at is older than the given retention window, and evicts them
+// from the in-memory cache. Returns the number of sessions deleted.
+func (s *Store) DeleteOlderThan(days int) (int64, error) {
+	rows, err := s.db.Query(`SELECT session_id FROM sessions WHERE updated_at < datetime('now', ?)`, fmt.Sprintf("-%d days", days))
+	if err != nil {
+		return 0, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	rows.Close()
+
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	res, err := s.db.Exec(`DELETE FROM sessions WHERE updated_at < datetime('now', ?)`, fmt.Sprintf("-%d days", days))
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+
+	s.mu.Lock()
+	for _, id := range ids {
+		delete(s.cache, id)
+	}
+	s.mu.Unlock()
+
+	return n, nil
 }
 
 func (s *Store) UpdateWorking(sessionID, stepSummary, continuableAction string) error {
