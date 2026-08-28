@@ -11,6 +11,7 @@ var (
 	reMultiBlank    = regexp.MustCompile(`\n{3,}`)
 	reHTMLComment   = regexp.MustCompile(`<!--[\s\S]*?-->`)
 	reZeroWidth     = regexp.MustCompile(`[\x{200B}\x{200C}\x{200D}\x{FEFF}]`)
+	rePivotTextRow  = regexp.MustCompile(`^id=\S+\s*\|\s*表=.*\|\s*data=\{.*\}$`)
 )
 
 func NormalizeMarkdown(content string) string {
@@ -21,6 +22,7 @@ func NormalizeMarkdown(content string) string {
 	content = reHTMLComment.ReplaceAllString(content, "")
 
 	lines := strings.Split(content, "\n")
+	lines = stripPivotTextDuplicate(lines)
 	lines = normalizeHeadingLevels(lines)
 
 	content = strings.Join(lines, "\n")
@@ -28,6 +30,61 @@ func NormalizeMarkdown(content string) string {
 	content = strings.TrimSpace(content)
 
 	return content
+}
+
+// stripPivotTextDuplicate 去除 FileView 对 Excel 表格做 pivot 转换时输出的重复内容：
+// 一个 ```json 围栏块（结构化 schema+data）后紧跟一个 ```text 围栏块，后者是同一批
+// 数据按 `id=... | 表=... | data={...}` 逐行展开的冗余文本表示。只保留 json 块，避免
+// 同一条数据被 Unit 抽取两遍产生重复 KP。
+func stripPivotTextDuplicate(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	i := 0
+	for i < len(lines) {
+		if strings.TrimSpace(lines[i]) == "```json" {
+			jsonEnd := findFenceEnd(lines, i+1)
+			if jsonEnd != -1 {
+				j := jsonEnd + 1
+				for j < len(lines) && strings.TrimSpace(lines[j]) == "" {
+					j++
+				}
+				if j < len(lines) && strings.TrimSpace(lines[j]) == "```text" {
+					textEnd := findFenceEnd(lines, j+1)
+					if textEnd != -1 && isPivotTextBlock(lines[j+1:textEnd]) {
+						out = append(out, lines[i:jsonEnd+1]...)
+						i = textEnd + 1
+						continue
+					}
+				}
+			}
+		}
+		out = append(out, lines[i])
+		i++
+	}
+	return out
+}
+
+func findFenceEnd(lines []string, start int) int {
+	for k := start; k < len(lines); k++ {
+		if strings.TrimSpace(lines[k]) == "```" {
+			return k
+		}
+	}
+	return -1
+}
+
+func isPivotTextBlock(lines []string) bool {
+	found := false
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		if t == "" {
+			continue
+		}
+		if !rePivotTextRow.MatchString(t) {
+			return false
+		}
+		found = true
+	}
+	return found
 }
 
 func normalizeHeadingLevels(lines []string) []string {

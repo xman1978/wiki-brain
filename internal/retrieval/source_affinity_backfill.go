@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 )
 
 // subjectTagCandidate is one source_tag_match.md candidate item — an
@@ -16,6 +17,17 @@ import (
 type subjectTagCandidate struct {
 	CandidateID string `json:"candidate_id"`
 	Subject     string `json:"subject"`
+}
+
+// tagMatchOutlineNode is one source_tag_match.md outline context line — the
+// document's own outline tree (title + summary per node), given as extra
+// grounding so the match can find topic evidence a document-level
+// title+summary misses (e.g. a sub-section covering a tag the overall
+// summary never mentions).
+type tagMatchOutlineNode struct {
+	Level   int    `json:"level"`
+	Title   string `json:"title"`
+	Summary string `json:"summary,omitempty"`
 }
 
 // BackfillSourceAffinityForSource matches sourceID's title/summary against
@@ -74,6 +86,11 @@ func (s *Service) BackfillSourceAffinityForSource(ctx context.Context, sourceID 
 		summary = src.Summary.String
 	}
 
+	outlineText, err := s.buildTagMatchOutlineText(sourceID)
+	if err != nil {
+		return fmt.Errorf("retrieval: backfill outline lookup: %w", err)
+	}
+
 	callBatch := func(ctx context.Context, batch []subjectTagCandidate) ([]string, error) {
 		payload, err := json.Marshal(batch)
 		if err != nil {
@@ -82,6 +99,7 @@ func (s *Service) BackfillSourceAffinityForSource(ctx context.Context, sourceID 
 		resp, err := s.llmClient.CompleteJSON(ctx, "source_tag_match.md", map[string]string{
 			"title":      src.Title,
 			"summary":    summary,
+			"outline":    outlineText,
 			"candidates": string(payload),
 		}, "classification")
 		if err != nil {
@@ -111,4 +129,37 @@ func (s *Service) BackfillSourceAffinityForSource(ctx context.Context, sourceID 
 		}
 	}
 	return nil
+}
+
+// buildTagMatchOutlineText renders sourceID's outline tree as indented
+// "level title：summary" lines for source_tag_match.md's {{outline}}
+// placeholder — the same GetOutlinesBySourceIDs data outlineLLMMatch already
+// uses for query-time outline recall, just formatted as flat context text
+// instead of a JSON candidate list since here the whole outline is context,
+// not something the LLM selects from. Returns a placeholder string (not an
+// error) when the source has no outline yet.
+func (s *Service) buildTagMatchOutlineText(sourceID string) (string, error) {
+	outlines, err := s.store.GetOutlinesBySourceIDs([]string{sourceID})
+	if err != nil {
+		return "", err
+	}
+	if len(outlines) == 0 {
+		return "（无目录）", nil
+	}
+
+	var b strings.Builder
+	for _, o := range outlines {
+		summary := ""
+		if o.Summary.Valid {
+			summary = o.Summary.String
+		}
+		b.WriteString(strings.Repeat("  ", max(o.Level-1, 0)))
+		b.WriteString(o.Title)
+		if summary != "" {
+			b.WriteString("：")
+			b.WriteString(summary)
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n"), nil
 }

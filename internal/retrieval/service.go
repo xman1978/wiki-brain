@@ -898,11 +898,13 @@ func (s *Service) filterAndRecall(ctx context.Context, qc QueryContext, candidat
 	}
 
 	sourceIDs := make([]string, len(filteredSources))
+	titles := make([]string, len(filteredSources))
 	for i, src := range filteredSources {
 		sourceIDs[i] = src.SourceID
+		titles[i] = src.Title
 	}
 	slog.Info("retrieval: step3 source filter done", "sources", sourceIDs)
-	emit("activation", "done", fmt.Sprintf("%d 个来源", len(sourceIDs)), time.Since(activationStart).Milliseconds())
+	emit("activation", "done", fmt.Sprintf("已筛选 %d 个文档：%s", len(titles), strings.Join(titles, "、")), time.Since(activationStart).Milliseconds())
 
 	return s.recallFromSources(ctx, qc, filteredSources, emit, progress, lastResort)
 }

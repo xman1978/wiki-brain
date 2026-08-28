@@ -208,10 +208,10 @@ func TestBuildPromptVarsIncludesEvidenceAttribution(t *testing.T) {
 		nil,
 	)
 
-	vars := buildPromptVars(es)
+	vars, aliasToFactID := buildPromptVars(es)
 	got := vars["direct_evidence_list"]
 	for _, want := range []string{
-		"[f1]",
+		"[e1]",
 		"来源标题：应收账款管理制度",
 		"来源主题：应收账款管理制度",
 		"内容主题：销售回款绩效考核与提成规则",
@@ -221,6 +221,46 @@ func TestBuildPromptVarsIncludesEvidenceAttribution(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("direct evidence prompt missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "[f1]") {
+		t.Errorf("expected the raw fact_id to be replaced by an alias, still found [f1]:\n%s", got)
+	}
+	if aliasToFactID["e1"] != "f1" {
+		t.Errorf("expected alias e1 to map back to fact_id f1, got %q", aliasToFactID["e1"])
+	}
+}
+
+// TestResolveEvidenceAliases_RewritesContentAndCitations covers the failure
+// mode this alias indirection exists to fix (see buildPromptVars' doc
+// comment): a model transcribing a long fact_id verbatim into free-text
+// content can drop/mangle characters, producing a citation that never
+// matches any real evidence. With short aliases the model only ever has to
+// copy something like "e3", and resolveEvidenceAliases maps it back to the
+// real fact_id before anything downstream (storage, Trace, frontend
+// linkification) sees it.
+func TestResolveEvidenceAliases_RewritesContentAndCitations(t *testing.T) {
+	aliasToFactID := map[string]string{
+		"e1": "aaaa1111-0000-0000-0000-000000000001",
+		"e2": "bbbb2222-0000-0000-0000-000000000002",
+	}
+	content := "第一条规则 [e1]，第二条规则 [e2]，未知别名 [e9] 保持原样。"
+	citations := []string{"e1", "e2", "e9"}
+
+	resolvedContent, resolvedCitations := resolveEvidenceAliases(content, citations, aliasToFactID)
+
+	wantContent := "第一条规则 [aaaa1111-0000-0000-0000-000000000001]，第二条规则 [bbbb2222-0000-0000-0000-000000000002]，未知别名 [e9] 保持原样。"
+	if resolvedContent != wantContent {
+		t.Errorf("resolved content mismatch:\ngot:  %s\nwant: %s", resolvedContent, wantContent)
+	}
+
+	wantCitations := []string{"aaaa1111-0000-0000-0000-000000000001", "bbbb2222-0000-0000-0000-000000000002", "e9"}
+	if len(resolvedCitations) != len(wantCitations) {
+		t.Fatalf("expected %d resolved citations, got %d: %v", len(wantCitations), len(resolvedCitations), resolvedCitations)
+	}
+	for i, want := range wantCitations {
+		if resolvedCitations[i] != want {
+			t.Errorf("citation[%d] = %q, want %q", i, resolvedCitations[i], want)
 		}
 	}
 }

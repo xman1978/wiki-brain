@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -341,6 +343,51 @@ func (s *Store) GetSourceAffinitySources(domainIDs []string, subjectNorm string)
 	return out, rows.Err()
 }
 
+// SourceAffinityBinding is one source_affinity row, keyed from the source
+// side (as opposed to GetSourceAffinitySources, keyed from the subject
+// side) — the shape the source-detail "主题标签" management panel reads and
+// writes through (ListSourceAffinityBySourceID/DeleteSourceAffinityByID).
+type SourceAffinityBinding struct {
+	AffinityID  string `json:"affinity_id"`
+	DomainID    string `json:"domain_id"`
+	SubjectNorm string `json:"subject_norm"`
+}
+
+// ListSourceAffinityBySourceID returns every tag bound to sourceID, ordered
+// by subject_norm — the reverse direction of GetSourceAffinitySources, for
+// the source-detail page's manual tag management (list/add/edit/delete).
+func (s *Store) ListSourceAffinityBySourceID(sourceID string) ([]SourceAffinityBinding, error) {
+	if sourceID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`SELECT affinity_id, domain_id, subject_norm FROM source_affinity
+		WHERE source_id = ? ORDER BY subject_norm`, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval store: list source affinity by source id: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SourceAffinityBinding
+	for rows.Next() {
+		var b SourceAffinityBinding
+		if err := rows.Scan(&b.AffinityID, &b.DomainID, &b.SubjectNorm); err != nil {
+			return nil, fmt.Errorf("retrieval store: scan source affinity binding: %w", err)
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// DeleteSourceAffinityByID removes a single binding by its affinity_id — the
+// source-detail page's manual "delete tag" action. No-op (not an error) if
+// the id doesn't exist.
+func (s *Store) DeleteSourceAffinityByID(affinityID string) error {
+	if _, err := s.db.Exec(`DELETE FROM source_affinity WHERE affinity_id = ?`, affinityID); err != nil {
+		return fmt.Errorf("retrieval store: delete source affinity by id: %w", err)
+	}
+	return nil
+}
+
 // RecordSourceAffinitySuccess upserts (domainID, subjectNorm, sourceID) with
 // consecutive_failures reset to 0 — called both by the pending-subject
 // background matcher (ProcessPendingSubjectMatches) when a queued subject's
@@ -455,6 +502,62 @@ func (s *Service) CleanIdleSubjectNorms(days int) (int, error) {
 
 func (s *Service) CleanIdleSourceAffinity(days int) (int, error) {
 	return s.store.DeleteIdleSourceAffinity(days)
+}
+
+// ---- manual tag management (source-detail page "主题标签" panel) ----
+
+// ListSourceSubjectTags lists the tags currently bound to sourceID.
+func (s *Service) ListSourceSubjectTags(sourceID string) ([]SourceAffinityBinding, error) {
+	return s.store.ListSourceAffinityBySourceID(sourceID)
+}
+
+// ErrSourceHasNoDomain is returned by AddSourceSubjectTag when sourceID
+// isn't classified into any domain — subject_norms/source_affinity are
+// domain-scoped by design, so there is nowhere to normalize/bind a tag
+// under.
+var ErrSourceHasNoDomain = errors.New("retrieval: source has no domain, cannot add a subject tag")
+
+// AddSourceSubjectTag manually binds subjectText to sourceID — the
+// source-detail page's "add tag" action. Goes through the same
+// SubjectNormalizer tiers as every other write path (never lets a manually
+// typed tag bypass normalization and drift out of the canonical subject_norm
+// vocabulary), then the same RecordSourceAffinitySuccess every other write
+// path uses — a manually added tag is trusted exactly as much as one the
+// background matcher found.
+func (s *Service) AddSourceSubjectTag(ctx context.Context, sourceID, subjectText string) (*SourceAffinityBinding, error) {
+	if sourceID == "" || strings.TrimSpace(subjectText) == "" {
+		return nil, fmt.Errorf("retrieval: source id and subject text are required")
+	}
+	domainID, err := s.store.SourceDomainID(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval: add source subject tag domain lookup: %w", err)
+	}
+	if domainID == "" {
+		return nil, ErrSourceHasNoDomain
+	}
+	subjectNorm, err := s.subjectNormalizer.Normalize(ctx, []string{domainID}, subjectText)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval: add source subject tag normalize: %w", err)
+	}
+	if err := s.store.RecordSourceAffinitySuccess(domainID, subjectNorm, sourceID); err != nil {
+		return nil, fmt.Errorf("retrieval: add source subject tag record: %w", err)
+	}
+	bindings, err := s.store.ListSourceAffinityBySourceID(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval: add source subject tag lookup: %w", err)
+	}
+	for _, b := range bindings {
+		if b.DomainID == domainID && b.SubjectNorm == subjectNorm {
+			return &b, nil
+		}
+	}
+	return &SourceAffinityBinding{DomainID: domainID, SubjectNorm: subjectNorm}, nil
+}
+
+// RemoveSourceSubjectTag removes a single binding by affinity_id — the
+// source-detail page's "delete tag" action.
+func (s *Service) RemoveSourceSubjectTag(affinityID string) error {
+	return s.store.DeleteSourceAffinityByID(affinityID)
 }
 
 // ---- pending_subject_affinity_match store methods (migration 072) ----
@@ -683,6 +786,12 @@ func (s *Service) trySourceAffinityShortcut(ctx context.Context, qc QueryContext
 	}
 
 	slog.Info("retrieval: subject affinity shortcut hit, skipping domain/source filter", "subject_norm", subjectNorm, "source_ids", sourceIDs)
+	titles := make([]string, len(sources))
+	for i, src := range sources {
+		titles[i] = src.Title
+	}
+	emit("activation", "start", "", 0)
+	emit("activation", "done", fmt.Sprintf("已筛选 %d 个文档：%s（主题绑定直达）", len(titles), strings.Join(titles, "、")), 0)
 	es, err := s.recallFromSources(ctx, qc, sources, emit, progress, false)
 	if err == nil && !evidenceEmpty(es) {
 		return es, true

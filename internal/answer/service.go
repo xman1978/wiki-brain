@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -423,7 +424,7 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 			`{"phase":"generation","status":"start","path":"%s","model":"%s"}`, path, model)}
 		generationStart := time.Now()
 
-		vars := buildPromptVars(es)
+		vars, aliasToFactID := buildPromptVars(es)
 		llmCh, err := s.llmClient.CompleteStream(ctx, promptFile, vars, model)
 		if err != nil {
 			genMs := time.Since(generationStart).Milliseconds()
@@ -478,11 +479,12 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 					return
 				}
 
-				citations := validateCitations(output.Citations, es)
+				resolvedContent, resolvedCitations := resolveEvidenceAliases(output.Content, output.Citations, aliasToFactID)
+				citations := validateCitations(resolvedCitations, es)
 				finalResult = &AnswerResult{
 					AnswerID:    uuid.New().String(),
 					Question:    es.Question,
-					Content:     output.Content,
+					Content:     resolvedContent,
 					Citations:   citations,
 					HasAnswer:   true,
 					Path:        path,
@@ -496,7 +498,7 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 					"answer_id", finalResult.AnswerID,
 					"path", path,
 					"citation_count", len(citations),
-					"content_len", len(output.Content),
+					"content_len", len(resolvedContent),
 					"generation_ms", generationMs,
 					"total_ms", totalMs)
 				outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
@@ -570,7 +572,7 @@ func (s *Service) handleGenerate(ctx context.Context, es *retrieval.EvidenceSet,
 	slog.Debug("answer: generation start",
 		"path", path, "prompt_file", promptFile, "model", model, "question", es.Question)
 	genStart := time.Now()
-	vars := buildPromptVars(es)
+	vars, aliasToFactID := buildPromptVars(es)
 
 	raw, err := s.llmClient.CompleteJSON(ctx, promptFile, vars, model)
 	if err != nil {
@@ -590,17 +592,18 @@ func (s *Service) handleGenerate(ctx context.Context, es *retrieval.EvidenceSet,
 		return s.handleError(es)
 	}
 
-	citations := validateCitations(output.Citations, es)
+	resolvedContent, resolvedCitations := resolveEvidenceAliases(output.Content, output.Citations, aliasToFactID)
+	citations := validateCitations(resolvedCitations, es)
 	slog.Debug("answer: generation done",
 		"path", path,
 		"citation_count", len(citations),
-		"content_len", len(output.Content),
+		"content_len", len(resolvedContent),
 		"duration_ms", time.Since(genStart).Milliseconds())
 
 	r := &AnswerResult{
 		AnswerID:    uuid.New().String(),
 		Question:    es.Question,
-		Content:     output.Content,
+		Content:     resolvedContent,
 		Citations:   citations,
 		HasAnswer:   true,
 		Path:        path,
@@ -647,7 +650,18 @@ func truncateStr(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-func buildPromptVars(es *retrieval.EvidenceSet) map[string]string {
+// buildPromptVars formats es's evidence into the answer_deep.md/answer_short.md
+// prompt variables. Each evidence block is keyed by a short alias (e1, e2, …)
+// instead of its real fact_id: models are unreliable at transcribing long
+// random UUIDs verbatim into free-text content (character drops/typos become
+// more likely the further into the evidence list the citation is), producing
+// citations that don't match any real fact_id and render as a bare bracketed
+// string instead of a clickable evidence link. Aliases are short enough for
+// the model to copy exactly; resolveEvidenceAliases (called on the model's
+// output, before validateCitations) maps them back to real fact_ids so
+// nothing downstream (DB storage, Trace, frontend linkification) needs to
+// know aliases exist.
+func buildPromptVars(es *retrieval.EvidenceSet) (map[string]string, map[string]string) {
 	constraint := es.Constraint
 	if constraint == "" {
 		constraint = "（无）"
@@ -657,25 +671,34 @@ func buildPromptVars(es *retrieval.EvidenceSet) map[string]string {
 		"constraint": constraint,
 	}
 
+	aliasToFactID := make(map[string]string)
+	counter := 0
+	nextAlias := func(factID string) string {
+		counter++
+		alias := fmt.Sprintf("e%d", counter)
+		aliasToFactID[alias] = factID
+		return alias
+	}
+
 	var directLines []string
 	for _, e := range es.DirectEvidence {
-		directLines = append(directLines, formatPromptEvidence(e))
+		directLines = append(directLines, formatPromptEvidence(nextAlias(e.FactID), e))
 	}
 	vars["direct_evidence_list"] = strings.Join(directLines, "\n")
 
 	var supportLines []string
 	for _, e := range es.Supporting {
-		supportLines = append(supportLines, formatPromptEvidence(e))
+		supportLines = append(supportLines, formatPromptEvidence(nextAlias(e.FactID), e))
 	}
 	vars["supporting_evidence_list"] = strings.Join(supportLines, "\n")
 
-	return vars
+	return vars, aliasToFactID
 }
 
-func formatPromptEvidence(e retrieval.Evidence) string {
+func formatPromptEvidence(alias string, e retrieval.Evidence) string {
 	return fmt.Sprintf(
 		"[%s]\n来源标题：%s\n来源主题：%s\n内容主题：%s\n对象：%s\n范围：%s\n证据：%s",
-		e.FactID,
+		alias,
 		valueOrUnspecified(e.SourceTitle),
 		valueOrUnspecified(e.SourceTheme),
 		valueOrUnspecified(e.ContentTheme),
@@ -683,6 +706,42 @@ func formatPromptEvidence(e retrieval.Evidence) string {
 		valueOrUnspecified(e.Scope),
 		e.Content,
 	)
+}
+
+// evidenceAliasRe matches the short "eN" alias citation form models are now
+// asked to copy (see buildPromptVars) inside its literal bracket wrapper,
+// e.g. "[e3]" — the same bracket-wrapping convention the old raw-fact_id
+// citations used, so nothing about how content is stored or linkified
+// downstream needs to change.
+var evidenceAliasRe = regexp.MustCompile(`\[e(\d+)\]`)
+
+// resolveEvidenceAliases rewrites content's inline [eN] markers and the
+// citations array's alias entries back into real fact_ids, using the map
+// buildPromptVars produced for this same evidence set. An alias the model
+// invented (not in the map) is left untouched in content and dropped from
+// citations — validateCitations' hallucination filter still catches
+// anything that slips through as a citations-array entry.
+func resolveEvidenceAliases(content string, citations []string, aliasToFactID map[string]string) (string, []string) {
+	resolvedContent := evidenceAliasRe.ReplaceAllStringFunc(content, func(m string) string {
+		alias := m[1 : len(m)-1] // strip the surrounding [ ]
+		if factID, ok := aliasToFactID[alias]; ok {
+			return "[" + factID + "]"
+		}
+		return m
+	})
+
+	resolvedCitations := make([]string, 0, len(citations))
+	for _, c := range citations {
+		if factID, ok := aliasToFactID[c]; ok {
+			resolvedCitations = append(resolvedCitations, factID)
+		} else {
+			// Not a known alias — pass through unchanged (e.g. a model that
+			// reverts to citing a real fact_id directly) and let
+			// validateCitations' existing hallucination filter decide.
+			resolvedCitations = append(resolvedCitations, c)
+		}
+	}
+	return resolvedContent, resolvedCitations
 }
 
 func valueOrUnspecified(value string) string {

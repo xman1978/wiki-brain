@@ -1555,7 +1555,7 @@ function initProcessPanel(startTime) {
   PP_STATE = {};
   PP_STEPS.forEach(function(id) { PP_STATE[id] = { state:'wait', label:'', dur:null, detail:'' }; });
   PP_STATE.session.label = '会话处理';
-  PP_STATE.activation.label = '知识点激活';
+  PP_STATE.activation.label = '文档筛选';
   PP_STATE.outline.label = '目录结构检索';
   PP_STATE.fts.label = '全文检索';
   PP_STATE.screen.label = '证据筛选';
@@ -2690,6 +2690,13 @@ async function viewSource(sourceId, citedUnitId) {
           ' + (d.status==='deleted' ? '<button class="btn btn-sm" style="color:var(--green)" onclick="restoreSource(\'' + esc(d.source_id) + '\');closeSourceDetail()">恢复</button>' : '') + '\
           <button class="btn" onclick="closeSourceDetail()">关闭</button>\
         </div>\
+        ' + (d.status==='completed' ? '<h3 id="sourceTagsToggle" onclick="toggleSourceTagsDrawer(\'' + esc(d.source_id) + '\')" style="cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between;margin-top:14px;font-size:13px;color:var(--text-1);text-transform:uppercase;letter-spacing:.05em"><span>主题标签</span><span id="sourceTagsCaret">&#9656;</span></h3><div id="sourceTagsDrawer" class="hidden" style="margin-top:8px">\
+          <div id="sourceTagsList" style="font-size:12px;color:var(--text-3)">加载中...</div>\
+          <div style="display:flex;gap:6px;margin-top:8px">\
+            <input id="sourceTagInput" placeholder="新标签主题" style="flex:1;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">\
+            <button class="btn btn-sm btn-primary" onclick="addSourceTag(\'' + esc(d.source_id) + '\')">添加</button>\
+          </div>\
+        </div>' : '') + '\
         ' + (d.status==='completed' ? '<h3 style="margin-top:14px;font-size:13px;color:var(--text-1);text-transform:uppercase;letter-spacing:.05em">知识单元</h3><div id="sourceKUList" style="margin-top:8px"><div style="font-size:12px;color:var(--text-3)">加载中...</div></div>' : '') + '\
         ' + (d.status==='completed' ? '<div id="sourceCoverageResult"></div>' : '') + '\
         ' + (d.status==='completed' ? '<h3 style="margin-top:14px;font-size:13px;color:var(--text-1);text-transform:uppercase;letter-spacing:.05em">历史版本</h3><div id="sourceVersionsList" style="margin-top:8px"><div style="font-size:12px;color:var(--text-3)">加载中...</div></div>' : '') + '';
@@ -2698,6 +2705,73 @@ async function viewSource(sourceId, citedUnitId) {
   } catch(e) { content.innerHTML = '<h2>来源详情</h2><div style="color:var(--red)">' + esc(e.message) + '</div><div class="modal-actions"><button class="btn" onclick="closeSourceDetail()">关闭</button></div>'; }
 }
 function closeSourceDetail() { document.getElementById('sourceDetailModal').classList.add('hidden'); }
+
+// 主题标签管理面板（source_affinity 的人工增/删/改入口，2026-08-27 会话讨论）：
+// 默认折叠，点击标题展开时才首次拉取列表，避免打开详情弹窗就多打一次请求。
+function toggleSourceTagsDrawer(sourceId) {
+  var drawer = document.getElementById('sourceTagsDrawer');
+  var caret = document.getElementById('sourceTagsCaret');
+  if (!drawer) return;
+  var opening = drawer.classList.contains('hidden');
+  drawer.classList.toggle('hidden');
+  if (caret) caret.innerHTML = opening ? '&#9662;' : '&#9656;';
+  if (opening && !drawer.dataset.loaded) {
+    drawer.dataset.loaded = '1';
+    loadSourceTags(sourceId);
+  }
+}
+
+async function loadSourceTags(sourceId) {
+  var el = document.getElementById('sourceTagsList');
+  if (!el) return;
+  el.innerHTML = '加载中...';
+  var r = await api('GET', '/sources/' + sourceId + '/subject-tags');
+  if (!r.ok) { el.innerHTML = '<span style="color:var(--red)">加载失败</span>'; return; }
+  var tags = Array.isArray(r.data) ? r.data : [];
+  if (!tags.length) { el.innerHTML = '暂无主题标签'; return; }
+  el.innerHTML = tags.map(function(t) {
+    return '<div class="tag-row" id="tagRow_' + esc(t.affinity_id) + '" style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border-lt);font-size:12px">\
+      <span style="flex:1">' + esc(t.subject_norm) + '</span>\
+      <button class="btn btn-sm" onclick="editSourceTag(\'' + esc(sourceId) + '\',\'' + esc(t.affinity_id) + '\',\'' + esc(t.subject_norm) + '\')">编辑</button>\
+      <button class="btn btn-sm" style="color:var(--red)" onclick="removeSourceTag(\'' + esc(sourceId) + '\',\'' + esc(t.affinity_id) + '\')">删除</button>\
+    </div>';
+  }).join('');
+}
+
+async function addSourceTag(sourceId) {
+  var input = document.getElementById('sourceTagInput');
+  var subject = input ? input.value.trim() : '';
+  if (!subject) return;
+  var r = await api('POST', '/sources/' + sourceId + '/subject-tags', { subject: subject });
+  if (r.ok) { input.value = ''; loadSourceTags(sourceId); }
+  else { showAlert('添加失败：' + ((r.data && r.data.error) || r.status)); }
+}
+
+async function removeSourceTag(sourceId, affinityId) {
+  if (!(await showConfirm('删除这个主题标签？'))) return;
+  var r = await api('DELETE', '/sources/' + sourceId + '/subject-tags/' + affinityId);
+  if (r.ok) { loadSourceTags(sourceId); }
+  else { showAlert('删除失败：' + ((r.data && r.data.error) || r.status)); }
+}
+
+function editSourceTag(sourceId, affinityId, oldSubject) {
+  var row = document.getElementById('tagRow_' + affinityId);
+  if (!row) return;
+  row.innerHTML = '<input id="tagEditInput_' + esc(affinityId) + '" value="' + esc(oldSubject) + '" style="flex:1;padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">\
+    <button class="btn btn-sm btn-primary" onclick="saveSourceTagEdit(\'' + esc(sourceId) + '\',\'' + esc(affinityId) + '\',\'' + esc(oldSubject) + '\')">保存</button>\
+    <button class="btn btn-sm" onclick="loadSourceTags(\'' + esc(sourceId) + '\')">取消</button>';
+}
+
+async function saveSourceTagEdit(sourceId, affinityId, oldSubject) {
+  var input = document.getElementById('tagEditInput_' + affinityId);
+  var newSubject = input ? input.value.trim() : '';
+  if (!newSubject || newSubject === oldSubject) { loadSourceTags(sourceId); return; }
+  var delR = await api('DELETE', '/sources/' + sourceId + '/subject-tags/' + affinityId);
+  if (!delR.ok) { showAlert('修改失败：' + ((delR.data && delR.data.error) || delR.status)); return; }
+  var addR = await api('POST', '/sources/' + sourceId + '/subject-tags', { subject: newSubject });
+  if (!addR.ok) { showAlert('修改失败：' + ((addR.data && addR.data.error) || addR.status)); }
+  loadSourceTags(sourceId);
+}
 
 // 来源摘要人工修正：source_filter 粗筛只看 title/summary，摘要遗漏产品名/角色会导致
 // 该来源整体在候选池阶段被漏掉（比 KU 语义纠偏更早一层），故单独给摘要提供编辑入口。
