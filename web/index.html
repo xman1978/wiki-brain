@@ -2626,9 +2626,11 @@ async function loadSources() {
     var domainSel = document.getElementById('sourceDomainFilter');
     if (domainSel && body.domains) {
       var curVal = domainSel.value;
-      domainSel.innerHTML = '<option value="">全部领域</option>' + body.domains.map(function(d) {
-        return '<option value="' + esc(d.domain_id) + '"' + (d.domain_id === curVal ? ' selected' : '') + '>' + esc(d.name) + '</option>';
-      }).join('');
+      domainSel.innerHTML = '<option value="">全部领域</option>' +
+        '<option value="__unclassified__"' + (curVal === '__unclassified__' ? ' selected' : '') + '>未分类</option>' +
+        body.domains.map(function(d) {
+          return '<option value="' + esc(d.domain_id) + '"' + (d.domain_id === curVal ? ' selected' : '') + '>' + esc(d.name) + '</option>';
+        }).join('');
     }
     // update pager
     var pager = document.getElementById('sourcesPager');

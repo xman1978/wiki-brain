@@ -23,6 +23,7 @@ type Config struct {
 	KPN       KPNConfig       `yaml:"kpn"`
 	Wiki      WikiConfig      `yaml:"wiki"`
 	Session   SessionConfig   `yaml:"session"`
+	Mcp       McpConfig       `yaml:"mcp"`
 
 	// BootstrapLLM is populated from an optional llm: section in config.yml
 	// only for one-time import into the database at startup. Not used at runtime.
@@ -97,6 +98,7 @@ type QueueConfig struct {
 }
 
 type FileViewConfig struct {
+	Mode           string `yaml:"mode"` // "remote"（默认）| "local"
 	BaseURL        string `yaml:"base_url"`
 	PollIntervalMs int    `yaml:"poll_interval_ms"`
 	MaxPollSeconds int    `yaml:"max_poll_seconds"`
@@ -317,6 +319,13 @@ type SessionConfig struct {
 	RetentionDays int `yaml:"retention_days"`
 	// CleanupInterval: 清理任务的执行间隔，Go duration 字符串（如 "24h"）。
 	CleanupInterval string `yaml:"cleanup_interval"`
+}
+
+// McpConfig 见 docs/impl/v1/mcp.md。import_file 工具提交后同步有限等待，
+// 超过此时长仍未 completed/failed 就直接返回当前状态，不阻塞调用方。
+type McpConfig struct {
+	ImportWaitTimeoutSeconds int `yaml:"import_wait_timeout_seconds"`
+	ImportPollIntervalMs     int `yaml:"import_poll_interval_ms"`
 }
 
 type StudyConfig struct {

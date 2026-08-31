@@ -1320,6 +1320,79 @@ func (s *Service) GetHTMLPreview(sourceID string) (string, error) {
 	return "<pre>" + escaped + "</pre>", nil
 }
 
+// PathPrefix returns the server's configured path prefix (see
+// ServerConfig.PathPrefix), so preview HTML can reference static assets
+// (e.g. the vendored file-viewer widget) at the same mount point as the
+// rest of the web UI.
+func (s *Service) PathPrefix() string {
+	if s.cfg == nil {
+		return ""
+	}
+	return strings.TrimRight(s.cfg.Server.PathPrefix, "/")
+}
+
+// TextPreviewFormat reports how a source should be previewed when it's
+// plain Markdown or plain text: "markdown" (render client-side via the
+// app's existing marked.js), "text" (verbatim escaped <pre>), or "" (not
+// applicable — use the normal GetHTMLPreview/NativePreviewSupported paths
+// instead). Only applies in local mode: LocalConvertClient.ConvertToHTML
+// already round-trips .md/.txt through goldmark (bare CommonMark, no GFM
+// tables, and — for .txt specifically — collapses single line breaks since
+// plain text has no Markdown blank-line paragraph markers), which is worse
+// than either of these two dedicated renderings; remote mode's
+// Aspose-backed HTML preview is unaffected by this and is left alone, same
+// reasoning as NativePreviewSupported.
+func (s *Service) TextPreviewFormat(sourceID string) string {
+	if s.cfg == nil || s.cfg.FileView.Mode != "local" {
+		return ""
+	}
+	src, err := s.store.GetByID(sourceID)
+	if err != nil {
+		return ""
+	}
+	switch strings.ToLower(filepath.Ext(src.FileName)) {
+	case ".md", ".markdown":
+		return "markdown"
+	case ".txt":
+		return "text"
+	default:
+		return ""
+	}
+}
+
+// GetOriginalPath resolves the current original file for a source, for
+// direct browser rendering (GET /sources/:id/original).
+func (s *Service) GetOriginalPath(sourceID string) (fullPath, fileName string, err error) {
+	src, err := s.store.GetByID(sourceID)
+	if err != nil {
+		return "", "", err
+	}
+	return filepath.Join(s.baseDir, src.OriginalPath), src.FileName, nil
+}
+
+// NativePreviewSupported reports whether the current fileview mode and the
+// source's file extension are eligible for client-side rendering via the
+// vendored file-viewer widget instead of the FileView/local-convert HTML
+// preview. Local mode's ConvertToHTML only renders a crude Markdown
+// round-trip (see docs/impl/v1/local-file-convert.md 第 8 节); remote mode's
+// Aspose-generated HTML already preserves layout, so this only applies to
+// local mode.
+func (s *Service) NativePreviewSupported(sourceID string) bool {
+	if s.cfg == nil || s.cfg.FileView.Mode != "local" {
+		return false
+	}
+	src, err := s.store.GetByID(sourceID)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(src.FileName)) {
+	case ".docx", ".doc", ".pptx", ".xlsx", ".xls", ".pdf":
+		return true
+	default:
+		return false
+	}
+}
+
 // GetVersionOriginalPath resolves an archived version's original file for
 // download (GET /sources/:id/versions/:version/download).
 func (s *Service) GetVersionOriginalPath(sourceID string, version int) (fullPath, fileName string, err error) {

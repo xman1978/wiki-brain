@@ -70,6 +70,7 @@ queue:
 
 # FileView 服务（格式转换）
 fileview:
+  mode: "remote"   # remote | local，默认 remote，与现有行为完全一致
 #  base_url:          "http://192.168.0.169:9000"
   base_url:          "http://127.0.0.1:8000"
   poll_interval_ms:  1500
@@ -182,6 +183,11 @@ wiki:
 session:
   retention_days: 30       # 历史会话保留天数，超过此天数的会话（含消息轮次）自动清理
   cleanup_interval: "24h"  # 清理任务执行间隔
+
+# MCP 模块（对接 AI Agent 平台，见 docs/impl/v1/mcp.md）
+mcp:
+  import_wait_timeout_seconds: 20   # import_file 同步等待处理完成的上限
+  import_poll_interval_ms:     500  # 等待期间轮询 source 状态的间隔
 
 # Study 模块
 study:

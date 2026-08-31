@@ -16,6 +16,10 @@ var (
 	ErrOutlineHasUnits    = errors.New("outline node has knowledge units, cannot delete")
 )
 
+// UnclassifiedDomainFilter is the sentinel domain_id query value that selects
+// sources with no domain assigned (domain_id IS NULL), used by List/Count.
+const UnclassifiedDomainFilter = "__unclassified__"
+
 type Source struct {
 	SourceID            string
 	Title               string
@@ -202,7 +206,9 @@ func (s *Store) List(status, domainID, q string, limit, offset int) ([]Source, e
 		where = append(where, "status = ?")
 		args = append(args, status)
 	}
-	if domainID != "" {
+	if domainID == UnclassifiedDomainFilter {
+		where = append(where, "domain_id IS NULL")
+	} else if domainID != "" {
 		where = append(where, "domain_id = ?")
 		args = append(args, domainID)
 	}
@@ -498,7 +504,9 @@ func (s *Store) Count(status, domainID, q string) (int, error) {
 		where = append(where, "status = ?")
 		args = append(args, status)
 	}
-	if domainID != "" {
+	if domainID == UnclassifiedDomainFilter {
+		where = append(where, "domain_id IS NULL")
+	} else if domainID != "" {
 		where = append(where, "domain_id = ?")
 		args = append(args, domainID)
 	}

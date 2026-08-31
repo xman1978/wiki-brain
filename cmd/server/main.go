@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -26,9 +27,11 @@ import (
 	"github.com/jxman78/wiki-brain/internal/foundation/progress"
 	"github.com/jxman78/wiki-brain/internal/foundation/queue"
 	"github.com/jxman78/wiki-brain/internal/llmconfig"
+	"github.com/jxman78/wiki-brain/internal/mcp"
 	"github.com/jxman78/wiki-brain/internal/retrieval"
 	"github.com/jxman78/wiki-brain/internal/session"
 	"github.com/jxman78/wiki-brain/internal/source"
+	"github.com/jxman78/wiki-brain/internal/source/localconvert"
 	"github.com/jxman78/wiki-brain/internal/study"
 	"github.com/jxman78/wiki-brain/internal/trace"
 	"github.com/jxman78/wiki-brain/internal/unit"
@@ -140,12 +143,20 @@ func main() {
 	}
 	var llmClient llm.LLMClient = llmRouter
 
-	// FileView client
-	fvClient := source.NewFileViewClient(
-		cfg.FileView.BaseURL,
-		cfg.FileView.PollIntervalMs,
-		cfg.FileView.MaxPollSeconds,
-	)
+	// FileView client — mode: "local" 使用内置的纯 Go 转换降级方案
+	// （docs/impl/v1/local-file-convert.md），其余取值（含缺省/空/非法值）
+	// 一律按 "remote" 处理，保持向后兼容。
+	var fvClient source.FileViewClient
+	switch cfg.FileView.Mode {
+	case "local":
+		fvClient = localconvert.NewLocalConvertClient()
+	default:
+		fvClient = source.NewFileViewClient(
+			cfg.FileView.BaseURL,
+			cfg.FileView.PollIntervalMs,
+			cfg.FileView.MaxPollSeconds,
+		)
+	}
 
 	// Progress broadcaster
 	broadcaster := progress.NewBroadcaster()
@@ -372,6 +383,15 @@ func main() {
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		w.Write(data)
 	})
+	// Vendored file-viewer widget (DOCX/PPTX/XLSX/PDF client-side rendering
+	// for fileview.mode=local previews, see docs/impl/v1/local-file-convert.md
+	// 第 8 节) — static files, served straight from the embedded FS.
+	vendorFS, err := fs.Sub(web.FS, "vendor/file-viewer")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "挂载 vendor/file-viewer 失败: %v\n", err)
+		os.Exit(1)
+	}
+	mux.Handle("GET "+prefix+"/vendor/file-viewer/", http.StripPrefix(prefix+"/vendor/file-viewer/", http.FileServer(http.FS(vendorFS))))
 
 	// API routes — if prefix is set, wrap mux with StripPrefix
 	apiMux := mux
@@ -394,6 +414,22 @@ func main() {
 	entry.NewHandler(entrySvc).RegisterRoutes(apiMux)
 	domain.NewHandler(domainSvc).RegisterRoutes(apiMux)
 	llmconfig.NewHandler(llmConfigSvc).RegisterRoutes(apiMux)
+
+	// MCP（对接 AI Agent 平台，docs/impl/v1/mcp.md）：与 REST API 共用同一个
+	// service 图与数据库连接，走 Streamable HTTP，不是独立 stdio 子进程。
+	mcpServer := mcp.NewServer(sourceSvc, sourceStore, unitStore, retrievalSvc, mcp.Config{
+		ImportWaitTimeout:  time.Duration(cfg.Mcp.ImportWaitTimeoutSeconds) * time.Second,
+		ImportPollInterval: time.Duration(cfg.Mcp.ImportPollIntervalMs) * time.Millisecond,
+	})
+	// 显式按方法注册（而不是裸路径 "/mcp"）：apiMux 在未设置 server.path_prefix
+	// 时与 mux 是同一个 *http.ServeMux，裸路径模式匹配所有方法，会与已注册的
+	// "GET /"（Web UI，带斜杠的子树通配）产生 Go 1.22+ ServeMux 无法判定优先级
+	// 的冲突而在启动时 panic。Streamable HTTP 需要 POST（客户端消息）、GET
+	// （服务端 SSE 流）、DELETE（会话终止）三种方法。
+	mcpHandler := mcpServer.Handler()
+	apiMux.Handle("POST /mcp", mcpHandler)
+	apiMux.Handle("GET /mcp", mcpHandler)
+	apiMux.Handle("DELETE /mcp", mcpHandler)
 
 	var rootHandler http.Handler = mux
 	if prefix != "" {

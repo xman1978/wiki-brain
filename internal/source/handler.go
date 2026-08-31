@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -38,6 +41,7 @@ mux.HandleFunc("PATCH /sources/{id}/summary", h.setSourceSummary)
 	mux.HandleFunc("DELETE /sources/{id}/outlines/{outline_id}", h.deleteOutlineNode)
 	mux.HandleFunc("GET /sources/{id}/markdown", h.getMarkdown)
 	mux.HandleFunc("GET /sources/{id}/preview", h.getPreview)
+	mux.HandleFunc("GET /sources/{id}/original", h.getOriginal)
 	mux.HandleFunc("GET /sources/{id}/progress", h.streamProgress)
 	mux.HandleFunc("GET /sources/{id}/versions", h.listSourceVersions)
 	mux.HandleFunc("GET /sources/{id}/versions/{version}/download", h.downloadSourceVersion)
@@ -620,6 +624,26 @@ func (h *Handler) getPreview(w http.ResponseWriter, r *http.Request) {
 		escaped := strings.ReplaceAll(md, "<", "&lt;")
 		escaped = strings.ReplaceAll(escaped, ">", "&gt;")
 		html = "<pre>" + escaped + "</pre>"
+	} else if h.svc.NativePreviewSupported(id) {
+		_, fileName, ferr := h.svc.GetOriginalPath(id)
+		if ferr != nil {
+			foundation.WriteError(w, http.StatusNotFound, "source not found")
+			return
+		}
+		html = renderNativePreviewPage(h.svc.PathPrefix(), id, fileName)
+	} else if kind := h.svc.TextPreviewFormat(id); kind != "" {
+		md, merr := h.svc.GetMarkdown(id)
+		if merr != nil {
+			foundation.WriteError(w, http.StatusNotFound, "source not found")
+			return
+		}
+		if kind == "markdown" {
+			html = renderMarkdownPreviewPage(h.svc.PathPrefix(), md)
+		} else {
+			escaped := strings.ReplaceAll(md, "<", "&lt;")
+			escaped = strings.ReplaceAll(escaped, ">", "&gt;")
+			html = renderTextPreviewPage(escaped)
+		}
 	} else {
 		html, err = h.svc.GetHTMLPreview(id)
 		if err != nil {
@@ -629,6 +653,117 @@ func (h *Handler) getPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	io.WriteString(w, html)
+}
+
+// renderNativePreviewPage builds a standalone page that renders the original
+// file client-side via the vendored file-viewer widget, instead of the
+// crude Markdown-round-trip HTML that local-convert mode produces (see
+// docs/impl/v1/local-file-convert.md 第 8 节). Only used when
+// Service.NativePreviewSupported returns true (fileview.mode=local and a
+// DOCX/DOC/PPTX/XLSX/XLS/PDF extension).
+func renderNativePreviewPage(prefix, sourceID, fileName string) string {
+	escapedName := html.EscapeString(fileName)
+	return `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<script src="` + prefix + `/vendor/file-viewer/flyfish-file-viewer-web-full.iife.js"></script>
+<style>html,body{margin:0;height:100%}</style>
+</head><body>
+<flyfish-file-viewer src="` + prefix + `/sources/` + sourceID + `/original" filename="` + escapedName + `" locale="zh-CN" style="display:block;width:100%;height:100vh"></flyfish-file-viewer>
+</body></html>`
+}
+
+// renderMarkdownPreviewPage renders a .md/.markdown source client-side with
+// the app's existing marked.js (already embedded/served for the main UI —
+// see web/index.html's own renderMarkdown()), instead of local mode's
+// goldmark-based ConvertToHTML round-trip (bare CommonMark: no GFM tables,
+// strikethrough, etc.). The markdown text is JSON-encoded before embedding;
+// encoding/json escapes '<', '>' and '&' by default, which is what keeps an
+// embedded "</script>" (or any HTML) in the source content from breaking
+// out of the inline <script> block.
+func renderMarkdownPreviewPage(prefix, markdown string) string {
+	encoded, err := json.Marshal(markdown)
+	if err != nil {
+		encoded = []byte(`""`)
+	}
+	return `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<script src="` + prefix + `/marked.min.js"></script>
+<style>
+body{margin:0;padding:2rem;max-width:860px;margin:0 auto;font-family:system-ui,-apple-system,sans-serif;line-height:1.75;font-size:15px;color:#1e293b;background:#fff;}
+h1,h2,h3,h4{margin:0.8em 0 0.4em;font-weight:600;}
+h1{font-size:1.4em;border-bottom:1px solid #e2e8f0;padding-bottom:0.25em;}
+h2{font-size:1.2em;}h3{font-size:1.05em;}
+p{margin:0.6em 0;}ul,ol{margin:0.5em 0;padding-left:1.6em;}
+blockquote{margin:0.6em 0;padding-left:1em;border-left:4px solid #cbd5e1;color:#475569;}
+code{font-family:ui-monospace,monospace;font-size:0.9em;background:#f1f5f9;padding:0.15em 0.35em;border-radius:4px;}
+pre{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:0.85rem 1rem;overflow-x:auto;}
+pre code{background:none;padding:0;}
+table{border-collapse:collapse;width:100%;margin:0.75em 0;font-size:0.9em;}
+th,td{border:1px solid #e2e8f0;padding:0.4em 0.65em;}th{background:#f8fafc;}
+img{max-width:100%;height:auto;}
+</style>
+</head><body id="content"></body>
+<script>
+var src = ` + string(encoded) + `;
+document.getElementById('content').innerHTML = marked.parse(src);
+</script>
+</html>`
+}
+
+// renderTextPreviewPage renders a .txt source verbatim in a <pre> block —
+// content is expected to already be HTML-escaped by the caller. Mirrors
+// what the real FileView service's TextConverter does (escape + <pre>,
+// preserving exact line breaks/whitespace), which local mode's
+// goldmark-as-Markdown round-trip does not: plain text has no blank-line
+// paragraph markers, so goldmark collapses single line breaks.
+func renderTextPreviewPage(escapedContent string) string {
+	return `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+body{margin:0;padding:1.5rem;font-family:ui-monospace,monospace;font-size:13px;line-height:1.6;color:#1e293b;background:#fff;}
+pre{white-space:pre-wrap;word-break:break-word;margin:0;}
+</style>
+</head><body><pre>` + escapedContent + `</pre></body></html>`
+}
+
+// officeContentTypes covers the extensions NativePreviewSupported allows;
+// mime.TypeByExtension's fallback table doesn't reliably include the
+// Office Open XML types across platforms, so these are pinned explicitly.
+var officeContentTypes = map[string]string{
+	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	".doc":  "application/msword",
+	".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	".xls":  "application/vnd.ms-excel",
+	".pdf":  "application/pdf",
+}
+
+func originalContentType(ext string) string {
+	if ct, ok := officeContentTypes[strings.ToLower(ext)]; ok {
+		return ct
+	}
+	if ct := mime.TypeByExtension(ext); ct != "" {
+		return ct
+	}
+	return "application/octet-stream"
+}
+
+func (h *Handler) getOriginal(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	fullPath, fileName, err := h.svc.GetOriginalPath(id)
+	if err != nil {
+		foundation.WriteError(w, http.StatusNotFound, "source not found")
+		return
+	}
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		foundation.WriteError(w, http.StatusNotFound, "original file not found")
+		return
+	}
+	contentType := originalContentType(filepath.Ext(fileName))
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", fileName))
+	w.Write(data)
 }
 
 // listSourceVersions implements GET /sources/:id/versions: the historical
