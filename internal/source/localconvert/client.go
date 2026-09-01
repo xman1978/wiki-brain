@@ -8,7 +8,20 @@ import (
 	"strings"
 
 	"github.com/yuin/goldmark"
+
+	"github.com/jxman78/wiki-brain/internal/foundation/llm"
 )
+
+// OCRSettings gates the scanned-PDF/image-file OCR fallback (§10): local
+// mode already covers born-digital PDF/DOCX/XLSX/PPTX; this additionally
+// enables OCR via the multimodal model bound to the "doc_convert" LLM
+// purpose for scanned PDF pages and standalone image files. MaxPages<=0
+// falls back to 50. Backed by sysconfig.FileViewSettings.OCREnabled/
+// OCRMaxPages, editable from the web page (see docs/impl/v1/local-file-convert.md).
+type OCRSettings struct {
+	Enabled  bool
+	MaxPages int
+}
 
 // LocalConvertClient is a pure-Go, in-process fallback for the remote
 // FileView conversion service (docs/impl/v1/local-file-convert.md). It
@@ -21,10 +34,18 @@ import (
 // md/markdown/txt (text.go, charset-normalize passthrough) are implemented.
 // Legacy .xls/.doc/.ppt (binary OLE2 formats) and .ofd return an explicit
 // unsupported error here — never a silent empty conversion.
-type LocalConvertClient struct{}
+//
+// Scanned PDF pages and standalone image files (.jpg/.png/.bmp/.tif) go
+// through OCR via llmClient/ocrCfg instead (docs/impl/v1/local-file-convert.md
+// §10); both fields are optional, in which case scanned PDFs surface
+// pdfconv.ErrNoExtractableText as before and image files are unsupported.
+type LocalConvertClient struct {
+	llmClient llm.LLMClient
+	ocrCfg    OCRSettings
+}
 
-func NewLocalConvertClient() *LocalConvertClient {
-	return &LocalConvertClient{}
+func NewLocalConvertClient(llmClient llm.LLMClient, ocrCfg OCRSettings) *LocalConvertClient {
+	return &LocalConvertClient{llmClient: llmClient, ocrCfg: ocrCfg}
 }
 
 func (c *LocalConvertClient) ConvertToMarkdown(ctx context.Context, srcPath string) ([]byte, error) {
@@ -38,7 +59,7 @@ func (c *LocalConvertClient) ConvertToMarkdown(ctx context.Context, srcPath stri
 	case ".doc":
 		return nil, fmt.Errorf("localconvert: unsupported format .doc (legacy binary Word is not covered, only .docx OOXML)")
 	case ".pdf":
-		return ConvertPDFToMarkdown(ctx, srcPath)
+		return ConvertPDFToMarkdown(ctx, srcPath, c.llmClient, c.ocrCfg)
 	case ".ofd":
 		return nil, fmt.Errorf("localconvert: unsupported format .ofd (OFD is not a PDF variant and is not covered)")
 	case ".pptx":
@@ -47,8 +68,13 @@ func (c *LocalConvertClient) ConvertToMarkdown(ctx context.Context, srcPath stri
 		return nil, fmt.Errorf("localconvert: unsupported format .ppt (legacy binary PowerPoint is not covered, only .pptx OOXML)")
 	case ".md", ".markdown", ".txt":
 		return ConvertTextToMarkdown(srcPath)
+	case ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff":
+		if !c.ocrCfg.Enabled || c.llmClient == nil {
+			return nil, fmt.Errorf("localconvert: image conversion requires OCR to be enabled (系统设置 → 文件转换服务) and a doc_convert model to be configured")
+		}
+		return ConvertImageToMarkdown(ctx, c.llmClient, srcPath)
 	default:
-		return nil, fmt.Errorf("localconvert: unsupported format %s (only .xlsx, .docx, .pdf and .pptx are implemented)", filepath.Ext(srcPath))
+		return nil, fmt.Errorf("localconvert: unsupported format %s (only .xlsx, .docx, .pdf, .pptx and image files are implemented)", filepath.Ext(srcPath))
 	}
 }
 

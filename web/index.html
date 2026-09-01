@@ -80,6 +80,10 @@
     .sidebar-divider { height:1px; background:var(--border-lt); margin:8px 10px; width:calc(100% - 20px); }
     .sidebar.expanded .sidebar-divider { margin:8px 16px; width:auto; }
 
+    /* 帮助入口固定在侧边栏最底部（不随历史记录列表滚动） */
+    .sidebar-help-wrap { margin-top:auto; width:100%; padding:6px 0; border-top:1px solid var(--border-lt); display:flex; flex-direction:column; align-items:center; }
+    .sidebar.expanded .sidebar-help-wrap { padding:6px 10px; align-items:stretch; }
+
     .sidebar-section-label { font-size:12px; color:var(--text-3); padding:8px 0 4px; font-weight:500; display:none; }
     .sidebar.expanded .sidebar-section-label { display:block; padding:8px 22px 4px; }
 
@@ -368,6 +372,11 @@
     .panel-empty { text-align:center; padding:40px 16px; color:var(--text-3); font-size:14px; }
     .panel-section { margin-bottom:18px; }
     .panel-section h3 { font-size:11px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }
+    #llmDrawer .sys-group { position:relative; border:1px solid var(--border-lt); border-radius:var(--radius-sm); padding:24px 16px 14px; margin-bottom:16px; }
+    #llmDrawer .sys-group .panel-section:last-child { margin-bottom:0; }
+    #llmDrawer .sys-group-label { position:absolute; top:0; right:16px; transform:translateY(-50%); background:var(--bg); padding:0 6px; font-size:12px; font-weight:600; color:#000; }
+    #llmDrawer .sys-row { display:flex; gap:12px; }
+    #llmDrawer .sys-row > label { flex:1; min-width:0; }
     .flow-step { display:flex; align-items:flex-start; gap:8px; padding:5px 0; font-size:13px; }
     .flow-arrow { color:var(--text-3); }
     .flow-label { color:var(--text-3); font-size:12px; min-width:60px; }
@@ -754,12 +763,16 @@
     <button class="nav-item" onclick="openStudyView()" title="学习报告"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg></span><span class="nav-label">学习报告</span></button>
     <button class="nav-item" onclick="openActivationView()" title="激活链接"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M13 2 4.5 13H11l-1 9 9.5-12H13l0-8Z"/></svg></span><span class="nav-label">激活链接</span><span class="nav-badge hidden" id="activationPendingBadge">0</span></button>
     <button class="nav-item" onclick="openConceptView()" title="知识领域"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg></span><span class="nav-label">知识领域</span><span class="nav-badge hidden" id="conceptPendingBadge">0</span><span class="nav-badge hidden" id="wikiPendingBadge">0</span></button>
-    <button class="nav-item" onclick="openLlmView()" title="模型设置"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg></span><span class="nav-label">模型设置</span></button>
+    <button class="nav-item" onclick="openLlmView()" title="系统设置"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg></span><span class="nav-label">系统设置</span></button>
   </div>
 
   <div class="sidebar-divider"></div>
   <div class="sidebar-section-label">历史记录</div>
   <div class="history-list" id="historyList"></div>
+
+  <div class="sidebar-help-wrap">
+    <button class="nav-item" onclick="openHelpManual()" title="帮助 / 使用手册"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span><span class="nav-label">帮助</span></button>
+  </div>
 </aside>
 
 <!-- ── HISTORY POPOVER (for collapsed sidebar) ────────── -->
@@ -859,10 +872,10 @@
           <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropFile(event)">
             <div class="uz-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
             <div class="uz-text">点击或拖拽上传文件</div>
-            <div class="uz-hint">MD · TXT · PDF · DOCX · HTML · PPT/PPTX · XLS/XLSX</div>
+            <div class="uz-hint">MD · TXT · PDF · DOCX · PPT/PPTX · XLS/XLSX</div>
           </div>
-          <input type="file" id="fileInput" style="display:none" accept=".pdf,.docx,.md,.txt,.html,.ppt,.pptx,.xls,.xlsx" onchange="fileSelected(event)" />
-          <input type="file" id="reuploadFileInput" style="display:none" accept=".pdf,.docx,.md,.txt,.html,.ppt,.pptx,.xls,.xlsx" onchange="onReuploadFileSelected(event)" />
+          <input type="file" id="fileInput" style="display:none" accept=".pdf,.docx,.md,.txt,.ppt,.pptx,.xls,.xlsx" onchange="fileSelected(event)" />
+          <input type="file" id="reuploadFileInput" style="display:none" accept=".pdf,.docx,.md,.txt,.ppt,.pptx,.xls,.xlsx" onchange="onReuploadFileSelected(event)" />
         </div>
       </div>
       <div class="drawer-timeline">
@@ -925,14 +938,14 @@
   </div>
 </div>
 
-<!-- ── LLM SETTINGS DRAWER ───────────────────────────── -->
+<!-- ── SYSTEM SETTINGS DRAWER（模型 / 文件转换服务 / 历史会话，三个区域堆叠，
+     不用页签——都是低频、一次性配置好的设置，没必要为切换增加一次点击）──── -->
 <div class="file-overlay hidden" id="llmOverlay" onclick="closeLlmView()"></div>
-<div class="file-drawer" id="llmDrawer" style="width:min(540px,95vw)">
+<div class="file-drawer" id="llmDrawer" style="width:min(560px,95vw)">
   <div class="drawer-header">
-    <span>模型设置</span>
+    <span>系统设置</span>
     <div style="display:flex;gap:6px;align-items:center">
       <button class="btn btn-sm" onclick="loadLlmSettings()">刷新</button>
-      <button class="btn btn-sm" onclick="newLlmProvider()">新建服务商</button>
       <button class="btn-ghost" onclick="closeLlmView()">✕</button>
     </div>
   </div>
@@ -2256,7 +2269,7 @@ async function doUploadFile(file) {
   }, 1500);
 }
 
-function resetUploadZone() { document.getElementById('uploadZone').innerHTML = '<div class="uz-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div><div class="uz-text">点击或拖拽上传文件</div><div class="uz-hint">MD · TXT · PDF · DOCX · HTML · PPT/PPTX · XLS/XLSX</div>'; }
+function resetUploadZone() { document.getElementById('uploadZone').innerHTML = '<div class="uz-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div><div class="uz-text">点击或拖拽上传文件</div><div class="uz-hint">MD · TXT · PDF · DOCX · PPT/PPTX · XLS/XLSX</div>'; }
 
 // ── TIMELINE ──────────────────────────────────────────
 var TL_STEPS = [
@@ -3428,12 +3441,13 @@ async function pollReuploadTimeline(shadowId, title, uploadStart) {
 // ═══════════════════════════════════════════════════════
 // LLM SETTINGS
 // ═══════════════════════════════════════════════════════
-var LLM_PURPOSES = ['default', 'reasoning', 'extraction', 'classification'];
+var LLM_PURPOSES = ['default', 'reasoning', 'extraction', 'classification', 'doc_convert'];
 var LLM_PURPOSE_LABELS = {
   default: '默认',
   reasoning: '推理',
   extraction: '提取',
-  classification: '分类'
+  classification: '分类',
+  doc_convert: '文档转换'
 };
 function llmPurposeLabel(purpose) {
   return LLM_PURPOSE_LABELS[purpose] || purpose;
@@ -3443,6 +3457,11 @@ function llmPlatformLabel(platformId) {
   return p ? p.label : platformId;
 }
 var llmState = { providers: [], bindings: {}, platforms: [], editingId: null, openPurposes: {} };
+var sysState = { fileview: null, session: null };
+
+function openHelpManual() {
+  window.open(S.baseUrl + '/help', '_blank');
+}
 
 function openLlmView() {
   document.getElementById('llmDrawer').classList.add('open');
@@ -3467,6 +3486,8 @@ async function loadLlmSettings() {
     llmState.bindings = await llmApi('GET', '/llm/bindings') || {};
     if (!Array.isArray(llmState.providers)) llmState.providers = [];
     if (!Array.isArray(llmState.platforms)) llmState.platforms = [];
+    sysState.fileview = await llmApi('GET', '/system/fileview');
+    sysState.session = await llmApi('GET', '/system/session');
     renderLlmSettings();
   } catch (e) {
     body.innerHTML = '<div style="color:var(--red)">加载失败: ' + esc(e.message) + '</div>';
@@ -3541,7 +3562,7 @@ function syncLlmPurposeOpenState() {
 function renderLlmSettings() {
   syncLlmPurposeOpenState();
   var body = document.getElementById('llmBody');
-  var html = '<div class="panel-section"><h3>用途绑定</h3><div style="display:grid;gap:8px">';
+  var html = '<div class="sys-group"><span class="sys-group-label">模型设置</span><div class="panel-section"><h3>用途绑定</h3><div style="display:grid;gap:8px">';
   LLM_PURPOSES.forEach(function(purpose) {
     var b = bindingSlot(llmState.bindings[purpose]);
     var open = llmState.openPurposes && llmState.openPurposes[purpose];
@@ -3568,7 +3589,7 @@ function renderLlmSettings() {
   });
   html += '<button class="btn btn-sm" style="margin-top:8px" onclick="saveLlmBindings()">保存绑定</button></div></div>';
 
-  html += '<div class="panel-section"><h3>模型服务商配置</h3>';
+  html += '<div class="panel-section"><h3 style="display:flex;justify-content:space-between;align-items:center">模型服务商配置<button class="btn btn-sm" onclick="newLlmProvider()">新建服务商</button></h3>';
   if (!llmState.providers.length) {
     html += '<p style="color:var(--text-3)">尚无服务商，请点击「新建服务商」或从 config.yml 升级导入。</p>';
   }
@@ -3586,9 +3607,109 @@ function renderLlmSettings() {
   if (llmState.editingId === '__new__') {
     html += renderLlmProviderForm({ provider_id: '', name: '', platform: 'openai_compatible', base_url: '', api_key: '', timeout_seconds: 120, max_retries: 3, response_format: 'json_object' });
   }
-  html += '</div>';
+  html += '</div></div>';
+
+  html += renderFileViewSettingsSection();
+  html += renderSessionSettingsSection();
+
   body.innerHTML = html;
   bindLlmDrawerActions(body);
+}
+
+// ═══════════════════════════════════════════════════════
+// 文件转换服务设置（原 config.yml fileview/ocr 段，现 DB-backed，即时生效）
+// ═══════════════════════════════════════════════════════
+function renderFileViewSettingsSection() {
+  var v = sysState.fileview || {};
+  var html = '<div class="sys-group panel-section"><span class="sys-group-label">文件转换服务设置</span>';
+  html += '<label class="llm-bind-think" style="display:block;margin-bottom:10px">' +
+    '<input type="checkbox" id="fv_use_remote"' + (v.use_remote ? ' checked' : '') + ' onchange="toggleFileViewRemoteFields()"> 使用远程转换服务（关闭则使用内置本地转换）</label>';
+  html += '<div id="fv_remote_fields" style="display:grid;gap:8px' + (v.use_remote ? '' : ';display:none') + '">';
+  html += fieldRow('服务地址', '<input id="fv_base_url" class="llm-field" value="' + esc(v.base_url || '') + '">');
+  html += '<div class="sys-row">' +
+    fieldRow('转换超时时间(秒)', '<input type="number" id="fv_timeout" class="llm-field" value="' + (v.timeout_seconds || 600) + '">') +
+    fieldRow('状态检测间隔(毫秒)', '<input type="number" id="fv_poll_interval" class="llm-field" value="' + (v.poll_interval_ms || 1500) + '">') +
+    '</div>';
+  html += '</div>';
+  html += '<label class="llm-bind-think" style="display:block;margin:14px 0 10px">' +
+    '<input type="checkbox" id="fv_ocr_enabled"' + (v.ocr_enabled ? ' checked' : '') + (v.use_remote ? ' disabled' : '') + ' onchange="toggleFileViewOcrFields()"> 使用多模态模型识别扫描件（OCR，与「使用远程转换服务」互斥）</label>';
+  html += '<div id="fv_ocr_fields" style="display:grid;gap:8px' + (v.ocr_enabled ? '' : ';display:none') + '">';
+  html += fieldRow('扫描件最大转换页数', '<input type="number" id="fv_ocr_max_pages" class="llm-field" value="' + (v.ocr_max_pages || 50) + '">');
+  html += '</div>';
+  html += '<button class="btn btn-sm" style="width:100%;margin-top:12px" onclick="saveFileViewSettings()">保存</button>';
+  html += '</div>';
+  return html;
+}
+// 「使用远程转换服务」和「使用多模态模型识别扫描件（OCR）」互斥——OCR 只在
+// 内置本地转换路径下生效（localconvert.ConvertPDFToMarkdown 的扫描件兜底），
+// 开启远程服务时禁用并清空 OCR 勾选，反之亦然。
+function toggleFileViewRemoteFields() {
+  var useRemote = document.getElementById('fv_use_remote').checked;
+  document.getElementById('fv_remote_fields').style.display = useRemote ? '' : 'none';
+  var ocrBox = document.getElementById('fv_ocr_enabled');
+  ocrBox.disabled = useRemote;
+  if (useRemote && ocrBox.checked) {
+    ocrBox.checked = false;
+    document.getElementById('fv_ocr_fields').style.display = 'none';
+  }
+}
+function toggleFileViewOcrFields() {
+  var useOcr = document.getElementById('fv_ocr_enabled').checked;
+  document.getElementById('fv_ocr_fields').style.display = useOcr ? '' : 'none';
+  var remoteBox = document.getElementById('fv_use_remote');
+  if (useOcr && remoteBox.checked) {
+    remoteBox.checked = false;
+    document.getElementById('fv_remote_fields').style.display = 'none';
+  }
+}
+async function saveFileViewSettings() {
+  var body = {
+    use_remote: document.getElementById('fv_use_remote').checked,
+    base_url: document.getElementById('fv_base_url').value,
+    timeout_seconds: parseInt(document.getElementById('fv_timeout').value, 10) || 600,
+    poll_interval_ms: parseInt(document.getElementById('fv_poll_interval').value, 10) || 1500,
+    ocr_enabled: document.getElementById('fv_ocr_enabled').checked,
+    ocr_max_pages: parseInt(document.getElementById('fv_ocr_max_pages').value, 10) || 50
+  };
+  try {
+    sysState.fileview = await llmApi('PUT', '/system/fileview', body);
+    toast('已保存，立即生效');
+  } catch (e) { toast('保存失败: ' + e.message, true); }
+}
+
+// ═══════════════════════════════════════════════════════
+// 历史会话设置（原 config.yml session 段，现 DB-backed，即时生效）
+// ═══════════════════════════════════════════════════════
+function renderSessionSettingsSection() {
+  var v = sysState.session || {};
+  var ci = v.cleanup_interval || { value: 24, unit: 'hour' };
+  var html = '<div class="sys-group panel-section"><span class="sys-group-label">历史会话设置</span>';
+  html += '<div class="sys-row">';
+  html += fieldRow('历史会话保留时间(天)', '<input type="number" id="sess_retention_days" class="llm-field" value="' + (v.retention_days || 30) + '">');
+  html += '<label><div style="font-size:11px;color:var(--text-3);margin-bottom:4px">清理执行间隔</div>' +
+    '<div style="display:flex;gap:6px">' +
+    '<input type="number" id="sess_cleanup_value" class="llm-field llm-field-inline" value="' + (ci.value || 24) + '">' +
+    '<select id="sess_cleanup_unit" class="llm-field llm-field-inline">' +
+    '<option value="hour"' + (ci.unit === 'hour' ? ' selected' : '') + '>小时</option>' +
+    '<option value="day"' + (ci.unit === 'day' ? ' selected' : '') + '>天</option>' +
+    '</select></div></label>';
+  html += '</div>';
+  html += '<button class="btn btn-sm" style="width:100%;margin-top:12px" onclick="saveSessionSettings()">保存</button>';
+  html += '</div>';
+  return html;
+}
+async function saveSessionSettings() {
+  var body = {
+    retention_days: parseInt(document.getElementById('sess_retention_days').value, 10) || 30,
+    cleanup_interval: {
+      value: parseInt(document.getElementById('sess_cleanup_value').value, 10) || 24,
+      unit: document.getElementById('sess_cleanup_unit').value
+    }
+  };
+  try {
+    sysState.session = await llmApi('PUT', '/system/session', body);
+    toast('已保存，立即生效');
+  } catch (e) { toast('保存失败: ' + e.message, true); }
 }
 
 function renderLlmProviderForm(pr) {

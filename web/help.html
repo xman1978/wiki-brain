@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>使用手册 · 知识大脑</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:          #ffffff;
+    --bg-alt:      #f9f9f9;
+    --surface:     #ffffff;
+    --border:      #e8e8e3;
+    --border-lt:   #f0f0eb;
+    --text:        #2d2d2a;
+    --text-2:      #6b6b65;
+    --text-3:      #9b9b93;
+    --accent:      #c96442;
+    --accent-lt:   #fdf4f0;
+    --radius:      16px;
+    --radius-sm:   8px;
+    --shadow-md:   0 4px 16px rgba(0,0,0,.08);
+  }
+
+  body {
+    font-family: 'Söhne', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+    color: var(--text);
+    background: var(--bg-alt);
+    min-height: 100vh;
+  }
+
+  .help-header {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 24px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border-lt);
+  }
+  .help-header h1 { font-size: 16px; font-weight: 700; color: var(--text); }
+  .help-header .spacer { flex: 1; }
+  .help-back {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--text-2); text-decoration: none;
+    padding: 6px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);
+    background: var(--surface); cursor: pointer;
+  }
+  .help-back:hover { background: var(--accent-lt); color: var(--accent); border-color: var(--accent-lt); }
+  .help-back svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  .help-body { max-width: 860px; margin: 0 auto; padding: 32px 24px 96px; }
+  .help-card {
+    background: var(--surface); border: 1px solid var(--border-lt);
+    border-radius: var(--radius); box-shadow: var(--shadow-md);
+    padding: 40px 48px;
+  }
+
+  #manualContent { line-height: 1.75; font-size: 15px; color: var(--text); word-wrap: break-word; }
+  #manualContent h1 { font-size: 26px; font-weight: 700; margin: 0 0 18px; color: var(--text); }
+  #manualContent h2 { font-size: 20px; font-weight: 700; margin: 36px 0 14px; padding-top: 8px; border-top: 1px solid var(--border-lt); color: var(--text); }
+  #manualContent h2:first-of-type { border-top: none; padding-top: 0; margin-top: 8px; }
+  #manualContent h3 { font-size: 16px; font-weight: 700; margin: 22px 0 10px; color: var(--accent); }
+  #manualContent p { margin: 0 0 14px; }
+  #manualContent ul, #manualContent ol { margin: 0 0 14px 22px; }
+  #manualContent li { margin: 0 0 6px; }
+  #manualContent strong { color: var(--text); font-weight: 700; }
+  #manualContent code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; background: var(--bg-alt); border: 1px solid var(--border-lt); border-radius: 4px; padding: 1px 5px; }
+  #manualContent pre { background: var(--bg-alt); border: 1px solid var(--border-lt); border-radius: var(--radius-sm); padding: 12px 14px; overflow-x: auto; margin: 0 0 14px; }
+  #manualContent pre code { border: none; background: none; padding: 0; }
+  #manualContent table { border-collapse: collapse; width: 100%; margin: 0 0 16px; font-size: 14px; }
+  #manualContent th, #manualContent td { border: 1px solid var(--border-lt); padding: 8px 10px; text-align: left; vertical-align: top; }
+  #manualContent th { background: var(--bg-alt); font-weight: 700; }
+  #manualContent tr:nth-child(even) td { background: var(--bg-alt); }
+  #manualContent a { color: var(--accent); }
+  #manualContent hr { border: none; border-top: 1px solid var(--border-lt); margin: 24px 0; }
+  #manualContent .help-loading, #manualContent .help-error { color: var(--text-3); padding: 40px 0; text-align: center; }
+  #manualContent .help-error { color: var(--accent); }
+
+  @media (max-width: 720px) {
+    .help-card { padding: 24px 20px; }
+    .help-body { padding: 20px 12px 64px; }
+  }
+</style>
+</head>
+<body>
+  <div class="help-header">
+    <h1>使用手册</h1>
+    <div class="spacer"></div>
+    <a class="help-back" href="." title="返回主界面">
+      <svg viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      返回主界面
+    </a>
+  </div>
+  <div class="help-body">
+    <div class="help-card">
+      <div id="manualContent"><div class="help-loading">正在加载使用手册…</div></div>
+    </div>
+  </div>
+
+  <script src="marked.min.js"></script>
+  <script>
+    fetch('manual.md')
+      .then(function(res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.text();
+      })
+      .then(function(md) {
+        var el = document.getElementById('manualContent');
+        if (typeof marked !== 'undefined' && marked.parse) {
+          el.innerHTML = marked.parse(md);
+        } else {
+          el.innerHTML = '<pre style="white-space:pre-wrap">' + md.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</pre>';
+        }
+      })
+      .catch(function(err) {
+        document.getElementById('manualContent').innerHTML =
+          '<div class="help-error">使用手册加载失败：' + (err && err.message ? err.message : '未知错误') + '</div>';
+      });
+  </script>
+</body>
+</html>

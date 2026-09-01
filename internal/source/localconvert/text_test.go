@@ -67,7 +67,7 @@ func TestConvertTextToMarkdown_GBKFallback(t *testing.T) {
 
 func TestLocalConvertClient_ConvertToMarkdown_TextFormats(t *testing.T) {
 	dir := t.TempDir()
-	c := NewLocalConvertClient()
+	c := NewLocalConvertClient(nil, OCRSettings{})
 	for _, ext := range []string{".md", ".markdown", ".txt"} {
 		path := filepath.Join(dir, "file"+ext)
 		if err := os.WriteFile(path, []byte("hello"), 0644); err != nil {

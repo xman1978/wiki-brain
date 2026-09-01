@@ -18,6 +18,15 @@ type FileViewClient interface {
 	ConvertToHTML(ctx context.Context, srcPath string) (html []byte, err error)
 }
 
+// ModeReporter is optionally implemented by a FileViewClient whose active
+// mode ("remote" | "local") can change at runtime — see
+// sysconfig.DynamicFileViewClient, which backs the live-editable 系统设置 →
+// 文件转换服务 page. Reports "remote" when not implemented, matching this
+// package's own static client.
+type ModeReporter interface {
+	Mode() string
+}
+
 type fileViewClient struct {
 	baseURL        string
 	pollInterval   time.Duration

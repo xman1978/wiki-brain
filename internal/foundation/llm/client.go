@@ -3,6 +3,7 @@ package llm
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,8 +35,39 @@ func NewOpenAIClient(provider *ProviderRuntime, promptsDir string) (*OpenAIClien
 }
 
 type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role string `json:"role"`
+	// Content is a plain string for text-only messages, or []chatContentPart
+	// for multimodal messages built by buildImageMessage. encoding/json
+	// marshals either shape correctly without a custom MarshalJSON.
+	Content any `json:"content"`
+}
+
+// chatContentPart is one element of an OpenAI-compatible multimodal
+// message's content array.
+type chatContentPart struct {
+	Type     string        `json:"type"`
+	Text     string        `json:"text,omitempty"`
+	ImageURL *chatImageURL `json:"image_url,omitempty"`
+}
+
+type chatImageURL struct {
+	URL string `json:"url"`
+}
+
+func buildImageMessage(role, text string, images []ImageInput) chatMessage {
+	parts := make([]chatContentPart, 0, len(images)+1)
+	if text != "" {
+		parts = append(parts, chatContentPart{Type: "text", Text: text})
+	}
+	for _, img := range images {
+		mime := img.MimeType
+		if mime == "" {
+			mime = "image/png"
+		}
+		dataURI := "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(img.Data)
+		parts = append(parts, chatContentPart{Type: "image_url", ImageURL: &chatImageURL{URL: dataURI}})
+	}
+	return chatMessage{Role: role, Content: parts}
 }
 
 type chatResponse struct {
@@ -173,8 +205,31 @@ func (c *OpenAIClient) call(ctx context.Context, prompt *Prompt, mc ModelParams,
 		messages = append(messages, chatMessage{Role: "system", Content: prompt.System})
 	}
 	messages = append(messages, chatMessage{Role: "user", Content: prompt.User})
+	return c.callMessages(ctx, messages, mc, jsonObject, prompt.Schema)
+}
 
-	bodyBytes, err := marshalChatRequest(c.provider.Platform, mc, messages, jsonObject, false, c.provider.ResponseFormat, prompt.Schema)
+// CompleteImage is the LLMClient.CompleteImage implementation: the prompt's
+// User section plus the given images are sent as one multipart user message.
+func (c *OpenAIClient) CompleteImage(ctx context.Context, promptFile string, vars map[string]string, images []ImageInput, purpose string) (string, error) {
+	mc := c.provider.ModelForPurpose(purpose)
+	return c.CompleteImageWithParams(ctx, promptFile, vars, images, mc)
+}
+
+func (c *OpenAIClient) CompleteImageWithParams(ctx context.Context, promptFile string, vars map[string]string, images []ImageInput, mc ModelParams) (string, error) {
+	prompt, err := c.loadPrompt(promptFile, vars)
+	if err != nil {
+		return "", err
+	}
+	var messages []chatMessage
+	if prompt.System != "" {
+		messages = append(messages, chatMessage{Role: "system", Content: prompt.System})
+	}
+	messages = append(messages, buildImageMessage("user", prompt.User, images))
+	return c.callMessages(ctx, messages, mc, false, "")
+}
+
+func (c *OpenAIClient) callMessages(ctx context.Context, messages []chatMessage, mc ModelParams, jsonObject bool, schemaJSON string) (string, error) {
+	bodyBytes, err := marshalChatRequest(c.provider.Platform, mc, messages, jsonObject, false, c.provider.ResponseFormat, schemaJSON)
 	if err != nil {
 		return "", fmt.Errorf("llm: marshal request: %w", err)
 	}

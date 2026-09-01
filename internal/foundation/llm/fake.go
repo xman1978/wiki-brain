@@ -115,6 +115,16 @@ func (f *FakeClient) CompleteJSON(_ context.Context, promptFile string, vars map
 	return []byte(resp.Output), nil
 }
 
+func (f *FakeClient) CompleteImage(_ context.Context, promptFile string, vars map[string]string, images []ImageInput, model string) (string, error) {
+	f.recordCall(promptFile, model, vars)
+
+	resp, ok := f.nextResponse(promptFile)
+	if !ok {
+		return "", fmt.Errorf("fake: no response configured for %q", promptFile)
+	}
+	return resp.Output, resp.Err
+}
+
 func (f *FakeClient) CompleteStream(_ context.Context, promptFile string, vars map[string]string, model string) (<-chan StreamChunk, error) {
 	f.recordCall(promptFile, model, vars)
 

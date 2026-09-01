@@ -15,14 +15,12 @@ type Config struct {
 	Database  DatabaseConfig  `yaml:"database"`
 	Index     IndexConfig     `yaml:"index"`
 	Queue     QueueConfig     `yaml:"queue"`
-	FileView  FileViewConfig  `yaml:"fileview"`
 	Source    SourceConfig    `yaml:"source"`
 	Retrieval RetrievalConfig `yaml:"retrieval"`
 	Study     StudyConfig     `yaml:"study"`
 	Evidence  EvidenceConfig  `yaml:"evidence"`
 	KPN       KPNConfig       `yaml:"kpn"`
 	Wiki      WikiConfig      `yaml:"wiki"`
-	Session   SessionConfig   `yaml:"session"`
 	Mcp       McpConfig       `yaml:"mcp"`
 
 	// BootstrapLLM is populated from an optional llm: section in config.yml
@@ -95,13 +93,6 @@ type IndexConfig struct {
 type QueueConfig struct {
 	BufferSize int `yaml:"buffer_size"`
 	Workers    int `yaml:"workers"`
-}
-
-type FileViewConfig struct {
-	Mode           string `yaml:"mode"` // "remote"（默认）| "local"
-	BaseURL        string `yaml:"base_url"`
-	PollIntervalMs int    `yaml:"poll_interval_ms"`
-	MaxPollSeconds int    `yaml:"max_poll_seconds"`
 }
 
 type SourceConfig struct {
@@ -312,13 +303,6 @@ type WikiConfig struct {
 	// ActivationLink/Bundle): a served answer that isn't sampled produces no
 	// synthesis event at all, see wiki.md 步骤 4a「未中选」.
 	SynthesisAuditRate float64 `yaml:"synthesis_audit_rate"`
-}
-
-type SessionConfig struct {
-	// RetentionDays: 更新时间早于此天数的会话（含其消息轮次）会被周期性清理删除。
-	RetentionDays int `yaml:"retention_days"`
-	// CleanupInterval: 清理任务的执行间隔，Go duration 字符串（如 "24h"）。
-	CleanupInterval string `yaml:"cleanup_interval"`
 }
 
 // McpConfig 见 docs/impl/v1/mcp.md。import_file 工具提交后同步有限等待，

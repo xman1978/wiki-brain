@@ -1296,6 +1296,20 @@ func (s *Service) GetMarkdownForVersion(sourceID string, version int) (string, e
 	return string(data), nil
 }
 
+// HasHTMLPreview reports whether GetHTMLPreview can return a real rendered
+// preview (e.g. remote FileView's Aspose-generated HTML, which preserves
+// layout) rather than degrading to the markdown-as-<pre> fallback. Used by
+// getPreview to decide whether this beats the unit_id-scoped markdown
+// snippet, mirroring NativePreviewSupported's role for local mode.
+func (s *Service) HasHTMLPreview(sourceID string) bool {
+	src, err := s.store.GetByID(sourceID)
+	if err != nil || !src.HTMLPath.Valid {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(s.baseDir, src.HTMLPath.String))
+	return err == nil
+}
+
 func (s *Service) GetHTMLPreview(sourceID string) (string, error) {
 	src, err := s.store.GetByID(sourceID)
 	if err != nil {
@@ -1331,6 +1345,15 @@ func (s *Service) PathPrefix() string {
 	return strings.TrimRight(s.cfg.Server.PathPrefix, "/")
 }
 
+// fileViewMode reports the FileView client's current active mode
+// ("remote"/"local"), which can change at runtime — see ModeReporter.
+func (s *Service) fileViewMode() string {
+	if mr, ok := s.fileView.(ModeReporter); ok {
+		return mr.Mode()
+	}
+	return "remote"
+}
+
 // TextPreviewFormat reports how a source should be previewed when it's
 // plain Markdown or plain text: "markdown" (render client-side via the
 // app's existing marked.js), "text" (verbatim escaped <pre>), or "" (not
@@ -1343,7 +1366,7 @@ func (s *Service) PathPrefix() string {
 // Aspose-backed HTML preview is unaffected by this and is left alone, same
 // reasoning as NativePreviewSupported.
 func (s *Service) TextPreviewFormat(sourceID string) string {
-	if s.cfg == nil || s.cfg.FileView.Mode != "local" {
+	if s.fileViewMode() != "local" {
 		return ""
 	}
 	src, err := s.store.GetByID(sourceID)
@@ -1378,7 +1401,7 @@ func (s *Service) GetOriginalPath(sourceID string) (fullPath, fileName string, e
 // Aspose-generated HTML already preserves layout, so this only applies to
 // local mode.
 func (s *Service) NativePreviewSupported(sourceID string) bool {
-	if s.cfg == nil || s.cfg.FileView.Mode != "local" {
+	if s.fileViewMode() != "local" {
 		return false
 	}
 	src, err := s.store.GetByID(sourceID)

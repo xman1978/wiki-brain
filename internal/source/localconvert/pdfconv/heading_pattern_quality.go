@@ -464,9 +464,30 @@ func detectMixedRecognitionPatternKeys(lines []string, headingLineIndexes map[in
 	// whole document's worth of top-level structure over one paragraph's
 	// missing style. Exempting TITLE_CN_NUM here does not touch the
 	// separate, still-active detectDisqualifiedPatternKeys quality gate
-	// (long/punctuation-dense lines are still rejected there per-line), and
-	// does not touch any other pattern key.
+	// (long/punctuation-dense lines are still rejected there per-line).
 	delete(result, "TITLE_CN_NUM")
+	// 2026-09-01 user decision: the identical connascence failure mode
+	// affects the TITLE_CHAPTER_* keys ("第一章"/"第一条"/... style chapter
+	// numbering) — confirmed against a real DOCX where six chapter titles
+	// used literal "第X章" text (correctly recognized as headings) and a
+	// seventh used Word auto-numbering (<w:numPr>) for the same "第X章"
+	// prefix, which isWordHeadingCandidate's listItem check disqualifies
+	// from the boldAndLarge/centered heading fallback regardless of its
+	// actual visual formatting. That one unstyled/differently-numbered
+	// sibling made this same mixed-recognition pass blacklist
+	// TITLE_CHAPTER_ONE document-wide, stripping "#" from all six correctly
+	// recognized chapter headings. Unlike TITLE_CN_NUM's exemption above,
+	// countsForMixedRecognitionCandidate's TITLE_CHAPTER_* branch doesn't
+	// require IsStandaloneHeadingLine — it always counts a "第X章..." line
+	// — so this exemption relies on the same per-line quality gate
+	// (clearlyFailsHeadingQualityWithLen, still active) plus
+	// isBodyChapterReference (still active in
+	// shouldDemoteExistingHeadingByCounterEvidence) to keep genuine
+	// mid-sentence chapter references ("详见第五章...") from being
+	// recognized as headings in the first place.
+	for _, pk := range []string{"TITLE_CHAPTER_ONE", "TITLE_CHAPTER_TOW", "TITLE_CHAPTER_THREE", "TITLE_CHAPTER_FOUR", "TITLE_CHAPTER_FIVE"} {
+		delete(result, pk)
+	}
 	return result
 }
 

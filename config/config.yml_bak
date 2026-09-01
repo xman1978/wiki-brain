@@ -1,6 +1,38 @@
 # Wiki-Brain 配置文件
 # 环境变量优先级高于此文件，格式：WB_<大写字段路径>，如 WB_LLM_BASE_URL
 
+# LLM 配置
+llm:
+  api_key:           "sk-sp-H.DMXMPP.8ilN.MEUCIQD1WsHKwfXBui1mtTdf4pVSpYfLr-ZnHDJJehAD0L2UwwIgJEK-45oY2q1bJGn9WmJyizsv6Re67tnDMJmonewLjS4"
+  base_url:          "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+  timeout_seconds:   120
+  max_retries:       3
+  models:
+    default:
+      model:            "qwen3.6-flash"
+      temperature:      0
+      max_input_tokens: 4096
+      max_output_tokens: 4096
+      thinking:          false
+    reasoning:
+      model:            "qwen3.6-flash"
+      temperature:      0.1
+      max_input_tokens: 4096
+      max_output_tokens: 8192
+      thinking:         false
+    extraction:
+      model:            "qwen3.6-flash"
+      temperature:      0
+      max_input_tokens: 4096
+      max_output_tokens: 8192
+      thinking:         false
+    classification:
+      model:            "qwen3.6-flash"
+      temperature:      0
+      max_input_tokens: 4096
+      max_output_tokens: 4096
+      thinking:         false
+
 # HTTP 服务器
 server:
   host:            "0.0.0.0"            # 监听地址，0.0.0.0 表示所有网卡，127.0.0.1 仅本机

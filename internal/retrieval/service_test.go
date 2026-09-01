@@ -871,6 +871,10 @@ func (f *rerankJudgeTrackingLLM) CompleteStream(_ context.Context, promptFile st
 	return nil, fmt.Errorf("unexpected CompleteStream call: %s", promptFile)
 }
 
+func (f *rerankJudgeTrackingLLM) CompleteImage(_ context.Context, promptFile string, vars map[string]string, images []llm.ImageInput, model string) (string, error) {
+	return "", fmt.Errorf("unexpected CompleteImage call: %s", promptFile)
+}
+
 func (f *rerankJudgeTrackingLLM) CompleteJSON(ctx context.Context, promptFile string, vars map[string]string, model string) ([]byte, error) {
 	f.mu.Lock()
 	if f.calls == nil {

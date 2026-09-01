@@ -40,7 +40,7 @@ func TestE2E_StructuralOutlineWithSummary(t *testing.T) {
 	}
 	t.Cleanup(func() { idxMgr.Close() })
 
-	fv := NewFileViewClient(cfg.FileView.BaseURL, cfg.FileView.PollIntervalMs, cfg.FileView.MaxPollSeconds)
+	fv := NewFileViewClient("http://127.0.0.1:8000", 1500, 600)
 	q := queue.New(100)
 	svc := NewService(store, fv, llmClient, llmClient, idxMgr.Outlines, q, cfg, tmpDir)
 

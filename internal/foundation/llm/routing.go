@@ -100,6 +100,14 @@ func (r *RoutingClient) CompleteStream(ctx context.Context, promptFile string, v
 	return c.CompleteStreamWithParams(ctx, promptFile, vars, mc)
 }
 
+func (r *RoutingClient) CompleteImage(ctx context.Context, promptFile string, vars map[string]string, images []ImageInput, purpose string) (string, error) {
+	c, mc, err := r.resolve(purpose)
+	if err != nil {
+		return "", err
+	}
+	return c.CompleteImageWithParams(ctx, promptFile, vars, images, mc)
+}
+
 func (r *RoutingClient) ModelForPurpose(purpose string) (ModelParams, error) {
 	_, mc, err := r.resolve(purpose)
 	return mc, err

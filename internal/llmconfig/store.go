@@ -17,7 +17,7 @@ var (
 	ErrInvalidInput  = errors.New("llmconfig: invalid input")
 )
 
-var PurposeList = []string{"default", "reasoning", "extraction", "classification"}
+var PurposeList = []string{"default", "reasoning", "extraction", "classification", "doc_convert"}
 
 type Provider struct {
 	ProviderID     string                     `json:"provider_id"`

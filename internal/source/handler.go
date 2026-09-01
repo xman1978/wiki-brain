@@ -615,7 +615,33 @@ func (h *Handler) getPreview(w http.ResponseWriter, r *http.Request) {
 	unitID := r.URL.Query().Get("unit_id")
 	var html string
 	var err error
-	if unitID != "" {
+	if h.svc.NativePreviewSupported(id) {
+		// Native preview (the vendored file-viewer widget rendering the real
+		// original file) takes priority over the unit_id-scoped markdown
+		// snippet whenever the format supports it — "查看来源" → "预览" from
+		// the evidence panel should show the true original document, even
+		// though that means losing the jump-to-cited-passage highlighting
+		// GetMarkdownForUnit provided. unit_id-scoped preview remains the
+		// fallback below for formats NativePreviewSupported doesn't cover
+		// (e.g. plain .md/.txt sources, or remote fileview mode).
+		_, fileName, ferr := h.svc.GetOriginalPath(id)
+		if ferr != nil {
+			foundation.WriteError(w, http.StatusNotFound, "source not found")
+			return
+		}
+		html = renderNativePreviewPage(h.svc.PathPrefix(), id, fileName)
+	} else if h.svc.HasHTMLPreview(id) {
+		// Remote fileview mode's real Aspose-generated HTML (layout
+		// preserved) beats the unit_id-scoped markdown snippet for the same
+		// reason the native widget does above — it's only reachable when
+		// NativePreviewSupported is false (local mode already covers its
+		// formats there), so this is effectively the remote-mode branch.
+		html, err = h.svc.GetHTMLPreview(id)
+		if err != nil {
+			foundation.WriteError(w, http.StatusNotFound, "source not found")
+			return
+		}
+	} else if unitID != "" {
 		md, merr := h.svc.GetMarkdownForUnit(id, unitID)
 		if merr != nil {
 			foundation.WriteError(w, http.StatusNotFound, "source not found")
@@ -624,13 +650,6 @@ func (h *Handler) getPreview(w http.ResponseWriter, r *http.Request) {
 		escaped := strings.ReplaceAll(md, "<", "&lt;")
 		escaped = strings.ReplaceAll(escaped, ">", "&gt;")
 		html = "<pre>" + escaped + "</pre>"
-	} else if h.svc.NativePreviewSupported(id) {
-		_, fileName, ferr := h.svc.GetOriginalPath(id)
-		if ferr != nil {
-			foundation.WriteError(w, http.StatusNotFound, "source not found")
-			return
-		}
-		html = renderNativePreviewPage(h.svc.PathPrefix(), id, fileName)
 	} else if kind := h.svc.TextPreviewFormat(id); kind != "" {
 		md, merr := h.svc.GetMarkdown(id)
 		if merr != nil {

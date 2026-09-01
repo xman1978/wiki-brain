@@ -39,6 +39,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -313,6 +314,7 @@ func parseParagraph(dec *xml.Decoder, se xml.StartElement, styles *styleRegistry
 	fieldDepth := 0    // >0 while inside a skipped fldSimple subtree
 	inFieldCode := false // true between fldChar begin..separate (instrText, skip)
 	delDepth := 0      // >0 while inside a skipped w:del subtree
+	var fieldInstr strings.Builder // accumulates instrText between fldChar begin..separate, to classify the field
 
 	var maxBoldSize float64
 	sawBoldLarge := false
@@ -340,7 +342,18 @@ func parseParagraph(dec *xml.Decoder, se xml.StartElement, styles *styleRegistry
 				p.NumID = np.numID
 				p.ILvl = np.ilvl
 			case "fldSimple":
-				fieldDepth++
+				// PAGEREF fields carry a TOC entry's page number as their
+				// cached result — the only literal digit a Word-generated
+				// TOC line has, since the chapter title around it is plain
+				// text. Dropping it under the general field.remove()
+				// semantics (see fldChar/separate below) left TOC lines with
+				// no trailing page number, which is exactly what
+				// pdfconv.IsChapterTocLine/isTocPagedLine key off of to
+				// recognize and strip a TOC block — so those fields' cached
+				// text is kept; every other field type keeps being skipped.
+				if !keepFieldResult(attrVal(t.Attr, "instr")) {
+					fieldDepth++
+				}
 			case "del":
 				delDepth++
 			case "ins":
@@ -349,9 +362,12 @@ func parseParagraph(dec *xml.Decoder, se xml.StartElement, styles *styleRegistry
 				switch attrVal(t.Attr, "fldCharType") {
 				case "begin":
 					inFieldCode = true
+					fieldInstr.Reset()
 				case "separate":
 					inFieldCode = false
-					fieldDepth++ // skip the cached field RESULT too (field.remove() semantics)
+					if !keepFieldResult(fieldInstr.String()) {
+						fieldDepth++ // skip the cached field RESULT too (field.remove() semantics)
+					}
 				case "end":
 					if fieldDepth > 0 {
 						fieldDepth--
@@ -359,8 +375,13 @@ func parseParagraph(dec *xml.Decoder, se xml.StartElement, styles *styleRegistry
 					inFieldCode = false
 				}
 			case "instrText":
-				// field code text; consumed by CharData below but suppressed
-				// via inFieldCode flag.
+				text, err := readCharData(dec)
+				if err != nil {
+					return nil, err
+				}
+				if inFieldCode {
+					fieldInstr.WriteString(text)
+				}
 			case "t":
 				text, err := readCharData(dec)
 				if err != nil {
@@ -498,6 +519,15 @@ func parseNumPr(dec *xml.Decoder) (numPrResult, error) {
 			depth--
 		}
 	}
+}
+
+// pagerefFieldInstrRe matches a field instruction (the " PAGEREF _Toc123 \h "
+// text between fldChar begin/separate, or a fldSimple's w:instr attribute)
+// whose cached result should be kept rather than dropped.
+var pagerefFieldInstrRe = regexp.MustCompile(`(?i)^\s*PAGEREF\b`)
+
+func keepFieldResult(instr string) bool {
+	return pagerefFieldInstrRe.MatchString(instr)
 }
 
 func readCharData(dec *xml.Decoder) (string, error) {

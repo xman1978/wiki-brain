@@ -45,18 +45,13 @@ func setupIntegrationService(t *testing.T) (*Service, *llm.FakeClient) {
 			SegmentMaxChars: 4000,
 			MinSegmentChars: 400,
 		},
-		FileView: config.FileViewConfig{
-			BaseURL:        "http://127.0.0.1:8000",
-			PollIntervalMs: 1500,
-			MaxPollSeconds: 600,
-		},
 	}
 	models := llm.StaticPurposeModels{
 		"default":    {Model: "test", MaxInputTokens: 100000, MaxOutputTokens: 4096},
 		"extraction": {Model: "test", MaxInputTokens: 100000, MaxOutputTokens: 4096},
 	}
 
-	fv := NewFileViewClient(cfg.FileView.BaseURL, cfg.FileView.PollIntervalMs, cfg.FileView.MaxPollSeconds)
+	fv := NewFileViewClient("http://127.0.0.1:8000", 1500, 600)
 	svc := NewService(store, fv, fake, models, idxMgr.Outlines, q, cfg, tmpDir)
 	return svc, fake
 }

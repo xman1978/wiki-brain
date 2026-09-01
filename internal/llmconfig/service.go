@@ -12,12 +12,25 @@ import (
 )
 
 type Service struct {
-	store  *Store
-	router *llm.RoutingClient
+	store           *Store
+	router          *llm.RoutingClient
+	onConfigChanged func()
 }
 
 func NewService(store *Store, router *llm.RoutingClient) *Service {
 	return &Service{store: store, router: router}
+}
+
+// SetOnConfigChanged wires a callback invoked after every successful
+// CreateProvider/UpdateProvider/SetBindings call (config/config.yml 首次启动
+// 的 BootstrapFromYAML 不算，只有通过「系统设置」界面/API 的改动才触发).
+// Used by cmd/server/main.go to (re-)trigger a sync of the built-in 使用手册
+// Source: firing on provider create/update (not just bindings) matters
+// because fixing a bad api_key/base_url — the most likely reason a previous
+// auto-import attempt failed — is a provider edit, not necessarily a
+// bindings edit. See maybeSyncHelpManual.
+func (s *Service) SetOnConfigChanged(fn func()) {
+	s.onConfigChanged = fn
 }
 
 func (s *Service) ReloadRouter(ctx context.Context) error {
@@ -198,6 +211,9 @@ func (s *Service) CreateProvider(p Provider) (Provider, error) {
 	if err := s.ReloadRouter(context.Background()); err != nil {
 		return Provider{}, err
 	}
+	if s.onConfigChanged != nil {
+		s.onConfigChanged()
+	}
 	return s.store.GetProvider(p.ProviderID)
 }
 
@@ -225,6 +241,9 @@ func (s *Service) UpdateProvider(p Provider) (Provider, error) {
 	if err := s.ReloadRouter(context.Background()); err != nil {
 		return Provider{}, err
 	}
+	if s.onConfigChanged != nil {
+		s.onConfigChanged()
+	}
 	return s.store.GetProvider(p.ProviderID)
 }
 
@@ -251,7 +270,13 @@ func (s *Service) SetBindings(bindings map[string]PurposeBinding) error {
 	if err := s.store.SetBindings(bindings); err != nil {
 		return err
 	}
-	return s.ReloadRouter(context.Background())
+	if err := s.ReloadRouter(context.Background()); err != nil {
+		return err
+	}
+	if s.onConfigChanged != nil {
+		s.onConfigChanged()
+	}
+	return nil
 }
 
 func (s *Service) TestProvider(ctx context.Context, id string) (int, error) {

@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -31,13 +35,171 @@ import (
 	"github.com/jxman78/wiki-brain/internal/retrieval"
 	"github.com/jxman78/wiki-brain/internal/session"
 	"github.com/jxman78/wiki-brain/internal/source"
-	"github.com/jxman78/wiki-brain/internal/source/localconvert"
 	"github.com/jxman78/wiki-brain/internal/study"
+	"github.com/jxman78/wiki-brain/internal/sysconfig"
 	"github.com/jxman78/wiki-brain/internal/trace"
 	"github.com/jxman78/wiki-brain/internal/unit"
 	"github.com/jxman78/wiki-brain/internal/wiki"
 	"github.com/jxman78/wiki-brain/web"
 )
+
+// helpManualFileName is the Source file_name identity used for the
+// auto-synced 使用手册 (web/manual.md) — keep it stable so re-syncs always
+// find the same Source rather than creating duplicates.
+const helpManualFileName = "Wiki-Brain系统使用手册.md"
+
+// helpManualSyncTimeout bounds how long maybeSyncHelpManual waits for the
+// manual's Source to actually finish processing (register → convert →
+// extract) before giving up on this round. A bad LLM config (wrong api_key,
+// unreachable base_url, wrong model name, ...) shows up here as the Source
+// landing in a failed state, not as an error from the initial Import/
+// ImportShadow call — those only fail on obviously-bad input (unsupported
+// format, duplicate name), not on downstream LLM failures, since the actual
+// extraction runs asynchronously on the task queue.
+const helpManualSyncTimeout = 10 * time.Minute
+
+// maybeSyncHelpManual imports (or, if it already exists, reuploads) the
+// built-in 使用手册 (web/manual.md) as a normal Source once the LLM is fully
+// configured (all internal/llmconfig.PurposeList purposes bound), so it
+// becomes answerable through 问答 like any other document — this is what
+// lets the system explain its own usage when asked. A content hash persisted
+// via sysconfig makes this idempotent (safe to call repeatedly) and lets a
+// future edit to manual.md self-heal into the running system on the next
+// call instead of requiring a manual reupload every time the docs change.
+//
+// The hash is only persisted after polling confirms the Source actually
+// finished processing successfully (see waitForHelpManualSync) — not merely
+// after Import/ImportShadow accepts the file. This matters because a wrong
+// api_key/base_url/model lets the file register and queue just fine; it
+// only surfaces as a failure once extraction actually calls the LLM. If we
+// marked "synced" the moment the file was accepted, a bad model config
+// would silently leave the manual permanently unimportable — the failure
+// would only be visible if someone happened to open 文件 面板, and no future
+// trigger would ever retry it (the content hash wouldn't have changed).
+// Leaving the hash unset on failure means the very next trigger — the admin
+// fixing the provider's api_key/base_url (SetOnConfigChanged also fires on
+// CreateProvider/UpdateProvider, not just SetBindings) or the next server
+// restart — retries automatically, with no admin action beyond fixing the
+// config itself required. The 文件 panel's existing manual "重试" button
+// also still works meanwhile as an immediate, visible fallback.
+//
+// Called once at startup and again after every successful LLM config change
+// (see llmConfigSvc.SetOnConfigChanged below) so "no LLM configured yet" and
+// "LLM configured but broken" both naturally resolve themselves once the
+// admin finishes/fixes setup.
+func maybeSyncHelpManual(ctx context.Context, llmConfigSvc *llmconfig.Service, sysConfigSvc *sysconfig.Service, sourceSvc *source.Service) {
+	bindings, err := llmConfigSvc.GetBindings()
+	if err != nil {
+		slog.Error("使用手册自动同步：读取模型绑定失败", "error", err)
+		return
+	}
+	for _, purpose := range llmconfig.PurposeList {
+		if _, ok := bindings[purpose]; !ok {
+			return // 大模型尚未完成配置，跳过——等下一次配置变更或下次启动再检查
+		}
+	}
+
+	data, err := web.FS.ReadFile("manual.md")
+	if err != nil {
+		slog.Error("使用手册自动同步：读取内嵌文件失败", "error", err)
+		return
+	}
+	sum := sha256.Sum256(data)
+	hash := hex.EncodeToString(sum[:])
+
+	lastHash, err := sysConfigSvc.GetHelpManualHash()
+	if err != nil {
+		slog.Error("使用手册自动同步：读取已同步版本记录失败", "error", err)
+		return
+	}
+	if lastHash == hash {
+		return // 内容未变化，已是最新（含此前已确认成功同步的情况）
+	}
+
+	existing, err := findSourceByFileName(sourceSvc, helpManualFileName)
+	if err != nil {
+		slog.Error("使用手册自动同步：查询已有文件失败", "error", err)
+		return
+	}
+
+	var watchID string
+	if existing == nil {
+		created, err := sourceSvc.Import(ctx, helpManualFileName, bytes.NewReader(data))
+		if err != nil {
+			slog.Error("使用手册自动同步：导入失败", "error", err)
+			return
+		}
+		watchID = created.SourceID
+	} else {
+		// 内容有更新，或此前一次导入曾经失败：走与手动"重新上传"完全相同的
+		// Shadow Source 换血流程，不直接覆盖，处理失败也不影响原有可查询内容
+		// （首次导入若失败，existing 就是那条 units_status=failed 的记录本身，
+		// 这里等效于自动帮它按一次"重试"）。
+		shadow, err := sourceSvc.ImportShadow(ctx, existing.SourceID, helpManualFileName, bytes.NewReader(data))
+		if err != nil {
+			slog.Error("使用手册自动同步：导入失败", "error", err)
+			return
+		}
+		watchID = shadow.SourceID
+	}
+
+	if !waitForHelpManualSync(sourceSvc, watchID, existing != nil, helpManualSyncTimeout) {
+		slog.Warn("使用手册自动同步：处理未成功完成，本轮放弃——请检查大模型配置是否可用（API Key、服务地址、模型名是否正确），也可以在「文件」面板里查看具体错误并手动重试；配置修复后下次保存系统设置或重启服务会自动重新尝试")
+		return
+	}
+
+	if err := sysConfigSvc.SetHelpManualHash(hash); err != nil {
+		slog.Error("使用手册自动同步：记录同步版本失败", "error", err)
+		return
+	}
+	slog.Info("使用手册已自动同步为可问答的知识来源")
+}
+
+// waitForHelpManualSync polls until the just-triggered import/reupload of
+// the 使用手册 either succeeds or definitively fails, so maybeSyncHelpManual
+// only marks the content hash as synced on confirmed success. isReupload
+// distinguishes the two outcome shapes: a fresh import's own Source row
+// transitions pending/processing → completed/failed in place; a reupload's
+// Shadow Source row instead disappears entirely on success (swapped into
+// the target and deleted, docs/impl/v1/lifecycle.md 步骤 2) while staying
+// present with units_status=failed on failure (so 系统设置里修复配置后，
+// POST /sources/:id/reupload/retry 或本函数的下一次调用能找到它续跑).
+func waitForHelpManualSync(sourceSvc *source.Service, sourceID string, isReupload bool, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		src, err := sourceSvc.Store().GetByID(sourceID)
+		if err != nil {
+			if isReupload && errors.Is(err, sql.ErrNoRows) {
+				return true // 影子行已消失 = 换血成功，目标 Source 已接管新内容
+			}
+			return false
+		}
+		if src.Status == "failed" || src.UnitsStatus == "failed" {
+			return false
+		}
+		if !isReupload && src.Status == "completed" && src.UnitsStatus == "completed" {
+			return true
+		}
+		time.Sleep(3 * time.Second)
+	}
+	return false
+}
+
+// findSourceByFileName looks up a non-shadow Source by its exact file_name.
+// There's no dedicated store method for this (only ExistsByFileName), so we
+// reuse the filename LIKE-search behind List and filter for an exact match.
+func findSourceByFileName(sourceSvc *source.Service, fileName string) (*source.Source, error) {
+	sources, err := sourceSvc.Store().List("", "", fileName, 5, 0)
+	if err != nil {
+		return nil, err
+	}
+	for i := range sources {
+		if sources[i].FileName == fileName {
+			return &sources[i], nil
+		}
+	}
+	return nil, nil
+}
 
 func main() {
 	var configPath string
@@ -143,20 +305,22 @@ func main() {
 	}
 	var llmClient llm.LLMClient = llmRouter
 
-	// FileView client — mode: "local" 使用内置的纯 Go 转换降级方案
-	// （docs/impl/v1/local-file-convert.md），其余取值（含缺省/空/非法值）
-	// 一律按 "remote" 处理，保持向后兼容。
-	var fvClient source.FileViewClient
-	switch cfg.FileView.Mode {
-	case "local":
-		fvClient = localconvert.NewLocalConvertClient()
-	default:
-		fvClient = source.NewFileViewClient(
-			cfg.FileView.BaseURL,
-			cfg.FileView.PollIntervalMs,
-			cfg.FileView.MaxPollSeconds,
-		)
+	// 系统设置（文件转换服务、历史会话）——DB-backed，页面即时生效，见
+	// internal/sysconfig。
+	sysConfigStore := sysconfig.NewStore(database)
+	sysConfigSvc := sysconfig.NewService(sysConfigStore)
+
+	// FileView client — DynamicFileViewClient 按当前设置在远程 FileView 服务
+	// 与内置纯 Go 转换降级方案（docs/impl/v1/local-file-convert.md）之间选择，
+	// 每次调用读取最新设置，系统设置页保存后无需重启即可生效。
+	fileViewSettings, err := sysConfigSvc.GetFileView()
+	if err != nil {
+		slog.Error("读取文件转换服务设置失败", "error", err)
+		os.Exit(1)
 	}
+	dynamicFVClient := sysconfig.NewDynamicFileViewClient(llmClient, fileViewSettings)
+	sysConfigSvc.SetFileViewClient(dynamicFVClient)
+	var fvClient source.FileViewClient = dynamicFVClient
 
 	// Progress broadcaster
 	broadcaster := progress.NewBroadcaster()
@@ -197,6 +361,15 @@ func main() {
 	unitSvc.SetBroadcaster(broadcaster)
 	sourceSvc.SetLifecycleSetter(unitSvc)
 	sourceSvc.SetEntryMatcher(unitSvc)
+
+	// 使用手册自学习接入：LLM 首次配置完成、或供应商/绑定后续任何变更
+	// （含修复此前导致导入失败的错误配置）时自动把内置使用手册同步为可问答
+	// 的 Source；同时在启动时也检查一次，覆盖"手册内容随版本更新"与"上次
+	// 同步时模型还没配好/配错了"这几种场景。
+	llmConfigSvc.SetOnConfigChanged(func() {
+		go maybeSyncHelpManual(context.Background(), llmConfigSvc, sysConfigSvc, sourceSvc)
+	})
+	go maybeSyncHelpManual(context.Background(), llmConfigSvc, sysConfigSvc, sourceSvc)
 
 	activationMatcher := activation.NewMatcher(activationStore)
 	activationSvc := activation.NewService(activationStore, activationMatcher)
@@ -349,15 +522,13 @@ func main() {
 	studyScheduler.Start()
 
 	// ── Session retention scheduler ─────────────────────
-	sessionRetentionDays := cfg.Session.RetentionDays
-	if sessionRetentionDays <= 0 {
-		sessionRetentionDays = 30
-	}
-	sessionCleanupInterval, err := time.ParseDuration(cfg.Session.CleanupInterval)
+	sessionSettings, err := sysConfigSvc.GetSession()
 	if err != nil {
-		sessionCleanupInterval = 24 * time.Hour
+		slog.Error("读取历史会话设置失败", "error", err)
+		os.Exit(1)
 	}
-	sessionScheduler := session.NewScheduler(sessionStore, sessionRetentionDays, sessionCleanupInterval)
+	sessionScheduler := session.NewScheduler(sessionStore, sessionSettings.RetentionDays, sessionSettings.Duration())
+	sysConfigSvc.SetSessionScheduler(sessionScheduler)
 	sessionScheduler.Start()
 
 	// ── HTTP routes ─────────────────────────────────────
@@ -381,6 +552,26 @@ func main() {
 			return
 		}
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Write(data)
+	})
+	// 用户使用手册：帮助图标打开的静态页面（help.html 用相对路径请求 manual.md
+	// 并用已内嵌的 marked.min.js 客户端渲染，不走数据库/API）。
+	mux.HandleFunc("GET "+prefix+"/help", func(w http.ResponseWriter, r *http.Request) {
+		data, err := web.FS.ReadFile("help.html")
+		if err != nil {
+			http.Error(w, "page not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(data)
+	})
+	mux.HandleFunc("GET "+prefix+"/manual.md", func(w http.ResponseWriter, r *http.Request) {
+		data, err := web.FS.ReadFile("manual.md")
+		if err != nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		w.Write(data)
 	})
 	// Vendored file-viewer widget (DOCX/PPTX/XLSX/PDF client-side rendering
@@ -414,6 +605,7 @@ func main() {
 	entry.NewHandler(entrySvc).RegisterRoutes(apiMux)
 	domain.NewHandler(domainSvc).RegisterRoutes(apiMux)
 	llmconfig.NewHandler(llmConfigSvc).RegisterRoutes(apiMux)
+	sysconfig.NewHandler(sysConfigSvc).RegisterRoutes(apiMux)
 
 	// MCP（对接 AI Agent 平台，docs/impl/v1/mcp.md）：与 REST API 共用同一个
 	// service 图与数据库连接，走 Streamable HTTP，不是独立 stdio 子进程。
