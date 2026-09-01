@@ -291,19 +291,33 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 	outCh := make(chan llm.StreamChunk, 32)
 	var finalResult *AnswerResult
 
+	// send delivers a chunk unless ctx is cancelled first (e.g. the client
+	// disconnected), so the producer never blocks forever on a full buffer
+	// with nobody left to drain it.
+	send := func(c llm.StreamChunk) bool {
+		select {
+		case outCh <- c:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
 	go func() {
 		defer close(outCh)
 		totalStart := time.Now()
 		slog.Debug("answer: stream start", "question", p.Question, "force_deep", p.ForceDeep)
 
-		outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: `{"phase":"retrieval","status":"start"}`}
+		if !send(llm.StreamChunk{Type: llm.ChunkPhase, Content: `{"phase":"retrieval","status":"start"}`}) {
+			return
+		}
 		retrievalStart := time.Now()
 		slog.Debug("answer: stream retrieval start")
 
 		progress := func(evt retrieval.ProgressEvent) {
 			data := fmt.Sprintf(`{"phase":"%s","status":"%s","detail":"%s","duration_ms":%d}`,
 				evt.Phase, evt.Status, evt.Detail, evt.Duration)
-			outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: data}
+			send(llm.StreamChunk{Type: llm.ChunkPhase, Content: data})
 		}
 
 		es, err := s.retSvc.RetrieveWithProgress(ctx, retrieval.QueryContext{
@@ -319,9 +333,9 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 		if err != nil {
 			slog.Error("answer: retrieval failed", "error", err)
 			slog.Debug("answer: stream retrieval error", "duration_ms", time.Since(retrievalStart).Milliseconds(), "error", err)
-			outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
-				`{"phase":"retrieval","status":"error","duration_ms":%d}`, time.Since(retrievalStart).Milliseconds())}
-			outCh <- llm.StreamChunk{Type: llm.ChunkError, Err: err}
+			send(llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
+				`{"phase":"retrieval","status":"error","duration_ms":%d}`, time.Since(retrievalStart).Milliseconds())})
+			send(llm.StreamChunk{Type: llm.ChunkError, Err: err})
 			return
 		}
 
@@ -340,20 +354,24 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 			slog.Debug("answer: stream supporting evidence",
 				"index", i, "fact_id", e.FactID, "point_id", e.PointID, "unit_id", e.UnitID)
 		}
-		outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
+		if !send(llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
 			`{"phase":"retrieval","status":"done","duration_ms":%d,"direct_count":%d,"supporting_count":%d,"path":"%s"}`,
-			retrievalMs, len(es.DirectEvidence), len(es.Supporting), es.Path)}
+			retrievalMs, len(es.DirectEvidence), len(es.Supporting), es.Path)}) {
+			return
+		}
 
 		if es.PathType == retrieval.PathTypeWiki {
 			totalMs := time.Since(totalStart).Milliseconds()
 			slog.Debug("answer: stream wiki direct answer", "total_ms", totalMs)
-			outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
-				`{"phase":"answer","status":"wiki_direct","total_ms":%d}`, totalMs)}
+			if !send(llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
+				`{"phase":"answer","status":"wiki_direct","total_ms":%d}`, totalMs)}) {
+				return
+			}
 			g := s.handleWikiAnswer(es)
 			s.saveAndEnqueue(g.result, g.promptVersion, g.modelName)
 			finalResult = g.result
-			outCh <- llm.StreamChunk{Type: llm.ChunkContent, Content: finalResult.Content}
-			outCh <- llm.StreamChunk{Type: llm.ChunkDone}
+			send(llm.StreamChunk{Type: llm.ChunkContent, Content: finalResult.Content})
+			send(llm.StreamChunk{Type: llm.ChunkDone})
 			return
 		}
 
@@ -369,41 +387,53 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 		if !hasEvidence {
 			totalMs := time.Since(totalStart).Milliseconds()
 			slog.Debug("answer: stream no evidence", "total_ms", totalMs)
-			outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
-				`{"phase":"answer","status":"no_evidence","total_ms":%d}`, totalMs)}
+			if !send(llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
+				`{"phase":"answer","status":"no_evidence","total_ms":%d}`, totalMs)}) {
+				return
+			}
 			g := s.handleNone(ctx, es)
 			s.saveAndEnqueue(g.result, g.promptVersion, g.modelName)
 			finalResult = g.result
-			outCh <- llm.StreamChunk{Type: llm.ChunkContent, Content: finalResult.Content}
-			outCh <- llm.StreamChunk{Type: llm.ChunkDone}
+			send(llm.StreamChunk{Type: llm.ChunkContent, Content: finalResult.Content})
+			send(llm.StreamChunk{Type: llm.ChunkDone})
 			return
 		}
 
 		verifyStart := time.Now()
-		outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: `{"phase":"verify","status":"start"}`}
+		if !send(llm.StreamChunk{Type: llm.ChunkPhase, Content: `{"phase":"verify","status":"start"}`}) {
+			return
+		}
 		refused, verifyResult := s.checkSlowPathSufficiency(ctx, es)
 		if verifyResult.ran {
 			verifyMs := time.Since(verifyStart).Milliseconds()
 			if verifyResult.err != nil {
-				outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
-					`{"phase":"verify","status":"error","duration_ms":%d}`, verifyMs)}
+				if !send(llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
+					`{"phase":"verify","status":"error","duration_ms":%d}`, verifyMs)}) {
+					return
+				}
 			} else {
-				outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
+				if !send(llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
 					`{"phase":"verify","status":"done","duration_ms":%d,"sufficient":%v,"needs_deep":%v,"reason":%q,"direct_count":%d,"supporting_count":%d}`,
-					verifyMs, verifyResult.sufficient, verifyResult.needsDeep, verifyResult.reason, len(es.DirectEvidence), len(es.Supporting))}
+					verifyMs, verifyResult.sufficient, verifyResult.needsDeep, verifyResult.reason, len(es.DirectEvidence), len(es.Supporting))}) {
+					return
+				}
 			}
 		} else {
-			outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: `{"phase":"verify","status":"skipped"}`}
+			if !send(llm.StreamChunk{Type: llm.ChunkPhase, Content: `{"phase":"verify","status":"skipped"}`}) {
+				return
+			}
 		}
 		if refused != nil {
 			totalMs := time.Since(totalStart).Milliseconds()
 			slog.Debug("answer: stream slow path verify refused", "total_ms", totalMs)
-			outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
-				`{"phase":"answer","status":"insufficient","total_ms":%d}`, totalMs)}
+			if !send(llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
+				`{"phase":"answer","status":"insufficient","total_ms":%d}`, totalMs)}) {
+				return
+			}
 			s.saveAndEnqueue(refused.result, refused.promptVersion, refused.modelName)
 			finalResult = refused.result
-			outCh <- llm.StreamChunk{Type: llm.ChunkContent, Content: finalResult.Content}
-			outCh <- llm.StreamChunk{Type: llm.ChunkDone}
+			send(llm.StreamChunk{Type: llm.ChunkContent, Content: finalResult.Content})
+			send(llm.StreamChunk{Type: llm.ChunkDone})
 			return
 		}
 
@@ -420,8 +450,10 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 
 		slog.Debug("answer: stream generation start",
 			"path", path, "prompt_file", promptFile, "model", model)
-		outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
-			`{"phase":"generation","status":"start","path":"%s","model":"%s"}`, path, model)}
+		if !send(llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
+			`{"phase":"generation","status":"start","path":"%s","model":"%s"}`, path, model)}) {
+			return
+		}
 		generationStart := time.Now()
 
 		vars, aliasToFactID := buildPromptVars(es)
@@ -430,13 +462,15 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 			genMs := time.Since(generationStart).Milliseconds()
 			slog.Error("answer: stream LLM failed", "error", err)
 			slog.Debug("answer: stream LLM init error", "duration_ms", genMs, "error", err)
-			outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
-				`{"phase":"generation","status":"error","duration_ms":%d}`, genMs)}
+			if !send(llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
+				`{"phase":"generation","status":"error","duration_ms":%d}`, genMs)}) {
+				return
+			}
 			g := s.handleError(es)
 			s.saveAndEnqueue(g.result, g.promptVersion, g.modelName)
 			finalResult = g.result
-			outCh <- llm.StreamChunk{Type: llm.ChunkContent, Content: finalResult.Content}
-			outCh <- llm.StreamChunk{Type: llm.ChunkDone}
+			send(llm.StreamChunk{Type: llm.ChunkContent, Content: finalResult.Content})
+			send(llm.StreamChunk{Type: llm.ChunkDone})
 			return
 		}
 
@@ -450,14 +484,16 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 				if chunk.Type == llm.ChunkContent {
 					contentBuf.WriteString(chunk.Content)
 				}
-				outCh <- chunk
+				if !send(chunk) {
+					return
+				}
 			case llm.ChunkError:
 				slog.Error("answer: stream error", "error", chunk.Err)
 				slog.Debug("answer: stream chunk error", "chunk_index", chunkCount, "error", chunk.Err)
 				g := s.handleError(es)
 				s.saveAndEnqueue(g.result, g.promptVersion, g.modelName)
 				finalResult = g.result
-				outCh <- llm.StreamChunk{Type: llm.ChunkError, Err: chunk.Err}
+				send(llm.StreamChunk{Type: llm.ChunkError, Err: chunk.Err})
 				return
 			case llm.ChunkDone:
 				raw := contentBuf.String()
@@ -475,7 +511,7 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 					g := s.handleError(es)
 					s.saveAndEnqueue(g.result, g.promptVersion, g.modelName)
 					finalResult = g.result
-					outCh <- llm.StreamChunk{Type: llm.ChunkDone}
+					send(llm.StreamChunk{Type: llm.ChunkDone})
 					return
 				}
 
@@ -501,9 +537,9 @@ func (s *Service) AnswerStream(ctx context.Context, p AnswerStreamParams) (<-cha
 					"content_len", len(resolvedContent),
 					"generation_ms", generationMs,
 					"total_ms", totalMs)
-				outCh <- llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
-					`{"phase":"generation","status":"done","duration_ms":%d,"total_ms":%d}`, generationMs, totalMs)}
-				outCh <- llm.StreamChunk{Type: llm.ChunkDone}
+				send(llm.StreamChunk{Type: llm.ChunkPhase, Content: fmt.Sprintf(
+					`{"phase":"generation","status":"done","duration_ms":%d,"total_ms":%d}`, generationMs, totalMs)})
+				send(llm.StreamChunk{Type: llm.ChunkDone})
 				return
 			}
 		}

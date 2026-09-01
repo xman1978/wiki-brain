@@ -49,9 +49,10 @@ func TestHandlerCreateSource(t *testing.T) {
 		t.Errorf("format = %v, want markdown", resp["format"])
 	}
 
-	// Verify file was saved
+	// Verify file was saved under its sharded bucket (first 2 chars of the
+	// source_id, see shardedRelPath).
 	sourceID := resp["source_id"].(string)
-	origPath := filepath.Join(svc.baseDir, "data", "sources", "original", sourceID+".md")
+	origPath := filepath.Join(svc.baseDir, "data", "sources", "original", sourceID[:2], sourceID+".md")
 	if _, err := os.Stat(origPath); err != nil {
 		t.Errorf("original file not created: %v", err)
 	}

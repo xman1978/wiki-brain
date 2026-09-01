@@ -13,6 +13,10 @@ BIN_NAME="$(basename "$BIN_PATH")"
 CONFIG_PATH="$ROOT_DIR/config/config.yml"
 PID_FILE="$ROOT_DIR/run.pid"
 LOG_DIR="$ROOT_DIR/logs"
+# 程序自身把 stdout/stderr 接管进 wiki-brain.log（见 internal/foundation/logging.go
+# 的 RedirectStdToLogFile），这里只需要给 nohup 一个占位落点，正常情况下不会再有
+# 内容写进来；万一程序在完成接管之前就崩溃（比如启动阶段极早期的 panic），这里
+# 还能兜底看到内容。
 STDOUT_LOG="$LOG_DIR/server.out.log"
 PORT="$(sed -n 's/^[[:space:]]*port:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$CONFIG_PATH" | head -1)"
 PORT="${PORT:-8800}"

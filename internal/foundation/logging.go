@@ -70,3 +70,18 @@ func NewAccessLogger(opts LogOptions) (*slog.Logger, error) {
 	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: opts.Level})
 	return slog.New(handler), nil
 }
+
+// newRedirectFileWriter 构造 RedirectStdToLogFile 各平台实现共用的、指向
+// opts.Dir/opts.Filename 的带轮转 writer。
+func newRedirectFileWriter(opts LogOptions) (*lumberjack.Logger, error) {
+	if err := os.MkdirAll(opts.Dir, 0755); err != nil {
+		return nil, err
+	}
+	return &lumberjack.Logger{
+		Filename:   filepath.Join(opts.Dir, opts.Filename),
+		MaxSize:    opts.MaxSizeMB,
+		MaxBackups: opts.MaxBackups,
+		MaxAge:     opts.MaxAgeDays,
+		Compress:   opts.Compress,
+	}, nil
+}

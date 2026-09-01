@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // TestMigration050_ActivationConfidenceConvergence is the Store-level
@@ -16,11 +16,11 @@ import (
 // JSON (hit_count, plus the table-level known_question_terms column) into a
 // fresh DB that has every migration up to (not including) 050 applied, runs
 // 050, and asserts the post-migration shape — empirically confirming
-// mattn/go-sqlite3's JSON1 build supports json_set/json_remove/
+// the sqlite driver's JSON1 build supports json_set/json_remove/
 // json_group_array/json_each the way this migration relies on
 // (docs/impl/v1/activation.md「Migration 与回填」).
 func TestMigration050_ActivationConfidenceConvergence(t *testing.T) {
-	database, err := sql.Open("sqlite3", ":memory:?_journal_mode=WAL&_foreign_keys=on")
+	database, err := sql.Open("sqlite", ":memory:?_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

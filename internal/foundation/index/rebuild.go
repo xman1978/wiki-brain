@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 )
 
@@ -194,24 +193,6 @@ func (m *Manager) rebuildOutlines(db *sql.DB) (int, error) {
 	}
 
 	return count, rows.Err()
-}
-
-func RebuildFromScratch(dbPath, idxPath string, readMarkdown func(sourceID string) ([]string, error)) (RebuildStats, error) {
-	os.RemoveAll(idxPath)
-
-	mgr, err := NewManager(idxPath)
-	if err != nil {
-		return RebuildStats{}, fmt.Errorf("create index manager: %w", err)
-	}
-	defer mgr.Close()
-
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=on")
-	if err != nil {
-		return RebuildStats{}, fmt.Errorf("open db: %w", err)
-	}
-	defer db.Close()
-
-	return mgr.Rebuild(db, readMarkdown)
 }
 
 func sliceLines(lines []string, lineStart, lineEnd int) string {

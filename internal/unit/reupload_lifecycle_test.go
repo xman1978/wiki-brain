@@ -83,7 +83,11 @@ func seedMarkdown(t *testing.T, tmpDir string, src *source.Source) {
 	if err != nil {
 		t.Fatalf("read original for markdown seed: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(tmpDir, src.MarkdownPath), data, 0644); err != nil {
+	mdFullPath := filepath.Join(tmpDir, src.MarkdownPath)
+	if err := os.MkdirAll(filepath.Dir(mdFullPath), 0755); err != nil {
+		t.Fatalf("mkdir markdown dir: %v", err)
+	}
+	if err := os.WriteFile(mdFullPath, data, 0644); err != nil {
 		t.Fatalf("seed markdown: %v", err)
 	}
 }

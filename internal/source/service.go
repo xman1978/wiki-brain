@@ -132,6 +132,22 @@ type OutlineIndexDoc struct {
 	NodeType  string `json:"node_type"`
 }
 
+// shardedRelPath builds a bucketed relative path under
+// data/sources/<category>/<shard>/<fileName>, where shard is the source's
+// UUID's first 2 hex chars (up to 256 buckets) — keeps any single directory
+// from growing unbounded as sources accumulate. Reads never derive a path
+// from source_id; they always join baseDir with whatever relative path is
+// stored in the sources/source_versions row, so files written under the
+// older flat layout (data/sources/<category>/<fileName>, no shard) keep
+// working unchanged and need no migration.
+func shardedRelPath(category, sourceID, fileName string) string {
+	shard := sourceID
+	if len(shard) > 2 {
+		shard = shard[:2]
+	}
+	return filepath.Join("data", "sources", category, shard, fileName)
+}
+
 // Import handles the full upload flow: save file, create source record.
 // Returns the source for the caller; processing happens async.
 func (s *Service) Import(ctx context.Context, fileName string, fileReader io.Reader) (*Source, error) {
@@ -199,10 +215,13 @@ func (s *Service) importInternal(ctx context.Context, fileName string, fileReade
 
 	format := DetectFormat(fileName)
 
-	originalDir := filepath.Join(s.baseDir, "data", "sources", "original")
-	originalPath := filepath.Join(originalDir, sourceID+ext)
+	originalRelPath := shardedRelPath("original", sourceID, sourceID+ext)
+	originalFullPath := filepath.Join(s.baseDir, originalRelPath)
+	if err := os.MkdirAll(filepath.Dir(originalFullPath), 0755); err != nil {
+		return nil, fmt.Errorf("create original dir: %w", err)
+	}
 
-	f, err := os.Create(originalPath)
+	f, err := os.Create(originalFullPath)
 	if err != nil {
 		return nil, fmt.Errorf("create original file: %w", err)
 	}
@@ -212,14 +231,14 @@ func (s *Service) importInternal(ctx context.Context, fileName string, fileReade
 	}
 	f.Close()
 
-	markdownPath := filepath.Join("data", "sources", "markdown", sourceID+".md")
+	markdownPath := shardedRelPath("markdown", sourceID, sourceID+".md")
 
 	src := &Source{
 		SourceID:     sourceID,
 		Title:        strings.TrimSuffix(fileName, filepath.Ext(fileName)),
 		Format:       format,
 		FileName:     fileName,
-		OriginalPath: filepath.Join("data", "sources", "original", sourceID+ext),
+		OriginalPath: originalRelPath,
 		MarkdownPath: markdownPath,
 		Status:       "pending",
 		Origin:       origin,
@@ -427,6 +446,9 @@ func (s *Service) convertToMarkdown(ctx context.Context, src *Source) error {
 		return fmt.Errorf("fileview convert: %w", err)
 	}
 
+	if err := os.MkdirAll(filepath.Dir(mdFullPath), 0755); err != nil {
+		return fmt.Errorf("create markdown dir: %w", err)
+	}
 	if err := os.WriteFile(mdFullPath, md, 0644); err != nil {
 		return fmt.Errorf("write markdown: %w", err)
 	}
@@ -436,11 +458,13 @@ func (s *Service) convertToMarkdown(ctx context.Context, src *Source) error {
 	if err != nil {
 		slog.Warn("HTML preview generation failed", "source_id", src.SourceID, "error", err)
 	} else if len(html) > 0 {
-		htmlPath := filepath.Join(s.baseDir, "data", "sources", "html", src.SourceID+".html")
-		if err := os.WriteFile(htmlPath, html, 0644); err != nil {
+		relHTMLPath := shardedRelPath("html", src.SourceID, src.SourceID+".html")
+		htmlPath := filepath.Join(s.baseDir, relHTMLPath)
+		if err := os.MkdirAll(filepath.Dir(htmlPath), 0755); err != nil {
+			slog.Warn("create html dir failed", "error", err)
+		} else if err := os.WriteFile(htmlPath, html, 0644); err != nil {
 			slog.Warn("write HTML preview failed", "error", err)
 		} else {
-			relHTMLPath := filepath.Join("data", "sources", "html", src.SourceID+".html")
 			s.store.db.Exec("UPDATE sources SET html_path = ?, updated_at = CURRENT_TIMESTAMP WHERE source_id = ?",
 				relHTMLPath, src.SourceID)
 		}
@@ -1159,12 +1183,18 @@ func (s *Service) archiveAndSwapFiles(target, shadow *Source) (archived archived
 	}
 
 	// Copy shadow's freshly processed content into target's identity.
-	newOriginalPath := filepath.Join("data", "sources", "original", target.SourceID+filepath.Ext(shadow.OriginalPath))
+	newOriginalPath := shardedRelPath("original", target.SourceID, target.SourceID+filepath.Ext(shadow.OriginalPath))
+	if err := os.MkdirAll(filepath.Join(s.baseDir, filepath.Dir(newOriginalPath)), 0755); err != nil {
+		return archivedFiles{}, "", sql.NullString{}, fmt.Errorf("create original dir: %w", err)
+	}
 	if copyErr := copyFile(filepath.Join(s.baseDir, shadow.OriginalPath), filepath.Join(s.baseDir, newOriginalPath)); copyErr != nil {
 		return archivedFiles{}, "", sql.NullString{}, fmt.Errorf("copy shadow original: %w", copyErr)
 	}
 	os.Remove(filepath.Join(s.baseDir, shadow.OriginalPath))
 
+	if err := os.MkdirAll(filepath.Join(s.baseDir, filepath.Dir(target.MarkdownPath)), 0755); err != nil {
+		return archivedFiles{}, "", sql.NullString{}, fmt.Errorf("create markdown dir: %w", err)
+	}
 	if copyErr := copyFile(filepath.Join(s.baseDir, shadow.MarkdownPath), filepath.Join(s.baseDir, target.MarkdownPath)); copyErr != nil {
 		return archivedFiles{}, "", sql.NullString{}, fmt.Errorf("copy shadow markdown: %w", copyErr)
 	}
@@ -1172,8 +1202,10 @@ func (s *Service) archiveAndSwapFiles(target, shadow *Source) (archived archived
 
 	newHTMLPath := sql.NullString{}
 	if shadow.HTMLPath.Valid {
-		targetHTMLPath := filepath.Join("data", "sources", "html", target.SourceID+".html")
-		if copyErr := copyFile(filepath.Join(s.baseDir, shadow.HTMLPath.String), filepath.Join(s.baseDir, targetHTMLPath)); copyErr == nil {
+		targetHTMLPath := shardedRelPath("html", target.SourceID, target.SourceID+".html")
+		if err := os.MkdirAll(filepath.Join(s.baseDir, filepath.Dir(targetHTMLPath)), 0755); err != nil {
+			slog.Warn("create html dir failed", "error", err)
+		} else if copyErr := copyFile(filepath.Join(s.baseDir, shadow.HTMLPath.String), filepath.Join(s.baseDir, targetHTMLPath)); copyErr == nil {
 			os.Remove(filepath.Join(s.baseDir, shadow.HTMLPath.String))
 			newHTMLPath = sql.NullString{String: targetHTMLPath, Valid: true}
 		}

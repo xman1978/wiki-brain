@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // TestMigration051_ActivationBundleMemberConfidence empirically verifies
@@ -16,7 +16,7 @@ import (
 // last_seen_at} objects, and that fringe_point_ids is dropped
 // (docs/impl/v1/activation-bundle.md「成员置信度：Bundle 独有的第二根轴」).
 func TestMigration051_ActivationBundleMemberConfidence(t *testing.T) {
-	database, err := sql.Open("sqlite3", ":memory:?_journal_mode=WAL&_foreign_keys=on")
+	database, err := sql.Open("sqlite", ":memory:?_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

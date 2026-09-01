@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // TestMigration052_WikiSynthesisSatisfaction verifies the four additive
@@ -14,7 +14,7 @@ import (
 // on both a pre-existing row (added via ALTER TABLE ... DEFAULT 0) and a
 // freshly-inserted one (docs/impl/v1/wiki.md 步骤 4a).
 func TestMigration052_WikiSynthesisSatisfaction(t *testing.T) {
-	database, err := sql.Open("sqlite3", ":memory:?_journal_mode=WAL&_foreign_keys=on")
+	database, err := sql.Open("sqlite", ":memory:?_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

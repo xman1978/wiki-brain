@@ -231,6 +231,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 把 stdout/stderr 接管进同一份日志文件，取代 run.sh 里 nohup 单独重定向到的、
+	// 永不轮转的 server.out.log——此后任何 panic 输出、logger 初始化之前来不及走
+	// slog 的错误都归并进 wiki-brain.log。
+	if err := foundation.RedirectStdToLogFile(logOpts); err != nil {
+		slog.Error("重定向 stdout/stderr 到日志文件失败", "error", err)
+		os.Exit(1)
+	}
+
 	accessLogOpts := logOpts
 	accessLogOpts.Console = cfg.Logging.AccessConsole
 	accessLogger, err := foundation.NewAccessLogger(accessLogOpts)
