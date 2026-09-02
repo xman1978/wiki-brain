@@ -158,12 +158,19 @@ type Revision struct {
 // compiling against everything the entry owns. Empty means "no restriction",
 // the pre-existing behavior (every other caller — Study-candidate compile,
 // Recompile — never sends this field).
+// TopicName is an optional human-supplied page title: when non-empty, it is
+// used as the compiled page's title instead of the default (a "、"-joined
+// concatenation of the selected entries' names). The entry names often don't
+// match what the page actually ends up being about once material is
+// assembled (docs/impl/v1/wiki.md), so a title the user chose at compile time
+// takes precedence.
 type CompileRequest struct {
-	EntryIDs []string  `json:"entry_ids"`
-	ResultID string    `json:"result_id,omitempty"`
-	Claims   []Claim   `json:"claims,omitempty"`
-	Tensions []Tension `json:"tensions,omitempty"`
-	PointIDs []string  `json:"point_ids,omitempty"`
+	EntryIDs  []string  `json:"entry_ids"`
+	ResultID  string    `json:"result_id,omitempty"`
+	Claims    []Claim   `json:"claims,omitempty"`
+	Tensions  []Tension `json:"tensions,omitempty"`
+	PointIDs  []string  `json:"point_ids,omitempty"`
+	TopicName string    `json:"topic_name,omitempty"`
 }
 
 // AnalyzeRequest is POST /wiki/compile/analyze's request body -- same shape

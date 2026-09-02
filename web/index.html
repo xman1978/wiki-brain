@@ -4,6 +4,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>知识大脑</title>
+  <script>
+    // 尽早在样式解析前设置属性，避免高对比度用户首帧闪烁成默认配色。
+    (function() {
+      try {
+        if (localStorage.getItem('wb_contrast') === 'high') {
+          document.documentElement.setAttribute('data-contrast', 'high');
+        }
+      } catch (e) {}
+    })();
+  </script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -15,8 +25,8 @@
       --border:      #e8e8e3;
       --border-lt:   #f0f0eb;
       --text:        #2d2d2a;
-      --text-2:      #6b6b65;
-      --text-3:      #9b9b93;
+      --text-2:      #5a5a54;
+      --text-3:      #767670;
       --accent:      #c96442;
       --accent-lt:   #fdf4f0;
       --green:       #2e7d5b;
@@ -31,6 +41,18 @@
       --radius-xs:   6px;
       --shadow:      0 1px 3px rgba(0,0,0,.04);
       --shadow-md:   0 4px 16px rgba(0,0,0,.08);
+    }
+
+    /* 高对比度模式：只覆盖灰阶/描边 token，其余颜色语义（accent/green/yellow/red）不变，
+       靠 :root 变量级联到全站，不需要逐条规则改写。 */
+    :root[data-contrast="high"] {
+      --bg-alt:      #f2f2ef;
+      --surface-alt: #eaeae7;
+      --border:      #b8b8b0;
+      --border-lt:   #cfcfc8;
+      --text:        #000000;
+      --text-2:      #262622;
+      --text-3:      #3d3d38;
     }
 
     body { font-family: 'Söhne', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif; font-size:15px; color:var(--text); background:var(--bg); height:100vh; display:flex; overflow:hidden; }
@@ -66,6 +88,7 @@
     }
     .sidebar.expanded .nav-item { width:100%; padding:9px 12px; justify-content:flex-start; }
     .nav-item:hover { background:rgba(0,0,0,.05); color:var(--text); }
+    .nav-item.active { color:var(--accent); background:var(--accent-lt); }
     .nav-item .nav-icon { width:20px; height:20px; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
     .nav-item .nav-icon svg { width:18px; height:18px; stroke:currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
     .nav-item .nav-label { display:none; white-space:nowrap; }
@@ -98,11 +121,11 @@
     .history-item:hover { background:rgba(0,0,0,.05); color:var(--text); }
     .history-item.active { background:rgba(0,0,0,.07); color:var(--text); font-weight:500; }
     .history-item .hi-title { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; }
-    .history-item .hi-time { font-size:11px; color:var(--text-3); margin-top:2px; }
+    .history-item .hi-time { font-size:12px; color:var(--text-3); margin-top:2px; }
     .history-item .hi-del { position:absolute; right:8px; top:8px; color:var(--text-3); cursor:pointer; font-size:12px; opacity:0; transition:.12s; padding:2px 4px; border-radius:4px; }
     .history-item:hover .hi-del { opacity:1; }
     .history-item .hi-del:hover { color:var(--red); background:var(--red-lt); }
-    .history-group-label { font-size:11px; color:var(--text-3); padding:10px 12px 4px; font-weight:500; }
+    .history-group-label { font-size:12px; color:var(--text-3); padding:10px 12px 4px; font-weight:500; }
 
     /* History popover (shown when clicking history icon in collapsed mode) */
     .history-popover {
@@ -173,7 +196,7 @@
     }
     .process-panel.empty { display:flex; align-items:center; justify-content:center; }
     .process-panel.pp-hidden { display:none; }
-    .pp-title { font-size:11px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; margin-bottom:12px; }
+    .pp-title { font-size:12px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; margin-bottom:12px; }
     .pp-step { display:flex; gap:8px; position:relative; min-height:32px; }
     .pp-rail { display:flex; flex-direction:column; align-items:center; width:14px; flex-shrink:0; }
     .pp-dot { width:8px; height:8px; border-radius:50%; border:2px solid var(--border); background:var(--bg); flex-shrink:0; z-index:1; margin-top:2px; }
@@ -186,8 +209,8 @@
     .pp-body { flex:1; padding-bottom:8px; }
     .pp-label { font-size:12px; font-weight:500; color:var(--text); }
     .pp-label.wait { color:var(--text-3); }
-    .pp-dur { font-size:10px; color:var(--text-3); font-family:'SF Mono',SFMono-Regular,Menlo,monospace; margin-top:1px; }
-    .pp-detail { font-size:10px; color:var(--text-2); margin-top:1px; }
+    .pp-dur { font-size:12px; color:var(--text-3); font-family:'SF Mono',SFMono-Regular,Menlo,monospace; margin-top:1px; }
+    .pp-detail { font-size:12px; color:var(--text-2); margin-top:1px; }
     .pp-step:last-child .pp-line { display:none; }
     .pp-empty { font-size:12px; color:var(--text-3); text-align:center; }
 
@@ -204,7 +227,7 @@
     .icon-btn.copied { color:var(--green); }
     .icon-btn[title]::after {
       content:attr(title); position:absolute; bottom:calc(100% + 6px); left:50%; transform:translateX(-50%);
-      background:var(--text); color:#fff; font-size:11px; padding:3px 8px; border-radius:5px;
+      background:var(--text); color:#fff; font-size:12px; padding:3px 8px; border-radius:5px;
       white-space:nowrap; opacity:0; pointer-events:none; transition:opacity .12s; z-index:50;
     }
     .icon-btn[title]:hover::after { opacity:1; }
@@ -280,7 +303,7 @@
       pointer-events:none;
     }
     .wiki-page-content a[data-tooltip]:hover::after { opacity:1; visibility:visible; transition-delay:.35s, 0s; }
-    .wiki-cite-legend { display:flex; gap:14px; flex-wrap:wrap; font-size:11px; color:var(--text-3); margin:6px 0 10px; }
+    .wiki-cite-legend { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--text-3); margin:6px 0 10px; }
     .wiki-cite-legend span { display:inline-flex; align-items:center; gap:4px; }
     .wiki-cite-legend i { width:10px; height:10px; border-radius:2px; display:inline-block; }
     .ans-body th { background:var(--bg-2); }
@@ -288,7 +311,7 @@
     .ans-body a[href^="evidence:"]:hover { border-color:var(--accent); color:var(--accent); }
     .ans-meta { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; align-items:center; padding-top:12px; border-top:1px solid var(--border-lt); }
 
-    .badge { font-size:11px; padding:3px 9px; border-radius:20px; border:1px solid var(--border); background:var(--surface-alt); color:var(--text-2); font-weight:500; }
+    .badge { font-size:12px; padding:3px 9px; border-radius:20px; border:1px solid var(--border); background:var(--border-lt); color:var(--text); font-weight:500; }
     .badge.confident { background:var(--green-lt); border-color:var(--green); color:var(--green); }
     .badge.partial   { background:var(--yellow-lt); border-color:var(--yellow); color:var(--yellow); }
     .badge.gap       { background:var(--red-lt); border-color:var(--red); color:var(--red); }
@@ -296,13 +319,13 @@
     .badge.deep      { background:var(--accent-lt); border-color:var(--accent); color:var(--accent); }
     .badge.none, .badge.error { background:var(--red-lt); border-color:var(--red); color:var(--red); }
 
-    .id-text { font-size:11px; color:var(--text-3); font-family:'SF Mono',SFMono-Regular,Menlo,monospace; cursor:pointer; }
+    .id-text { font-size:12px; color:var(--text-3); font-family:'SF Mono',SFMono-Regular,Menlo,monospace; cursor:pointer; }
     .id-text:hover { color:var(--accent); }
     .ans-citations { margin-top:12px; }
-    .ans-citations h4 { font-size:11px; color:var(--text-3); margin-bottom:6px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; }
-    .citation-tag { display:inline-block; font-size:11px; padding:2px 8px; border-radius:4px; background:var(--surface-alt); border:1px solid var(--border); margin:2px; cursor:pointer; font-family:'SF Mono',SFMono-Regular,Menlo,monospace; }
+    .ans-citations h4 { font-size:12px; color:var(--text-3); margin-bottom:6px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; }
+    .citation-tag { display:inline-block; font-size:12px; padding:2px 8px; border-radius:4px; background:var(--border-lt); border:1px solid var(--border); color:var(--text); margin:2px; cursor:pointer; font-family:'SF Mono',SFMono-Regular,Menlo,monospace; }
     .citation-tag:hover { border-color:var(--accent); color:var(--accent); }
-    .kp-chip { display:inline-block; font-size:11px; padding:2px 8px; border-radius:4px; background:var(--surface-alt); border:1px solid var(--border); margin:2px 4px 2px 0; }
+    .kp-chip { display:inline-block; font-size:12px; padding:2px 8px; border-radius:4px; background:var(--border-lt); border:1px solid var(--border); color:var(--text); margin:2px 4px 2px 0; }
     .ans-feedback { margin-top:12px; display:flex; gap:8px; align-items:center; }
     .ans-feedback span { font-size:12px; color:var(--text-3); }
     .feedback-btn {
@@ -317,7 +340,7 @@
     .feedback-btn:disabled { opacity:.4; cursor:not-allowed; }
     .feedback-btn[title]::after {
       content:attr(title); position:absolute; bottom:calc(100% + 6px); left:50%; transform:translateX(-50%);
-      background:var(--text); color:#fff; font-size:11px; padding:3px 8px; border-radius:5px;
+      background:var(--text); color:#fff; font-size:12px; padding:3px 8px; border-radius:5px;
       white-space:nowrap; opacity:0; pointer-events:none; transition:opacity .12s; z-index:50;
     }
     .feedback-btn[title]:hover::after { opacity:1; }
@@ -349,7 +372,7 @@
     }
     .input-bar .send-btn:hover { background:#000; }
     .input-bar .send-btn:disabled { background:var(--text-3); cursor:not-allowed; }
-    .input-hint { text-align:center; font-size:11px; color:var(--text-3); margin-top:6px; }
+    .input-hint { text-align:center; font-size:12px; color:var(--text-3); margin-top:6px; }
 
     /* ── EXPLAIN DRAWER (right) ──────────────────────────── */
     .explain-overlay { position:fixed; inset:0; background:rgba(0,0,0,.15); z-index:89; }
@@ -371,7 +394,7 @@
     .panel-content { flex:1; overflow-y:auto; padding:16px 20px; }
     .panel-empty { text-align:center; padding:40px 16px; color:var(--text-3); font-size:14px; }
     .panel-section { margin-bottom:18px; }
-    .panel-section h3 { font-size:11px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }
+    .panel-section h3 { font-size:12px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }
     #llmDrawer .sys-group { position:relative; border:1px solid var(--border-lt); border-radius:var(--radius-sm); padding:24px 16px 14px; margin-bottom:16px; }
     #llmDrawer .sys-group .panel-section:last-child { margin-bottom:0; }
     #llmDrawer .sys-group-label { position:absolute; top:0; right:16px; transform:translateY(-50%); background:var(--bg); padding:0 6px; font-size:12px; font-weight:600; color:#000; }
@@ -386,12 +409,12 @@
     .evidence-card:hover { border-color:var(--text-3); }
     .evidence-card.direct { border-left:3px solid var(--green); }
     .evidence-card.supporting { border-left:3px solid var(--yellow); }
-    .evidence-card.filtered { border-left:3px solid var(--text-3); opacity:.85; }
-    .evidence-card .ev-role { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; }
+    .evidence-card.filtered { border-left:3px solid var(--text-3); opacity:.95; }
+    .evidence-card .ev-role { font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; }
     .evidence-card.direct .ev-role { color:var(--green); }
     .evidence-card.supporting .ev-role { color:var(--yellow); }
     .evidence-card.filtered .ev-role { color:var(--text-3); }
-    .evidence-card .ev-source { font-size:11px; color:var(--text-3); margin-top:3px; }
+    .evidence-card .ev-source { font-size:12px; color:var(--text-3); margin-top:3px; }
     .evidence-card .ev-content { font-size:13px; margin-top:6px; line-height:1.5; color:var(--text-2); }
     .evidence-card .ev-content p { margin:0.3em 0; }
     .evidence-card .ev-content p:first-child { margin-top:0; }
@@ -433,7 +456,7 @@
     .upload-zone:hover, .upload-zone.drag-over { border-color:var(--accent); background:var(--accent-lt); }
     .upload-zone .uz-icon { font-size:22px; margin-bottom:6px; line-height:1; }
     .upload-zone .uz-text { font-size:12px; color:var(--text-2); }
-    .upload-zone .uz-hint { font-size:10px; color:var(--text-3); margin-top:4px; line-height:1.4; }
+    .upload-zone .uz-hint { font-size:12px; color:var(--text-3); margin-top:4px; line-height:1.4; }
     #sourceNameFilter {
       box-sizing:border-box;
       padding:6px 10px;
@@ -452,7 +475,7 @@
     .timeline-title { font-size:12px; font-weight:600; color:var(--text-2); margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
     .timeline-title .tl-title-left { display:flex; align-items:baseline; gap:8px; min-width:0; flex:1; }
     .timeline-title .tl-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
-    .timeline-title .tl-upload-at { font-size:11px; font-weight:400; color:var(--text-3); flex-shrink:0; white-space:nowrap; }
+    .timeline-title .tl-upload-at { font-size:12px; font-weight:400; color:var(--text-3); flex-shrink:0; white-space:nowrap; }
     .timeline-steps { display:flex; align-items:flex-start; width:100%; gap:0; }
     .tl-step { flex:1; min-width:0; display:flex; flex-direction:column; position:relative; align-items:stretch; }
     .tl-rail { display:flex; flex-direction:row; align-items:center; width:100%; height:14px; }
@@ -466,11 +489,11 @@
     .tl-step:first-child .tl-line-left { visibility:hidden; }
     .tl-step:last-child .tl-line-right { visibility:hidden; }
     .tl-body { padding:6px 4px 0; text-align:center; }
-    .tl-label { font-size:11px; font-weight:500; color:var(--text); line-height:1.35; }
+    .tl-label { font-size:12px; font-weight:500; color:var(--text); line-height:1.35; }
     .tl-label.wait { color:var(--text-3); }
-    .tl-time { font-size:10px; color:var(--text-3); margin-top:3px; font-family:'SF Mono',SFMono-Regular,Menlo,monospace; }
+    .tl-time { font-size:12px; color:var(--text-3); margin-top:3px; font-family:'SF Mono',SFMono-Regular,Menlo,monospace; }
     .tl-empty { font-size:12px; color:var(--text-3); padding:8px 4px; text-align:center; line-height:1.5; }
-    .tl-error { margin-top:8px; font-size:11px; color:var(--red); padding:6px 8px; background:var(--red-lt); border-radius:var(--radius-xs); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .tl-error { margin-top:8px; font-size:12px; color:var(--red); padding:6px 8px; background:var(--red-lt); border-radius:var(--radius-xs); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
     .source-card { border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:6px; cursor:pointer; transition:.12s; display:flex; align-items:center; gap:12px; }
     .source-card:hover { border-color:var(--text-3); background:var(--bg-alt); }
@@ -479,7 +502,7 @@
     .source-card .sc-title { font-size:13px; font-weight:500; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:1; }
     .source-card .sc-meta { display:flex; gap:6px; align-items:center; flex-wrap:nowrap; flex-shrink:0; margin-left:auto; }
     .source-card .sc-actions { display:flex; gap:4px; justify-content:flex-end; flex-wrap:wrap; align-items:center; flex-shrink:0; }
-    .status-chip { font-size:10px; padding:2px 7px; border-radius:10px; font-weight:500; }
+    .status-chip { font-size:12px; padding:2px 7px; border-radius:10px; font-weight:500; }
     .status-pending    { background:#fef3c7; color:#92400e; }
     .status-processing { background:#dbeafe; color:#1e40af; }
     .status-completed  { background:var(--green-lt); color:var(--green); }
@@ -498,7 +521,7 @@
     .summary-stat.gap       .ss-val { color:var(--red); }
     .table-wrap { overflow-x:auto; }
     table { width:100%; border-collapse:collapse; font-size:13px; }
-    th { padding:10px 12px; text-align:left; font-size:11px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.05em; border-bottom:1px solid var(--border); }
+    th { padding:10px 12px; text-align:left; font-size:12px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.05em; border-bottom:1px solid var(--border); }
     td { padding:10px 12px; border-bottom:1px solid var(--border-lt); }
     tr:last-child td { border-bottom:none; }
     tr:hover td { background:var(--bg-alt); }
@@ -526,9 +549,9 @@
 
     /* ── MISC ─────────────────────────────────────────────── */
     .hidden { display:none !important; }
-    .copy-btn { font-size:10px; padding:2px 6px; border-radius:4px; border:1px solid var(--border); background:var(--bg-alt); cursor:pointer; color:var(--text-3); font-weight:500; }
+    .copy-btn { font-size:12px; padding:2px 6px; border-radius:4px; border:1px solid var(--border); background:var(--bg-alt); cursor:pointer; color:var(--text-3); font-weight:500; }
     .copy-btn:hover { color:var(--accent); border-color:var(--accent); }
-    .raw-json { font-family:'SF Mono',SFMono-Regular,Menlo,monospace; font-size:11px; white-space:pre-wrap; word-break:break-all; color:var(--text); background:var(--bg-alt); padding:14px; border-radius:var(--radius-sm); border:1px solid var(--border); overflow-x:auto; }
+    .raw-json { font-family:'SF Mono',SFMono-Regular,Menlo,monospace; font-size:12px; white-space:pre-wrap; word-break:break-all; color:var(--text); background:var(--bg-alt); padding:14px; border-radius:var(--radius-sm); border:1px solid var(--border); overflow-x:auto; }
     select { padding:6px 10px; border:1px solid var(--border); border-radius:var(--radius-xs); font-size:13px; background:var(--bg); outline:none; cursor:pointer; color:var(--text); }
     select:focus { border-color:var(--text-3); }
     #llmDrawer .llm-field,
@@ -577,7 +600,7 @@
     }
     #llmDrawer .llm-purpose-fold-title::before {
       content:'▶';
-      font-size:10px;
+      font-size:12px;
       color:var(--text-3);
       transition:transform .15s ease;
       flex-shrink:0;
@@ -642,8 +665,8 @@
     .correction-box textarea { width:100%; border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 10px; font:inherit; font-size:13px; resize:vertical; min-height:60px; outline:none; }
     .correction-box .correction-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:6px; }
     .ev-badges { display:flex; gap:4px; margin-top:3px; flex-wrap:wrap; align-items:center; }
-    .ev-mined-badge { font-size:10px; padding:1px 6px; border-radius:4px; background:var(--surface-alt); border:1px solid var(--border); color:var(--text-3); }
-    .ev-lines { font-size:10px; color:var(--text-3); font-family:'SF Mono',SFMono-Regular,Menlo,monospace; }
+    .ev-mined-badge { font-size:12px; padding:1px 6px; border-radius:4px; background:var(--border-lt); border:1px solid var(--border); color:var(--text-2); }
+    .ev-lines { font-size:12px; color:var(--text-2); font-family:'SF Mono',SFMono-Regular,Menlo,monospace; }
     .ku-context { margin-top:8px; padding:10px; border-radius:var(--radius-sm); background:var(--bg-alt); font-size:12px; color:var(--text-2); border:1px solid var(--border-lt); }
     .activation-hit-card { border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:6px; font-size:12px; }
     .activation-hit-card .ah-score { color:var(--text-3); }
@@ -658,7 +681,7 @@
     .link-row:hover, .page-row:hover, .result-row:hover { border-color:var(--text-3); background:var(--bg-alt); }
     .link-row.active, .page-row.active, .result-row.active { border-color:var(--accent); background:var(--accent-lt); }
     .link-row .lr-terms, .page-row .pr-title, .result-row .rr-action { font-size:13px; font-weight:500; }
-    .link-row .lr-meta, .page-row .pr-meta, .result-row .rr-meta { font-size:11px; color:var(--text-3); margin-top:4px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .link-row .lr-meta, .page-row .pr-meta, .result-row .rr-meta { font-size:12px; color:var(--text-3); margin-top:4px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 
     /* ── 知识领域 drawer: domain rail + concept grid ── */
     #conceptDrawer .drawer-body { display:flex; }
@@ -666,7 +689,7 @@
     .dcc-status-badge.status-confirmed { background:var(--green-lt); color:var(--green); border:1px solid var(--green); }
     /* 置信度分档徽标（2026-08-13，取代 candidate/verified/weakened/deprecated
        离散状态机的展示层——exploring 灰 / self_graded 蓝 / trusted 金）。 */
-    .tier-badge { display:inline-block; padding:1px 7px; border-radius:999px; font-size:11px; font-weight:600; }
+    .tier-badge { display:inline-block; padding:1px 7px; border-radius:999px; font-size:12px; font-weight:600; }
     .tier-badge.exploring { background:var(--surface-alt); color:var(--text-2); border:1px solid var(--border); }
     .tier-badge.self_graded { background:var(--blue-lt,#e3edff); color:var(--blue,#3b6fd6); border:1px solid var(--blue,#3b6fd6); }
     .tier-badge.trusted { background:var(--yellow-lt); color:var(--yellow); border:1px solid var(--yellow); }
@@ -681,8 +704,8 @@
     .domain-rail-item.active { background:var(--accent-lt); color:var(--accent); }
     .domain-rail-item.active .domain-rail-name { color:var(--accent); }
     .domain-rail-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:500; color:var(--text); }
-    .domain-rail-count { font-size:11px; color:var(--text-3); flex-shrink:0; }
-    .domain-rail-signal { flex-shrink:0; min-width:16px; height:16px; padding:0 4px; border-radius:9px; background:var(--yellow-lt); color:var(--yellow); font-size:10px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+    .domain-rail-count { font-size:12px; color:var(--text-3); flex-shrink:0; }
+    .domain-rail-signal { flex-shrink:0; min-width:16px; height:16px; padding:0 4px; border-radius:9px; background:var(--yellow-lt); color:var(--yellow); font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; }
     .domain-main { flex:1; min-width:0; display:flex; flex-direction:column; overflow:hidden; }
     .domain-concept-pane { padding:16px 18px 24px; }
     .domain-concept-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(180px,1fr)); gap:10px; margin-top:12px; }
@@ -692,16 +715,16 @@
     .domain-concept-card.confirmed { border-color:var(--text); border-width:1.5px; }
     .domain-concept-card.candidate { background:var(--bg-alt); }
     .domain-concept-card.candidate.status-rejected,
-    .domain-concept-card.candidate.status-expired { opacity:.7; }
+    .domain-concept-card.candidate.status-expired { opacity:.9; }
     .domain-concept-card .dcc-top { display:flex; align-items:flex-start; justify-content:space-between; gap:6px; margin-bottom:4px; }
     .domain-concept-card .dcc-name { font-size:13px; font-weight:600; }
     .domain-concept-card .dcc-desc { font-size:11.5px; color:var(--text-2); overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; min-height:2.6em; }
-    .domain-concept-card .dcc-kp { font-size:11px; color:var(--text-3); margin-top:8px; padding-top:8px; border-top:1px dashed var(--border-lt); }
-    .dcc-badge { flex-shrink:0; font-size:10px; font-weight:600; padding:2px 7px; border-radius:20px; background:var(--yellow-lt); color:var(--yellow); border:1px solid var(--yellow); cursor:pointer; }
-    .dcc-status-badge { flex-shrink:0; font-size:10px; font-weight:600; padding:2px 7px; border-radius:20px; }
+    .domain-concept-card .dcc-kp { font-size:12px; color:var(--text-3); margin-top:8px; padding-top:8px; border-top:1px dashed var(--border-lt); }
+    .dcc-badge { flex-shrink:0; font-size:12px; font-weight:600; padding:2px 7px; border-radius:20px; background:var(--yellow-lt); color:var(--yellow); border:1px solid var(--yellow); cursor:pointer; }
+    .dcc-status-badge { flex-shrink:0; font-size:12px; font-weight:600; padding:2px 7px; border-radius:20px; }
     .dcc-status-badge.status-pending_confirm { background:var(--yellow-lt); color:var(--yellow); border:1px solid var(--yellow); }
     .dcc-status-badge.status-rejected { background:var(--red-lt); color:var(--red); border:1px solid var(--red); }
-    .dcc-status-badge.status-expired { background:var(--surface-alt); color:var(--text-3); border:1px solid var(--border); }
+    .dcc-status-badge.status-expired { background:var(--border-lt); color:var(--text-2); border:1px solid var(--border); }
     .dcc-status-badge.status-published { background:var(--green-lt); color:var(--green); border:1px solid var(--green); }
     .dcc-status-badge.status-draft { background:var(--surface-alt); color:var(--text-2); border:1px solid var(--border); }
     .dcc-status-badge.status-needs_recompile { background:var(--yellow-lt); color:var(--yellow); border:1px solid var(--yellow); }
@@ -720,11 +743,11 @@
     .lazy-section-body { padding:10px 12px; display:none; }
     .lazy-section.open .lazy-section-body { display:block; }
     .lazy-section.open .chev { transform:rotate(180deg); display:inline-block; }
-    .lazy-subhead { font-size:11px; color:var(--text-3); text-transform:uppercase; letter-spacing:.04em; margin:10px 0 6px; }
+    .lazy-subhead { font-size:12px; color:var(--text-3); text-transform:uppercase; letter-spacing:.04em; margin:10px 0 6px; }
     .lazy-subhead:first-child { margin-top:0; }
     .q-item { padding:6px 0; border-bottom:1px solid var(--border-lt); font-size:13px; }
     .q-item:last-child { border-bottom:0; }
-    .q-item .q-meta { font-size:11px; color:var(--text-3); margin-top:2px; }
+    .q-item .q-meta { font-size:12px; color:var(--text-3); margin-top:2px; }
 
     /* 知识点链接的实际样式在 .cite-ok/.cite-warn/.cite-bad 里（renderWikiContent
        给每个 point: 链接都会挂上其中一个 class，见上面的 pill 样式块）——这条
@@ -763,7 +786,7 @@
     <button class="nav-item" onclick="openStudyView()" title="学习报告"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg></span><span class="nav-label">学习报告</span></button>
     <button class="nav-item" onclick="openActivationView()" title="激活链接"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M13 2 4.5 13H11l-1 9 9.5-12H13l0-8Z"/></svg></span><span class="nav-label">激活链接</span><span class="nav-badge hidden" id="activationPendingBadge">0</span></button>
     <button class="nav-item" onclick="openConceptView()" title="知识领域"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg></span><span class="nav-label">知识领域</span><span class="nav-badge hidden" id="conceptPendingBadge">0</span><span class="nav-badge hidden" id="wikiPendingBadge">0</span></button>
-    <button class="nav-item" onclick="openLlmView()" title="系统设置"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg></span><span class="nav-label">系统设置</span></button>
+    <button class="nav-item" onclick="openLlmView()" title="系统设置"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg></span><span class="nav-label">系统设置</span></button>
   </div>
 
   <div class="sidebar-divider"></div>
@@ -771,6 +794,7 @@
   <div class="history-list" id="historyList"></div>
 
   <div class="sidebar-help-wrap">
+    <button class="nav-item" onclick="toggleHighContrast()" title="高对比度模式" id="contrastToggleBtn" aria-pressed="false"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 0 0 20z" fill="currentColor" stroke="none"/></svg></span><span class="nav-label">高对比度模式</span></button>
     <button class="nav-item" onclick="openHelpManual()" title="帮助 / 使用手册"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span><span class="nav-label">帮助</span></button>
   </div>
 </aside>
@@ -886,7 +910,7 @@
     </div>
     <div class="drawer-sources">
       <div class="drawer-sources-header" style="display:flex;align-items:center;justify-content:space-between;">
-        <span>来源列表 <span id="sourcesCount" style="font-size:11px;color:var(--text-3)"></span></span>
+        <span>来源列表 <span id="sourcesCount" style="font-size:12px;color:var(--text-3)"></span></span>
         <button class="btn btn-sm" onclick="loadSources()">刷新</button>
       </div>
       <div style="padding:8px 12px;border-bottom:1px solid var(--border-lt);display:flex;gap:8px;flex-wrap:nowrap;align-items:center;">
@@ -1608,7 +1632,7 @@ function renderProcessPanel() {
     if (isTotalRow && s.state === 'done') {
       html += '<div style="border-top:1px solid var(--border-lt);margin:6px 0 8px;padding-top:8px;display:flex;justify-content:space-between;align-items:center">\
         <span style="font-size:12px;font-weight:600;color:var(--text-2)">' + esc(s.label) + '</span>\
-        <span style="font-size:11px;font-weight:600;color:var(--green);font-family:\'SF Mono\',monospace">' + durText + '</span></div>';
+        <span style="font-size:12px;font-weight:600;color:var(--green);font-family:\'SF Mono\',monospace">' + durText + '</span></div>';
       return;
     }
     if (isTotalRow) return;
@@ -1945,7 +1969,7 @@ function appendErrorMsg(msg, rawData) {
   el.innerHTML = '\
     <div style="color:var(--red);font-size:14px;font-weight:500">请求出错</div>\
     <div style="font-size:13px;color:var(--text-2);margin-top:6px">' + esc(msg) + '</div>\
-    ' + (rawData ? '<details style="margin-top:8px"><summary style="font-size:11px;cursor:pointer;color:var(--text-3)">原始响应</summary><div class="raw-json" style="margin-top:6px">' + esc(JSON.stringify(rawData,null,2)) + '</div></details>' : '');
+    ' + (rawData ? '<details style="margin-top:8px"><summary style="font-size:12px;cursor:pointer;color:var(--text-3)">原始响应</summary><div class="raw-json" style="margin-top:6px">' + esc(JSON.stringify(rawData,null,2)) + '</div></details>' : '');
   chatInner().appendChild(el);
   scrollThread();
 }
@@ -2064,7 +2088,7 @@ function renderOverviewTab(ans, container) {
     <div class="panel-section" style="border-top:1px solid var(--border-lt);padding-top:14px">\
       <h3>思考记录</h3>\
       ' + (tid
-        ? '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px"><code style="font-size:10px;background:var(--bg-alt);padding:3px 8px;border-radius:4px;border:1px solid var(--border);flex:1;word-break:break-all">' + esc(tid) + '</code><button class="copy-btn" onclick="copy(\'' + esc(tid) + '\',this)">复制</button></div><button class="btn btn-sm" style="width:100%" onclick="showTraceDetail(\'' + esc(tid) + '\')">加载思考记录</button>'
+        ? '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px"><code style="font-size:12px;background:var(--bg-alt);padding:3px 8px;border-radius:4px;border:1px solid var(--border);flex:1;word-break:break-all">' + esc(tid) + '</code><button class="copy-btn" onclick="copy(\'' + esc(tid) + '\',this)">复制</button></div><button class="btn btn-sm" style="width:100%" onclick="showTraceDetail(\'' + esc(tid) + '\')">加载思考记录</button>'
         : '<div style="font-size:13px;color:var(--text-3);font-style:italic">记录生成中…</div>') + '\
     </div><div id="traceDetail"></div>';
 }
@@ -2081,7 +2105,7 @@ function renderSourcesTab(ans, container) {
     html += '<div class="panel-section"><h3>激活命中 (' + hits.length + ')</h3>' + hits.map(function(h) {
       return '<div class="activation-hit-card">\
         <div><span class="id-text" title="点击复制 link_id" onclick="copy(\'' + esc(h.link_id||'') + '\',this)">link:' + esc((h.link_id||'').slice(0,10)) + '…</span></div>\
-        <div style="margin-top:2px">point: <code style="font-size:11px">' + esc((h.point_id||'').slice(0,16)) + '…</code></div>\
+        <div style="margin-top:2px">point: <code style="font-size:12px">' + esc((h.point_id||'').slice(0,16)) + '…</code></div>\
         <div class="ah-score" style="margin-top:2px">match_score: ' + (h.match_score!=null ? h.match_score.toFixed(2) : '-') + (h.matched_by ? ' · ' + (h.matched_by === 'model' ? '模型辅助' : '精确') : '') + '</div>\
       </div>';
     }).join('') + '</div>';
@@ -2093,7 +2117,7 @@ function renderSourcesTab(ans, container) {
   }
   if (direct.length) html += '<div class="panel-section"><h3>直接证据 (' + direct.length + ')</h3>' + direct.map(function(e) { return evidenceCardHtml(e, 'direct'); }).join('') + '</div>';
   if (supporting.length) html += '<div class="panel-section"><h3>补充证据 (' + supporting.length + ')</h3>' + supporting.map(function(e) { return evidenceCardHtml(e, 'supporting'); }).join('') + '</div>';
-  if (filtered.length) html += '<div class="panel-section"><h3>已过滤候选 (' + filtered.length + ')</h3><div style="font-size:11px;color:var(--text-3);margin-bottom:8px">检索到但被判定与问题无关，未参与回答——用于排查"内容存在但检索不到"是否属于误判。</div>' + filtered.map(function(e) { return evidenceCardHtml(e, 'filtered'); }).join('') + '</div>';
+  if (filtered.length) html += '<div class="panel-section"><h3>已过滤候选 (' + filtered.length + ')</h3><div style="font-size:12px;color:var(--text-3);margin-bottom:8px">检索到但被判定与问题无关，未参与回答——用于排查"内容存在但检索不到"是否属于误判。</div>' + filtered.map(function(e) { return evidenceCardHtml(e, 'filtered'); }).join('') + '</div>';
   container.innerHTML = html;
 }
 
@@ -2161,12 +2185,12 @@ async function loadGapEvidenceInto(traceId, containerId) {
       return;
     }
     var html = '<div style="margin-top:10px">';
-    if (direct.length) html += '<div style="font-size:11px;color:var(--text-3);margin:6px 0 4px">直接证据 (' + direct.length + ')</div>' + direct.map(function(e) { return evidenceCardHtml(e, 'direct'); }).join('');
-    if (supporting.length) html += '<div style="font-size:11px;color:var(--text-3);margin:10px 0 4px">补充证据 (' + supporting.length + ')</div>' + supporting.map(function(e) { return evidenceCardHtml(e, 'supporting'); }).join('');
-    if (filtered.length) html += '<div style="font-size:11px;color:var(--text-3);margin:10px 0 4px">已过滤候选 (' + filtered.length + ')</div>' + filtered.map(function(e) { return evidenceCardHtml(e, 'filtered'); }).join('');
+    if (direct.length) html += '<div style="font-size:12px;color:var(--text-3);margin:6px 0 4px">直接证据 (' + direct.length + ')</div>' + direct.map(function(e) { return evidenceCardHtml(e, 'direct'); }).join('');
+    if (supporting.length) html += '<div style="font-size:12px;color:var(--text-3);margin:10px 0 4px">补充证据 (' + supporting.length + ')</div>' + supporting.map(function(e) { return evidenceCardHtml(e, 'supporting'); }).join('');
+    if (filtered.length) html += '<div style="font-size:12px;color:var(--text-3);margin:10px 0 4px">已过滤候选 (' + filtered.length + ')</div>' + filtered.map(function(e) { return evidenceCardHtml(e, 'filtered'); }).join('');
     html += '</div>';
     el.innerHTML = html;
-  } catch(e) { el.innerHTML = '<div style="font-size:12px;color:var(--red);margin-top:8px">加载失败：' + esc(e.message) + '</div>'; }
+  } catch(e) { el.innerHTML = '<div style="font-size:12px;color:var(--red);margin-top:8px">加载失败</div>'; }
 }
 
 // openGapDetailModal replaces the study report gap table's old per-row "详情"
@@ -2213,10 +2237,10 @@ async function showTraceDetail(traceId) {
         <div><b>问题：</b>' + esc(t.question || '') + '</div>\
         <div><b>主题：</b><code>' + esc(t.question_terms || '') + '</code></div>\
         <div><b>检索质量：</b><span class="badge ' + t.retrieval_quality + '">' + qualityLabel(t.retrieval_quality) + '</span></div>\
-        <div><b>直接命中：</b><code style="font-size:10px">' + esc(JSON.stringify(t.direct_point_ids || [])) + '</code></div>\
+        <div><b>直接命中：</b><code style="font-size:12px">' + esc(JSON.stringify(t.direct_point_ids || [])) + '</code></div>\
         ' + (t.has_feedback ? '<div><b>反馈：</b>' + esc(t.feedback_type || '') + '</div>' : '') + '\
         <div><b>时间：</b>' + esc(t.created_at || '') + '</div>\
-      </div><details style="margin-top:8px"><summary style="font-size:11px;cursor:pointer;color:var(--text-3)">原始数据</summary><div class="raw-json" style="margin-top:6px">' + esc(JSON.stringify(t,null,2)) + '</div></details></div>';
+      </div><details style="margin-top:8px"><summary style="font-size:12px;cursor:pointer;color:var(--text-3)">原始数据</summary><div class="raw-json" style="margin-top:6px">' + esc(JSON.stringify(t,null,2)) + '</div></details></div>';
     } else el.innerHTML = '<div style="font-size:12px;color:var(--red);margin-top:8px">加载失败</div>';
   } catch(e) { el.innerHTML = '<div style="font-size:12px;color:var(--red);margin-top:8px">错误：' + esc(e.message) + '</div>'; }
 }
@@ -2369,7 +2393,7 @@ function scheduleSourceTimelinePoll(sourceId) {
 function renderPersistedSourceTimeline(sourceId, d) {
   var panel = document.getElementById('timelinePanel');
   var steps = buildStepsFromSource(d);
-  var errHtml = d.error_msg ? '<div style="margin-top:8px;font-size:11px;color:var(--red);padding:6px 8px;background:var(--red-lt);border-radius:var(--radius-xs)">' + esc(d.error_msg) + '</div>' : '';
+  var errHtml = d.error_msg ? '<div style="margin-top:8px;font-size:12px;color:var(--red);padding:6px 8px;background:var(--red-lt);border-radius:var(--radius-xs)">' + esc(d.error_msg) + '</div>' : '';
   panel.innerHTML = renderTimeline(d.title || d.source_id, steps, d) + errHtml;
 
   // Keep polling until BOTH source processing and knowledge-unit extraction
@@ -2661,7 +2685,7 @@ async function loadSources() {
         <div class="sc-meta">\
           <span class="badge">' + esc(s.format || '') + '</span>\
           ' + sourceDomainSelectHtml(s) + '\
-          <span id="sd-status-' + esc(s.source_id) + '" style="font-size:10px;color:var(--text-3)"></span>\
+          <span id="sd-status-' + esc(s.source_id) + '" style="font-size:12px;color:var(--text-3)"></span>\
         </div>\
       </div><div class="sc-actions">\
         <button class="btn btn-sm" onclick="viewSource(\'' + esc(s.source_id) + '\')">详情</button>\
@@ -2797,7 +2821,7 @@ function editSourceSummary(sourceId) {
   var currentText = current ? current.firstChild.textContent.trim() : '';
   row.innerHTML = '<span class="dl">摘要</span><div class="dv" style="display:flex;flex-direction:column;gap:6px;flex:1">\
     <textarea id="sourceSummaryInput" rows="3" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">' + esc(currentText) + '</textarea>\
-    <div style="font-size:11px;color:var(--text-3)">用于来源粗筛（source_filter）：写清楚该文档覆盖的产品/角色/场景，避免因摘要未提及而被漏选。</div>\
+    <div style="font-size:12px;color:var(--text-3)">用于来源粗筛（source_filter）：写清楚该文档覆盖的产品/角色/场景，避免因摘要未提及而被漏选。</div>\
     <div style="display:flex;gap:6px">\
       <button class="btn btn-sm btn-primary" onclick="saveSourceSummary(\'' + esc(sourceId) + '\')">保存</button>\
       <button class="btn btn-sm" onclick="viewSource(\'' + esc(sourceId) + '\')">取消</button>\
@@ -2853,7 +2877,7 @@ function renderOutlineNode(node, unitsByOutline, sourceId, citedUnitId, depth) {
     : '';
   var html = '<div style="margin-top:6px">\
     <div style="display:flex;align-items:center;gap:6px;padding:4px 0 4px ' + indent + 'px;border-bottom:1px solid var(--border-lt)">\
-      <span style="color:var(--text-3);font-size:11px">▾</span>\
+      <span style="color:var(--text-3);font-size:12px">▾</span>\
       <span class="icon-btn" style="width:16px;height:16px;color:var(--text-3);pointer-events:none">' + ICON_FOLDER + '</span>\
       <span style="flex:1;font-size:12px;font-weight:500;color:var(--text-1)">' + esc(node.title || '') + '</span>\
       ' + outlineNodeTypeBadgeHtml(node.node_type) + '\
@@ -2864,7 +2888,7 @@ function renderOutlineNode(node, unitsByOutline, sourceId, citedUnitId, depth) {
     <div style="padding-left:' + (indent + 20) + 'px">' +
       (ownUnits.length
         ? ownUnits.map(function(u) { return renderKuRow(u, citedUnitId, sourceId); }).join('')
-        : '<div style="font-size:11px;color:var(--text-3);padding:4px 0">（无直接归属知识单元）</div>') +
+        : '<div style="font-size:12px;color:var(--text-3);padding:4px 0">（无直接归属知识单元）</div>') +
     '</div>';
   if (Array.isArray(node.children) && node.children.length) {
     html += node.children.map(function(child) {
@@ -3240,14 +3264,14 @@ async function openKuSemantics(unitId) {
       </div>\
       ' + (u.outline_path ? '<div style="color:var(--text-2);margin-bottom:10px">所属目录：' + esc(u.outline_path) + (u.outline_node_type ? ' <span class="badge">' + esc(u.outline_node_type) + '</span>' : '') + '</div>' : '') + '\
       <div style="' + kuLabelStyle + '">内容</div>\
-      <div style="max-height:180px;overflow:auto;background:var(--bg-2);border:1px solid var(--border-lt);border-radius:4px;padding:8px;white-space:pre-wrap;font-family:monospace;font-size:11px;color:var(--text-2);text-align:left">' + esc(u.content || '') + '</div>\
+      <div style="max-height:180px;overflow:auto;background:var(--bg-2);border:1px solid var(--border-lt);border-radius:4px;padding:8px;white-space:pre-wrap;font-family:monospace;font-size:12px;color:var(--text-2);text-align:left">' + esc(u.content || '') + '</div>\
       <div style="color:var(--text-3);margin-top:4px">KU 本体（中心句/行号/正文）为提取产物，只读；每条知识点各自的 rerank 语义可展开编辑——同一 KU 内不同知识点可能适用于不同的对象/范围，检索的相关性筛选与证据分类依据的是知识点自己的语义，而非整个 KU 共用一份。</div>\
     </div>\
     <div style="text-align:left;margin-bottom:8px">\
       <div style="' + kuLabelStyle + '">知识点</div>\
       <div id="kuSemPoints"></div>\
     </div>\
-    <div style="font-size:11px;color:var(--text-3);text-align:left">检索靠知识点匹配问题——把「问题会怎么问」对应的具体规则/数字逐字补进来（如“不跨年累计，次年清零”）。提取产物只读；手动新增的可撤销。</div>\
+    <div style="font-size:12px;color:var(--text-3);text-align:left">检索靠知识点匹配问题——把「问题会怎么问」对应的具体规则/数字逐字补进来（如“不跨年累计，次年清零”）。提取产物只读；手动新增的可撤销。</div>\
     <div class="modal-actions">\
       <button class="btn" onclick="closeKuSemantics()">关闭</button>\
     </div>';
@@ -3318,12 +3342,12 @@ async function togglePointSemantics(pointId) {
   }
   var missing = !sem.content_theme && !sem.scope;
   box.innerHTML = (sem.manually_edited ? '<span class="badge" title="人工修正过" style="margin-bottom:6px;display:inline-block">人工</span>' : '') +
-    (missing ? '<div style="font-size:11px;color:var(--red);margin-bottom:6px">该知识点无语义记录，被召回将导致检索报错——请补写后保存。</div>' : '') +
+    (missing ? '<div style="font-size:12px;color:var(--red);margin-bottom:6px">该知识点无语义记录，被召回将导致检索报错——请补写后保存。</div>' : '') +
     fieldRow('内容主题', 'pointSemContentTheme_' + pointId, sem.content_theme) +
     fieldRow('对象', 'pointSemObject_' + pointId, sem.object) +
     fieldRow('范围', 'pointSemScope_' + pointId, sem.scope) +
     fieldRow('来源主题', 'pointSemSourceTheme_' + pointId, sem.source_theme) +
-    (sem.edited_at ? '<div style="font-size:11px;color:var(--text-3);margin-bottom:6px">最近人工修正：' + dateStr(sem.edited_at) + '</div>' : '') +
+    (sem.edited_at ? '<div style="font-size:12px;color:var(--text-3);margin-bottom:6px">最近人工修正：' + dateStr(sem.edited_at) + '</div>' : '') +
     '<div style="text-align:right"><button class="btn btn-sm btn-primary" onclick="savePointSemantics(\'' + esc(pointId) + '\')">保存</button></div>';
 }
 
@@ -3366,7 +3390,7 @@ async function addKuPoint() {
     await loadKuPoints(kuSemanticsUnitId);
     if (n > 0) {
       var el = document.getElementById('kuSemPoints');
-      if (el) { el.insertAdjacentHTML('beforeend', '<div style="font-size:11px;color:var(--green,#2da44e);margin-top:4px">已新增，关联出 ' + n + ' 条新关系</div>'); }
+      if (el) { el.insertAdjacentHTML('beforeend', '<div style="font-size:12px;color:var(--green,#2da44e);margin-top:4px">已新增，关联出 ' + n + ' 条新关系</div>'); }
     }
   } else {
     btn.disabled = false;
@@ -3490,7 +3514,7 @@ async function loadLlmSettings() {
     sysState.session = await llmApi('GET', '/system/session');
     renderLlmSettings();
   } catch (e) {
-    body.innerHTML = '<div style="color:var(--red)">加载失败: ' + esc(e.message) + '</div>';
+    body.innerHTML = '<div style="color:var(--red)">加载失败</div>';
   }
 }
 
@@ -3686,7 +3710,7 @@ function renderSessionSettingsSection() {
   var html = '<div class="sys-group panel-section"><span class="sys-group-label">历史会话设置</span>';
   html += '<div class="sys-row">';
   html += fieldRow('历史会话保留时间(天)', '<input type="number" id="sess_retention_days" class="llm-field" value="' + (v.retention_days || 30) + '">');
-  html += '<label><div style="font-size:11px;color:var(--text-3);margin-bottom:4px">清理执行间隔</div>' +
+  html += '<label><div style="font-size:12px;color:var(--text-3);margin-bottom:4px">清理执行间隔</div>' +
     '<div style="display:flex;gap:6px">' +
     '<input type="number" id="sess_cleanup_value" class="llm-field llm-field-inline" value="' + (ci.value || 24) + '">' +
     '<select id="sess_cleanup_unit" class="llm-field llm-field-inline">' +
@@ -3734,7 +3758,7 @@ function renderLlmProviderForm(pr) {
 }
 
 function fieldRow(label, input) {
-  return '<label><div style="font-size:11px;color:var(--text-3);margin-bottom:4px">' + label + '</div>' + input + '</label>';
+  return '<label><div style="font-size:12px;color:var(--text-3);margin-bottom:4px">' + label + '</div>' + input + '</label>';
 }
 function miniField(label, elId, val) {
   return '<label style="font-size:12px;display:block">' + label + '<input id="' + elId + '" class="llm-field" value="' + esc(String(val != null ? val : '')) + '" style="margin-top:4px"></label>';
@@ -3756,7 +3780,7 @@ function modelNameField(formId, purpose, modelVal) {
     '<option value="">— 选择模型 —</option></select>' +
     '<button type="button" id="' + btnId + '" class="btn btn-sm" onclick="toggleLlmModelPicker(\'' + esc(formId) + '\',\'' + esc(purpose) + '\')">获取模型列表</button>' +
     '</div>' +
-    '<div id="' + statusId + '" style="font-size:11px;color:var(--text-3);margin-top:4px"></div></label>';
+    '<div id="' + statusId + '" style="font-size:12px;color:var(--text-3);margin-top:4px"></div></label>';
 }
 
 // 按钮的两种状态：还没拉过列表（或当前是手动输入模式）时点击去拉取模型列表
@@ -3978,8 +4002,8 @@ async function loadStudyReport() {
     var r = await api('GET', '/study/reports/latest');
     if (r.ok && r.data) renderStudyReport(r.data, body);
     else if (r.status===404) body.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text-3)"><div style="margin-bottom:16px"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg></div><div>暂无学习报告</div><div style="font-size:13px;margin-top:8px">点击「学习扫描」运行第一轮扫描并生成报告</div></div>';
-    else body.innerHTML = '<div style="color:var(--red);padding:20px">加载失败：' + esc(JSON.stringify(r.data)) + '</div>';
-  } catch(e) { body.innerHTML = '<div style="color:var(--red);padding:20px">请求失败：' + esc(e.message) + '</div>'; }
+    else body.innerHTML = '<div style="color:var(--red);padding:20px">加载失败</div>';
+  } catch(e) { body.innerHTML = '<div style="color:var(--red);padding:20px">加载失败</div>'; }
 }
 
 // recallSuggestion turns study.summary's outline_citation_rate/cited_avg_rank
@@ -4021,7 +4045,7 @@ function topNSuggestionCardHtml(t) {
       <div class="summary-stat confident"><div class="ss-val">' + pct(t.backtest_hit_rate_at_current) + '</div><div class="ss-label">当前 N 回测命中率</div></div>\
       <div class="summary-stat confident"><div class="ss-val">' + (t.suggested_n_data_sufficient ? pct(t.backtest_hit_rate_at_suggested) : '-') + '</div><div class="ss-label">建议 N 回测命中率（目标 ' + pct(t.target_hit_rate) + '）</div></div>\
     </div>\
-    <div style="font-size:11px;color:var(--text-3);margin-top:12px;line-height:1.6">\
+    <div style="font-size:12px;color:var(--text-3);margin-top:12px;line-height:1.6">\
       校准样本（最近 ' + (t.sample_window_days || 0) + ' 天，共 ' + sampleCount + ' 条用于计算建议值）：\
       首次即充分 ' + (t.tight_count || 0) + ' · 候选池扩展救回 ' + (t.pool_rescued_count || 0) + ' · 内容扩展救回 ' + (t.content_rescued_count || 0) + '（不计入校准）· \
       候选池提前耗尽 ' + (t.pool_exhausted_count || 0) + '（右删失，不计入）· 扩池后仍不充分 ' + (t.gap_at_2n_count || 0) + '（知识缺口，不计入）。\
@@ -4071,7 +4095,7 @@ function renderStudyReport(report, container) {
       <tbody>' + lcPage.map(function(c) {
         var st = c.stats || {};
         return '<tr style="cursor:pointer" title="点击查看 ActivationLink 详情" onclick="openStudyActivationCandidate(\'' + esc(c.point_id||'') + '\')">\
-          <td><code style="font-size:11px">' + esc(c.question_terms||'') + '</code></td>\
+          <td><code style="font-size:12px">' + esc(c.question_terms||'') + '</code></td>\
           <td style="font-size:12px">' + esc(c.entry_name||'') + '</td>\
           <td>' + (st.hit_count||0) + '</td>\
           <td>' + (st.confident_count||0) + '</td>\
@@ -4082,7 +4106,7 @@ function renderStudyReport(report, container) {
         </tr>';
       }).join('') + '</tbody></table></div>\
       ' + studyPagerHtml(S.alcPage, lc.length, STUDY_ALC_PAGE_SIZE, 'setAlcPage') + '\
-      <div style="font-size:11px;color:var(--text-3);margin-top:12px">以上候选基于检索信号统计生成，仅供人工审核参考。点击行可查看 ActivationLink 详情。</div></div>' : '') + '\
+      <div style="font-size:12px;color:var(--text-3);margin-top:12px">以上候选基于检索信号统计生成，仅供人工审核参考。点击行可查看 ActivationLink 详情。</div></div>' : '') + '\
     ' + (wc.length ? '<div class="study-card"><h2>Wiki 候选 (' + wc.length + ')</h2><div class="table-wrap"><table>\
       <thead><tr><th>概念</th><th>达标 KP 数</th><th>平均置信</th><th>KPN 连接数</th><th>活跃天数</th><th>状态</th></tr></thead>\
       <tbody>' + wcPage.map(function(w) {
@@ -4097,7 +4121,7 @@ function renderStudyReport(report, container) {
         </tr>';
       }).join('') + '</tbody></table></div>\
       ' + studyPagerHtml(S.wcPage, wc.length, STUDY_WC_PAGE_SIZE, 'setWcPage') + '\
-      <div style="font-size:11px;color:var(--text-3);margin-top:12px">点击行可查看 Wiki 候选详情并编译。</div></div>' : '') + '\
+      <div style="font-size:12px;color:var(--text-3);margin-top:12px">点击行可查看 Wiki 候选详情并编译。</div></div>' : '') + '\
     ' + (gp.length ? '<div class="study-card"><h2>高频知识盲区 (' + gp.length + ')</h2><div class="table-wrap"><table>\
       <thead><tr><th style="white-space:nowrap">问题主题</th><th style="white-space:nowrap">出现次数</th><th>主要原因</th><th>建议</th><th>典型问题</th></tr></thead>\
       <tbody>' + gpPage.map(function(g, i) {
@@ -4116,7 +4140,7 @@ function renderStudyReport(report, container) {
         <div class="summary-stat confident"><div class="ss-val">' + (cc.merge_created||0) + '</div><div class="ss-label">本轮合并候选</div></div>\
         <div class="summary-stat partial"><div class="ss-val">' + (ccPendingAdd.length + ccPendingMerge.length) + '</div><div class="ss-label">待确认候选</div></div>\
       </div>\
-      <div style="font-size:11px;color:var(--text-3);margin-top:12px">新增/合并候选的确认与执行请到「概念演化」审计视图操作，Study 只负责识别候选，不自动执行。</div></div>';
+      <div style="font-size:12px;color:var(--text-3);margin-top:12px">新增/合并候选的确认与执行请到「概念演化」审计视图操作，Study 只负责识别候选，不自动执行。</div></div>';
 }
 
 async function runStudy() {
@@ -4127,8 +4151,8 @@ async function runStudy() {
   try {
     var r = await api('POST', '/study/run', {});
     if (r.ok) { loadStudyReport(); }
-    else { body.innerHTML = '<div style="color:var(--red);padding:20px">扫描失败：' + esc(JSON.stringify(r.data)) + '</div>'; }
-  } catch(e) { body.innerHTML = '<div style="color:var(--red);padding:20px">请求失败：' + esc(e.message) + '</div>'; }
+    else { body.innerHTML = '<div style="color:var(--red);padding:20px">扫描失败</div>'; }
+  } catch(e) { body.innerHTML = '<div style="color:var(--red);padding:20px">扫描失败</div>'; }
   btn.disabled = false; btn.textContent = '学习扫描';
 }
 
@@ -4151,7 +4175,7 @@ async function openStudyActivationCandidate(pointId) {
     }
     await selectActivationLink(rows[0].link_id);
   } catch(e) {
-    detail.innerHTML = '<div style="color:var(--red);padding:20px">加载失败：' + esc(e.message) + '</div>';
+    detail.innerHTML = '<div style="color:var(--red);padding:20px">加载失败</div>';
   }
 }
 
@@ -4238,7 +4262,7 @@ async function loadStudyRecords() {
     renderStudyRecordsList();
   } catch(e) {
     var list = document.getElementById('studyRecordsList');
-    if (list) list.innerHTML = '<div style="color:var(--red);padding:20px">加载失败：' + esc(e.message) + '</div>';
+    if (list) list.innerHTML = '<div style="color:var(--red);padding:20px">加载失败</div>';
   }
 }
 
@@ -4315,7 +4339,7 @@ async function loadLearningResults() {
     renderLearningResultsList();
   } catch(e) {
     var list = document.getElementById('lrList');
-    if (list) list.innerHTML = '<div style="color:var(--red);padding:20px">加载失败：' + esc(e.message) + '</div>';
+    if (list) list.innerHTML = '<div style="color:var(--red);padding:20px">加载失败</div>';
   }
 }
 
@@ -4331,8 +4355,8 @@ function renderLearningResultsList() {
     pageRows.map(function(row) {
       var obj = row.question_terms ? esc(row.question_terms) : esc((row.object_id||'').slice(0,20));
       return '<tr style="cursor:pointer" onclick="showLearningResultDetail(\'' + esc(row.result_id) + '\')">\
-        <td style="font-size:11px">' + dateStr(row.created_at) + '</td>\
-        <td><code style="font-size:11px">' + esc(row.action) + '</code></td>\
+        <td style="font-size:12px">' + dateStr(row.created_at) + '</td>\
+        <td><code style="font-size:12px">' + esc(row.action) + '</code></td>\
         <td style="font-size:12px">' + obj + '</td>\
         <td style="font-size:12px;color:var(--text-2)">' + esc((row.reason||'').slice(0,50)) + '</td>\
         <td><span class="badge ' + (row.status==='applied'?'confident':(row.status==='rejected'?'gap':'partial')) + '">' + esc(row.status) + '</span></td>\
@@ -4364,7 +4388,7 @@ async function showLearningResultDetail(resultId) {
           }).join('')
         : '<div style="font-size:12px;color:var(--text-3)">暂无支撑事件</div>') +
       '</div>';
-  } catch(e) { el.innerHTML = '<div class="study-card">加载失败：' + esc(e.message) + '</div>'; }
+  } catch(e) { el.innerHTML = '<div class="study-card">加载失败</div>'; }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -4620,7 +4644,7 @@ function renderBundleMembersTable(members, coreIds, memberDetails) {
       : '';
     return '<div style="font-size:12px;padding:8px 10px;background:var(--bg-2);border-radius:8px">\
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">\
-        <span style="font-family:monospace;color:var(--text-3);font-size:11px">' + esc(m.point_id) + '</span>\
+        <span style="font-family:monospace;color:var(--text-3);font-size:12px">' + esc(m.point_id) + '</span>\
         <span class="tier-badge ' + (isCore ? 'trusted' : 'exploring') + '">' + (isCore ? '核心' : '路肩') + '</span>\
       </div>\
       ' + contentHtml + originHtml + '\
@@ -4670,7 +4694,7 @@ async function toggleBundleQuestionsSection(bundleId) {
     if (S.bundleDetailCache && S.bundleDetailCache.bundleId === bundleId) S.bundleDetailCache.questions = r.data;
     body.innerHTML = renderBundleQuestionsHtml(r.data);
   } catch (e) {
-    body.innerHTML = '<div style="color:var(--red);font-size:12px">加载失败：' + esc(e.message) + '</div>';
+    body.innerHTML = '<div style="color:var(--red);font-size:12px">加载失败</div>';
   }
 }
 function renderBundleQuestionsHtml(data) {
@@ -4974,7 +4998,7 @@ async function toggleLinkQuestionsSection(linkId) {
     if (S.linkDetailCache && S.linkDetailCache.linkId === linkId) S.linkDetailCache.questions = r.data;
     body.innerHTML = renderLinkQuestionsHtml(r.data);
   } catch (e) {
-    body.innerHTML = '<div style="color:var(--red);font-size:12px">加载失败：' + esc(e.message) + '</div>';
+    body.innerHTML = '<div style="color:var(--red);font-size:12px">加载失败</div>';
   }
 }
 
@@ -5008,7 +5032,7 @@ async function toggleLinkHistorySection(linkId) {
     if (S.linkDetailCache && S.linkDetailCache.linkId === linkId) S.linkDetailCache.results = results;
     body.innerHTML = renderLinkHistoryHtml(results);
   } catch (e) {
-    body.innerHTML = '<div style="color:var(--red);font-size:12px">加载失败：' + esc(e.message) + '</div>';
+    body.innerHTML = '<div style="color:var(--red);font-size:12px">加载失败</div>';
   }
 }
 
@@ -5044,9 +5068,9 @@ async function toggleLinkUnitContent(unitId) {
     el.innerHTML = '<div class="ku-context"><b>' + esc(u.center || '') + '</b> (L' + u.line_start + '-L' + u.line_end + ')'
       + (u.lifecycle && u.lifecycle !== 'current' ? ' ' + lifecycleBadgeHtml(u.lifecycle) : '')
       + body
-      + (pts ? '<div style="margin-top:6px;font-size:11px;color:var(--text-3)">单元内知识点：</div>' + pts : '')
+      + (pts ? '<div style="margin-top:6px;font-size:12px;color:var(--text-3)">单元内知识点：</div>' + pts : '')
       + '</div>';
-  } catch(ex) { el.innerHTML = '<div class="ku-context">加载失败：' + esc(ex.message) + '</div>'; }
+  } catch(ex) { el.innerHTML = '<div class="ku-context">加载失败</div>'; }
 }
 
 function refreshActivationViewIfOpen() {
@@ -5429,7 +5453,7 @@ async function matchWikiManualEntries() {
     var listUrl = '/entries' + (domainId ? '?domain_id=' + encodeURIComponent(domainId) : '');
     var listResp = await api('GET', listUrl);
     if (!listResp.ok || !listResp.data) {
-      host.innerHTML = '<div style="color:var(--red);font-size:12px">词条加载失败：' + esc(listResp.data && (listResp.data.message || listResp.data.error) ? (listResp.data.message || listResp.data.error) : JSON.stringify(listResp.data)) + '</div>';
+      host.innerHTML = '<div style="color:var(--red);font-size:12px">词条加载失败</div>';
       return;
     }
     var entries = listResp.data || [];
@@ -5505,7 +5529,7 @@ function wikiManualEntryKPPanelHtml(entryId) {
     return '<div style="padding:6px 12px 10px 34px;font-size:12px;color:var(--text-3)">加载 KP 中…</div>';
   }
   if (cached.error) {
-    return '<div style="padding:6px 12px 10px 34px;font-size:12px;color:var(--red)">加载失败：' + esc(cached.error) + '</div>';
+    return '<div style="padding:6px 12px 10px 34px;font-size:12px;color:var(--red)">加载失败</div>';
   }
   var points = cached.points || [];
   if (!points.length) {
@@ -5752,6 +5776,12 @@ async function compileWikiEntries(entryIdsCsv, resultId) {
     var pointIds = collectWikiManualSelectedPointIds();
     var body = { entry_ids: entryIds, result_id: resultId, claims: cached.claims || [], tensions: cached.tensions || [] };
     if (pointIds) body.point_ids = pointIds;
+    // 只有人工手动生成 Wiki 这条路径才有「主题名称」输入框（wikiManualTopicName，
+    // Study 候选路径的面板没有这个 DOM 节点），非空才带上，让后端用它做标题，
+    // 不带则回退到后端默认的词条名字拼接。
+    var topicNameEl = document.getElementById('wikiManualTopicName');
+    var topicName = topicNameEl ? topicNameEl.value.trim() : (S.wikiManualTopicName || '').trim();
+    if (topicName) body.topic_name = topicName;
     var r = await api('POST', '/wiki/compile', body);
     if (r.ok) {
       statusEl.innerHTML = '<span style="color:var(--green)">编译成功，已生成草稿</span>';
@@ -6187,7 +6217,7 @@ async function loadConceptKPLinksSection(conceptId) {
     links.forEach(function(l) { (byPoint[l.point_id] = byPoint[l.point_id] || []).push(l); });
     S.conceptKPLinksCache = byPoint;
     host.innerHTML = points.map(function(pt) { return renderKPLinkRowHtml(pt, byPoint[pt.point_id] || []); }).join('');
-  } catch(e) { host.innerHTML = '<div style="font-size:12px;color:var(--red)">加载失败：' + esc(e.message) + '</div>'; }
+  } catch(e) { host.innerHTML = '<div style="font-size:12px;color:var(--red)">加载失败</div>'; }
 }
 
 function renderKPLinkRowHtml(point, links) {
@@ -6972,7 +7002,7 @@ async function reloadEntryEditView() {
   var r = await api('GET', '/entries/' + encodeURIComponent(conceptId));
   if (S.conceptEditId !== conceptId) return;
   var box = document.getElementById('conceptEditModalContent');
-  if (!r.ok) { box.innerHTML = '<div style="color:var(--red);padding:20px">加载失败：' + esc(r.data && r.data.message ? r.data.message : '') + '</div>'; return; }
+  if (!r.ok) { box.innerHTML = '<div style="color:var(--red);padding:20px">加载失败</div>'; return; }
   S.conceptEditData = r.data;
   renderEntryEditView();
 }
@@ -6988,7 +7018,7 @@ function renderEntryEditView() {
     return '<div style="padding:8px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;gap:8px">\
       <div style="flex:1;min-width:0">\
         <div style="font-size:12px;color:var(--text)">' + esc(p.content || '') + '</div>\
-        <div style="font-size:11px;color:var(--text-3);margin-top:4px">来源文件：' + esc(p.source_title || '') + '</div>\
+        <div style="font-size:12px;color:var(--text-3);margin-top:4px">来源文件：' + esc(p.source_title || '') + '</div>\
       </div>\
       <button class="btn btn-sm" style="color:var(--red);flex-shrink:0" onclick="removeEntryEditPoint(\'' + esc(p.point_id) + '\')">移除</button>\
     </div>';
@@ -7008,7 +7038,7 @@ function renderEntryEditView() {
       (candidates.length ? candidates.map(function(p) {
         return '<label style="padding:6px 0;border-bottom:1px solid var(--border-lt);display:flex;align-items:flex-start;gap:8px;cursor:pointer">\
           <input type="checkbox" value="' + esc(p.point_id) + '" style="margin-top:2px;flex-shrink:0">\
-          <div style="flex:1;min-width:0;font-size:12px;color:var(--text)">' + esc(p.content || '') + '<div style="font-size:11px;color:var(--text-3);margin-top:2px">' + esc(p.source_title || '') + '</div></div>\
+          <div style="flex:1;min-width:0;font-size:12px;color:var(--text)">' + esc(p.content || '') + '<div style="font-size:12px;color:var(--text-3);margin-top:2px">' + esc(p.source_title || '') + '</div></div>\
         </label>';
       }).join('') : '<div style="font-size:12px;color:var(--text-3);padding:6px 0">该领域下暂无可添加的知识点（需未归类且状态为 current）</div>') +
       '</div>';
@@ -7205,7 +7235,7 @@ function buildEntryPointsSectionHtml(c, points) {
     return '<div style="padding:8px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;gap:8px">\
       <div style="flex:1;min-width:0">\
         <div style="font-size:12px;color:var(--text)">' + esc(p.content || '') + '</div>\
-        <div style="font-size:11px;color:var(--text-3);margin-top:4px">来源文件：' + esc(p.source_title || '') + '</div>\
+        <div style="font-size:12px;color:var(--text-3);margin-top:4px">来源文件：' + esc(p.source_title || '') + '</div>\
       </div>' + (editable ? '<button class="btn btn-sm" style="color:var(--red);flex-shrink:0" onclick="removeConceptFormPoint(\'' + esc(p.point_id) + '\')">移除</button>' : '') + '\
     </div>';
   }).join('') : '<div style="font-size:12px;color:var(--text-3);padding:8px 0">暂无数据</div>';
@@ -7235,7 +7265,7 @@ function renderEntryAddPointsPicker() {
       <input type="checkbox" value="' + esc(p.point_id) + '" style="margin-top:2px;flex-shrink:0">\
       <div style="flex:1;min-width:0">\
         <div style="font-size:12px;color:var(--text)">' + esc(p.content || '') + '</div>\
-        <div style="font-size:11px;color:var(--text-3);margin-top:2px">来源文件：' + esc(p.source_title || '') + '</div>\
+        <div style="font-size:12px;color:var(--text-3);margin-top:2px">来源文件：' + esc(p.source_title || '') + '</div>\
       </div>\
     </label>';
   }).join('') : '<div style="font-size:12px;color:var(--text-3);padding:6px 0">该领域下没有其他待归类知识点</div>';
@@ -7244,7 +7274,7 @@ function renderEntryAddPointsPicker() {
       <button class="btn btn-sm" onclick="addSelectedConceptFormPoints()">添加</button>\
     </div>\
     <div id="conceptFormAddPicker" style="margin-top:8px;border:1px solid var(--border);border-radius:var(--radius-xs);padding:8px;max-height:220px;overflow-y:auto">\
-      <div style="font-size:11px;color:var(--text-3);margin-bottom:6px">该领域下尚无概念的知识点：</div>' + listHtml + '\
+      <div style="font-size:12px;color:var(--text-3);margin-bottom:6px">该领域下尚无概念的知识点：</div>' + listHtml + '\
     </div>';
 }
 
@@ -7926,6 +7956,27 @@ document.getElementById('chatInner').addEventListener('click', function(e) {
   if (sep === -1) openEvidenceInDrawer(rest);
   else openEvidenceInDrawer(rest.slice(sep + 1), rest.slice(0, sep));
 });
+
+// ═══════════════════════════════════════════════════════
+// 高对比度模式
+// ═══════════════════════════════════════════════════════
+function syncContrastButton() {
+  var high = document.documentElement.getAttribute('data-contrast') === 'high';
+  var btn = document.getElementById('contrastToggleBtn');
+  if (btn) {
+    btn.classList.toggle('active', high);
+    btn.setAttribute('aria-pressed', high ? 'true' : 'false');
+  }
+}
+function toggleHighContrast() {
+  var high = document.documentElement.getAttribute('data-contrast') === 'high';
+  var next = high ? '' : 'high';
+  if (next) document.documentElement.setAttribute('data-contrast', next);
+  else document.documentElement.removeAttribute('data-contrast');
+  try { localStorage.setItem('wb_contrast', next); } catch (e) {}
+  syncContrastButton();
+}
+syncContrastButton();
 
 // ═══════════════════════════════════════════════════════
 // INIT

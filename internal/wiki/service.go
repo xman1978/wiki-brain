@@ -126,6 +126,13 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 	if err != nil {
 		return nil, err
 	}
+	title := compiled.title
+	if strings.TrimSpace(req.TopicName) != "" {
+		// User-supplied topic name at compile time takes precedence over the
+		// default "、"-joined entry names, which often drift from what the
+		// page actually ends up being about once material is assembled.
+		title = strings.TrimSpace(req.TopicName)
+	}
 
 	compiledFromIDs := nonEmpty(req.ResultID)
 	if len(compiledFromIDs) == 0 {
@@ -141,7 +148,7 @@ func (s *Service) Compile(ctx context.Context, req CompileRequest) (*Page, error
 		// wiki-single-tier-task-brief.md 步骤 3: "所有新编译页面 page_type
 		// 统一写 PageTypeTopic").
 		PageType:           PageTypeTopic,
-		Title:              compiled.title,
+		Title:              title,
 		Content:            compiled.content,
 		Status:             StatusDraft,
 		SourcePointIDs:     marshalIDs(compiled.sourcePointIDs),
@@ -228,7 +235,11 @@ func (s *Service) Recompile(ctx context.Context, pageID, reason string, compiled
 		return nil, err
 	}
 
-	if err := s.store.ReplaceContent(pageID, compiled.title, compiled.content,
+	// Recompile only regenerates content, not the page's identity: the title
+	// stays whatever it was set to at compile time (user-supplied topic name,
+	// or the legacy entry-name join for pages compiled before TopicName
+	// existed) rather than being recomputed from the current entry set.
+	if err := s.store.ReplaceContent(pageID, page.Title, compiled.content,
 		marshalIDs(compiled.sourcePointIDs), marshalIDs(compiled.sourceUnitIDs), marshalIDs(compiled.sourceLinkIDs),
 		marshalConditions(compiled.observedConditions),
 		marshalIDs(compiled.aliases), marshalIDs(compiled.triggerQuestions),
@@ -236,7 +247,7 @@ func (s *Service) Recompile(ctx context.Context, pageID, reason string, compiled
 		marshalIDs(compiledFrom), compiled.summary, "[]", "v1", "reasoning"); err != nil {
 		return nil, err
 	}
-	rev := &Revision{PageID: pageID, Content: compiled.content, Title: compiled.title, Reason: reason}
+	rev := &Revision{PageID: pageID, Content: compiled.content, Title: page.Title, Reason: reason}
 	if err := s.store.InsertRevision(rev); err != nil {
 		slog.Error("wiki: insert recompile revision failed", "page_id", pageID, "error", err)
 	} else {
