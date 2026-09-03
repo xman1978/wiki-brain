@@ -15,10 +15,21 @@ type presetData struct {
 }
 
 type presetDomain struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Concepts    []presetEntry `json:"entries"`
+	ID            string              `json:"id"`
+	Name          string              `json:"name"`
+	Description   string              `json:"description"`
+	Concepts      []presetEntry       `json:"entries"`
+	DocCategories []presetDocCategory `json:"doc_categories"`
+}
+
+// presetDocCategory is one doc_categories row (docs/design/doc-category.md):
+// a predefined document-genre label scoped to this domain, curated by hand
+// like entries but with no candidate/evolution machinery — value domain is
+// closed and domain-specific, refreshed at preset load, never auto-mined.
+type presetDocCategory struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 type presetEntry struct {
@@ -107,6 +118,18 @@ func LoadPresetData(db *sql.DB, filePath string) error {
 			}
 
 			if err := upsertEntryAliasSynonyms(tx, d.ID, c); err != nil {
+				return err
+			}
+		}
+
+		for _, dc := range d.DocCategories {
+			_, err := tx.Exec(
+				`INSERT INTO doc_categories (category_id, domain_id, name, description) VALUES (?, ?, ?, ?)
+				 ON CONFLICT(category_id) DO UPDATE SET name = excluded.name, description = excluded.description,
+				   domain_id = excluded.domain_id, updated_at = CURRENT_TIMESTAMP`,
+				dc.ID, d.ID, dc.Name, dc.Description,
+			)
+			if err != nil {
 				return err
 			}
 		}

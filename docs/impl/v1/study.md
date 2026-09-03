@@ -595,8 +595,16 @@ last_reason == "answer_error"   → recommendation = "生成异常，需查日�
 ```text
 GET  /study/results
   查询参数：action、object_type、object_id、status、limit（默认 50）
-  响应：learning_results 列表；object_type=activation_link 时 JOIN 补充
-        question_terms / point_summary
+  响应：learning_results 列表；question_terms 字段按 object_type 分别 JOIN 补充
+        为该对象的可读名称——activation_link 取 activation_links.question_terms
+        （同时 JOIN knowledge_points 补 point_summary）、knowledge_gap 取
+        knowledge_gaps.question、wiki_page 取 wiki_pages.title、entry_candidate
+        取 entry_candidates.suggested_name、activation_bundle 取
+        activation_bundles.representative_terms；管理页「学习动作」列表的「对象」列
+        展示这个名称而不是 object_id 原始 uuid（2026-09-02 补充，此前只有
+        activation_link 有名称，其余类型的列表页显示的是截断 uuid；
+        entry_add_candidate 动作的 object_type 是 entry_candidate 而非其动作名
+        本身，容易在核对时漏看）
 
 GET  /study/results/:id
   响应：完整字段 + event_ids 展开后的事件摘要列表（审计视图数据源）

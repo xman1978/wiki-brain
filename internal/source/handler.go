@@ -32,7 +32,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /sources/{id}", h.deleteSource)
 	mux.HandleFunc("POST /sources/{id}/restore", h.restoreSource)
 	mux.HandleFunc("PATCH /sources/{id}/domain", h.setSourceDomain)
-mux.HandleFunc("PATCH /sources/{id}/summary", h.setSourceSummary)
+	mux.HandleFunc("PATCH /sources/{id}/doc-category", h.setSourceDocCategory)
+	mux.HandleFunc("PATCH /sources/{id}/summary", h.setSourceSummary)
 	mux.HandleFunc("POST /sources/{id}/retry", h.retrySource)
 	mux.HandleFunc("POST /sources/{id}/reupload", h.reuploadSource)
 	mux.HandleFunc("POST /sources/{id}/reupload/retry", h.reuploadRetry)
@@ -128,6 +129,12 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// categoryMap is built lazily, one ListDocCategories call per domain_id
+	// actually present in this page's results — the source list page is
+	// small (paginated), so this stays well short of N+1 per row.
+	categoryMap := make(map[string]string)
+	categoryDomainsFetched := make(map[string]bool)
+
 	type item struct {
 		SourceID            string  `json:"source_id"`
 		Title               string  `json:"title"`
@@ -138,6 +145,8 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 		OutlineType         *string `json:"outline_type"`
 		DomainID            *string `json:"domain_id,omitempty"`
 		DomainName          *string `json:"domain_name,omitempty"`
+		DocCategoryID       *string `json:"doc_category_id,omitempty"`
+		DocCategoryName     *string `json:"doc_category_name,omitempty"`
 		CreatedAt           string  `json:"created_at"`
 		ProcessingStartedAt *string `json:"processing_started_at,omitempty"`
 		CompletedAt         *string `json:"completed_at,omitempty"`
@@ -163,6 +172,20 @@ func (h *Handler) listSources(w http.ResponseWriter, r *http.Request) {
 			it.DomainID = &s.DomainID.String
 			if name, ok := domainMap[s.DomainID.String]; ok {
 				it.DomainName = &name
+			}
+			if s.DocCategoryID.Valid && !categoryDomainsFetched[s.DomainID.String] {
+				if categories, err := h.svc.store.ListDocCategories(s.DomainID.String); err == nil {
+					for _, c := range categories {
+						categoryMap[c.CategoryID] = c.Name
+					}
+				}
+				categoryDomainsFetched[s.DomainID.String] = true
+			}
+		}
+		if s.DocCategoryID.Valid {
+			it.DocCategoryID = &s.DocCategoryID.String
+			if name, ok := categoryMap[s.DocCategoryID.String]; ok {
+				it.DocCategoryName = &name
 			}
 		}
 		if s.ProcessingStartedAt.Valid {
@@ -237,6 +260,9 @@ func (h *Handler) getSource(w http.ResponseWriter, r *http.Request) {
 	}
 	if src.DomainID.Valid {
 		resp["domain_id"] = src.DomainID.String
+	}
+	if src.DocCategoryID.Valid {
+		resp["doc_category_id"] = src.DocCategoryID.String
 	}
 	if src.WordCount.Valid {
 		resp["word_count"] = src.WordCount.Int64
@@ -375,6 +401,40 @@ func (h *Handler) setSourceDomain(w http.ResponseWriter, r *http.Request) {
 	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"source_id": id,
 		"domain_id": body.DomainID,
+	})
+}
+
+// setSourceDocCategory implements PATCH /sources/:id/doc-category: the file
+// list's manual override for a source's document category
+// (docs/design/doc-category.md), mirroring setSourceDomain.
+func (h *Handler) setSourceDocCategory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var body struct {
+		CategoryID string `json:"category_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		foundation.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := h.svc.SetDocCategory(id, body.CategoryID); err != nil {
+		if strings.Contains(err.Error(), "source not found") {
+			foundation.WriteError(w, http.StatusNotFound, "source not found")
+			return
+		}
+		if strings.Contains(err.Error(), "unknown category_id") || strings.Contains(err.Error(), "no domain assigned") {
+			foundation.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		slog.Error("set source doc category failed", "error", err)
+		foundation.WriteError(w, http.StatusInternalServerError, "set doc category failed")
+		return
+	}
+
+	foundation.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"source_id":       id,
+		"doc_category_id": body.CategoryID,
 	})
 }
 

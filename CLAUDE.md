@@ -102,6 +102,6 @@ Wiki-Brain 是一个知识检索系统，核心流程：文件导入 → KU/KP �
 | 8   | Wiki       | `docs/impl/v1/wiki.md`（编译链路重构见 `docs/impl/v1/wiki-generation.md`：P0 已实现；P1 切面聚类已实现，写作调用维持两次整页 LLM 调用（analyze+compile，材料按切面分组），**不做**提纲/逐节生成——该架构曾实现过一版又确认收缩，代码收缩指令见 `docs/impl/v1/wiki-generation-simplify-task-brief.md`。**2026-08-18 单层化改判已实施**，取代 `wiki.md` 中两层架构相关章节，以 `docs/design/wiki-single-tier-revision.md` + `docs/impl/v1/wiki-single-tier-task-brief.md` 为准，详见上方「V1 关键设计决策」） |
 | 9   | Page       | `docs/impl/v1/page.md`                                                                                                                                                                                                                                                                                                                                                                    |
 
-设计方向（不在上面强制顺序内，尚未排期，见文档内「待确认」标注）：`docs/impl/v1/activation-bundle.md`（ActivationBundle / 熟路——ActivationLink 之上的组合激活层）。
+设计方向（不在上面强制顺序内，尚未排期，见文档内「待确认」标注）：`docs/impl/v1/activation-bundle.md`（ActivationBundle / 熟路——ActivationLink 之上的组合激活层）；`docs/impl/v1/doc-category.md`（文档分类——按知识领域各自预定义的文档体裁维度，`doc_categories` 表 + `preset/domains.json` 治理 + 镜像 `matchDomain` 的 LLM 归类，设计依据 `docs/design/doc-category.md`；本次范围明确不接入 Retrieval，只是可查询/可管理的结构化字段）。
 
 总览与范围边界：`docs/impl/v1/readme.md`；设计依据：`docs/design/lifecycle.md`（记忆生命周期）、`docs/design/precompile.md`（ActivationLink）、`docs/design/activation-bundle.md`（ActivationBundle / 熟路）、`docs/design/study.md`（学习机制）、`docs/design/retrieval.md`（分层检索）、`docs/design/wiki.md`（Wiki 编译）。

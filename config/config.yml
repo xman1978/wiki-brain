@@ -89,6 +89,9 @@ retrieval:
   source_affinity_idle_days:      90    # subject_norms/source_affinity 行超过该天数未命中由 Study 周期清理
   source_affinity_pending_batch_max: 50 # pending_subject_affinity_match 每次 Study tick 最多处理的待匹配主题数（2026-08-27 改判）
 
+  # MCP retrieve 的 doc_category_hint 材料体裁过滤（2026-09-02 新增，见 docs/impl/v1/mcp.md 3b 节）
+  doc_category_narrow_min_sources: 4  # hint 匹配到的 category 下候选 Source 数达到此值才收窄 Step3 候选集，否则退回全量
+
 # Evidence 模块挖掘
 evidence:
   enabled:              false

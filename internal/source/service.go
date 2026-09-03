@@ -403,10 +403,13 @@ func (s *Service) Process(ctx context.Context, sourceID string) error {
 	s.generateSummary(ctx, sourceID, src.Title, allOutlines)
 	s.emit(sourceID, progress.Event{Step: progress.StepSourceSummary, Status: progress.StatusCompleted, ElapsedMs: time.Since(stepStart).Milliseconds()})
 
-	// Step 8: Domain matching
+	// Step 8: Domain matching (+ doc_category matching, docs/design/doc-category.md —
+	// folded into this same progress step since it's a second layer of the
+	// same classification action and depends on domain_id just assigned).
 	stepStart = time.Now()
 	s.emit(sourceID, progress.Event{Step: progress.StepDomainMatch, Status: progress.StatusStarted, Message: "领域匹配"})
 	s.matchDomain(ctx, sourceID)
+	s.matchDocCategory(ctx, sourceID)
 	s.emit(sourceID, progress.Event{Step: progress.StepDomainMatch, Status: progress.StatusCompleted, ElapsedMs: time.Since(stepStart).Milliseconds()})
 
 	// Step 9: Write to Bleve index
@@ -579,6 +582,101 @@ func (s *Service) matchDomain(ctx context.Context, sourceID string) {
 	}
 }
 
+// matchDocCategory classifies sourceID against its (now-assigned) domain's
+// doc_categories value domain (docs/design/doc-category.md) — mirrors
+// matchDomain's shape exactly: LLM picks one from a predefined list or null,
+// any failure just logs and leaves the source unclassified, never blocks the
+// pipeline. Must run after matchDomain since the candidate list is scoped by
+// domain_id.
+func (s *Service) matchDocCategory(ctx context.Context, sourceID string) {
+	src, err := s.store.GetByID(sourceID)
+	if err != nil {
+		slog.Warn("match doc category: get source failed", "error", err)
+		return
+	}
+	if !src.DomainID.Valid || src.DomainID.String == "" {
+		return
+	}
+
+	categories, err := s.store.ListDocCategories(src.DomainID.String)
+	if err != nil {
+		slog.Warn("match doc category: list doc categories failed", "error", err)
+		return
+	}
+	if len(categories) == 0 {
+		return
+	}
+
+	var categoryList strings.Builder
+	for _, c := range categories {
+		fmt.Fprintf(&categoryList, "[%s] %s：%s\n", c.CategoryID, c.Name, c.Description)
+	}
+
+	summary := ""
+	if src.Summary.Valid {
+		summary = src.Summary.String
+	}
+
+	output, err := s.llmClient.CompleteJSON(ctx, "source_doc_category_match.md", map[string]string{
+		"title":         src.Title,
+		"summary":       summary,
+		"category_list": categoryList.String(),
+	}, "extraction")
+	if err != nil {
+		slog.Warn("doc category match LLM failed", "source_id", sourceID, "error", err)
+		return
+	}
+
+	var result struct {
+		CategoryID *string `json:"category_id"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		slog.Warn("doc category match parse failed", "error", err)
+		return
+	}
+
+	if result.CategoryID != nil && *result.CategoryID != "" {
+		exists, err := s.store.DocCategoryExists(*result.CategoryID, src.DomainID.String)
+		if err != nil {
+			slog.Warn("doc category exists check failed", "error", err)
+			return
+		}
+		if exists {
+			s.store.UpdateDocCategoryID(sourceID, result.CategoryID)
+		}
+	}
+}
+
+// SetDocCategory implements the file list's manual doc_category override
+// (docs/design/doc-category.md), mirroring SetDomain: an empty categoryID
+// clears the assignment. categoryID must belong to the source's current
+// domain_id — a category from another domain's value domain would be
+// meaningless here.
+func (s *Service) SetDocCategory(sourceID, categoryID string) error {
+	src, err := s.store.GetByID(sourceID)
+	if err != nil {
+		return fmt.Errorf("source not found")
+	}
+
+	if categoryID != "" {
+		if !src.DomainID.Valid || src.DomainID.String == "" {
+			return fmt.Errorf("source has no domain assigned, cannot set doc category")
+		}
+		exists, err := s.store.DocCategoryExists(categoryID, src.DomainID.String)
+		if err != nil {
+			return fmt.Errorf("source: set doc category: %w", err)
+		}
+		if !exists {
+			return fmt.Errorf("unknown category_id: %s", categoryID)
+		}
+	}
+
+	if categoryID == "" {
+		return s.store.UpdateDocCategoryID(sourceID, nil)
+	}
+	return s.store.UpdateDocCategoryID(sourceID, &categoryID)
+}
+
 // SetDomain implements the file list's manual domain override (文件列表可修改
 // 所属知识领域): matchDomain's LLM classification can misfile a source when the
 // domain definitions don't clearly cover its topic, so a human correction has
@@ -616,8 +714,21 @@ func (s *Service) SetDomain(sourceID, domainID string) error {
 		return err
 	}
 
-	if domainID != oldDomainID && s.conceptMatcher != nil {
-		go s.conceptMatcher.MatchEntries(context.Background(), sourceID, domainID)
+	if domainID != oldDomainID {
+		// The doc_category previously assigned belonged to the old domain's
+		// value domain — meaningless (or outright dangling) under the new
+		// one, so clear it and, if there's a new domain to reclassify
+		// against, kick off matchDocCategory async, same treatment as the
+		// concept re-match below (docs/design/doc-category.md 3.3).
+		if err := s.store.UpdateDocCategoryID(sourceID, nil); err != nil {
+			slog.Warn("set domain: clear doc category failed", "source_id", sourceID, "error", err)
+		}
+		if domainID != "" {
+			go s.matchDocCategory(context.Background(), sourceID)
+		}
+		if s.conceptMatcher != nil {
+			go s.conceptMatcher.MatchEntries(context.Background(), sourceID, domainID)
+		}
 	}
 	return nil
 }
@@ -1601,6 +1712,7 @@ func (s *Service) ProcessRetry(ctx context.Context, sourceID string) error {
 	s.store.UpdateOutlineType(sourceID, outlineType)
 	s.generateSummary(ctx, sourceID, src.Title, allOutlines)
 	s.matchDomain(ctx, sourceID)
+	s.matchDocCategory(ctx, sourceID)
 	s.indexOutlines(allOutlines)
 
 	if err := s.store.UpdateStatus(sourceID, "completed", nil); err != nil {

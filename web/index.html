@@ -311,7 +311,7 @@
     .ans-body a[href^="evidence:"]:hover { border-color:var(--accent); color:var(--accent); }
     .ans-meta { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; align-items:center; padding-top:12px; border-top:1px solid var(--border-lt); }
 
-    .badge { font-size:12px; padding:3px 9px; border-radius:20px; border:1px solid var(--border); background:var(--border-lt); color:var(--text); font-weight:500; }
+    .badge { font-size:12px; padding:3px 9px; border-radius:20px; border:1px solid var(--border); background:var(--border-lt); color:var(--text); font-weight:500; white-space:nowrap; flex-shrink:0; }
     .badge.confident { background:var(--green-lt); border-color:var(--green); color:var(--green); }
     .badge.partial   { background:var(--yellow-lt); border-color:var(--yellow); color:var(--yellow); }
     .badge.gap       { background:var(--red-lt); border-color:var(--red); color:var(--red); }
@@ -495,14 +495,14 @@
     .tl-empty { font-size:12px; color:var(--text-3); padding:8px 4px; text-align:center; line-height:1.5; }
     .tl-error { margin-top:8px; font-size:12px; color:var(--red); padding:6px 8px; background:var(--red-lt); border-radius:var(--radius-xs); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
-    .source-card { border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:6px; cursor:pointer; transition:.12s; display:flex; align-items:center; gap:12px; }
+    .source-card { border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:6px; cursor:pointer; transition:.12s; display:flex; flex-wrap:nowrap; align-items:center; gap:12px; overflow-x:auto; }
     .source-card:hover { border-color:var(--text-3); background:var(--bg-alt); }
     .source-card.active { border-color:var(--border); background:var(--surface-alt); }
-    .source-card .sc-main { flex:1; min-width:0; display:flex; align-items:center; gap:8px; }
-    .source-card .sc-title { font-size:13px; font-weight:500; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:1; }
+    .source-card .sc-main { flex:1; min-width:0; display:flex; align-items:center; gap:8px; flex-wrap:nowrap; }
+    .source-card .sc-title { font-size:13px; font-weight:500; min-width:60px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:1; }
     .source-card .sc-meta { display:flex; gap:6px; align-items:center; flex-wrap:nowrap; flex-shrink:0; margin-left:auto; }
-    .source-card .sc-actions { display:flex; gap:4px; justify-content:flex-end; flex-wrap:wrap; align-items:center; flex-shrink:0; }
-    .status-chip { font-size:12px; padding:2px 7px; border-radius:10px; font-weight:500; }
+    .source-card .sc-actions { display:flex; gap:4px; justify-content:flex-end; flex-wrap:nowrap; align-items:center; flex-shrink:0; }
+    .status-chip { font-size:12px; padding:2px 7px; border-radius:10px; font-weight:500; white-space:nowrap; flex-shrink:0; }
     .status-pending    { background:#fef3c7; color:#92400e; }
     .status-processing { background:#dbeafe; color:#1e40af; }
     .status-completed  { background:var(--green-lt); color:var(--green); }
@@ -1125,6 +1125,22 @@
   </div>
 </div>
 
+
+<!-- ── DOC CATEGORY CREATE/EDIT MODAL（docs/design/doc-category.md）──── -->
+<div class="modal-overlay hidden" id="docCategoryModal" onclick="if(event.target===this)closeDocCategoryModal()">
+  <div class="modal-box" style="width:400px">
+    <h2 id="docCategoryModalTitle">新增文档分类</h2>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <label style="font-size:12px;color:var(--text-3)">分类名称<input id="docCategoryName" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-xs);font-size:13px;background:var(--bg);outline:none;color:var(--text);margin-top:4px" placeholder="例如：故障排查案例" /></label>
+      <label style="font-size:12px;color:var(--text-3)">描述<textarea id="docCategoryDesc" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-xs);font-size:13px;background:var(--bg);outline:none;color:var(--text);margin-top:4px;min-height:64px;resize:vertical" placeholder="说明什么样的文档属于这一类——用于自动归类时的判断依据"></textarea></label>
+    </div>
+    <div class="modal-actions" style="justify-content:flex-end;margin-top:16px">
+      <button class="btn btn-primary btn-sm" onclick="submitDocCategoryForm()">保存</button>
+      <button class="btn btn-sm" onclick="closeDocCategoryModal()">取消</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── SOURCE DETAIL MODAL ───────────────────────────────── -->
 <div class="modal-overlay hidden" id="sourceDetailModal" onclick="if(event.target===this)closeSourceDetail()">
   <div class="modal-box" id="sourceDetailContent"></div>
@@ -1153,6 +1169,7 @@ const S = {
   // 否则历史回答的证据链接全部串到最新一条回答上。
   answersById:   {},
   tracesById:    {},
+  sourceTitleCache: {},
   pollTimers:    {},
   sourceTimelineEventSource: null,
   sourceTimelineSourceId:    null,
@@ -2071,7 +2088,6 @@ function renderOverviewTab(ans, container) {
   var path = ans.path || 'unknown';
   var trace = S.currentTrace;
   var quality = trace ? trace.retrieval_quality : null;
-  var tid = trace ? trace.trace_id : '';
   var analysisRow = function(label, val) {
     return val ? '<div class="flow-step"><span class="flow-label">' + label + '</span><span class="flow-val" style="font-size:12px">' + esc(val) + '</span></div>' : '';
   };
@@ -2084,22 +2100,39 @@ function renderOverviewTab(ans, container) {
       <div class="flow-step"><span class="flow-arrow">↓</span><span class="flow-label">检索路径</span><span class="flow-val"><span class="badge ' + path + '">' + pathLabel(path) + '</span></span></div>\
       ' + (quality ? '<div class="flow-step"><span class="flow-arrow">↓</span><span class="flow-label">检索质量</span><span class="flow-val"><span class="badge ' + quality + '">' + qualityLabel(quality) + '</span></span></div>' : '') + '\
       <div class="flow-step"><span class="flow-arrow">↓</span><span class="flow-label">引用来源</span><span class="flow-val" style="font-size:12px">' + direct.length + ' 直接 · ' + supporting.length + ' 补充</span></div>\
-    </div>\
-    <div class="panel-section" style="border-top:1px solid var(--border-lt);padding-top:14px">\
-      <h3>思考记录</h3>\
-      ' + (tid
-        ? '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px"><code style="font-size:12px;background:var(--bg-alt);padding:3px 8px;border-radius:4px;border:1px solid var(--border);flex:1;word-break:break-all">' + esc(tid) + '</code><button class="copy-btn" onclick="copy(\'' + esc(tid) + '\',this)">复制</button></div><button class="btn btn-sm" style="width:100%" onclick="showTraceDetail(\'' + esc(tid) + '\')">加载思考记录</button>'
-        : '<div style="font-size:13px;color:var(--text-3);font-style:italic">记录生成中…</div>') + '\
-    </div><div id="traceDetail"></div>';
+    </div>';
 }
 
-function renderSourcesTab(ans, container) {
+// resolveSourceTitles 收集一批证据条目引用到的 source_id，把尚未缓存的
+// 标题批量拉回 S.sourceTitleCache，供 evidenceCardHtml 把来源展示从 uuid 换成文件名。
+async function resolveSourceTitles(evLists) {
+  var ids = {};
+  evLists.forEach(function(list) {
+    (list || []).forEach(function(e) {
+      try {
+        var ref = typeof e.source_ref === 'string' ? JSON.parse(e.source_ref) : e.source_ref;
+        if (ref && ref.source_id && !(ref.source_id in S.sourceTitleCache)) ids[ref.source_id] = true;
+      } catch(ex) {}
+    });
+  });
+  var toFetch = Object.keys(ids);
+  if (!toFetch.length) return;
+  await Promise.all(toFetch.map(async function(sourceId) {
+    try {
+      var r = await api('GET', '/sources/' + sourceId);
+      S.sourceTitleCache[sourceId] = (r.ok && r.data && r.data.title) ? r.data.title : '';
+    } catch(ex) { S.sourceTitleCache[sourceId] = ''; }
+  }));
+}
+
+async function renderSourcesTab(ans, container) {
   var evSet = ans.evidence_snapshot;
   if (!evSet) { container.innerHTML = '<div class="panel-empty">本次回答未返回证据来源</div>'; return; }
   var direct = evSet.direct_evidence || [];
   var supporting = evSet.supporting || [];
   var filtered = evSet.filtered_evidence || [];
   var hits = evSet.activation_hits || [];
+  await resolveSourceTitles([direct, supporting, filtered]);
   var html = '';
   if (evSet.path_type === 'fast' && hits.length) {
     html += '<div class="panel-section"><h3>激活命中 (' + hits.length + ')</h3>' + hits.map(function(h) {
@@ -2129,10 +2162,11 @@ function evidenceCardHtml(e, role) {
   var lineLabel = (lineStart != null && lineEnd != null) ? ('L' + lineStart + '-L' + lineEnd) : '';
   var roleLabel = role === 'direct' ? '直接证据' : (role === 'supporting' ? '补充证据' : '已过滤（判定无关）');
   var domId = fid || e.unit_id || '';
+  var sourceTitle = sourceId ? (S.sourceTitleCache[sourceId] || sourceId.slice(0,16) + '…') : '';
   return '<div class="evidence-card ' + role + '" id="ev-' + esc(domId) + '">\
     <div class="ev-role">' + roleLabel + '</div>\
     <div class="ev-badges">\
-      ' + (sourceId ? '<span class="ev-source">来源: ' + esc(sourceId.slice(0,16)) + '…</span>' : '') + '\
+      ' + (sourceId ? '<span class="ev-source">来源: ' + esc(sourceTitle) + '</span>' : '') + '\
       ' + (role !== 'filtered' ? '<span class="ev-mined-badge">' + minedLabel + '</span>' : '') + '\
       ' + (lineLabel ? '<span class="ev-lines">' + lineLabel + '</span>' : '') + '\
     </div>\
@@ -2184,6 +2218,7 @@ async function loadGapEvidenceInto(traceId, containerId) {
       el.innerHTML = '<div style="font-size:12px;color:var(--text-3);margin-top:8px">该次检索未召回任何候选</div>';
       return;
     }
+    await resolveSourceTitles([direct, supporting, filtered]);
     var html = '<div style="margin-top:10px">';
     if (direct.length) html += '<div style="font-size:12px;color:var(--text-3);margin:6px 0 4px">直接证据 (' + direct.length + ')</div>' + direct.map(function(e) { return evidenceCardHtml(e, 'direct'); }).join('');
     if (supporting.length) html += '<div style="font-size:12px;color:var(--text-3);margin:10px 0 4px">补充证据 (' + supporting.length + ')</div>' + supporting.map(function(e) { return evidenceCardHtml(e, 'supporting'); }).join('');
@@ -2219,30 +2254,6 @@ function closeGapDetailModal() {
 function highlightEvidence(factId) {
   var el = document.getElementById('ev-' + factId);
   if (el) { el.scrollIntoView({ behavior:'smooth', block:'nearest' }); el.style.boxShadow = '0 0 0 2px var(--accent)'; setTimeout(function() { el.style.boxShadow = ''; }, 2000); }
-}
-
-// ═══════════════════════════════════════════════════════
-// TRACE DETAIL
-// ═══════════════════════════════════════════════════════
-async function showTraceDetail(traceId) {
-  if (!traceId) return;
-  var el = document.getElementById('traceDetail');
-  if (!el) return;
-  el.innerHTML = '<div style="font-size:12px;color:var(--text-3);margin-top:8px">加载中...</div>';
-  try {
-    var r = await api('GET', '/traces/' + traceId);
-    if (r.ok && r.data) {
-      var t = r.data;
-      el.innerHTML = '<div class="panel-section" style="border-top:1px solid var(--border-lt);padding-top:14px;margin-top:14px"><h3>思考记录详情</h3><div style="font-size:12px;line-height:2">\
-        <div><b>问题：</b>' + esc(t.question || '') + '</div>\
-        <div><b>主题：</b><code>' + esc(t.question_terms || '') + '</code></div>\
-        <div><b>检索质量：</b><span class="badge ' + t.retrieval_quality + '">' + qualityLabel(t.retrieval_quality) + '</span></div>\
-        <div><b>直接命中：</b><code style="font-size:12px">' + esc(JSON.stringify(t.direct_point_ids || [])) + '</code></div>\
-        ' + (t.has_feedback ? '<div><b>反馈：</b>' + esc(t.feedback_type || '') + '</div>' : '') + '\
-        <div><b>时间：</b>' + esc(t.created_at || '') + '</div>\
-      </div><details style="margin-top:8px"><summary style="font-size:12px;cursor:pointer;color:var(--text-3)">原始数据</summary><div class="raw-json" style="margin-top:6px">' + esc(JSON.stringify(t,null,2)) + '</div></details></div>';
-    } else el.innerHTML = '<div style="font-size:12px;color:var(--red);margin-top:8px">加载失败</div>';
-  } catch(e) { el.innerHTML = '<div style="font-size:12px;color:var(--red);margin-top:8px">错误：' + esc(e.message) + '</div>'; }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2629,6 +2640,33 @@ async function updateSourceDomain(sourceId, selectEl) {
     if (statusEl) statusEl.textContent = '保存失败';
   }
   if (statusEl) setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 2000);
+  loadSources();
+}
+
+// 文件列表内联文档分类下拉（PATCH /sources/:id/doc-category，docs/design/
+// doc-category.md）：值域按 s.domain_id 各自不同，S.docCategoriesByDomain
+// 由 loadSources 在渲染前按本页出现过的 domain_id 预取好，见该函数。
+function sourceDocCategorySelectHtml(s) {
+  if (!s.domain_id) return '';
+  var categories = (S.docCategoriesByDomain && S.docCategoriesByDomain[s.domain_id]) || [];
+  if (!categories.length) return '';
+  var opts = '<option value="">未分类</option>' + categories.map(function(c) {
+    return '<option value="' + esc(c.category_id) + '"' + (c.category_id === s.doc_category_id ? ' selected' : '') + '>' + esc(c.name) + '</option>';
+  }).join('');
+  return '<select class="badge" style="background:var(--bg-3);color:var(--text-2);border:none;cursor:pointer" onclick="event.stopPropagation()" onchange="event.stopPropagation();updateSourceDocCategory(\'' + esc(s.source_id) + '\',this)">' + opts + '</select>';
+}
+
+async function updateSourceDocCategory(sourceId, selectEl) {
+  var categoryId = selectEl.value;
+  var statusEl = document.getElementById('sd-status-' + sourceId);
+  if (statusEl) statusEl.textContent = '保存中...';
+  try {
+    var r = await api('PATCH', '/sources/' + sourceId + '/doc-category', { category_id: categoryId });
+    if (statusEl) statusEl.textContent = r.ok ? '已保存' : '保存失败';
+  } catch(e) {
+    if (statusEl) statusEl.textContent = '保存失败';
+  }
+  if (statusEl) setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 2000);
 }
 
 var sourcePage = 0;
@@ -2678,6 +2716,19 @@ async function loadSources() {
       document.getElementById('srcNextBtn').disabled = sourcePage >= totalPages - 1;
     }
     if (!src.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">暂无来源</div>'; return; }
+    // 预取本页出现过的每个 domain_id 的文档分类值域（docs/design/doc-
+    // category.md）——分类下拉的选项按来源所属领域各不相同，页面量级小
+    // （分页），不必担心并发请求过多。
+    S.docCategoriesByDomain = S.docCategoriesByDomain || {};
+    var domainIdsNeeded = Array.from(new Set(src.map(function(s) { return s.domain_id; }).filter(Boolean)))
+      .filter(function(id) { return !S.docCategoriesByDomain[id]; });
+    if (domainIdsNeeded.length) {
+      await Promise.all(domainIdsNeeded.map(function(id) {
+        return api('GET', '/domains/' + encodeURIComponent(id) + '/doc-categories').then(function(r) {
+          S.docCategoriesByDomain[id] = (r.ok && Array.isArray(r.data)) ? r.data : [];
+        }).catch(function() { S.docCategoriesByDomain[id] = []; });
+      }));
+    }
     list.innerHTML = src.map(function(s) {
       return '<div class="source-card" id="sc-' + esc(s.source_id) + '" onclick="showTimelineForSource(\'' + esc(s.source_id) + '\')"><div class="sc-main">\
         <span class="status-chip status-' + (sourceDisplayStatus(s) || 'unknown') + '">' + statusLabel(sourceDisplayStatus(s)) + '</span>\
@@ -2685,6 +2736,7 @@ async function loadSources() {
         <div class="sc-meta">\
           <span class="badge">' + esc(s.format || '') + '</span>\
           ' + sourceDomainSelectHtml(s) + '\
+          ' + sourceDocCategorySelectHtml(s) + '\
           <span id="sd-status-' + esc(s.source_id) + '" style="font-size:12px;color:var(--text-3)"></span>\
         </div>\
       </div><div class="sc-actions">\
@@ -2729,13 +2781,13 @@ async function viewSource(sourceId, citedUnitId) {
           ' + (d.status==='deleted' ? '<button class="btn btn-sm" style="color:var(--green)" onclick="restoreSource(\'' + esc(d.source_id) + '\');closeSourceDetail()">恢复</button>' : '') + '\
           <button class="btn" onclick="closeSourceDetail()">关闭</button>\
         </div>\
-        ' + (d.status==='completed' ? '<h3 id="sourceTagsToggle" onclick="toggleSourceTagsDrawer(\'' + esc(d.source_id) + '\')" style="cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between;margin-top:14px;font-size:13px;color:var(--text-1);text-transform:uppercase;letter-spacing:.05em"><span>主题标签</span><span id="sourceTagsCaret">&#9656;</span></h3><div id="sourceTagsDrawer" class="hidden" style="margin-top:8px">\
+        ' + (d.status==='completed' ? '<div class="lazy-section" id="sourceTagsSection" style="margin-top:14px"><button type="button" class="lazy-section-head" id="sourceTagsToggle" onclick="toggleSourceTagsDrawer(\'' + esc(d.source_id) + '\')"><span style="text-transform:uppercase;letter-spacing:.05em">主题标签</span><span class="chev">▾</span></button><div class="lazy-section-body" id="sourceTagsDrawer">\
           <div id="sourceTagsList" style="font-size:12px;color:var(--text-3)">加载中...</div>\
           <div style="display:flex;gap:6px;margin-top:8px">\
             <input id="sourceTagInput" placeholder="新标签主题" style="flex:1;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">\
             <button class="btn btn-sm btn-primary" onclick="addSourceTag(\'' + esc(d.source_id) + '\')">添加</button>\
           </div>\
-        </div>' : '') + '\
+        </div></div>' : '') + '\
         ' + (d.status==='completed' ? '<h3 style="margin-top:14px;font-size:13px;color:var(--text-1);text-transform:uppercase;letter-spacing:.05em">知识单元</h3><div id="sourceKUList" style="margin-top:8px"><div style="font-size:12px;color:var(--text-3)">加载中...</div></div>' : '') + '\
         ' + (d.status==='completed' ? '<div id="sourceCoverageResult"></div>' : '') + '\
         ' + (d.status==='completed' ? '<h3 style="margin-top:14px;font-size:13px;color:var(--text-1);text-transform:uppercase;letter-spacing:.05em">历史版本</h3><div id="sourceVersionsList" style="margin-top:8px"><div style="font-size:12px;color:var(--text-3)">加载中...</div></div>' : '') + '';
@@ -2748,12 +2800,11 @@ function closeSourceDetail() { document.getElementById('sourceDetailModal').clas
 // 主题标签管理面板（source_affinity 的人工增/删/改入口，2026-08-27 会话讨论）：
 // 默认折叠，点击标题展开时才首次拉取列表，避免打开详情弹窗就多打一次请求。
 function toggleSourceTagsDrawer(sourceId) {
+  var section = document.getElementById('sourceTagsSection');
   var drawer = document.getElementById('sourceTagsDrawer');
-  var caret = document.getElementById('sourceTagsCaret');
-  if (!drawer) return;
-  var opening = drawer.classList.contains('hidden');
-  drawer.classList.toggle('hidden');
-  if (caret) caret.innerHTML = opening ? '&#9662;' : '&#9656;';
+  if (!section || !drawer) return;
+  var opening = !section.classList.contains('open');
+  section.classList.toggle('open');
   if (opening && !drawer.dataset.loaded) {
     drawer.dataset.loaded = '1';
     loadSourceTags(sourceId);
@@ -4316,13 +4367,12 @@ async function loadLearningResults() {
   body.innerHTML = '\
     <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">\
       <select id="lrActionFilter" onchange="loadLearningResults()"><option value="">全部动作</option>\
-        <option value="create_candidate">create_candidate</option><option value="promote">promote</option>\
-        <option value="weaken">weaken</option><option value="reverify">reverify</option><option value="deprecate">deprecate</option>\
-        <option value="gap_flag">gap_flag</option><option value="wiki_candidate">wiki_candidate</option><option value="recompile_flag">recompile_flag</option></select>\
+        ' + LEARNING_ACTION_ORDER.map(function(a) { return '<option value="' + a + '">' + learningActionLabel(a) + '</option>'; }).join('') + '</select>\
       <select id="lrObjectTypeFilter" onchange="loadLearningResults()"><option value="">全部对象</option>\
-        <option value="activation_link">activation_link</option><option value="knowledge_gap">knowledge_gap</option><option value="wiki_page">wiki_page</option></select>\
+        <option value="activation_link">ActivationLink（可召回链接）</option><option value="activation_bundle">ActivationBundle（熟路）</option>\
+        <option value="knowledge_gap">知识盲区</option><option value="wiki_page">Wiki 页面</option><option value="entry_candidate">概念候选</option></select>\
       <select id="lrStatusFilter" onchange="loadLearningResults()"><option value="">全部状态</option>\
-        <option value="applied">applied</option><option value="pending_confirm">pending_confirm</option><option value="rejected">rejected</option></select>\
+        <option value="applied">已生效</option><option value="pending_confirm">待确认</option><option value="rejected">已驳回</option><option value="expired">已过期</option></select>\
     </div>\
     <div id="lrList"><div style="text-align:center;padding:40px;color:var(--text-3)">加载中...</div></div>';
   document.getElementById('lrActionFilter').value = S.lrAction || '';
@@ -4356,10 +4406,10 @@ function renderLearningResultsList() {
       var obj = row.question_terms ? esc(row.question_terms) : esc((row.object_id||'').slice(0,20));
       return '<tr style="cursor:pointer" onclick="showLearningResultDetail(\'' + esc(row.result_id) + '\')">\
         <td style="font-size:12px">' + dateStr(row.created_at) + '</td>\
-        <td><code style="font-size:12px">' + esc(row.action) + '</code></td>\
+        <td style="font-size:13px">' + esc(learningActionLabel(row.action)) + '<div style="font-size:11px;color:var(--text-3);margin-top:2px"><code>' + esc(row.action) + '</code></div></td>\
         <td style="font-size:12px">' + obj + '</td>\
         <td style="font-size:12px;color:var(--text-2)">' + esc((row.reason||'').slice(0,50)) + '</td>\
-        <td><span class="badge ' + (row.status==='applied'?'confident':(row.status==='rejected'?'gap':'partial')) + '">' + esc(row.status) + '</span></td>\
+        <td><span class="badge ' + (row.status==='applied'?'confident':(row.status==='rejected'?'gap':'partial')) + '">' + esc({applied:'已生效',pending_confirm:'待确认',rejected:'已驳回',expired:'已过期'}[row.status] || row.status) + '</span></td>\
       </tr>';
     }).join('') + '</tbody></table></div>' +
     studyPagerHtml(S.lrPage, rows.length, STUDY_LR_PAGE_SIZE, 'setLrPage') +
@@ -4377,10 +4427,10 @@ async function showLearningResultDetail(resultId) {
     var events = d.events || [];
     el.innerHTML = '<div class="study-card">\
       <h2>动作详情</h2>\
-      <div class="detail-row"><span class="dl">action</span><span class="dv">' + esc(d.action) + '</span></div>\
-      <div class="detail-row"><span class="dl">object_id</span><span class="dv">' + esc(d.object_id) + '</span></div>\
-      <div class="detail-row"><span class="dl">reason</span><span class="dv">' + esc(d.reason) + '</span></div>\
-      <div class="detail-row"><span class="dl">status</span><span class="dv">' + esc(d.status) + '</span></div>\
+      <div class="detail-row"><span class="dl">动作</span><span class="dv">' + esc(learningActionLabel(d.action)) + ' <code style="font-size:12px;color:var(--text-3)">' + esc(d.action) + '</code></span></div>\
+      <div class="detail-row"><span class="dl">对象</span><span class="dv">' + esc(d.question_terms || d.object_id) + '</span></div>\
+      <div class="detail-row"><span class="dl">原因</span><span class="dv">' + esc(d.reason) + '</span></div>\
+      <div class="detail-row"><span class="dl">状态</span><span class="dv">' + esc({applied:'已生效',pending_confirm:'待确认',rejected:'已驳回',expired:'已过期'}[d.status] || d.status) + '</span></div>\
       <h3 style="margin-top:14px;font-size:13px">支撑事件 (' + events.length + ')</h3>' +
       (events.length
         ? events.map(function(ev) {
@@ -6640,20 +6690,24 @@ async function renderDomainConceptPane() {
       </div>\
       <button class="btn btn-sm" onclick="proposeEntriesFromOrphans(\'' + esc(domainId) + '\')">+ 新增词条</button>\
     </div>\
+    <div id="domainDocCategoryPanel" style="margin-top:12px"></div>\
     <div id="domainConceptTabs" style="margin-top:12px"></div>\
     <div class="domain-concept-grid" id="domainConceptGrid"><div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-3);font-size:12px">加载中...</div></div>\
     <div id="domainConceptPager"></div>';
 
-  var conceptsR, domainCandidatesR, pendingR;
+  var conceptsR, domainCandidatesR, pendingR, docCategoriesR;
   try {
     var results = await Promise.all([
       api('GET', '/entries?domain_id=' + encodeURIComponent(domainId)),
       api('GET', '/entries/candidates/by-domain?domain_id=' + encodeURIComponent(domainId)),
-      api('GET', '/entries/candidates?status=pending_confirm')
+      api('GET', '/entries/candidates?status=pending_confirm'),
+      api('GET', '/domains/' + encodeURIComponent(domainId) + '/doc-categories')
     ]);
-    conceptsR = results[0]; domainCandidatesR = results[1]; pendingR = results[2];
-  } catch (e) { conceptsR = domainCandidatesR = pendingR = { ok: false, data: [] }; }
+    conceptsR = results[0]; domainCandidatesR = results[1]; pendingR = results[2]; docCategoriesR = results[3];
+  } catch (e) { conceptsR = domainCandidatesR = pendingR = docCategoriesR = { ok: false, data: [] }; }
   if (S.domainRailSelectedId !== domainId) return; // 切换领域时旧请求已过期
+
+  renderDomainDocCategoryPanel(domainId, (docCategoriesR.ok && Array.isArray(docCategoriesR.data)) ? docCategoriesR.data : []);
 
   S.domainConceptList = (conceptsR.ok && Array.isArray(conceptsR.data)) ? conceptsR.data : [];
   var domainCandidates = (domainCandidatesR.ok && Array.isArray(domainCandidatesR.data)) ? domainCandidatesR.data : [];
@@ -6812,6 +6866,77 @@ function renderDomainGridCard(item) {
     <div class="dcc-desc">' + (originLabel ? esc(originLabel) + ' · ' : '') + (c.point_ids || []).length + ' 个关联知识点</div>\
     <div class="dcc-kp">最近信号 ' + dateStr(c.last_signal_at) + '</div>\
   </div>';
+}
+
+// 「知识领域」页面的"文档分类"面板（docs/design/doc-category.md）：按领域
+// 各自维护的、封闭的文档体裁枚举——与词条网格并列展示，互不影响，是文档的
+// 固有属性维度而非从提问中学习出来的东西。
+function renderDomainDocCategoryPanel(domainId, categories) {
+  var panel = document.getElementById('domainDocCategoryPanel');
+  if (!panel) return;
+  S.domainDocCategories = categories;
+  var chips = categories.length
+    ? categories.map(function(c) {
+        return '<span class="badge" style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-3);color:var(--text-2)" title="' + esc(c.description || '') + '">\
+          ' + esc(c.name) + (c.source_count ? ' <b style="color:var(--text)">' + c.source_count + '</b>' : '') + '\
+          <a href="javascript:void(0)" style="color:var(--text-3)" onclick="openDocCategoryEditForm(\'' + esc(c.category_id) + '\')">改</a>\
+          <a href="javascript:void(0)" style="color:var(--red)" onclick="removeDocCategory(\'' + esc(c.category_id) + '\',\'' + esc(domainId) + '\')">删</a>\
+        </span>';
+      }).join('')
+    : '<span style="font-size:12px;color:var(--text-3)">该领域尚未定义文档分类</span>';
+  panel.innerHTML = '<div style="font-size:12px;color:var(--text-3);margin-bottom:6px">文档分类</div>\
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' + chips + '\
+      <button class="btn btn-sm" onclick="openDocCategoryCreateForm(\'' + esc(domainId) + '\')">+ 新增分类</button>\
+    </div>';
+}
+
+function openDocCategoryCreateForm(domainId) {
+  S.docCategoryEditContext = { mode: 'create', domainId: domainId };
+  document.getElementById('docCategoryModalTitle').textContent = '新增文档分类';
+  document.getElementById('docCategoryName').value = '';
+  document.getElementById('docCategoryDesc').value = '';
+  document.getElementById('docCategoryModal').classList.remove('hidden');
+}
+
+function openDocCategoryEditForm(categoryId) {
+  var c = (S.domainDocCategories || []).find(function(x) { return x.category_id === categoryId; });
+  if (!c) return;
+  S.docCategoryEditContext = { mode: 'edit', categoryId: categoryId };
+  document.getElementById('docCategoryModalTitle').textContent = '编辑文档分类';
+  document.getElementById('docCategoryName').value = c.name;
+  document.getElementById('docCategoryDesc').value = c.description || '';
+  document.getElementById('docCategoryModal').classList.remove('hidden');
+}
+
+function closeDocCategoryModal() {
+  document.getElementById('docCategoryModal').classList.add('hidden');
+}
+
+async function submitDocCategoryForm() {
+  var ctx = S.docCategoryEditContext;
+  if (!ctx) return;
+  var name = document.getElementById('docCategoryName').value.trim();
+  var description = document.getElementById('docCategoryDesc').value.trim();
+  if (!name) { showAlert('请填写分类名称'); return; }
+  try {
+    var r = ctx.mode === 'create'
+      ? await api('POST', '/domains/' + encodeURIComponent(ctx.domainId) + '/doc-categories', { name: name, description: description })
+      : await api('PATCH', '/doc-categories/' + encodeURIComponent(ctx.categoryId), { name: name, description: description });
+    if (!r.ok) { showAlert('保存失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data))); return; }
+    closeDocCategoryModal();
+    if (S.docCategoriesByDomain) delete S.docCategoriesByDomain[ctx.domainId || S.domainRailSelectedId];
+    renderDomainConceptPane();
+  } catch (e) { showAlert('保存出错：' + e.message); }
+}
+
+async function removeDocCategory(categoryId, domainId) {
+  if (!(await showConfirm('确定删除此文档分类？已归入该分类的文档会变回未分类，不会被删除。'))) return;
+  try {
+    var r = await api('DELETE', '/doc-categories/' + encodeURIComponent(categoryId));
+    if (!r.ok) { showAlert('删除失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data))); return; }
+    if (S.docCategoriesByDomain) delete S.docCategoriesByDomain[domainId];
+    renderDomainConceptPane();
+  } catch (e) { showAlert('删除出错：' + e.message); }
 }
 
 function openDomainCreateForm() {
@@ -7857,6 +7982,32 @@ function sourceDisplayStatus(s) {
 function recLabel(r) { return {strong:'强推荐',candidate:'候选',ready:'可编译',needs_more_data:'数据不足'}[r] || r || '-'; }
 function reasonLabel(r) { return {no_candidates:'未检索到',judge_filtered:'检索到但被判无关',answer_error:'生成失败',unspecified:'原因不明'}[r] || r || '-'; }
 
+// learning_results.action 的中文说明。2026-08-13 起 promote/weaken/reverify/
+// deprecate 四个离散状态转换已废弃、统一改写为 prune_condition（见
+// docs/impl/v1/activation.md「状态机」），旧值不会再产生，这里不再提供筛选项，
+// 只在遇到历史数据时兜底显示。LEARNING_ACTION_ORDER 是筛选下拉框的选项顺序，
+// 只列当前仍会产生的动作。
+var LEARNING_ACTION_LABELS = {
+  create_candidate:      'ActivationLink 候选生成',
+  prune_condition:       'ActivationLink 条件清除/驳回',
+  gap_flag:              '标记知识盲区',
+  wiki_candidate:        'Wiki 材料候选',
+  recompile_flag:        '标记 Wiki 页面需重编译',
+  entry_add_candidate:   '概念候选：建议新增',
+  entry_merge_candidate: '概念候选：建议合并',
+  entry_add:             '概念：确认新增',
+  entry_merge:           '概念：确认合并',
+  topic_page_candidate:  '主题页候选（旧两层架构，V1 已不再产生）',
+  // 2026-08-13 之前的历史数据可能仍带这四个旧值
+  promote:   '（旧）晋升为 verified',
+  weaken:    '（旧）降级为 weakened',
+  reverify:  '（旧）重新验证为 verified',
+  deprecate: '（旧）标记为 deprecated'
+};
+var LEARNING_ACTION_ORDER = ['create_candidate', 'prune_condition', 'gap_flag', 'wiki_candidate', 'recompile_flag',
+  'entry_add_candidate', 'entry_merge_candidate', 'entry_add', 'entry_merge'];
+function learningActionLabel(a) { return LEARNING_ACTION_LABELS[a] || a || '未知'; }
+
 // showConfirm replaces window.confirm with an in-page modal (same visual
 // language as the rest of the app instead of the browser's native chrome).
 // Returns a Promise<boolean> so call sites just do `await showConfirm(msg)`.
@@ -7983,8 +8134,7 @@ syncContrastButton();
 // ═══════════════════════════════════════════════════════
 loadSessions().then(function() {
   if (S.sessions.length > 0) {
-    S.sessionId = S.sessions[0].session_id;
-    renderSessionList();
+    switchSession(S.sessions[0].session_id);
   }
 });
 checkHealth();

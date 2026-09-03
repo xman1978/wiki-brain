@@ -19,3 +19,16 @@ type Domain struct {
 	PendingSignalCount int       `json:"pending_signal_count"`
 	CreatedAt          time.Time `json:"created_at"`
 }
+
+// DocCategory is a doc_categories row plus how many sources currently carry
+// it (docs/design/doc-category.md) — a closed, human-curated document-genre
+// taxonomy scoped per domain, distinct from and not affected by the
+// query-driven source_affinity "主题标签" mechanism.
+type DocCategory struct {
+	CategoryID  string    `json:"category_id"`
+	DomainID    string    `json:"domain_id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	SourceCount int       `json:"source_count"`
+	CreatedAt   time.Time `json:"created_at"`
+}

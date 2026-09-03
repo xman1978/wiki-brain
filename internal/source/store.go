@@ -51,6 +51,11 @@ type Source struct {
 	Origin              string
 	OriginPageID        sql.NullString
 	ReflowSkippedEdges  int
+	// DocCategoryID is the doc_categories.category_id this source was
+	// classified into (docs/design/doc-category.md), or invalid when
+	// unclassified — either because its domain has no doc_categories value
+	// domain defined, or matchDocCategory hasn't run/matched yet.
+	DocCategoryID sql.NullString
 }
 
 // SourceVersion is a snapshot of a source's files as they were the moment a
@@ -108,12 +113,12 @@ func (s *Store) Create(src *Source) error {
 	if src.Origin == "" {
 		src.Origin = SourceOriginUpload
 	}
-	_, err := s.db.Exec(`INSERT INTO sources (source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, origin, origin_page_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := s.db.Exec(`INSERT INTO sources (source_id, title, format, file_name, original_path, html_path, markdown_path, status, error_msg, outline_type, summary, domain_id, word_count, shadow_of, origin, origin_page_id, doc_category_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		src.SourceID, src.Title, src.Format, src.FileName, src.OriginalPath,
 		src.HTMLPath, src.MarkdownPath, src.Status, src.ErrorMsg,
 		src.OutlineType, src.Summary, src.DomainID, src.WordCount, src.ShadowOf,
-		src.Origin, src.OriginPageID)
+		src.Origin, src.OriginPageID, src.DocCategoryID)
 	if err != nil {
 		return fmt.Errorf("source store: create: %w", err)
 	}
@@ -144,7 +149,7 @@ func (s *Store) IncrementReflowSkippedEdges(sourceID string, delta int) error {
 
 func (s *Store) GetByID(sourceID string) (*Source, error) {
 	src := &Source{}
-	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at, units_built_at, register_duration_ms, convert_duration_ms, units_duration_ms, semantics_duration_ms, origin, origin_page_id, reflow_skipped_edges
+	err := s.db.QueryRow(`SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at, units_built_at, register_duration_ms, convert_duration_ms, units_duration_ms, semantics_duration_ms, origin, origin_page_id, reflow_skipped_edges, doc_category_id
 		FROM sources WHERE source_id = ?`, sourceID).Scan(
 		&src.SourceID, &src.Title, &src.Format, &src.FileName,
 		&src.OriginalPath, &src.HTMLPath, &src.MarkdownPath, &src.Status, &src.UnitsStatus, &src.UnitsStage,
@@ -152,7 +157,7 @@ func (s *Store) GetByID(sourceID string) (*Source, error) {
 		&src.WordCount, &src.ShadowOf, &src.Version, &src.CreatedAt, &src.UpdatedAt,
 		&src.ProcessingStartedAt, &src.CompletedAt, &src.UnitsCompletedAt, &src.UnitsBuiltAt,
 		&src.RegisterDurationMs, &src.ConvertDurationMs, &src.UnitsDurationMs, &src.SemanticsDurationMs,
-		&src.Origin, &src.OriginPageID, &src.ReflowSkippedEdges)
+		&src.Origin, &src.OriginPageID, &src.ReflowSkippedEdges, &src.DocCategoryID)
 	if err != nil {
 		return nil, fmt.Errorf("source store: get by id: %w", err)
 	}
@@ -199,7 +204,7 @@ func (s *Store) GetSourcesByIDs(sourceIDs []string) ([]Source, error) {
 func (s *Store) List(status, domainID, q string, limit, offset int) ([]Source, error) {
 	var rows *sql.Rows
 	var err error
-	base := `SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at, units_built_at, origin, origin_page_id, reflow_skipped_edges FROM sources`
+	base := `SELECT source_id, title, format, file_name, original_path, html_path, markdown_path, status, units_status, units_stage, error_msg, outline_type, summary, domain_id, word_count, shadow_of, version, created_at, updated_at, processing_started_at, completed_at, units_completed_at, units_built_at, origin, origin_page_id, reflow_skipped_edges, doc_category_id FROM sources`
 	where := []string{"shadow_of IS NULL"}
 	var args []any
 	if status != "" {
@@ -233,7 +238,7 @@ func (s *Store) List(status, domainID, q string, limit, offset int) ([]Source, e
 			&src.ErrorMsg, &src.OutlineType, &src.Summary, &src.DomainID,
 			&src.WordCount, &src.ShadowOf, &src.Version, &src.CreatedAt, &src.UpdatedAt,
 			&src.ProcessingStartedAt, &src.CompletedAt, &src.UnitsCompletedAt, &src.UnitsBuiltAt,
-			&src.Origin, &src.OriginPageID, &src.ReflowSkippedEdges); err != nil {
+			&src.Origin, &src.OriginPageID, &src.ReflowSkippedEdges, &src.DocCategoryID); err != nil {
 			return nil, fmt.Errorf("source store: scan: %w", err)
 		}
 		sources = append(sources, src)
@@ -494,6 +499,21 @@ func (s *Store) UpdateDomainID(sourceID string, domainID *string) error {
 	return nil
 }
 
+// UpdateDocCategoryID mirrors UpdateDomainID for sources.doc_category_id
+// (docs/design/doc-category.md); a nil categoryID clears the classification.
+func (s *Store) UpdateDocCategoryID(sourceID string, categoryID *string) error {
+	var val sql.NullString
+	if categoryID != nil {
+		val = sql.NullString{String: *categoryID, Valid: true}
+	}
+	_, err := s.db.Exec(`UPDATE sources SET doc_category_id = ?, updated_at = CURRENT_TIMESTAMP WHERE source_id = ?`,
+		val, sourceID)
+	if err != nil {
+		return fmt.Errorf("source store: update doc category id: %w", err)
+	}
+	return nil
+}
+
 // Count mirrors List's visibility rule: shadow rows are always excluded.
 func (s *Store) Count(status, domainID, q string) (int, error) {
 	var count int
@@ -601,10 +621,10 @@ func (s *Store) SwapShadowIntoTarget(shadowID, targetID, originalPath string, ht
 	defer tx.Rollback()
 
 	shadow := &Source{}
-	err = tx.QueryRow(`SELECT file_name, format, summary, domain_id, outline_type, word_count, units_stage, units_built_at, units_completed_at
+	err = tx.QueryRow(`SELECT file_name, format, summary, domain_id, outline_type, word_count, units_stage, units_built_at, units_completed_at, doc_category_id
 		FROM sources WHERE source_id = ?`, shadowID).Scan(
 		&shadow.FileName, &shadow.Format, &shadow.Summary, &shadow.DomainID,
-		&shadow.OutlineType, &shadow.WordCount, &shadow.UnitsStage, &shadow.UnitsBuiltAt, &shadow.UnitsCompletedAt)
+		&shadow.OutlineType, &shadow.WordCount, &shadow.UnitsStage, &shadow.UnitsBuiltAt, &shadow.UnitsCompletedAt, &shadow.DocCategoryID)
 	if err != nil {
 		return fmt.Errorf("source store: swap: get shadow: %w", err)
 	}
@@ -642,9 +662,9 @@ func (s *Store) SwapShadowIntoTarget(shadowID, targetID, originalPath string, ht
 	// the units/points just reparented above ARE that finished result, so
 	// the target must reflect "done" immediately, not "pending" until some
 	// unrelated future unit_extract run happens to touch it.
-	if _, err := tx.Exec(`UPDATE sources SET file_name = ?, format = ?, summary = ?, domain_id = ?, outline_type = ?, word_count = ?, original_path = ?, html_path = ?, version = version + 1, units_status = 'completed', units_stage = ?, units_built_at = ?, units_completed_at = COALESCE(?, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP
+	if _, err := tx.Exec(`UPDATE sources SET file_name = ?, format = ?, summary = ?, domain_id = ?, outline_type = ?, word_count = ?, original_path = ?, html_path = ?, version = version + 1, units_status = 'completed', units_stage = ?, units_built_at = ?, units_completed_at = COALESCE(?, CURRENT_TIMESTAMP), doc_category_id = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE source_id = ?`,
-		shadow.FileName, shadow.Format, shadow.Summary, shadow.DomainID, shadow.OutlineType, shadow.WordCount, originalPath, htmlPath, shadow.UnitsStage, shadow.UnitsBuiltAt, shadow.UnitsCompletedAt, targetID); err != nil {
+		shadow.FileName, shadow.Format, shadow.Summary, shadow.DomainID, shadow.OutlineType, shadow.WordCount, originalPath, htmlPath, shadow.UnitsStage, shadow.UnitsBuiltAt, shadow.UnitsCompletedAt, shadow.DocCategoryID, targetID); err != nil {
 		return fmt.Errorf("source store: swap: update target metadata: %w", err)
 	}
 	if _, err := tx.Exec(`DELETE FROM sources WHERE source_id = ?`, shadowID); err != nil {
@@ -1042,6 +1062,66 @@ func (s *Store) ListDomains() ([]Domain, error) {
 		domains = append(domains, d)
 	}
 	return domains, rows.Err()
+}
+
+// DocCategory is this package's own trimmed read model of a doc_categories
+// row (mirrors Domain above) — kept local rather than importing
+// internal/domain, same decoupling rationale as ListDomains/DomainExists.
+type DocCategory struct {
+	CategoryID  string
+	Name        string
+	Description string
+}
+
+// ListDocCategories returns domainID's document-category value domain
+// (docs/design/doc-category.md), used to build matchDocCategory's LLM
+// candidate list and the manual-override picker.
+func (s *Store) ListDocCategories(domainID string) ([]DocCategory, error) {
+	rows, err := s.db.Query(`SELECT category_id, name, COALESCE(description, '') FROM doc_categories WHERE domain_id = ? ORDER BY name`, domainID)
+	if err != nil {
+		return nil, fmt.Errorf("source store: list doc categories: %w", err)
+	}
+	defer rows.Close()
+
+	var categories []DocCategory
+	for rows.Next() {
+		var c DocCategory
+		if err := rows.Scan(&c.CategoryID, &c.Name, &c.Description); err != nil {
+			return nil, fmt.Errorf("source store: scan doc category: %w", err)
+		}
+		categories = append(categories, c)
+	}
+	return categories, rows.Err()
+}
+
+// GetDocCategoryName resolves a doc_categories.category_id to its display
+// name — used by the MCP citation resolver to surface Citation.
+// DocCategoryName (docs/impl/v1/mcp.md 3b 节). Returns "" when the category
+// no longer exists rather than erroring, so one stale/deleted category
+// doesn't fail an otherwise-valid citation.
+func (s *Store) GetDocCategoryName(categoryID string) (string, error) {
+	var name string
+	err := s.db.QueryRow(`SELECT name FROM doc_categories WHERE category_id = ?`, categoryID).Scan(&name)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("source store: get doc category name: %w", err)
+	}
+	return name, nil
+}
+
+// DocCategoryExists reports whether categoryID exists and belongs to
+// domainID — SetDocCategory uses the domainID check to reject cross-domain
+// mismatches (a category from one domain's value domain being assigned to a
+// source classified under another).
+func (s *Store) DocCategoryExists(categoryID, domainID string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM doc_categories WHERE category_id = ? AND domain_id = ?`, categoryID, domainID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("source store: doc category exists: %w", err)
+	}
+	return count > 0, nil
 }
 
 type Domain struct {

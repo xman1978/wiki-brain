@@ -22,6 +22,15 @@ type QueryContext struct {
 	// pipeline — POST /retrieval's force_full request field
 	// (docs/impl/v1/retrieval.md 步骤 7), for debugging/comparison evals.
 	ForceFull bool
+	// DocCategoryHint is an optional free-text document-genre request
+	// (docs/impl/v1/mcp.md 3b 节, e.g. "故障案例"), currently only sent by
+	// the MCP retrieve tool. When non-empty and the resolved domain has a
+	// doc_categories value domain, the slow path narrows Step3's candidate
+	// set to sources classified into the best-matching category — but only
+	// when that subset is large enough (RetrievalConfig.
+	// DocCategoryNarrowMinSources) to avoid starving material coverage on a
+	// thin/miscategorized corpus.
+	DocCategoryHint string
 }
 
 type EvidenceSet struct {

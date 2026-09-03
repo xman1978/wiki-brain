@@ -259,6 +259,82 @@ func TestLoadPresetData_AliasReloadRefreshesButDoesNotClobberGapMined(t *testing
 	}
 }
 
+// TestLoadPresetData_DocCategories covers docs/design/doc-category.md: each
+// domain's doc_categories array UPSERTs into the doc_categories table,
+// refreshing name/description on replay without duplicating rows.
+func TestLoadPresetData_DocCategories(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := fdb.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	presetJSON := `{
+		"domains": [
+			{
+				"id": "se",
+				"name": "软件工程",
+				"description": "软件设计与开发",
+				"entries": [],
+				"doc_categories": [
+					{"id": "se_dc_guide", "name": "开发指南", "description": "旧描述"},
+					{"id": "se_dc_case", "name": "故障案例", "description": "案例描述"}
+				]
+			}
+		]
+	}`
+	presetPath := filepath.Join(t.TempDir(), "domains.json")
+	os.WriteFile(presetPath, []byte(presetJSON), 0644)
+
+	if err := LoadPresetData(db, presetPath); err != nil {
+		t.Fatalf("LoadPresetData: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM doc_categories WHERE domain_id = 'se'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Errorf("doc_categories = %d, want 2", count)
+	}
+
+	// Replay with an updated description — must refresh in place, not duplicate.
+	presetJSON2 := `{
+		"domains": [
+			{
+				"id": "se",
+				"name": "软件工程",
+				"description": "软件设计与开发",
+				"entries": [],
+				"doc_categories": [
+					{"id": "se_dc_guide", "name": "开发指南", "description": "新描述"},
+					{"id": "se_dc_case", "name": "故障案例", "description": "案例描述"}
+				]
+			}
+		]
+	}`
+	os.WriteFile(presetPath, []byte(presetJSON2), 0644)
+	if err := LoadPresetData(db, presetPath); err != nil {
+		t.Fatalf("second LoadPresetData: %v", err)
+	}
+
+	if err := db.QueryRow(`SELECT COUNT(*) FROM doc_categories WHERE domain_id = 'se'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Errorf("doc_categories after replay = %d, want 2 (no duplication)", count)
+	}
+
+	var desc string
+	if err := db.QueryRow(`SELECT description FROM doc_categories WHERE category_id = 'se_dc_guide'`).Scan(&desc); err != nil {
+		t.Fatal(err)
+	}
+	if desc != "新描述" {
+		t.Errorf("description = %q, want 新描述 (preset replay should refresh)", desc)
+	}
+}
+
 func TestLoadPresetDataFileNotFound(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	db, err := fdb.Open(dbPath)

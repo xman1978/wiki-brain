@@ -89,6 +89,8 @@ curl -X POST "http://localhost:8080/sources" \
       "outline_type": "heading",
       "domain_id": "dom_hr",
       "domain_name": "人力资源",
+      "doc_category_id": "cat_case",
+      "doc_category_name": "故障案例",
       "created_at": "2026-08-01T10:00:00Z",
       "processing_started_at": "2026-08-01T10:00:01Z",
       "completed_at": "2026-08-01T10:00:05Z",
@@ -130,6 +132,7 @@ curl "http://localhost:8080/sources?status=completed&limit=20&offset=0"
   "outline_type": "heading",
   "summary": "本文档介绍公司考勤与请假制度",
   "domain_id": "dom_hr",
+  "doc_category_id": "cat_case",
   "word_count": 12345,
   "processing_started_at": "2026-08-01T10:00:01Z",
   "completed_at": "2026-08-01T10:00:05Z",
@@ -142,7 +145,7 @@ curl "http://localhost:8080/sources?status=completed&limit=20&offset=0"
 }
 ```
 
-`error_msg` 字段仅在处理失败时出现。
+`error_msg` 字段仅在处理失败时出现；`doc_category_id` 仅在该文档已被分类（LLM 自动匹配或人工指定）时出现，未分类时省略。
 
 **curl 示例**
 
@@ -289,12 +292,52 @@ curl -N "http://localhost:8080/sources/src_abc123/progress"
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `PATCH /sources/{id}/domain` | 人工修正知识域，body `{"domain_id":"dom_hr"}` |
+| `PATCH /sources/{id}/doc-category` | 人工修正文档分类，body `{"category_id":"cat_case"}`（见 1.10 节） |
 | `PATCH /sources/{id}/summary` | 人工修正摘要，body `{"summary":"..."}` |
 | `GET /sources/{id}/outlines` | 获取目录树 |
 | `GET /sources/{id}/markdown` | 获取转换后的 Markdown（支持 `?unit_id=` / `?version=`） |
 | `GET /sources/{id}/preview` | 获取 HTML 预览 |
 | `GET /sources/{id}/original` | 下载/预览原始文件 |
 | `GET /sources/{id}/versions` | 列出历史版本（reupload 归档） |
+
+---
+
+### 1.10 文档分类管理（Doc Category）
+
+文档分类是知识领域内一个与主题正交的**体裁维度**（如"故障案例""制度原文"），值域按 `domain_id` 各自预定义（详见 `docs/design/doc-category.md`）。文档导入时由 LLM 在 `matchDomain` 之后自动匹配（候选列表为空则跳过、`doc_category_id` 保持未分类），也可人工覆盖。
+
+**分类值域管理（按知识域）**
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET /domains/{id}/doc-categories` | 列出该知识域下已维护的分类（含 `source_count`） |
+| `POST /domains/{id}/doc-categories` | 新增分类，body `{"name":"故障案例","description":"..."}` |
+| `PATCH /doc-categories/{id}` | 编辑分类，body `{"name":"...","description":"..."}` |
+| `DELETE /doc-categories/{id}` | 删除分类（已引用该分类的 Source 会被解除引用，不级联删除文档） |
+
+**Source 分类覆盖**
+
+`PATCH /sources/{id}/doc-category`，body：
+
+```json
+{ "category_id": "cat_case" }
+```
+
+`category_id` 必须属于该 Source 当前所属的 `domain_id`，否则 `400`；传空字符串清空分类。
+
+**curl 示例**
+
+```bash
+curl "http://localhost:8080/domains/dom_hr/doc-categories"
+
+curl -X POST "http://localhost:8080/domains/dom_hr/doc-categories" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "故障案例", "description": "记录具体故障现象、排查过程与解决方案的文档"}'
+
+curl -X PATCH "http://localhost:8080/sources/src_abc123/doc-category" \
+  -H "Content-Type: application/json" \
+  -d '{"category_id": "cat_case"}'
+```
 
 ---
 
@@ -534,3 +577,84 @@ curl "http://localhost:8080/answers/ans_001"
 **错误**
 
 - `404` 回答不存在
+
+---
+
+## 四、MCP 接口（对接 AI Agent 平台）
+
+MCP（Model Context Protocol）是知识大脑与外部 AI Agent 平台之间的薄封装接口层：`import_file` 复用现有导入链路，`retrieve` 复用现有检索链路、只返回原始证据，不做答案合成（怎么组织成给用户看的内容由 Agent 平台自己的 LLM 完成，详见 `docs/design/mcp.md`）。
+
+- 协议端点：MCP Streamable HTTP，`http://<host>:<port><prefix>/mcp`（与 REST API 同进程、同端口）。
+- 与上面的 REST 接口是两套独立入口，字段含义相同但不共享请求/响应结构。
+
+### 4.1 Tool: `import_file`
+
+**输入**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `file_path` | string | 与 `content_base64` 二选一 | 本地绝对路径，文件已在本地磁盘时使用 |
+| `content_base64` | string | 与 `file_path` 二选一 | 文件内容 base64 编码，材料只存在于 Agent 侧、未落盘时使用 |
+| `filename` | string | `content_base64` 模式下必填 | 用于推断文件格式与标题 |
+| `origin` | string | 否 | 来源标记，默认 `agent_generated` |
+| `origin_page_id` | string | 否 | 来源页面 ID（同 `origin=wiki_draft` 场景） |
+
+**输出**
+
+```json
+{
+  "source_id": "src_abc123",
+  "status": "completed",
+  "title": "复盘记录.md",
+  "format": "markdown"
+}
+```
+
+同步等待处理完成，超时（`mcp.import_wait_timeout_seconds`，默认 20s）后原样返回当前状态（`processing`/`pending`），不阻塞、不报错。
+
+### 4.2 Tool: `retrieve`
+
+**输入**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `question` | string | 是 | 要检索的问题 |
+| `force_full` | bool | 否 | 跳过快路径，强制走完整检索流程，默认 `false` |
+| `doc_category_hint` | string | 否 | 期望的材料体裁（自由文本，如"故障案例""制度原文"）。典型场景是 Agent 用知识库材料写新文档，按目标文档类型提示需要哪种体裁的证据；内部按域匹配到具体分类后，只有该分类下候选 Source 数达到阈值（`retrieval.doc_category_narrow_min_sources`，默认 4）才收窄候选，否则退回全量，不因分类覆盖不全而漏材料。 |
+
+**输出**
+
+```json
+{
+  "question": "故障排查手册要怎么写年假故障？",
+  "direct_evidence": [
+    {
+      "content": "全职员工每年享有5天带薪年假",
+      "citation": {
+        "source_title": "员工手册.pdf",
+        "section": "年假制度",
+        "link": "file:///path/to/员工手册.md#年假制度",
+        "doc_category_name": "制度原文"
+      },
+      "role": "direct"
+    }
+  ],
+  "supporting_evidence": [],
+  "conflicts": [],
+  "gap_reason": ""
+}
+```
+
+`citation.doc_category_name` 无条件返回（不依赖是否传了 `doc_category_hint`），来源未分类时省略；`gap_reason` 非空表示证据不足。
+
+**curl 示例（MCP 客户端伪代码，实际以具体 MCP SDK 的调用方式为准）**
+
+```json
+{
+  "tool": "retrieve",
+  "input": {
+    "question": "故障排查手册要怎么写年假故障？",
+    "doc_category_hint": "故障案例"
+  }
+}
+```

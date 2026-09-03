@@ -27,6 +27,40 @@ type SourceInfo struct {
 	Summary      sql.NullString
 	DomainID     sql.NullString
 	MarkdownPath string
+	// DocCategoryID is sources.doc_category_id — used by narrowByDocCategory
+	// to filter Step3's candidate set against a hint-matched category
+	// (docs/impl/v1/mcp.md 3b 节). Invalid when the source is unclassified.
+	DocCategoryID sql.NullString
+}
+
+// DocCategoryInfo mirrors source.Store.DocCategory — kept as this package's
+// own trimmed read model rather than importing internal/source, same
+// decoupling rationale as DomainInfo/ListDomains.
+type DocCategoryInfo struct {
+	CategoryID  string
+	Name        string
+	Description string
+}
+
+// ListDocCategories returns domainID's document-category value domain, used
+// to build the hint→category LLM match's candidate list
+// (docs/impl/v1/mcp.md 3b 节).
+func (s *Store) ListDocCategories(domainID string) ([]DocCategoryInfo, error) {
+	rows, err := s.db.Query(`SELECT category_id, name, COALESCE(description, '') FROM doc_categories WHERE domain_id = ? ORDER BY name`, domainID)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval store: list doc categories: %w", err)
+	}
+	defer rows.Close()
+
+	var result []DocCategoryInfo
+	for rows.Next() {
+		var c DocCategoryInfo
+		if err := rows.Scan(&c.CategoryID, &c.Name, &c.Description); err != nil {
+			return nil, fmt.Errorf("retrieval store: scan doc category: %w", err)
+		}
+		result = append(result, c)
+	}
+	return result, rows.Err()
 }
 
 type OutlineInfo struct {
@@ -77,7 +111,7 @@ func (s *Store) ListSourcesByDomainIDs(domainIDs []string) ([]SourceInfo, error)
 		args[i] = id
 	}
 	query := fmt.Sprintf(
-		`SELECT source_id, title, summary, domain_id, markdown_path FROM sources
+		`SELECT source_id, title, summary, domain_id, markdown_path, doc_category_id FROM sources
 		 WHERE (domain_id IN (%s) OR domain_id IS NULL) AND shadow_of IS NULL
 		 ORDER BY created_at DESC`,
 		strings.Join(placeholders, ","))
@@ -94,7 +128,7 @@ func (s *Store) ListSourcesByDomainIDs(domainIDs []string) ([]SourceInfo, error)
 // in progress must not participate in retrieval until the swap completes
 // (docs/impl/v1/lifecycle.md 步骤 2).
 func (s *Store) ListAllSources() ([]SourceInfo, error) {
-	rows, err := s.db.Query(`SELECT source_id, title, summary, domain_id, markdown_path FROM sources WHERE shadow_of IS NULL ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT source_id, title, summary, domain_id, markdown_path, doc_category_id FROM sources WHERE shadow_of IS NULL ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval store: list all sources: %w", err)
 	}
@@ -106,7 +140,7 @@ func scanSources(rows *sql.Rows) ([]SourceInfo, error) {
 	var result []SourceInfo
 	for rows.Next() {
 		var s SourceInfo
-		if err := rows.Scan(&s.SourceID, &s.Title, &s.Summary, &s.DomainID, &s.MarkdownPath); err != nil {
+		if err := rows.Scan(&s.SourceID, &s.Title, &s.Summary, &s.DomainID, &s.MarkdownPath, &s.DocCategoryID); err != nil {
 			return nil, fmt.Errorf("retrieval store: scan source: %w", err)
 		}
 		result = append(result, s)

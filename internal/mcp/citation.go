@@ -16,6 +16,12 @@ type Citation struct {
 	SourceTitle string `json:"source_title"`
 	Section     string `json:"section,omitempty"`
 	Link        string `json:"link"`
+	// DocCategoryName is the source's document-genre classification
+	// (docs/design/doc-category.md), surfaced unconditionally — independent
+	// of whether the retrieve call carried a doc_category_hint — so an Agent
+	// can see each evidence item's genre even when it didn't filter by one
+	// (docs/impl/v1/mcp.md 3b 节). Empty when the source is unclassified.
+	DocCategoryName string `json:"doc_category_name,omitempty"`
 }
 
 // citationResolver resolves SourceRef -> Citation, caching each source's
@@ -25,16 +31,18 @@ type Citation struct {
 type citationResolver struct {
 	store *source.Store
 
-	mu           sync.Mutex
-	sourceCache  map[string]*source.Source
-	outlineCache map[string][]source.Outline
+	mu            sync.Mutex
+	sourceCache   map[string]*source.Source
+	outlineCache  map[string][]source.Outline
+	categoryCache map[string]string
 }
 
 func newCitationResolver(store *source.Store) *citationResolver {
 	return &citationResolver{
-		store:        store,
-		sourceCache:  make(map[string]*source.Source),
-		outlineCache: make(map[string][]source.Outline),
+		store:         store,
+		sourceCache:   make(map[string]*source.Source),
+		outlineCache:  make(map[string][]source.Outline),
+		categoryCache: make(map[string]string),
 	}
 }
 
@@ -94,10 +102,26 @@ func (r *citationResolver) resolve(sourceID string, lineStart int) Citation {
 		link += "#" + slugify(section)
 	}
 
+	categoryName := ""
+	if src.DocCategoryID.Valid && src.DocCategoryID.String != "" {
+		categoryID := src.DocCategoryID.String
+		name, ok := r.categoryCache[categoryID]
+		if !ok {
+			resolved, err := r.store.GetDocCategoryName(categoryID)
+			if err != nil {
+				resolved = ""
+			}
+			name = resolved
+			r.categoryCache[categoryID] = name
+		}
+		categoryName = name
+	}
+
 	return Citation{
-		SourceTitle: src.Title,
-		Section:     section,
-		Link:        link,
+		SourceTitle:     src.Title,
+		Section:         section,
+		Link:            link,
+		DocCategoryName: categoryName,
 	}
 }
 

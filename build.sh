@@ -52,6 +52,18 @@ for target in "${TARGETS[@]}"; do
     # 编译产物里，需要随包分发。
     cp -R "$ROOT_DIR/config" "$out_dir/config"
     mkdir -p "$out_dir/logs"
+    cp "$ROOT_DIR/scripts/README.txt" "$out_dir/README.txt"
+
+    # Windows 产物额外带上 NSSM 服务管理脚本（把普通控制台程序注册/管理为
+    # Windows 服务），依赖用户自备 nssm.exe，见脚本内说明。
+    if [[ "$goos" == "windows" ]]; then
+        cp "$ROOT_DIR/scripts/windows/service.ps1" "$out_dir/service.ps1"
+        cp "$ROOT_DIR/scripts/windows/service.bat" "$out_dir/service.bat"
+    else
+        # linux/darwin 产物带上启动/停止脚本（tar.gz 保留可执行权限）。
+        cp "$ROOT_DIR/scripts/unix/run.sh" "$out_dir/run.sh"
+        chmod +x "$out_dir/run.sh"
+    fi
 
     archive_base="wiki-brain-${VERSION}-${goos}-${goarch}"
     (

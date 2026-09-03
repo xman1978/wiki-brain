@@ -105,8 +105,9 @@ func (s *Server) importFile(ctx context.Context, _ *gosdk.CallToolRequest, in Im
 // ── retrieve ─────────────────────────────────────────────────────────────
 
 type RetrieveInput struct {
-	Question  string `json:"question" jsonschema:"要检索的问题"`
-	ForceFull bool   `json:"force_full,omitempty" jsonschema:"跳过快路径，强制走完整检索流程，默认 false"`
+	Question        string `json:"question" jsonschema:"要检索的问题"`
+	ForceFull       bool   `json:"force_full,omitempty" jsonschema:"跳过快路径，强制走完整检索流程，默认 false"`
+	DocCategoryHint string `json:"doc_category_hint,omitempty" jsonschema:"期望的材料体裁（自由文本，如“故障案例”“制度原文”），可选"`
 }
 
 type EvidenceItem struct {
@@ -135,8 +136,9 @@ func (s *Server) retrieve(ctx context.Context, _ *gosdk.CallToolRequest, in Retr
 	}
 
 	es, err := s.retrievalSvc.RetrieveWithProgress(ctx, retrieval.QueryContext{
-		Question:  in.Question,
-		ForceFull: in.ForceFull,
+		Question:        in.Question,
+		ForceFull:       in.ForceFull,
+		DocCategoryHint: in.DocCategoryHint,
 	}, nil)
 	if err != nil {
 		return nil, RetrieveOutput{}, err

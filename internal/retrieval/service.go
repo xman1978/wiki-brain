@@ -827,6 +827,8 @@ func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progres
 	}
 	slog.Info("retrieval: step2 domain pre-filter done", "candidates", len(candidateSources))
 
+	candidateSources = s.narrowByDocCategory(ctx, qc, candidateSources)
+
 	es, err := s.filterAndRecall(ctx, qc, candidateSources, emit, progress, false)
 	if err != nil {
 		return nil, err
@@ -1172,6 +1174,95 @@ func (s *Service) domainPreFilter(ctx context.Context, qc QueryContext) ([]Sourc
 		return s.store.ListAllSources()
 	}
 	return sources, nil
+}
+
+// narrowByDocCategory implements the doc_category_hint material-genre filter
+// (docs/impl/v1/mcp.md 3b 节), currently only ever set by the MCP retrieve
+// tool. It matches the free-text hint against the resolved domain's
+// doc_categories value domain via one LLM call, then narrows candidates to
+// that category's sources — but only when the result is large enough
+// (RetrievalConfig.DocCategoryNarrowMinSources) to still cover writing
+// material; a thin/miscategorized corpus falls back to the untouched
+// candidate list rather than silently starving results. No-ops (including on
+// any lookup/parse failure) when the hint is empty, candidates span more
+// than one domain (doc_categories values are domain-scoped — ambiguous which
+// domain's list to match against), or the domain has no categories defined.
+func (s *Service) narrowByDocCategory(ctx context.Context, qc QueryContext, candidates []SourceInfo) []SourceInfo {
+	hint := strings.TrimSpace(qc.DocCategoryHint)
+	if hint == "" || len(candidates) == 0 {
+		return candidates
+	}
+
+	domainID := ""
+	for _, src := range candidates {
+		if !src.DomainID.Valid || src.DomainID.String == "" {
+			continue
+		}
+		if domainID == "" {
+			domainID = src.DomainID.String
+		} else if domainID != src.DomainID.String {
+			slog.Info("retrieval: doc_category_hint skipped, candidates span multiple domains", "hint", hint)
+			return candidates
+		}
+	}
+	if domainID == "" {
+		return candidates
+	}
+
+	categories, err := s.store.ListDocCategories(domainID)
+	if err != nil {
+		slog.Warn("retrieval: doc_category_hint list categories failed, skipping", "error", err)
+		return candidates
+	}
+	if len(categories) == 0 {
+		return candidates
+	}
+
+	var categoryList strings.Builder
+	for _, c := range categories {
+		fmt.Fprintf(&categoryList, "[%s] %s：%s\n", c.CategoryID, c.Name, c.Description)
+	}
+
+	resp, err := s.llmClient.CompleteJSON(ctx, "retrieval_doc_category_hint_match.md", map[string]string{
+		"hint":          hint,
+		"category_list": categoryList.String(),
+	}, "classification")
+	if err != nil {
+		slog.Warn("retrieval: doc_category_hint match LLM failed, skipping", "error", err)
+		return candidates
+	}
+
+	var result struct {
+		CategoryID *string `json:"category_id"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		slog.Warn("retrieval: doc_category_hint match parse failed, skipping", "error", err)
+		return candidates
+	}
+	if result.CategoryID == nil || *result.CategoryID == "" {
+		return candidates
+	}
+
+	narrowed := make([]SourceInfo, 0, len(candidates))
+	for _, src := range candidates {
+		if src.DocCategoryID.Valid && src.DocCategoryID.String == *result.CategoryID {
+			narrowed = append(narrowed, src)
+		}
+	}
+
+	minSources := 4
+	if s.cfg != nil && s.cfg.Retrieval.DocCategoryNarrowMinSources > 0 {
+		minSources = s.cfg.Retrieval.DocCategoryNarrowMinSources
+	}
+	if len(narrowed) < minSources {
+		slog.Info("retrieval: doc_category_hint matched category too thin, keeping full candidate set",
+			"hint", hint, "category_id", *result.CategoryID, "matched", len(narrowed), "min", minSources)
+		return candidates
+	}
+
+	slog.Info("retrieval: doc_category_hint narrowed candidates",
+		"hint", hint, "category_id", *result.CategoryID, "before", len(candidates), "after", len(narrowed))
+	return narrowed
 }
 
 // sourceFilterCandidate is one source_filter.md candidate item — mirrors

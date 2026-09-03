@@ -228,6 +228,12 @@ type RetrievalConfig struct {
 	// 绑定），未设置默认 50——避免一个 domain 短时间内积累了很多不同主题时，
 	// 单次 tick 的耗时不可控；处理不完的留到下一轮。
 	SourceAffinityPendingBatchMax int `yaml:"source_affinity_pending_batch_max"`
+
+	// DocCategoryNarrowMinSources：MCP retrieve 的 doc_category_hint 匹配到
+	// 具体 category 后，该 category 在所属 domain 下的候选 Source 数量达到此
+	// 阈值才用它收窄 Step3 sourceSemanticFilter 的候选集，否则退回未过滤的
+	// 全量候选（docs/impl/v1/mcp.md 3b 节）。<=0 时按默认值 4 处理。
+	DocCategoryNarrowMinSources int `yaml:"doc_category_narrow_min_sources"`
 }
 
 // EvidenceConfig — docs/impl/v1/evidence.md 配置项.

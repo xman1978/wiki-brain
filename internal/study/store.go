@@ -600,10 +600,14 @@ func (s *Store) HasPendingResult(action, objectType, objectID string) (bool, err
 func (s *Store) ListLearningResults(action, objectType, objectID, status string, limit int) ([]LearningResultRow, error) {
 	query := `SELECT lr.result_id, lr.action, lr.object_type, lr.object_id, lr.reason, lr.event_ids,
 		lr.status, COALESCE(lr.confirmed_by, ''), lr.created_at, lr.updated_at,
-		COALESCE(al.question_terms, ''), COALESCE(kp.content, '')
+		COALESCE(al.question_terms, kg.question, wp.title, ec.suggested_name, ab.representative_terms, ''), COALESCE(kp.content, '')
 		FROM learning_results lr
 		LEFT JOIN activation_links al ON lr.object_type = 'activation_link' AND al.link_id = lr.object_id
 		LEFT JOIN knowledge_points kp ON kp.point_id = al.point_id
+		LEFT JOIN knowledge_gaps kg ON lr.object_type = 'knowledge_gap' AND kg.gap_id = lr.object_id
+		LEFT JOIN wiki_pages wp ON lr.object_type = 'wiki_page' AND wp.page_id = lr.object_id
+		LEFT JOIN entry_candidates ec ON lr.object_type = 'entry_candidate' AND ec.candidate_id = lr.object_id
+		LEFT JOIN activation_bundles ab ON lr.object_type = 'activation_bundle' AND ab.bundle_id = lr.object_id
 		WHERE 1 = 1`
 	var args []interface{}
 	if action != "" {
@@ -651,10 +655,14 @@ func (s *Store) GetLearningResult(resultID string) (*LearningResultDetail, error
 	var eventIDsStr string
 	err := s.db.QueryRow(`SELECT lr.result_id, lr.action, lr.object_type, lr.object_id, lr.reason, lr.event_ids,
 		lr.status, COALESCE(lr.confirmed_by, ''), lr.created_at, lr.updated_at,
-		COALESCE(al.question_terms, ''), COALESCE(kp.content, '')
+		COALESCE(al.question_terms, kg.question, wp.title, ec.suggested_name, ab.representative_terms, ''), COALESCE(kp.content, '')
 		FROM learning_results lr
 		LEFT JOIN activation_links al ON lr.object_type = 'activation_link' AND al.link_id = lr.object_id
 		LEFT JOIN knowledge_points kp ON kp.point_id = al.point_id
+		LEFT JOIN knowledge_gaps kg ON lr.object_type = 'knowledge_gap' AND kg.gap_id = lr.object_id
+		LEFT JOIN wiki_pages wp ON lr.object_type = 'wiki_page' AND wp.page_id = lr.object_id
+		LEFT JOIN entry_candidates ec ON lr.object_type = 'entry_candidate' AND ec.candidate_id = lr.object_id
+		LEFT JOIN activation_bundles ab ON lr.object_type = 'activation_bundle' AND ab.bundle_id = lr.object_id
 		WHERE lr.result_id = ?`, resultID).
 		Scan(&d.ResultID, &d.Action, &d.ObjectType, &d.ObjectID, &d.Reason, &eventIDsStr,
 			&d.Status, &d.ConfirmedBy, &d.CreatedAt, &d.UpdatedAt, &d.QuestionTerms, &d.PointSummary)
