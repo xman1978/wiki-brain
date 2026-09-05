@@ -222,3 +222,67 @@ func TestHandler_Gaps_ReasonFilterAndFields(t *testing.T) {
 		t.Errorf("expected reason_counts[judge_filtered]=1, got %v", g.ReasonCounts)
 	}
 }
+
+func TestHandler_DomainCorrections_Empty(t *testing.T) {
+	handler, _ := setupHandler(t)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/study/domain-corrections", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestHandler_DomainCorrections_MinHitCountFilterAndFields(t *testing.T) {
+	handler, svc := setupHandler(t)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	if _, _, err := svc.store.UpsertDomainCorrection("terms-a", "问题A", []string{"d2"}, []string{"d1"}, "tr-a"); err != nil {
+		t.Fatalf("seed correction a: %v", err)
+	}
+	if _, _, err := svc.store.UpsertDomainCorrection("terms-b", "问题B", []string{"d3"}, []string{"d1", "d2"}, "tr-b"); err != nil {
+		t.Fatalf("seed correction b: %v", err)
+	}
+	if _, _, err := svc.store.UpsertDomainCorrection("terms-b", "问题B更新", []string{"d3"}, []string{"d1", "d2"}, "tr-b2"); err != nil {
+		t.Fatalf("seed correction b 2nd hit: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/study/domain-corrections?min_hit_count=2", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var corrections []DomainCorrectionEntry
+	if err := json.Unmarshal(w.Body.Bytes(), &corrections); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(corrections) != 1 {
+		t.Fatalf("expected 1 correction with hit_count>=2, got %d", len(corrections))
+	}
+	c := corrections[0]
+	if c.QuestionTerms != "terms-b" {
+		t.Errorf("expected terms-b, got %s", c.QuestionTerms)
+	}
+	if c.HitCount != 2 {
+		t.Errorf("expected hit_count=2, got %d", c.HitCount)
+	}
+	if len(c.AttemptedDomainIDs) != 1 || c.AttemptedDomainIDs[0] != "d3" {
+		t.Errorf("expected attempted_domain_ids=[d3], got %v", c.AttemptedDomainIDs)
+	}
+	if len(c.ResolvedDomainIDs) != 2 {
+		t.Errorf("expected 2 resolved_domain_ids, got %v", c.ResolvedDomainIDs)
+	}
+	if c.LastTraceID != "tr-b2" {
+		t.Errorf("expected last_trace_id=tr-b2, got %s", c.LastTraceID)
+	}
+	if c.Recommendation == "" {
+		t.Error("expected non-empty recommendation")
+	}
+}

@@ -14,6 +14,17 @@ type GapEvent struct {
 	Reason        string
 }
 
+// DomainCorrectionEvent is domain_mismatch's analog of GapEvent (docs/impl/v1/study.md
+// "domain_corrections 表").
+type DomainCorrectionEvent struct {
+	EventID            string
+	TraceID            string
+	Question           string
+	QuestionTerms      string
+	AttemptedDomainIDs []string
+	ResolvedDomainIDs  []string
+}
+
 type LinkCandidateRow struct {
 	CandidateID    string
 	QuestionTerms  string
@@ -42,6 +53,19 @@ type KnowledgeGapRow struct {
 	LastTraceID      string
 }
 
+// DomainCorrectionRow is domain_mismatch's analog of KnowledgeGapRow —
+// unlike gaps there's no reason_counts histogram, just the most recently
+// observed attempted/resolved domain sets (see migration 076).
+type DomainCorrectionRow struct {
+	CorrectionID           string
+	QuestionTerms          string
+	Question               string
+	AttemptedDomainIDsJSON string
+	ResolvedDomainIDsJSON  string
+	HitCount               int
+	LastTraceID            string
+}
+
 type TracePathRow struct {
 	Path               string
 	DirectPointIDsJSON string
@@ -66,6 +90,7 @@ type Report struct {
 	Summary                  TraceSummary              `json:"summary"`
 	ActivationLinkCandidates []ActivationLinkCandidate `json:"activation_link_candidates"`
 	KnowledgeGaps            []KnowledgeGapEntry       `json:"knowledge_gaps"`
+	DomainCorrections        []DomainCorrectionEntry   `json:"domain_corrections,omitempty"`
 	LearningActions          LearningActionsSummary    `json:"learning_actions"`
 	CrossSourceConflicts     []CrossSourceConflict     `json:"cross_source_conflicts"`
 	EntryCandidates          EntryCandidatesSection    `json:"entry_candidates"`
@@ -226,12 +251,26 @@ type KnowledgeGapEntry struct {
 	Recommendation string         `json:"recommendation"`
 }
 
+// DomainCorrectionEntry is domain_mismatch's analog of KnowledgeGapEntry.
+// Recommendation is a fixed advisory string (no reason breakdown, since
+// there's no reason field for this table — see DomainCorrectionRow).
+type DomainCorrectionEntry struct {
+	QuestionTerms      string   `json:"question_terms"`
+	Question           string   `json:"question"`
+	AttemptedDomainIDs []string `json:"attempted_domain_ids"`
+	ResolvedDomainIDs  []string `json:"resolved_domain_ids"`
+	HitCount           int      `json:"hit_count"`
+	LastTraceID        string   `json:"last_trace_id,omitempty"`
+	Recommendation     string   `json:"recommendation"`
+}
+
 type RunResult struct {
-	ReportID           string                 `json:"report_id"`
-	CandidatesFlagged  int                    `json:"candidates_flagged"`
-	GapEventsProcessed int                    `json:"gap_events_processed"`
-	LearningActions    LearningActionsSummary `json:"learning_actions"`
-	ElapsedMs          int64                  `json:"elapsed_ms"`
+	ReportID                      string                 `json:"report_id"`
+	CandidatesFlagged             int                    `json:"candidates_flagged"`
+	GapEventsProcessed            int                    `json:"gap_events_processed"`
+	DomainMismatchEventsProcessed int                    `json:"domain_mismatch_events_processed"`
+	LearningActions               LearningActionsSummary `json:"learning_actions"`
+	ElapsedMs                     int64                  `json:"elapsed_ms"`
 }
 
 // LearningActionsSummary is the report/run-response section documenting what

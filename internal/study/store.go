@@ -327,6 +327,42 @@ func (s *Store) FetchUnprocessedGapEvents() ([]GapEvent, error) {
 	return events, rows.Err()
 }
 
+// FetchUnprocessedDomainCorrectionEvents returns unprocessed domain_mismatch
+// learning events (docs/impl/v1/study.md "domain_corrections 表").
+func (s *Store) FetchUnprocessedDomainCorrectionEvents() ([]DomainCorrectionEvent, error) {
+	rows, err := s.db.Query(`
+		SELECT le.event_id, le.trace_id, le.payload, t.question_terms
+		FROM learning_events le
+		JOIN traces t ON le.trace_id = t.trace_id
+		WHERE le.processed = 0 AND le.event_type = 'domain_mismatch'
+		ORDER BY le.created_at`)
+	if err != nil {
+		return nil, fmt.Errorf("study store: fetch domain correction events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []DomainCorrectionEvent
+	for rows.Next() {
+		var e DomainCorrectionEvent
+		var payload string
+		if err := rows.Scan(&e.EventID, &e.TraceID, &payload, &e.QuestionTerms); err != nil {
+			return nil, fmt.Errorf("study store: scan domain correction event: %w", err)
+		}
+		var p struct {
+			Question           string   `json:"question"`
+			AttemptedDomainIDs []string `json:"attempted_domain_ids"`
+			ResolvedDomainIDs  []string `json:"resolved_domain_ids"`
+		}
+		if err := json.Unmarshal([]byte(payload), &p); err == nil {
+			e.Question = p.Question
+			e.AttemptedDomainIDs = p.AttemptedDomainIDs
+			e.ResolvedDomainIDs = p.ResolvedDomainIDs
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
 // UpsertKnowledgeGap implements docs/impl/v1/study.md "knowledge_gaps 表扩展":
 // reason_counts is a JSON map incremented per-reason (not a SQL ON CONFLICT
 // increment — SQLite here isn't built with the JSON1 functions this repo
@@ -389,6 +425,59 @@ func (s *Store) UpsertKnowledgeGap(questionTerms, question, reason, traceID stri
 		return "", 0, fmt.Errorf("study store: upsert gap commit: %w", err)
 	}
 	return gapID, hitCount, nil
+}
+
+// UpsertDomainCorrection implements docs/impl/v1/study.md "domain_corrections
+// 表": unlike UpsertKnowledgeGap there's no reason_counts-style histogram to
+// merge — attempted/resolved_domain_ids are just overwritten with the most
+// recent observation each hit, since what matters is "what's the latest
+// resolution", not "how many times each distinct reason occurred".
+func (s *Store) UpsertDomainCorrection(questionTerms, question string, attemptedDomainIDs, resolvedDomainIDs []string, traceID string) (correctionID string, hitCount int, err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", 0, fmt.Errorf("study store: upsert domain correction begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	attemptedJSON, _ := json.Marshal(attemptedDomainIDs)
+	resolvedJSON, _ := json.Marshal(resolvedDomainIDs)
+
+	err = tx.QueryRow(`SELECT correction_id FROM domain_corrections WHERE question_terms = ?`, questionTerms).
+		Scan(&correctionID)
+	switch {
+	case err == sql.ErrNoRows:
+		correctionID = uuid.New().String()
+		if _, err = tx.Exec(`
+			INSERT INTO domain_corrections (correction_id, question_terms, question, attempted_domain_ids, resolved_domain_ids, hit_count, last_trace_id)
+			VALUES (?, ?, ?, ?, ?, 1, ?)`,
+			correctionID, questionTerms, question, string(attemptedJSON), string(resolvedJSON), traceID); err != nil {
+			return "", 0, fmt.Errorf("study store: insert domain correction: %w", err)
+		}
+		hitCount = 1
+	case err != nil:
+		return "", 0, fmt.Errorf("study store: get existing domain correction: %w", err)
+	default:
+		if _, err = tx.Exec(`
+			UPDATE domain_corrections SET
+				hit_count = hit_count + 1,
+				question = ?,
+				attempted_domain_ids = ?,
+				resolved_domain_ids = ?,
+				last_trace_id = ?,
+				updated_at = CURRENT_TIMESTAMP
+			WHERE correction_id = ?`,
+			question, string(attemptedJSON), string(resolvedJSON), traceID, correctionID); err != nil {
+			return "", 0, fmt.Errorf("study store: update domain correction: %w", err)
+		}
+		if err = tx.QueryRow(`SELECT hit_count FROM domain_corrections WHERE correction_id = ?`, correctionID).Scan(&hitCount); err != nil {
+			return "", 0, fmt.Errorf("study store: get updated hit_count: %w", err)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return "", 0, fmt.Errorf("study store: upsert domain correction commit: %w", err)
+	}
+	return correctionID, hitCount, nil
 }
 
 func (s *Store) MarkEventProcessed(eventID string) error {
@@ -1155,6 +1244,53 @@ func (s *Store) TopKnowledgeGaps(limit int) ([]KnowledgeGapRow, error) {
 		if err := rows.Scan(&r.GapID, &r.QuestionTerms, &r.Question, &r.HitCount,
 			&r.ReasonCountsJSON, &r.LastReason, &r.LastTraceID); err != nil {
 			return nil, fmt.Errorf("study store: scan gap: %w", err)
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+func (s *Store) TopDomainCorrections(limit int) ([]DomainCorrectionRow, error) {
+	rows, err := s.db.Query(`
+		SELECT correction_id, question_terms, question, attempted_domain_ids, resolved_domain_ids, hit_count, last_trace_id
+		FROM domain_corrections
+		ORDER BY hit_count DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("study store: top domain corrections: %w", err)
+	}
+	defer rows.Close()
+
+	var results []DomainCorrectionRow
+	for rows.Next() {
+		var r DomainCorrectionRow
+		if err := rows.Scan(&r.CorrectionID, &r.QuestionTerms, &r.Question,
+			&r.AttemptedDomainIDsJSON, &r.ResolvedDomainIDsJSON, &r.HitCount, &r.LastTraceID); err != nil {
+			return nil, fmt.Errorf("study store: scan domain correction: %w", err)
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+func (s *Store) ListDomainCorrections(minHitCount, limit int) ([]DomainCorrectionRow, error) {
+	rows, err := s.db.Query(`
+		SELECT correction_id, question_terms, question, attempted_domain_ids, resolved_domain_ids, hit_count, last_trace_id
+		FROM domain_corrections
+		WHERE hit_count >= ?
+		ORDER BY hit_count DESC
+		LIMIT ?`, minHitCount, limit)
+	if err != nil {
+		return nil, fmt.Errorf("study store: list domain corrections: %w", err)
+	}
+	defer rows.Close()
+
+	var results []DomainCorrectionRow
+	for rows.Next() {
+		var r DomainCorrectionRow
+		if err := rows.Scan(&r.CorrectionID, &r.QuestionTerms, &r.Question,
+			&r.AttemptedDomainIDsJSON, &r.ResolvedDomainIDsJSON, &r.HitCount, &r.LastTraceID); err != nil {
+			return nil, fmt.Errorf("study store: scan domain correction: %w", err)
 		}
 		results = append(results, r)
 	}

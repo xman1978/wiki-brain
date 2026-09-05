@@ -298,6 +298,96 @@ func TestGapAggregation(t *testing.T) {
 	}
 }
 
+// TestDomainCorrectionAggregation mirrors TestGapAggregation for the
+// domain_mismatch/domain_corrections table (docs/impl/v1/study.md
+// "domain_corrections 表"): unlike knowledge_gaps, each upsert overwrites
+// attempted/resolved_domain_ids with the latest observation rather than
+// merging into a histogram.
+func TestDomainCorrectionAggregation(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+
+	seedSource(t, db, "src1")
+	seedDomain(t, db, "dom1", "D")
+	seedEntry(t, db, "con1", "dom1", "C")
+	seedKU(t, db, "ku1", "src1", "con1")
+	seedKP(t, db, "kp1", "ku1", "src1", "content")
+	seedAnswer(t, db, "ans1")
+	seedTrace(t, db, "tr1", "ans1", "什么是线性方程", "线性方程", "confident", "short", []string{"kp1"})
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"question":             "什么是线性方程",
+		"attempted_domain_ids": []string{"d2"},
+		"resolved_domain_ids":  []string{"d1"},
+	})
+	seedLearningEvent(t, db, "evt1", "tr1", "domain_mismatch", string(payload))
+
+	events, err := store.FetchUnprocessedDomainCorrectionEvents()
+	if err != nil {
+		t.Fatalf("FetchUnprocessedDomainCorrectionEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].QuestionTerms != "线性方程" {
+		t.Errorf("expected question_terms=线性方程, got %s", events[0].QuestionTerms)
+	}
+	if len(events[0].AttemptedDomainIDs) != 1 || events[0].AttemptedDomainIDs[0] != "d2" {
+		t.Errorf("expected attempted_domain_ids=[d2], got %v", events[0].AttemptedDomainIDs)
+	}
+	if len(events[0].ResolvedDomainIDs) != 1 || events[0].ResolvedDomainIDs[0] != "d1" {
+		t.Errorf("expected resolved_domain_ids=[d1], got %v", events[0].ResolvedDomainIDs)
+	}
+
+	correctionID, hitCount, err := store.UpsertDomainCorrection("线性方程", "什么是线性方程", []string{"d2"}, []string{"d1"}, "tr1")
+	if err != nil {
+		t.Fatalf("UpsertDomainCorrection: %v", err)
+	}
+	if hitCount != 1 {
+		t.Errorf("expected hit_count=1, got %d", hitCount)
+	}
+	if correctionID == "" {
+		t.Error("expected non-empty correction_id")
+	}
+
+	// Second upsert with a different resolved domain — overwrites, doesn't merge.
+	correctionID2, hitCount2, err := store.UpsertDomainCorrection("线性方程", "线性方程是什么", []string{"d2"}, []string{"d1", "d3"}, "tr2")
+	if err != nil {
+		t.Fatalf("UpsertDomainCorrection 2nd: %v", err)
+	}
+	if hitCount2 != 2 {
+		t.Errorf("expected hit_count=2, got %d", hitCount2)
+	}
+	if correctionID2 != correctionID {
+		t.Errorf("expected correction_id to stay stable across upserts, got %q then %q", correctionID, correctionID2)
+	}
+
+	var q, resolvedJSON, lastTraceID string
+	db.QueryRow(`SELECT question, resolved_domain_ids, last_trace_id FROM domain_corrections WHERE question_terms = '线性方程'`).
+		Scan(&q, &resolvedJSON, &lastTraceID)
+	if q != "线性方程是什么" {
+		t.Errorf("expected updated question, got %s", q)
+	}
+	var resolved []string
+	if err := json.Unmarshal([]byte(resolvedJSON), &resolved); err != nil {
+		t.Fatalf("unmarshal resolved_domain_ids: %v", err)
+	}
+	if len(resolved) != 2 || resolved[0] != "d1" || resolved[1] != "d3" {
+		t.Errorf("expected resolved_domain_ids overwritten to [d1 d3], got %v", resolved)
+	}
+	if lastTraceID != "tr2" {
+		t.Errorf("expected last_trace_id=tr2, got %s", lastTraceID)
+	}
+
+	if err := store.MarkEventProcessed("evt1"); err != nil {
+		t.Fatalf("MarkEventProcessed: %v", err)
+	}
+	events, _ = store.FetchUnprocessedDomainCorrectionEvents()
+	if len(events) != 0 {
+		t.Errorf("expected 0 unprocessed events, got %d", len(events))
+	}
+}
+
 // ========== Step 3: 报告生成相关查询 ==========
 
 func TestQueryTraceSummary(t *testing.T) {

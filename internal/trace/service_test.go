@@ -145,6 +145,94 @@ func assertPayloadReason(t *testing.T, payload, want string) {
 	}
 }
 
+// TestProcessTrace_DomainMismatch_FiresAlongsideGap asserts domain_mismatch
+// and knowledge_gap are independent — not an if/else-if pair — so both can
+// fire on the same trace (docs/impl/v1/study.md "domain_corrections 表").
+func TestProcessTrace_DomainMismatch_FiresAlongsideGap(t *testing.T) {
+	svc, store, db := setupService(t)
+	insertTestAnswer(t, db, "a-003")
+
+	r := &answer.AnswerResult{
+		AnswerID:  "a-003",
+		Question:  "未知问题",
+		Citations: []string{},
+		Path:      "deep",
+		EvidenceSet: &retrieval.EvidenceSet{
+			GapReason:           retrieval.GapReasonNoCandidates,
+			DomainRetryOccurred: true,
+			AttemptedDomainIDs:  []string{"d2"},
+			ResolvedDomainIDs:   []string{"d1"},
+		},
+	}
+
+	svc.ProcessTrace(r)
+
+	gapEvents, _ := store.ListLearningEvents("knowledge_gap", 0, 20)
+	if len(gapEvents) != 1 {
+		t.Fatalf("expected 1 knowledge_gap event, got %d", len(gapEvents))
+	}
+	mismatchEvents, _ := store.ListLearningEvents("domain_mismatch", 0, 20)
+	if len(mismatchEvents) != 1 {
+		t.Fatalf("expected 1 domain_mismatch event, got %d", len(mismatchEvents))
+	}
+	var p struct {
+		AttemptedDomainIDs []string `json:"attempted_domain_ids"`
+		ResolvedDomainIDs  []string `json:"resolved_domain_ids"`
+	}
+	if err := json.Unmarshal([]byte(mismatchEvents[0].Payload), &p); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if len(p.AttemptedDomainIDs) != 1 || p.AttemptedDomainIDs[0] != "d2" {
+		t.Errorf("expected attempted_domain_ids=[d2], got %v", p.AttemptedDomainIDs)
+	}
+	if len(p.ResolvedDomainIDs) != 1 || p.ResolvedDomainIDs[0] != "d1" {
+		t.Errorf("expected resolved_domain_ids=[d1], got %v", p.ResolvedDomainIDs)
+	}
+}
+
+// TestProcessTrace_DomainMismatch_FiresEvenWhenConfident asserts
+// domain_mismatch is orthogonal to final answer quality: DomainRetryOccurred
+// alone must produce the event even when the answer ends up confident (the
+// full-corpus retry succeeded and got cited) — it's not gated behind
+// QualityGap.
+func TestProcessTrace_DomainMismatch_FiresEvenWhenConfident(t *testing.T) {
+	svc, store, db := setupService(t)
+	insertTestAnswer(t, db, "a-004")
+	insertTestKP(t, db, "p1")
+
+	r := &answer.AnswerResult{
+		AnswerID:  "a-004",
+		Question:  "线性方程是什么？",
+		Citations: []string{"f1"},
+		HasAnswer: true,
+		Path:      "short",
+		EvidenceSet: &retrieval.EvidenceSet{
+			DirectEvidence: []retrieval.Evidence{
+				{FactID: "f1", PointID: "p1"},
+			},
+			DomainRetryOccurred: true,
+			AttemptedDomainIDs:  []string{"d2"},
+			ResolvedDomainIDs:   []string{"d1"},
+		},
+	}
+
+	svc.ProcessTrace(r)
+
+	traces, _ := store.ListTraces(QualityConfident, "", "", 20, 0)
+	if len(traces) != 1 {
+		t.Fatalf("expected 1 confident trace, got %d", len(traces))
+	}
+
+	gapEvents, _ := store.ListLearningEvents("knowledge_gap", 0, 20)
+	if len(gapEvents) != 0 {
+		t.Fatalf("expected 0 knowledge_gap events (quality is confident), got %d", len(gapEvents))
+	}
+	mismatchEvents, _ := store.ListLearningEvents("domain_mismatch", 0, 20)
+	if len(mismatchEvents) != 1 {
+		t.Fatalf("expected 1 domain_mismatch event despite confident quality, got %d", len(mismatchEvents))
+	}
+}
+
 func TestProcessTrace_DuplicateQuestion_NoDuplicateCooccurrence(t *testing.T) {
 	svc, store, db := setupService(t)
 	insertTestAnswer(t, db, "a-003")

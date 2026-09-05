@@ -175,7 +175,14 @@ type RetrievalConfig struct {
 	// not yet feeding an automatic adjustment.
 	PoolWidenEnabled bool    `yaml:"pool_widen_enabled"`
 	FastPathFallback bool    `yaml:"fast_path_fallback"`
-	WikiMinScore     float64 `yaml:"wiki_min_score"`
+	// DomainRetryOnGapEnabled gates retrieveSlowPath's Fallback 3: when
+	// domain-restricted retrieval (including Fallback 1/2) still returns
+	// empty evidence, retry once against the entire corpus ignoring the
+	// resolved domain restriction, before giving up
+	// (docs/impl/v1/retrieval.md 步骤 2 Fallback 3). No new LLM call — purely
+	// a retrieval-layer retry.
+	DomainRetryOnGapEnabled bool    `yaml:"domain_retry_on_gap_enabled"`
+	WikiMinScore            float64 `yaml:"wiki_min_score"`
 	// WikiMaxCandidates caps how many wiki-index/concept-matched candidate
 	// pages TryDirectAnswer tries in order before falling through
 	// (docs/impl/v1/wiki.md 步骤 4; <=0 defaults to 3, 1 reproduces the
@@ -328,6 +335,11 @@ type StudyConfig struct {
 	CreateWidthMax      float64 `yaml:"create_width_max"`
 	WikiKPMin           int     `yaml:"wiki_kp_min"`
 	GapHitThreshold     int     `yaml:"gap_hit_threshold"`
+	// DomainMismatchHitThreshold mirrors GapHitThreshold for the
+	// domain_corrections table (docs/impl/v1/study.md "domain_corrections
+	// 表"): once a normalized question's domain_mismatch events reach this
+	// count, aggregateDomainMismatches flags it for human review.
+	DomainMismatchHitThreshold int `yaml:"domain_mismatch_hit_threshold"`
 	ScanBatchSize       int     `yaml:"scan_batch_size"`
 	ReportPeriodDays    int     `yaml:"report_period_days"`
 	ReportMaxKeep       int     `yaml:"report_max_keep"`

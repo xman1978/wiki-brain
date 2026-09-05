@@ -288,29 +288,34 @@ func (s *Store) UpdateStatus(sourceID, status string, errorMsg *string) error {
 	if errorMsg != nil {
 		errVal = sql.NullString{String: *errorMsg, Valid: true}
 	}
-	now := time.Now().UTC()
 	switch status {
 	case "processing":
-		_, err := s.db.Exec(`UPDATE sources SET status = ?, error_msg = ?, processing_started_at = ?, updated_at = ?,
-				register_duration_ms = CAST((julianday(?) - julianday(created_at)) * 86400000 AS INTEGER)
+		// processing_started_at/updated_at must come from SQL's CURRENT_TIMESTAMP
+		// rather than a bound Go time.Time: modernc.org/sqlite renders a bound
+		// time.Time using Go's own String() format ("... +0000 UTC"), which
+		// julianday() cannot parse, so both the duration computed here and any
+		// later julianday(processing_started_at) read (see convert_duration_ms
+		// below) would silently evaluate to NULL.
+		_, err := s.db.Exec(`UPDATE sources SET status = ?, error_msg = ?, processing_started_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP,
+				register_duration_ms = CAST((julianday(CURRENT_TIMESTAMP) - julianday(created_at)) * 86400000 AS INTEGER)
 			WHERE source_id = ?`,
-			status, errVal, now, now, now, sourceID)
+			status, errVal, sourceID)
 		if err != nil {
 			return fmt.Errorf("source store: update status: %w", err)
 		}
 	case "completed", "failed":
-		_, err := s.db.Exec(`UPDATE sources SET status = ?, error_msg = ?, completed_at = ?, updated_at = ?,
+		_, err := s.db.Exec(`UPDATE sources SET status = ?, error_msg = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP,
 				convert_duration_ms = CASE WHEN processing_started_at IS NOT NULL
-					THEN CAST((julianday(?) - julianday(processing_started_at)) * 86400000 AS INTEGER)
+					THEN CAST((julianday(CURRENT_TIMESTAMP) - julianday(processing_started_at)) * 86400000 AS INTEGER)
 					ELSE convert_duration_ms END
 			WHERE source_id = ?`,
-			status, errVal, now, now, now, sourceID)
+			status, errVal, sourceID)
 		if err != nil {
 			return fmt.Errorf("source store: update status: %w", err)
 		}
 	default:
-		_, err := s.db.Exec(`UPDATE sources SET status = ?, error_msg = ?, updated_at = ? WHERE source_id = ?`,
-			status, errVal, now, sourceID)
+		_, err := s.db.Exec(`UPDATE sources SET status = ?, error_msg = ?, updated_at = CURRENT_TIMESTAMP WHERE source_id = ?`,
+			status, errVal, sourceID)
 		if err != nil {
 			return fmt.Errorf("source store: update status: %w", err)
 		}

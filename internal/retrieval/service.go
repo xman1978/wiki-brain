@@ -820,12 +820,14 @@ func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progres
 
 	// Step 2: Domain pre-filter
 	domainStart := time.Now()
-	candidateSources, err := s.domainPreFilter(ctx, qc)
+	emit("domain", "start", "", 0)
+	candidateSources, matchedDomainIDs, err := s.domainPreFilter(ctx, qc)
 	if err != nil {
-		emit("activation", "error", err.Error(), time.Since(domainStart).Milliseconds())
+		emit("domain", "error", err.Error(), time.Since(domainStart).Milliseconds())
 		return nil, fmt.Errorf("retrieval: domain pre-filter: %w", err)
 	}
-	slog.Info("retrieval: step2 domain pre-filter done", "candidates", len(candidateSources))
+	emit("domain", "done", s.domainMatchDetail(matchedDomainIDs), time.Since(domainStart).Milliseconds())
+	slog.Info("retrieval: step2 domain pre-filter done", "candidates", len(candidateSources), "domain_ids", matchedDomainIDs)
 
 	candidateSources = s.narrowByDocCategory(ctx, qc, candidateSources)
 
@@ -880,11 +882,123 @@ func (s *Service) retrieveSlowPath(ctx context.Context, qc QueryContext, progres
 	// （docs/impl/v1/evidence.md），只是在最后一次重试里把这条回退也对 supporting
 	// 开放，避免"rerank 已经判定候选主题相关、只是摘要没抓到关键句"这种情况直接判空。
 	slog.Info("retrieval: empty result, retrying against full domain-filtered source pool", "sources", len(candidateSources))
-	return s.recallFromSources(ctx, retryQC, candidateSources, emit, progress, true)
+	es, err = s.recallFromSources(ctx, retryQC, candidateSources, emit, progress, true)
+	if err != nil {
+		return nil, err
+	}
+	if !evidenceEmpty(es) {
+		return es, nil
+	}
+
+	// Fallback 3（域匹配错误兜底）：Domain 预过滤解析到了一个非空但可能选错的
+	// 域，前面所有域内重试都判空——不区分"这个域真的没有材料"和"域本身就选
+	// 错了"，直接放弃。这里退化为不限定域、检索全部 source 兜底一次；如果
+	// 命中，把最初被搜索的域和实际命中证据所属的域都记下来，供 trace/study
+	// 学习闭环使用（docs/impl/v1/retrieval.md 步骤 2 Fallback 3）。只在确实
+	// 存在过域限定时才有必要重试，且不新增任何 LLM 调用。
+	if s.cfg != nil && s.cfg.Retrieval.DomainRetryOnGapEnabled && len(qc.DomainIDs) > 0 {
+		allSources, aerr := s.store.ListAllSources()
+		if aerr != nil {
+			slog.Warn("retrieval: domain retry fallback: list all sources failed", "error", aerr)
+			return es, nil
+		}
+		if !sameSourceSet(allSources, candidateSources) {
+			slog.Info("retrieval: empty result, retrying against full corpus ignoring domain", "sources", len(allSources))
+			finalES, ferr := s.recallFromSources(ctx, retryQC, allSources, emit, progress, true)
+			if ferr != nil {
+				slog.Warn("retrieval: domain retry fallback failed", "error", ferr)
+				return es, nil
+			}
+			if !evidenceEmpty(finalES) {
+				finalES.DomainRetryOccurred = true
+				finalES.AttemptedDomainIDs = domainIDsForSources(candidateSources)
+				finalES.ResolvedDomainIDs = resolvedDomainIDs(finalES, allSources)
+				return finalES, nil
+			}
+		}
+	}
+
+	return es, nil
 }
 
 func evidenceEmpty(es *EvidenceSet) bool {
 	return es == nil || (len(es.DirectEvidence) == 0 && len(es.Supporting) == 0)
+}
+
+// domainIDsForSources returns the distinct, sorted domain_ids present in
+// sources (skipping unset domain_id values).
+func domainIDsForSources(sources []SourceInfo) []string {
+	seen := map[string]bool{}
+	for _, src := range sources {
+		if src.DomainID.Valid && src.DomainID.String != "" {
+			seen[src.DomainID.String] = true
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sameSourceSet reports whether a and b contain exactly the same set of
+// source_ids, regardless of order — used to skip a domain-agnostic retry
+// when the domain-restricted pool already was the entire corpus.
+func sameSourceSet(a, b []SourceInfo) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	ids := make(map[string]bool, len(a))
+	for _, src := range a {
+		ids[src.SourceID] = true
+	}
+	for _, src := range b {
+		if !ids[src.SourceID] {
+			return false
+		}
+	}
+	return true
+}
+
+// resolvedDomainIDs maps es's final DirectEvidence+Supporting back to the
+// domain_ids of the sources that actually served them, via Evidence.SourceRef
+// (docs/impl/v1/retrieval.md 步骤 2 Fallback 3).
+func resolvedDomainIDs(es *EvidenceSet, allSources []SourceInfo) []string {
+	domainBySource := make(map[string]string, len(allSources))
+	for _, src := range allSources {
+		if src.DomainID.Valid && src.DomainID.String != "" {
+			domainBySource[src.SourceID] = src.DomainID.String
+		}
+	}
+
+	seen := map[string]bool{}
+	collect := func(evs []Evidence) {
+		for _, ev := range evs {
+			var ref SourceRef
+			if err := json.Unmarshal(ev.SourceRef, &ref); err != nil {
+				continue
+			}
+			if domainID, ok := domainBySource[ref.SourceID]; ok {
+				seen[domainID] = true
+			}
+		}
+	}
+	collect(es.DirectEvidence)
+	collect(es.Supporting)
+
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // filterAndRecall runs Step 3 (Source semantic filter) then Steps 4-10 within
@@ -1111,32 +1225,64 @@ func (s *Service) rerankAndBuildEvidenceSet(ctx context.Context, qc QueryContext
 	return es, nil
 }
 
+// domainMatchDetail renders the progress-event detail text for the "domain"
+// step: the names of the domains matched, or a note that no domain narrowed
+// the search (all sources considered). Name lookup failures degrade to
+// showing the raw IDs rather than failing the step.
+func (s *Service) domainMatchDetail(matchedDomainIDs []string) string {
+	if len(matchedDomainIDs) == 0 {
+		return "未匹配到具体知识领域，检索全部文档"
+	}
+	names := matchedDomainIDs
+	if domains, err := s.store.ListDomains(); err == nil {
+		byID := make(map[string]string, len(domains))
+		for _, d := range domains {
+			byID[d.DomainID] = d.Name
+		}
+		named := make([]string, len(matchedDomainIDs))
+		for i, id := range matchedDomainIDs {
+			if name, ok := byID[id]; ok {
+				named[i] = name
+			} else {
+				named[i] = id
+			}
+		}
+		names = named
+	}
+	return fmt.Sprintf("命中知识领域：%s", strings.Join(names, "、"))
+}
+
 // Step 2: Domain pre-filter. When qc.DomainResolved (session already routed
 // domains in the merged parse prompt), reuse DomainIDs and never call
-// question_domain_match again — empty DomainIDs means all sources.
-func (s *Service) domainPreFilter(ctx context.Context, qc QueryContext) ([]SourceInfo, error) {
+// question_domain_match again — empty DomainIDs means all sources. The second
+// return value is the domain IDs actually matched (empty when the step fell
+// back to all sources), for the caller to report in progress events.
+func (s *Service) domainPreFilter(ctx context.Context, qc QueryContext) ([]SourceInfo, []string, error) {
 	if qc.DomainResolved {
 		if len(qc.DomainIDs) == 0 {
 			slog.Info("retrieval: domain pre-filter using upstream empty domain_ids, all sources")
-			return s.store.ListAllSources()
+			sources, err := s.store.ListAllSources()
+			return sources, nil, err
 		}
 		sources, err := s.store.ListSourcesByDomainIDs(qc.DomainIDs)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if len(sources) == 0 {
 			slog.Warn("retrieval: upstream domain_ids matched zero sources, falling back to all sources", "domain_ids", qc.DomainIDs)
-			return s.store.ListAllSources()
+			sources, err := s.store.ListAllSources()
+			return sources, nil, err
 		}
-		return sources, nil
+		return sources, qc.DomainIDs, nil
 	}
 
 	domains, err := s.store.ListDomains()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(domains) == 0 {
-		return s.store.ListAllSources()
+		sources, err := s.store.ListAllSources()
+		return sources, nil, err
 	}
 
 	var domainList strings.Builder
@@ -1150,7 +1296,8 @@ func (s *Service) domainPreFilter(ctx context.Context, qc QueryContext) ([]Sourc
 	}, "classification")
 	if err != nil {
 		slog.Warn("retrieval: domain match failed, skipping", "error", err)
-		return s.store.ListAllSources()
+		sources, err := s.store.ListAllSources()
+		return sources, nil, err
 	}
 
 	var result struct {
@@ -1158,22 +1305,25 @@ func (s *Service) domainPreFilter(ctx context.Context, qc QueryContext) ([]Sourc
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
 		slog.Warn("retrieval: domain match parse failed, skipping", "error", err)
-		return s.store.ListAllSources()
+		sources, err := s.store.ListAllSources()
+		return sources, nil, err
 	}
 
 	if len(result.DomainIDs) == 0 {
-		return s.store.ListAllSources()
+		sources, err := s.store.ListAllSources()
+		return sources, nil, err
 	}
 
 	sources, err := s.store.ListSourcesByDomainIDs(result.DomainIDs)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(sources) == 0 {
 		slog.Warn("retrieval: domain match matched zero sources, falling back to all sources", "domain_ids", result.DomainIDs)
-		return s.store.ListAllSources()
+		sources, err := s.store.ListAllSources()
+		return sources, nil, err
 	}
-	return sources, nil
+	return sources, result.DomainIDs, nil
 }
 
 // narrowByDocCategory implements the doc_category_hint material-genre filter

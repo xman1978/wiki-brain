@@ -24,6 +24,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /study/reports/{id}", h.getReport)
 	mux.HandleFunc("GET /study/candidates", h.listCandidates)
 	mux.HandleFunc("GET /study/gaps", h.listGaps)
+	mux.HandleFunc("GET /study/domain-corrections", h.listDomainCorrections)
 	mux.HandleFunc("GET /study/results", h.listResults)
 	mux.HandleFunc("GET /study/results/{id}", h.getResult)
 }
@@ -135,6 +136,23 @@ func (h *Handler) listGaps(w http.ResponseWriter, r *http.Request) {
 	result := make([]KnowledgeGapEntry, len(gaps))
 	for i, g := range gaps {
 		result[i] = gapEntryFromRow(g)
+	}
+	foundation.WriteJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) listDomainCorrections(w http.ResponseWriter, r *http.Request) {
+	minHitCount := queryInt(r, "min_hit_count", 0)
+	limit := queryInt(r, "limit", 50)
+
+	rows, err := h.svc.store.ListDomainCorrections(minHitCount, limit)
+	if err != nil {
+		foundation.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	result := make([]DomainCorrectionEntry, len(rows))
+	for i, row := range rows {
+		result[i] = domainCorrectionEntryFromRow(row)
 	}
 	foundation.WriteJSON(w, http.StatusOK, result)
 }

@@ -940,6 +940,24 @@ func (s *Service) generateLearningEvents(t *Trace, r *answer.AnswerResult) {
 	} else {
 		slog.Debug("trace: no learning event needed", "trace_id", t.TraceID, "quality", t.RetrievalQuality)
 	}
+
+	// domain_mismatch is independent of RetrievalQuality — a domain-agnostic
+	// retry (docs/impl/v1/retrieval.md 步骤 2 Fallback 3) can succeed and
+	// still leave the final answer confident, but "domain pre-filter chose
+	// wrong" is still worth learning from regardless (docs/impl/v1/study.md
+	// "domain_corrections 表"). Deliberately not an else-if against the
+	// QualityGap branch above: both events can fire on the same trace.
+	if r.EvidenceSet != nil && r.EvidenceSet.DomainRetryOccurred {
+		slog.Debug("trace: generating domain_mismatch event", "trace_id", t.TraceID, "question", t.Question)
+		payload, _ := json.Marshal(map[string]interface{}{
+			"question":             t.Question,
+			"attempted_domain_ids": r.EvidenceSet.AttemptedDomainIDs,
+			"resolved_domain_ids":  r.EvidenceSet.ResolvedDomainIDs,
+		})
+		if _, err := s.store.SaveLearningEvent(t.TraceID, "domain_mismatch", string(payload)); err != nil {
+			slog.Error("trace: save domain_mismatch event failed", "trace_id", t.TraceID, "error", err)
+		}
+	}
 }
 
 // gapReason implements docs/impl/v1/trace.md's knowledge_gap payload.reason

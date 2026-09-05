@@ -256,6 +256,21 @@ EvidenceItem 新增：
   （2026-08-12 改判，撤销 2026-08-11 引入的两级结构，见 activation.md
   步骤 2）；不区分"首次/非首次提问"，一律走同一套纯程序流程；
 - 慢路径 Domain 预过滤直接复用 `domain_ids`，不再调用 `question_domain_match`（空则全库）。
+- **Fallback 3：域匹配错误兜底（2026-09-05 新增）**：Domain 预过滤解析到
+  一个非空但可能选错的域时，`retrieveSlowPath` 原有的 Fallback 1（补
+  subject/intent 重解析重试）、Fallback 2（跳过 Source 语义过滤、在
+  Domain 预过滤后的候选池上召回）都只在这个域限定的候选池内重试——不区
+  分"这个域真的没有材料"和"域本身就选错了"。当 Fallback 2 仍返回空证据、
+  `retrieval.domain_retry_on_gap_enabled`（默认 `true`）开启、且确实存在
+  过域限定（`qc.DomainIDs` 非空）时，退化为不限定域、对 `ListAllSources()`
+  全部 source 重试一次（若域限定池已经等于全库则跳过，避免重复劳动）；命
+  中则在 `EvidenceSet` 上记录 `domain_retry_occurred=true`、
+  `attempted_domain_ids`（最初被搜索、判定错误的域）、
+  `resolved_domain_ids`（最终 direct+supporting 证据实际所属的域集合，
+  可能跨多个域——KPN 扩展出的邻居证据可能来自另一个域）。**不新增任何
+  LLM 调用**——纯粹是把已经跑过的 Fallback 2 召回/rerank 管线，换一批候选
+  source 再跑一遍。供 trace/study 的域纠错学习闭环消费，见下方「步骤 6」
+  与 `docs/impl/v1/study.md`「domain_corrections 表」。
 
 ```text
 1. 调 activation.Match(expandedQuery) 得 LinkMatch 列表（≤ activation_match_top），
@@ -553,6 +568,8 @@ Rerank 候选 content 切片前再校验一次 KU lifecycle（防扫描间隙状
 
 `answer_error`（检索有证据、LLM 生成失败）不在此步骤产出——Trace 层直接读 `AnswerResult.Path == "error"` 判定，无需 retrieval 提供额外字段（见 trace.md）。
 
+**域纠错诊断字段（2026-09-05 新增，与上面 gap_reason 是并行、独立的诊断维度）**：`EvidenceSet.domain_retry_occurred`/`attempted_domain_ids`/`resolved_domain_ids`，仅在 Fallback 3（本文档步骤 2）实际触发且成功时才有值，与 `gap_reason` 是否为空无关——即便这次答案最终质量是 confident（Fallback 3 成功找到了证据），`domain_retry_occurred` 依然要记录，因为"域预过滤选错了"这件事本身值得学习，与最终答案质量正交。Trace 侧据此产出独立的 `domain_mismatch` 学习事件（不依赖 `RetrievalQuality==gap`），Study 侧聚合进 `domain_corrections` 表，见 `docs/impl/v1/study.md`「domain_corrections 表」。
+
 ### 步骤 7：快路径回落
 
 ```text
@@ -586,6 +603,9 @@ POST /answer（既有，见 answer 模块）
 ```text
 慢路径（MVP + 挖掘）：domain(1) + source(1) + outline(0~N) + rerank(1)
                       + mining(1) + answer(1)               ≈ 5~6 次
+                      Fallback 3（域匹配错误兜底，2026-09-05 新增，见步骤 2）
+                      不新增任何 LLM 调用——只是把已经跑过的 outline/FTS
+                      召回 + rerank 管线，换一批候选 source 再执行一遍。
 快路径：              match(0) + mining(1) + verify(1)
                       + answer(1)                            = 3 次
                       （2026-08-12 改判撤销激活层 Match 第二轮模型辅助

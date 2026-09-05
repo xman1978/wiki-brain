@@ -64,6 +64,7 @@ retrieval:
   slow_path_verify:       true   # 慢路径答题前充分性校验：sufficient=false 时拒答（防近邻概念串台）
   pool_widen_enabled:     true   # 充分性校验判不充分时，候选池 N→2N 扩展重试（docs/design/topn-coefficient-convergence.md 第3节）
   fast_path_fallback:     true   # 快路径回答失败时自动回落慢路径
+  domain_retry_on_gap_enabled: true  # 域内重试仍为空时，退化为不限定域检索全部 source 兜底一次（不新增 LLM 调用）
   wiki_min_score:         2.0    # Wiki 直答的 Bleve 最低分（Wiki 模块未实现前不生效）
   wiki_max_candidates:    3      # 直答候选序列长度上限（词法+概念入口合并去重后依次尝试，首个 sufficient=true 即停；设 1 退化为原 top-1 行为）
   rerank_relevance_debug_analysis: false  # 默认 false，证据过滤阶段用 rerank_relevance_concise.md（不输出 analysis，保证筛选速度）；调试排查判断依据时临时改 true，切到 rerank_relevance.md（输出 analysis，响应更慢）
@@ -157,6 +158,7 @@ study:
   create_width_max:        0.03  # width_pre 门槛
   wiki_kp_min:             4
   gap_hit_threshold:       3
+  domain_mismatch_hit_threshold: 3  # domain_corrections 表的命中阈值，达到后生成 domain_correction_flag 供人工复核
   scan_batch_size:         200
   report_period_days:      5
   report_max_keep:         10

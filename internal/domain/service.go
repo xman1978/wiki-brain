@@ -25,6 +25,14 @@ func (s *Service) Create(name, description string) (string, error) {
 	return s.store.Create(name, strings.TrimSpace(description))
 }
 
+func (s *Service) Update(domainID, name, description string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("domain: name is required")
+	}
+	return s.store.Update(domainID, name, strings.TrimSpace(description))
+}
+
 func (s *Service) ListDocCategories(domainID string) ([]DocCategory, error) {
 	return s.store.ListDocCategories(domainID)
 }

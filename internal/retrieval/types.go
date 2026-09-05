@@ -60,6 +60,20 @@ type EvidenceSet struct {
 	GapReason        string     `json:"gap_reason,omitempty"`
 	FilteredEvidence []Evidence `json:"filtered_evidence,omitempty"`
 
+	// DomainRetryOccurred/AttemptedDomainIDs/ResolvedDomainIDs are only
+	// meaningful when true — set when retrieveSlowPath's Fallback 3 (domain
+	// pre-filter turned out to be wrong: it resolved to a non-empty domain
+	// set but nothing in it satisfied the query, so retrieval retried
+	// against the full corpus and succeeded) actually fired and found
+	// evidence (docs/impl/v1/retrieval.md 步骤 2 Fallback 3). AttemptedDomainIDs
+	// is the domain set that was searched and failed; ResolvedDomainIDs is
+	// the distinct domain_id set the winning evidence's sources actually
+	// belong to. Feeds trace's domain_mismatch learning event
+	// (docs/impl/v1/study.md "domain_corrections 表").
+	DomainRetryOccurred bool     `json:"domain_retry_occurred,omitempty"`
+	AttemptedDomainIDs  []string `json:"attempted_domain_ids,omitempty"`
+	ResolvedDomainIDs   []string `json:"resolved_domain_ids,omitempty"`
+
 	// Wiki direct-answer fields (docs/impl/v1/wiki.md 步骤 4). Only meaningful
 	// when PathType==PathTypeWiki; this is the entire persisted
 	// evidence_snapshot shape for that path ("{wiki_page_id, cited_point_ids}"

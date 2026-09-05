@@ -495,13 +495,26 @@
     .tl-empty { font-size:12px; color:var(--text-3); padding:8px 4px; text-align:center; line-height:1.5; }
     .tl-error { margin-top:8px; font-size:12px; color:var(--red); padding:6px 8px; background:var(--red-lt); border-radius:var(--radius-xs); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
-    .source-card { border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:6px; cursor:pointer; transition:.12s; display:flex; flex-wrap:nowrap; align-items:center; gap:12px; overflow-x:auto; }
+    /* 文件列表用固定列宽的 flex 行模拟表格：栏目名（source-list-header）与
+       每一行（数据行）共用完全相同的 .sc-col-* 宽度定义，保证栏目名与其
+       下方的值严格对应；不用 CSS grid 是因为部分列（领域/文档分类）内是
+       原生 <select>，grid item 里表现和 flex item 一致，没有切换的必要。 */
+    .source-card { border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:6px; cursor:pointer; transition:.12s; display:flex; flex-wrap:nowrap; align-items:center; gap:10px; overflow-x:auto; }
     .source-card:hover { border-color:var(--text-3); background:var(--bg-alt); }
     .source-card.active { border-color:var(--border); background:var(--surface-alt); }
-    .source-card .sc-main { flex:1; min-width:0; display:flex; align-items:center; gap:8px; flex-wrap:nowrap; }
-    .source-card .sc-title { font-size:13px; font-weight:500; min-width:60px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:1; }
-    .source-card .sc-meta { display:flex; gap:6px; align-items:center; flex-wrap:nowrap; flex-shrink:0; margin-left:auto; }
-    .source-card .sc-actions { display:flex; gap:4px; justify-content:flex-end; flex-wrap:nowrap; align-items:center; flex-shrink:0; }
+    .source-card .sc-col-status { flex:0 0 52px; }
+    .source-card .sc-col-filename { flex:1 1 auto; min-width:60px; overflow:hidden; }
+    .source-card .sc-col-type { flex:0 0 60px; }
+    .source-card .sc-col-domain { flex:0 0 120px; min-width:0; }
+    .source-card .sc-col-category { flex:0 0 150px; min-width:0; }
+    .source-card .sc-col-actions { flex:0 0 auto; min-width:220px; display:flex; gap:4px; align-items:center; justify-content:flex-end; }
+    .source-card .sc-col-domain select, .source-card .sc-col-category select { width:100%; overflow:hidden; text-overflow:ellipsis; }
+    .source-card .sc-title { font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .source-card.source-list-header { cursor:default; padding:6px 12px; margin-bottom:2px; background:transparent; border-color:transparent; border-bottom:1px solid var(--border-lt); border-radius:0; overflow-x:visible; }
+    .source-card.source-list-header:hover { border-color:transparent; border-bottom-color:var(--border-lt); background:transparent; }
+    .source-card.source-list-header .sc-col-actions { justify-content:flex-start; }
+    .sc-col-label { font-size:13px; font-weight:700; color:#000; text-transform:uppercase; letter-spacing:.04em; white-space:nowrap; text-align:left; }
+    .sc-col-label .sc-col-sep { color:var(--text-3); font-weight:400; margin-right:4px; text-transform:none; }
     .status-chip { font-size:12px; padding:2px 7px; border-radius:10px; font-weight:500; white-space:nowrap; flex-shrink:0; }
     .status-pending    { background:#fef3c7; color:#92400e; }
     .status-processing { background:#dbeafe; color:#1e40af; }
@@ -927,6 +940,14 @@
         </select>
         <input id="sourceNameFilter" placeholder="按文件名搜索" oninput="scheduleSourceSearch()" />
       </div>
+      <div class="source-card source-list-header">
+        <div class="sc-col-status"><span class="sc-col-label">状态</span></div>
+        <div class="sc-col-filename"><span class="sc-col-label"><span class="sc-col-sep">|</span>文件名</span></div>
+        <div class="sc-col-type"><span class="sc-col-label"><span class="sc-col-sep">|</span>类型</span></div>
+        <div class="sc-col-domain"><span class="sc-col-label"><span class="sc-col-sep">|</span>领域</span></div>
+        <div class="sc-col-category"><span class="sc-col-label"><span class="sc-col-sep">|</span>文档分类</span></div>
+        <div class="sc-col-actions"><span class="sc-col-label"><span class="sc-col-sep">|</span>操作</span></div>
+      </div>
       <div class="drawer-sources-list" id="sourcesList">
         <div style="text-align:center;padding:40px 16px;color:var(--text-3);font-size:13px">打开后自动加载</div>
       </div>
@@ -1126,6 +1147,21 @@
 </div>
 
 
+<!-- ── DOMAIN EDIT MODAL ───────────────────────────────── -->
+<div class="modal-overlay hidden" id="domainEditModal" onclick="if(event.target===this)closeDomainEditModal()">
+  <div class="modal-box" style="width:400px">
+    <h2>编辑知识领域</h2>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <label style="font-size:12px;color:var(--text-3)">领域名称<input id="domainEditName" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-xs);font-size:13px;background:var(--bg);outline:none;color:var(--text);margin-top:4px" placeholder="例如：合同与采购管理" /></label>
+      <label style="font-size:12px;color:var(--text-3)">简介<textarea id="domainEditDesc" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-xs);font-size:13px;background:var(--bg);outline:none;color:var(--text);margin-top:4px;min-height:64px;resize:vertical" placeholder="一句话说明该领域覆盖的范围"></textarea></label>
+    </div>
+    <div class="modal-actions" style="justify-content:flex-end;margin-top:16px">
+      <button class="btn btn-primary btn-sm" onclick="submitDomainEditForm()">保存</button>
+      <button class="btn btn-sm" onclick="closeDomainEditModal()">取消</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── DOC CATEGORY CREATE/EDIT MODAL（docs/design/doc-category.md）──── -->
 <div class="modal-overlay hidden" id="docCategoryModal" onclick="if(event.target===this)closeDocCategoryModal()">
   <div class="modal-box" style="width:400px">
@@ -1186,6 +1222,7 @@ const S = {
   alcPage:             0,
   wcPage:              0,
   gapPage:             0,
+  dcPage:              0,
   lrPage:              0,
   recordsPage:         0,
   studyRecords:        [],
@@ -1470,7 +1507,7 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
         if (evt === 'phase') {
           try {
             var p = JSON.parse(data);
-            if (p.phase === 'activation' || p.phase === 'outline' || p.phase === 'fts' || p.phase === 'screen' || p.phase === 'rerank' || p.phase === 'evidence') {
+            if (p.phase === 'domain' || p.phase === 'activation' || p.phase === 'outline' || p.phase === 'fts' || p.phase === 'screen' || p.phase === 'rerank' || p.phase === 'evidence') {
               var stepId = p.phase;
               if (p.status === 'start') {
                 updateProcessStep(stepId, 'active', null, null, p.detail || '');
@@ -1481,10 +1518,12 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
               }
             } else if (p.phase === 'retrieval') {
               if (p.status === 'start') {
+                updateProcessStep('domain', 'active');
                 updateProcessStep('activation', 'active');
               } else if (p.status === 'done') {
                 updateProcessStep('verify', 'active');
               } else if (p.status === 'error') {
+                updateProcessStep('domain', 'fail', null, p.duration_ms);
                 updateProcessStep('activation', 'fail', null, p.duration_ms);
               }
             } else if (p.phase === 'verify') {
@@ -1506,7 +1545,7 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
               // 经过 activation/outline/fts/.../verify 这些阶段事件，之前
               // 处理过程面板对此完全没有对应分支，这些步骤会停留在最后一次
               // 更新的状态（甚至从未更新），看不出这次回答走的是 Wiki。
-              ['activation','outline','fts','screen','rerank','evidence','verify'].forEach(function(id) {
+              ['domain','activation','outline','fts','screen','rerank','evidence','verify'].forEach(function(id) {
                 if (!PP_STATE[id] || PP_STATE[id].state !== 'done') updateProcessStep(id, 'done', null, 0, '不适用（Wiki 直答）');
               });
               updateProcessStep('generation', 'done', '生成回答', 0, 'Wiki 直答');
@@ -1514,7 +1553,7 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
             } else if (p.phase === 'answer' && p.status === 'no_evidence') {
               // 只补齐尚未完成的阶段（如快路径下没有逐阶段事件），已完成阶段保留
               // 实时流入的真实耗时与结果，不得清零覆盖为"无证据"。
-              ['activation','outline','fts','screen','rerank','evidence','verify'].forEach(function(id) {
+              ['domain','activation','outline','fts','screen','rerank','evidence','verify'].forEach(function(id) {
                 if (!PP_STATE[id] || PP_STATE[id].state !== 'done') updateProcessStep(id, 'done', null, 0, '无证据');
               });
               updateProcessStep('generation', 'done', '生成回答', 0, '无需生成');
@@ -1600,7 +1639,7 @@ function doStreamAnswer(question, loadingEl, totalStart, retrievalStart, origina
 // ═══════════════════════════════════════════════════════
 // PROCESS PANEL
 // ═══════════════════════════════════════════════════════
-var PP_STEPS = ['session','activation','outline','fts','screen','rerank','evidence','verify','generation','trace','total'];
+var PP_STEPS = ['session','domain','activation','outline','fts','screen','rerank','evidence','verify','generation','trace','total'];
 var PP_STATE = {};
 
 function initProcessPanel(startTime) {
@@ -1609,6 +1648,7 @@ function initProcessPanel(startTime) {
   PP_STATE = {};
   PP_STEPS.forEach(function(id) { PP_STATE[id] = { state:'wait', label:'', dur:null, detail:'' }; });
   PP_STATE.session.label = '会话处理';
+  PP_STATE.domain.label = '知识领域检索';
   PP_STATE.activation.label = '文档筛选';
   PP_STATE.outline.label = '目录结构检索';
   PP_STATE.fts.label = '全文检索';
@@ -2730,16 +2770,14 @@ async function loadSources() {
       }));
     }
     list.innerHTML = src.map(function(s) {
-      return '<div class="source-card" id="sc-' + esc(s.source_id) + '" onclick="showTimelineForSource(\'' + esc(s.source_id) + '\')"><div class="sc-main">\
-        <span class="status-chip status-' + (sourceDisplayStatus(s) || 'unknown') + '">' + statusLabel(sourceDisplayStatus(s)) + '</span>\
-        <div class="sc-title">' + esc(s.title || s.source_id) + '</div>\
-        <div class="sc-meta">\
-          <span class="badge">' + esc(s.format || '') + '</span>\
-          ' + sourceDomainSelectHtml(s) + '\
-          ' + sourceDocCategorySelectHtml(s) + '\
-          <span id="sd-status-' + esc(s.source_id) + '" style="font-size:12px;color:var(--text-3)"></span>\
-        </div>\
-      </div><div class="sc-actions">\
+      return '<div class="source-card" id="sc-' + esc(s.source_id) + '" onclick="showTimelineForSource(\'' + esc(s.source_id) + '\')">\
+        <div class="sc-col-status"><span class="status-chip status-' + (sourceDisplayStatus(s) || 'unknown') + '">' + statusLabel(sourceDisplayStatus(s)) + '</span></div>\
+        <div class="sc-col-filename"><div class="sc-title" title="' + esc(s.title || s.source_id) + '">' + esc(s.title || s.source_id) + '</div></div>\
+        <div class="sc-col-type"><span class="badge">' + esc(s.format || '') + '</span></div>\
+        <div class="sc-col-domain">' + sourceDomainSelectHtml(s) + '</div>\
+        <div class="sc-col-category">' + sourceDocCategorySelectHtml(s) + '</div>\
+        <div class="sc-col-actions">\
+        <span id="sd-status-' + esc(s.source_id) + '" style="font-size:12px;color:var(--text-3)"></span>\
         <button class="btn btn-sm" onclick="viewSource(\'' + esc(s.source_id) + '\')">详情</button>\
         ' + (s.status==='completed' ? '<button class="btn btn-sm" onclick="window.open(S.baseUrl+\'/sources/' + esc(s.source_id) + '/preview\',\'_blank\')">预览</button>' : '') + '\
         ' + (sourceDisplayStatus(s)==='completed' ? '<button class="btn btn-sm" onclick="event.stopPropagation();reuploadSource(\'' + esc(s.source_id) + '\')">重新上传</button>' : '') + '\
@@ -3988,6 +4026,7 @@ function closeStudyView() { document.getElementById('studyDrawer').classList.rem
 var STUDY_ALC_PAGE_SIZE = 3;
 var STUDY_WC_PAGE_SIZE = 3;
 var STUDY_GAP_PAGE_SIZE = 3;
+var STUDY_DC_PAGE_SIZE = 3;
 var STUDY_LR_PAGE_SIZE = 10;
 var STUDY_RECORDS_PAGE_SIZE = 10;
 
@@ -4038,6 +4077,16 @@ function setGapPage(page) {
   if (body) body.scrollTop = scrollTop;
 }
 
+function setDcPage(page) {
+  if (!S.studyReport) return;
+  var body = document.getElementById('studyBody');
+  var scrollTop = body ? body.scrollTop : 0;
+  var total = (S.studyReport.domain_corrections || []).length;
+  S.dcPage = clampStudyPage(page, total, STUDY_DC_PAGE_SIZE);
+  renderStudyReport(S.studyReport, body);
+  if (body) body.scrollTop = scrollTop;
+}
+
 function setLrPage(page) {
   S.lrPage = clampStudyPage(page, (S.lrRows || []).length, STUDY_LR_PAGE_SIZE);
   renderLearningResultsList();
@@ -4049,6 +4098,7 @@ async function loadStudyReport() {
   S.alcPage = 0;
   S.wcPage = 0;
   S.gapPage = 0;
+  S.dcPage = 0;
   try {
     var r = await api('GET', '/study/reports/latest');
     if (r.ok && r.data) renderStudyReport(r.data, body);
@@ -4110,16 +4160,20 @@ function renderStudyReport(report, container) {
   var lc = report.activation_link_candidates || [];
   var wc = report.wiki_candidates || [];
   var gp = report.knowledge_gaps || [];
+  var dc = report.domain_corrections || [];
   S.reportGaps = gp;
   S.alcPage = clampStudyPage(S.alcPage, lc.length, STUDY_ALC_PAGE_SIZE);
   S.wcPage = clampStudyPage(S.wcPage, wc.length, STUDY_WC_PAGE_SIZE);
   S.gapPage = clampStudyPage(S.gapPage, gp.length, STUDY_GAP_PAGE_SIZE);
+  S.dcPage = clampStudyPage(S.dcPage, dc.length, STUDY_DC_PAGE_SIZE);
   var lcStart = S.alcPage * STUDY_ALC_PAGE_SIZE;
   var lcPage = lc.slice(lcStart, lcStart + STUDY_ALC_PAGE_SIZE);
   var wcStart = S.wcPage * STUDY_WC_PAGE_SIZE;
   var wcPage = wc.slice(wcStart, wcStart + STUDY_WC_PAGE_SIZE);
   var gpStart = S.gapPage * STUDY_GAP_PAGE_SIZE;
   var gpPage = gp.slice(gpStart, gpStart + STUDY_GAP_PAGE_SIZE);
+  var dcStart = S.dcPage * STUDY_DC_PAGE_SIZE;
+  var dcPage = dc.slice(dcStart, dcStart + STUDY_DC_PAGE_SIZE);
   var cc = report.entry_candidates || {};
   var ccPendingAdd = cc.pending_add || [];
   var ccPendingMerge = cc.pending_merge || [];
@@ -4184,6 +4238,16 @@ function renderStudyReport(report, container) {
           <td style="font-size:12px;color:var(--text-2)">' + esc((g.question||'').slice(0,60)) + '</td></tr>';
       }).join('') + '</tbody></table></div>\
       ' + studyPagerHtml(S.gapPage, gp.length, STUDY_GAP_PAGE_SIZE, 'setGapPage') + '</div>' : '') + '\
+    ' + (dc.length ? '<div class="study-card"><h2>域匹配疑似有误 (' + dc.length + ')</h2><div class="table-wrap"><table>\
+      <thead><tr><th style="white-space:nowrap">问题主题</th><th style="white-space:nowrap">出现次数</th><th>误判领域</th><th>实际领域</th><th>建议</th></tr></thead>\
+      <tbody>' + dcPage.map(function(d) {
+        return '<tr><td style="white-space:nowrap"><code style="font-size:12px">' + esc(d.question_terms||'') + '</code></td><td style="white-space:nowrap"><span class="badge gap">' + (d.hit_count||0) + ' 次</span></td>\
+          <td style="font-size:12px;color:var(--text-2)">' + esc((d.attempted_domain_ids||[]).join('、')) + '</td>\
+          <td style="font-size:12px;color:var(--text-2)">' + esc((d.resolved_domain_ids||[]).join('、')) + '</td>\
+          <td style="font-size:12px;color:var(--text-2)">' + esc(d.recommendation||'') + '</td></tr>';
+      }).join('') + '</tbody></table></div>\
+      ' + studyPagerHtml(S.dcPage, dc.length, STUDY_DC_PAGE_SIZE, 'setDcPage') + '\
+      <div style="font-size:12px;color:var(--text-3);margin-top:12px">仅供人工复核参考，不会自动修改域匹配规则。</div></div>' : '') + '\
     <div class="study-card"><h2 style="margin:0 0 10px">概念演化</h2>\
       <div class="study-summary-grid">\
         <div class="summary-stat"><div class="ss-val">' + (cc.entry_gap_event_count||0) + '</div><div class="ss-label">概念缺口</div></div>\
@@ -6680,7 +6744,10 @@ async function renderDomainConceptPane() {
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">\
       <div style="min-width:0">\
         <div style="font-size:16px;font-weight:700">' + esc(d.name) + '</div>\
-        <div style="font-size:12.5px;color:var(--text-2);margin-top:4px">' + esc(d.description || '暂无简介') + '</div>\
+        <div style="display:flex;align-items:flex-start;gap:6px;margin-top:4px">\
+          <div style="font-size:12.5px;color:var(--text-2)">' + esc(d.description || '暂无简介') + '</div>\
+          <button class="btn btn-sm" style="flex:none;padding:1px 8px" onclick="openDomainEditForm(\'' + esc(domainId) + '\')" title="编辑领域描述">改</button>\
+        </div>\
         <div style="display:flex;gap:14px;margin-top:8px;font-size:12px;color:var(--text-3);flex-wrap:wrap">\
           <span>来源 <b style="color:var(--text)">' + d.source_count + '</b></span>\
           <span>概念 <b style="color:var(--text)">' + d.entry_count + '</b></span>\
@@ -6958,6 +7025,30 @@ async function submitDomainCreateForm() {
     S.domainRailSelectedId = r.data.domain_id;
     await loadDomainRail();
   } catch (e) { showAlert('创建出错：' + e.message); }
+}
+
+function openDomainEditForm(domainId) {
+  var d = S.domainRailList.find(function(x) { return x.domain_id === domainId; });
+  if (!d) return;
+  S.domainEditingId = domainId;
+  document.getElementById('domainEditName').value = d.name || '';
+  document.getElementById('domainEditDesc').value = d.description || '';
+  document.getElementById('domainEditModal').classList.remove('hidden');
+}
+function closeDomainEditModal() {
+  document.getElementById('domainEditModal').classList.add('hidden');
+}
+async function submitDomainEditForm() {
+  var domainId = S.domainEditingId;
+  var name = document.getElementById('domainEditName').value.trim();
+  var description = document.getElementById('domainEditDesc').value.trim();
+  if (!name) { showAlert('请填写领域名称'); return; }
+  try {
+    var r = await api('PATCH', '/domains/' + encodeURIComponent(domainId), { name: name, description: description });
+    if (!r.ok) { showAlert('保存失败：' + (r.data && r.data.message ? r.data.message : JSON.stringify(r.data))); return; }
+    closeDomainEditModal();
+    await loadDomainRail();
+  } catch (e) { showAlert('保存出错：' + e.message); }
 }
 
 // 「知识领域」页面的"+ 新增词条"：对该领域下未归于已确认词条、也未挂在

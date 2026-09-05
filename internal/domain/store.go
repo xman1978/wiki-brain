@@ -70,6 +70,25 @@ func (s *Store) Create(name, description string) (string, error) {
 	return domainID, nil
 }
 
+// Update edits an existing domain's name/description in place.
+func (s *Store) Update(domainID, name, description string) error {
+	res, err := s.db.Exec(
+		`UPDATE domains SET name = ?, description = ? WHERE domain_id = ?`,
+		name, description, domainID,
+	)
+	if err != nil {
+		return fmt.Errorf("domain store: update: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("domain store: update rows affected: %w", err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // ListDocCategories returns domainID's document-category value domain
 // (docs/design/doc-category.md), each with how many non-shadow sources
 // currently carry it.

@@ -53,6 +53,11 @@ const (
 	// unique; the confirmation target is a concrete page, not a concept id or
 	// member-set fingerprint).
 	ActionTopicPageCandidate = "topic_page_candidate"
+	// ActionDomainCorrectionFlag is domain_corrections' advisory-only
+	// analog of ActionGapFlag (docs/impl/v1/study.md "domain_corrections
+	// 表"): flags a recurring domain-mismatch pattern for human review,
+	// does not itself change any domain-matching rule.
+	ActionDomainCorrectionFlag = "domain_correction_flag"
 )
 
 // learning_results.object_type — activation_link is written by this module;
@@ -65,6 +70,9 @@ const (
 	ObjectTypeKnowledgeGap   = "knowledge_gap"
 	ObjectTypeWikiPage       = "wiki_page"
 	ObjectTypeEntryCandidate = "entry_candidate"
+	// ObjectTypeDomainCorrection is domain_corrections' own audit object,
+	// written through this package's Store the same way ObjectTypeKnowledgeGap is.
+	ObjectTypeDomainCorrection = "domain_correction"
 )
 
 // LinkCondition is what Study / CreateLink pass in. ObservedConditions is the

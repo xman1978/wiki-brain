@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -136,7 +137,7 @@ func TestDomainPreFilter(t *testing.T) {
 		Output: `{"domain_ids": ["d1"]}`,
 	})
 
-	sources, err := svc.domainPreFilter(context.Background(), QueryContext{Question: "what is linear equation?"})
+	sources, _, err := svc.domainPreFilter(context.Background(), QueryContext{Question: "what is linear equation?"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +159,7 @@ func TestDomainPreFilterFallback(t *testing.T) {
 		Output: `{"domain_ids": []}`,
 	})
 
-	sources, err := svc.domainPreFilter(context.Background(), QueryContext{Question: "something"})
+	sources, _, err := svc.domainPreFilter(context.Background(), QueryContext{Question: "something"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +171,7 @@ func TestDomainPreFilterFallback(t *testing.T) {
 func TestDomainPreFilterUpstreamResolved(t *testing.T) {
 	svc, fake, _ := setupTestService(t)
 	// Should not need LLM when DomainResolved.
-	sources, err := svc.domainPreFilter(context.Background(), QueryContext{
+	sources, _, err := svc.domainPreFilter(context.Background(), QueryContext{
 		Question:       "ignored",
 		DomainIDs:      []string{"d1"},
 		DomainResolved: true,
@@ -205,12 +206,202 @@ func TestDomainPreFilterZeroMatchFallback(t *testing.T) {
 
 	svc := NewService(store, fake, nil, nil, &config.Config{}, nil, nil, nil)
 
-	sources, err := svc.domainPreFilter(context.Background(), QueryContext{Question: "something"})
+	sources, _, err := svc.domainPreFilter(context.Background(), QueryContext{Question: "something"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(sources) != 1 {
 		t.Fatalf("expected fallback to all 1 source, got %d", len(sources))
+	}
+}
+
+// TestRetrieveSlowPath_DomainMismatchRetry_Succeeds covers Fallback 3
+// (docs/impl/v1/retrieval.md 步骤 2): the question resolves to domain d2
+// (physics — s2 "Mechanics" + s3 "General", null-domain sources are always
+// included per ListSourcesByDomainIDs), but the content actually lives in
+// d1 (s1 "Algebra", "linear equations"). Fallback 1 is skipped (qc.Subject
+// set), Fallback 2 stays domain-restricted and also finds nothing (s2/s3
+// have no outline rows and no FTS-matching content for "linear
+// equations"), so Fallback 3 retries against the full corpus and succeeds.
+func TestRetrieveSlowPath_DomainMismatchRetry_Succeeds(t *testing.T) {
+	svc, fake, _ := setupTestService(t)
+	svc.cfg.Retrieval.DomainRetryOnGapEnabled = true
+
+	// Only needed for the initial filterAndRecall's sourceSemanticFilter
+	// over the wrong-domain candidateSources (s2, s3) — Fallback 2/3 call
+	// recallFromSources directly and skip source filtering.
+	fake.SetResponse("source_filter.md", llm.FakeResponse{
+		Output: `{"relevant_ids": ["s2", "s3"]}`,
+	})
+	// outlineLLMMatch short-circuits to (nil, nil) without any LLM call
+	// whenever the queried source set has zero outline rows (s2/s3 have
+	// none — only s1 does), so no fake response is needed for the two
+	// domain-restricted attempts; this one fires only once Fallback 3
+	// widens the source set to include s1.
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{
+		Output: `{"node_ids": ["o2"]}`,
+	})
+	fake.SetResponse("rerank_relevance.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "relevant": true, "analysis": "matches"}]}`,
+	})
+	fake.SetResponse("rerank_classify.md", llm.FakeResponse{
+		Output: `{"results": [{"candidate_id": "c1", "role": "direct", "analysis": "matches"}]}`,
+	})
+
+	qc := QueryContext{
+		Question:       "linear equations",
+		Subject:        "linear equations",
+		DomainResolved: true,
+		DomainIDs:      []string{"d2"},
+	}
+	es, err := svc.retrieveSlowPath(context.Background(), qc, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(es.DirectEvidence) == 0 {
+		t.Fatalf("expected direct evidence via domain-retry fallback, got none: %+v", es)
+	}
+	if !es.DomainRetryOccurred {
+		t.Fatalf("expected DomainRetryOccurred=true, got false")
+	}
+	if len(es.AttemptedDomainIDs) != 1 || es.AttemptedDomainIDs[0] != "d2" {
+		t.Fatalf("expected AttemptedDomainIDs=[d2], got %v", es.AttemptedDomainIDs)
+	}
+	// p1 (s1/d1, the direct hit) has KPN relations to p2 (s1/d1) and p3
+	// (s2/d2) which get pulled in as supporting/conflicting evidence, so
+	// ResolvedDomainIDs correctly reflects every domain the final evidence
+	// (direct+supporting) actually spans, not just the direct hit's domain.
+	wantDomains := []string{"d1", "d2"}
+	if !reflect.DeepEqual(es.ResolvedDomainIDs, wantDomains) {
+		t.Fatalf("expected ResolvedDomainIDs=%v, got %v", wantDomains, es.ResolvedDomainIDs)
+	}
+}
+
+// TestRetrieveSlowPath_DomainMismatchRetry_DisabledKeepsOldBehavior asserts
+// the feature is a strict no-op when DomainRetryOnGapEnabled is false (the
+// Go zero value) — byte-identical to pre-Fallback-3 behavior: still returns
+// Fallback 2's empty result, no panic, no new fields set.
+func TestRetrieveSlowPath_DomainMismatchRetry_DisabledKeepsOldBehavior(t *testing.T) {
+	svc, fake, _ := setupTestService(t)
+	// DomainRetryOnGapEnabled left false (zero value).
+
+	fake.SetResponse("source_filter.md", llm.FakeResponse{
+		Output: `{"relevant_ids": ["s2", "s3"]}`,
+	})
+
+	qc := QueryContext{
+		Question:       "linear equations",
+		Subject:        "linear equations",
+		DomainResolved: true,
+		DomainIDs:      []string{"d2"},
+	}
+	es, err := svc.retrieveSlowPath(context.Background(), qc, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !evidenceEmpty(es) {
+		t.Fatalf("expected empty evidence with domain retry disabled, got: %+v", es)
+	}
+	if es.DomainRetryOccurred {
+		t.Fatalf("expected DomainRetryOccurred=false when disabled")
+	}
+}
+
+// TestRetrieveSlowPath_DomainMismatchRetry_SkippedWhenAlreadyFullCorpus
+// asserts Fallback 3 doesn't waste a redundant retry when the domain
+// restriction already covered every source in the corpus — a single-domain
+// deployment where domainPreFilter's resolved set equals ListAllSources().
+// Verified by counting outline_filter.md calls: if Fallback 3 ran it would
+// call outlineLLMMatch a second time over the same (already-tried) source
+// set, doubling the call count.
+func TestRetrieveSlowPath_DomainMismatchRetry_SkippedWhenAlreadyFullCorpus(t *testing.T) {
+	db := foundation.NewTestDB(t)
+	store := NewStore(db)
+	db.Exec(`INSERT INTO domains (domain_id, name, description) VALUES ('d1', 'Math', 'Mathematics')`)
+	db.Exec(`INSERT INTO sources (source_id, title, format, file_name, original_path, markdown_path, status, domain_id)
+		VALUES ('s1', 'Algebra', 'md', 'algebra.md', '/tmp/algebra.md', '/tmp/algebra.md', 'completed', 'd1')`)
+	db.Exec(`INSERT INTO source_outlines (outline_id, source_id, level, title, line_start, line_end, node_type, position)
+		VALUES ('o1', 's1', 1, 'Chapter 1', 1, 10, 'section', 1)`)
+
+	idxDir := filepath.Join(foundation.NewTestDir(t), "index")
+	idxMgr, err := index.NewManager(idxDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { idxMgr.Close() })
+
+	fake := llm.NewFakeClient()
+	fake.SetResponse("source_filter.md", llm.FakeResponse{
+		Output: `{"relevant_ids": ["s1"]}`,
+	})
+	fake.SetResponse("outline_filter.md", llm.FakeResponse{
+		Output: `{"node_ids": []}`,
+	})
+
+	svc := NewService(store, fake, idxMgr.Units, idxMgr.Points, &config.Config{
+		Retrieval: config.RetrievalConfig{DomainRetryOnGapEnabled: true},
+	}, nil, nil, nil)
+
+	qc := QueryContext{
+		Question:       "something",
+		Subject:        "something",
+		DomainResolved: true,
+		DomainIDs:      []string{"d1"},
+	}
+	es, err := svc.retrieveSlowPath(context.Background(), qc, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !evidenceEmpty(es) {
+		t.Fatalf("expected empty evidence (no matching content), got: %+v", es)
+	}
+	if es.DomainRetryOccurred {
+		t.Fatal("expected DomainRetryOccurred=false — domain pool already equaled full corpus")
+	}
+
+	outlineCalls := 0
+	for _, c := range fake.Calls() {
+		if c.PromptFile == "outline_filter.md" {
+			outlineCalls++
+		}
+	}
+	// Fallback 1 is skipped (Subject set). The initial filterAndRecall
+	// call and Fallback 2's recallFromSources each call outlineLLMMatch
+	// once (2 total); a 3rd call would mean Fallback 3 redundantly
+	// retried the identical source set.
+	if outlineCalls != 2 {
+		t.Fatalf("expected exactly 2 outline_filter.md calls (no redundant Fallback 3 retry), got %d", outlineCalls)
+	}
+}
+
+func TestSameSourceSet(t *testing.T) {
+	a := []SourceInfo{{SourceID: "s1"}, {SourceID: "s2"}}
+	b := []SourceInfo{{SourceID: "s2"}, {SourceID: "s1"}}
+	if !sameSourceSet(a, b) {
+		t.Fatal("expected same set regardless of order")
+	}
+	c := []SourceInfo{{SourceID: "s1"}, {SourceID: "s3"}}
+	if sameSourceSet(a, c) {
+		t.Fatal("expected different sets to compare unequal")
+	}
+	if sameSourceSet(a, []SourceInfo{{SourceID: "s1"}}) {
+		t.Fatal("expected different lengths to compare unequal")
+	}
+}
+
+func TestDomainIDsForSources(t *testing.T) {
+	sources := []SourceInfo{
+		{SourceID: "s1", DomainID: sql.NullString{String: "d1", Valid: true}},
+		{SourceID: "s2", DomainID: sql.NullString{String: "d2", Valid: true}},
+		{SourceID: "s3", DomainID: sql.NullString{}},
+		{SourceID: "s4", DomainID: sql.NullString{String: "d1", Valid: true}},
+	}
+	got := domainIDsForSources(sources)
+	if len(got) != 2 || got[0] != "d1" || got[1] != "d2" {
+		t.Fatalf("expected [d1 d2] deduped+sorted, got %v", got)
+	}
+	if domainIDsForSources(nil) != nil {
+		t.Fatalf("expected nil for no sources")
 	}
 }
 

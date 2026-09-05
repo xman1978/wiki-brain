@@ -150,6 +150,11 @@ func (s *Service) Run() (*RunResult, error) {
 		return nil, fmt.Errorf("study: aggregate gaps: %w", err)
 	}
 
+	domainMismatchEventsProcessed, err := s.aggregateDomainMismatches()
+	if err != nil {
+		return nil, fmt.Errorf("study: aggregate domain mismatches: %w", err)
+	}
+
 	if err := s.processTopNCalibrationEvents(); err != nil {
 		slog.Error("study: process topn_calibration events failed", "error", err)
 	}
@@ -169,11 +174,12 @@ func (s *Service) Run() (*RunResult, error) {
 	}
 
 	return &RunResult{
-		ReportID:           report.ReportID,
-		CandidatesFlagged:  candidatesFlagged,
-		GapEventsProcessed: gapEventsProcessed,
-		LearningActions:    actions,
-		ElapsedMs:          time.Since(start).Milliseconds(),
+		ReportID:                      report.ReportID,
+		CandidatesFlagged:             candidatesFlagged,
+		GapEventsProcessed:            gapEventsProcessed,
+		DomainMismatchEventsProcessed: domainMismatchEventsProcessed,
+		LearningActions:               actions,
+		ElapsedMs:                     time.Since(start).Milliseconds(),
 	}, nil
 }
 
@@ -225,6 +231,60 @@ func (s *Service) aggregateGaps() (int, error) {
 	return processed, nil
 }
 
+// aggregateDomainMismatches mirrors aggregateGaps for domain_mismatch events
+// (docs/impl/v1/study.md "domain_corrections 表"): once a normalized
+// question's mismatch count reaches DomainMismatchHitThreshold, it inserts
+// an advisory-only domain_correction_flag learning result — this does NOT
+// change any domain-matching rule, it only surfaces a candidate for human
+// review, mirroring gap_flag's own advisory-only contract.
+func (s *Service) aggregateDomainMismatches() (int, error) {
+	events, err := s.store.FetchUnprocessedDomainCorrectionEvents()
+	if err != nil {
+		return 0, err
+	}
+
+	processed := 0
+	for _, e := range events {
+		if e.QuestionTerms == "" {
+			slog.Warn("study: domain correction event missing question_terms, skipping", "event_id", e.EventID)
+			if err := s.store.MarkEventProcessed(e.EventID); err != nil {
+				return processed, err
+			}
+			processed++
+			continue
+		}
+
+		correctionID, hitCount, err := s.store.UpsertDomainCorrection(e.QuestionTerms, e.Question, e.AttemptedDomainIDs, e.ResolvedDomainIDs, e.TraceID)
+		if err != nil {
+			return processed, err
+		}
+
+		if hitCount == s.cfg.DomainMismatchHitThreshold {
+			slog.Warn("study: domain mismatch reached threshold",
+				"question_terms", e.QuestionTerms,
+				"hit_count", hitCount)
+			reason := fmt.Sprintf("命中次数达到阈值 hit_count=%d", hitCount)
+			lr := &activation.LearningResult{
+				Action:     activation.ActionDomainCorrectionFlag,
+				ObjectType: activation.ObjectTypeDomainCorrection,
+				ObjectID:   correctionID,
+				Reason:     reason,
+				EventIDs:   marshalIDs([]string{e.EventID}),
+				Status:     activation.ResultApplied,
+			}
+			if err := s.activationSvc.Store().InsertLearningResult(lr); err != nil {
+				slog.Error("study: insert domain_correction_flag learning result failed", "correction_id", correctionID, "error", err)
+			}
+		}
+
+		if err := s.store.MarkEventProcessed(e.EventID); err != nil {
+			return processed, err
+		}
+		processed++
+	}
+	return processed, nil
+}
+
 func (s *Service) generateReport(actions LearningActionsSummary, entryScan entry.ScanSummary) (*Report, error) {
 	reportID := uuid.New().String()
 	periodDays := s.cfg.ReportPeriodDays
@@ -240,6 +300,11 @@ func (s *Service) generateReport(actions LearningActionsSummary, entryScan entry
 	}
 
 	gaps, err := s.buildGapEntries()
+	if err != nil {
+		return nil, err
+	}
+
+	domainCorrections, err := s.buildDomainCorrectionEntries()
 	if err != nil {
 		return nil, err
 	}
@@ -281,6 +346,7 @@ func (s *Service) generateReport(actions LearningActionsSummary, entryScan entry
 		Summary:                  *summary,
 		ActivationLinkCandidates: activationCandidates,
 		KnowledgeGaps:            gaps,
+		DomainCorrections:        domainCorrections,
 		LearningActions:          actions,
 		CrossSourceConflicts:     conflicts,
 		EntryCandidates:          conceptCandidates,
@@ -479,6 +545,38 @@ func gapEntryFromRow(g KnowledgeGapRow) KnowledgeGapEntry {
 		LastReason:     g.LastReason,
 		LastTraceID:    g.LastTraceID,
 		Recommendation: recommendation,
+	}
+}
+
+func (s *Service) buildDomainCorrectionEntries() ([]DomainCorrectionEntry, error) {
+	rows, err := s.store.TopDomainCorrections(20)
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]DomainCorrectionEntry, len(rows))
+	for i, r := range rows {
+		entries[i] = domainCorrectionEntryFromRow(r)
+	}
+	return entries, nil
+}
+
+// domainCorrectionEntryFromRow maps a DomainCorrectionRow to its human-facing
+// entry — advisory-only (docs/impl/v1/study.md "domain_corrections 表"), no
+// automatic domain-matching change is implied or applied by this record.
+func domainCorrectionEntryFromRow(r DomainCorrectionRow) DomainCorrectionEntry {
+	var attempted, resolved []string
+	_ = json.Unmarshal([]byte(r.AttemptedDomainIDsJSON), &attempted)
+	_ = json.Unmarshal([]byte(r.ResolvedDomainIDsJSON), &resolved)
+
+	return DomainCorrectionEntry{
+		QuestionTerms:      r.QuestionTerms,
+		Question:           r.Question,
+		AttemptedDomainIDs: attempted,
+		ResolvedDomainIDs:  resolved,
+		HitCount:           r.HitCount,
+		LastTraceID:        r.LastTraceID,
+		Recommendation:     "领域匹配疑似有误，需人工核对",
 	}
 }
 

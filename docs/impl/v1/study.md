@@ -83,6 +83,30 @@ ALTER TABLE knowledge_gaps ADD COLUMN last_trace_id TEXT NOT NULL DEFAULT '';
 
 不在 `knowledge_gaps` 里重复存储 KU 原文/文档标题：`last_trace_id` 只是指针，KU 内容、`source_ref`（含 source_id）已经完整存在 `answers.snapshot` 里（`GET /traces/:id` 拿到 `answer_id` 后 `GET /answers/:id` 即可取回）；这条链路复用现有接口，不新建存储也不新建接口。要让"被过滤的 KU"同样可查，前置依赖 retrieval.md 给 `EvidenceSet` 新增 `FilteredEvidence []Evidence`（rerank 阶段把 role=="irrelevant" 的候选一并带上，结构复用现有 `Evidence`），这样它会随现有 `evidence_snapshot` 一起自然落进 `answers.snapshot`，study 侧无需额外处理。
 
+### domain_corrections 表（2026-09-05 新增，域纠错学习闭环）
+
+对称于上面的 `knowledge_gaps`，但解决的是不同问题：`knowledge_gaps` 记录"这个问题始终答不出来"，`domain_corrections` 记录"这个问题被域预过滤送错了地方，但退化为全库检索之后其实是能答出来的"（见 `docs/impl/v1/retrieval.md` 步骤 2 Fallback 3）。前置依赖：`domain_mismatch` 学习事件，payload 为 `{"question", "attempted_domain_ids", "resolved_domain_ids"}`，由 trace 层在 `EvidenceSet.DomainRetryOccurred==true` 时产出——与 `knowledge_gap` 事件是否同时产出无关（两者独立，同一条 trace 可以两个都有：域纠错成功了，但最终答案质量依然被判 gap 是理论上可能的组合，不特殊处理）。
+
+`domain_corrections` 表（migration `076_domain_corrections.sql`）：
+
+```sql
+CREATE TABLE domain_corrections (
+    correction_id        TEXT PRIMARY KEY,
+    question_terms       TEXT NOT NULL,
+    question             TEXT NOT NULL,
+    attempted_domain_ids TEXT NOT NULL DEFAULT '[]', -- JSON 数组
+    resolved_domain_ids  TEXT NOT NULL DEFAULT '[]', -- JSON 数组
+    hit_count            INTEGER NOT NULL DEFAULT 1,
+    last_trace_id        TEXT NOT NULL DEFAULT '',
+    created_at, updated_at,
+    UNIQUE(question_terms)
+);
+```
+
+与 `knowledge_gaps` 的关键差异：**没有 `reason_counts` 式的累计直方图**——`UpsertDomainCorrection` 每次命中都是覆盖写最新的 `attempted_domain_ids`/`resolved_domain_ids`，不是合并计数。这是有意为之：`knowledge_gaps` 要回答"这个问题反复以哪几种原因失败过"，值得按原因累计；`domain_corrections` 要回答的是"这个问题现在应该被路由到哪个域"，只有最近一次的判断有意义，历史上试过哪些域不重要。
+
+`aggregateDomainMismatches()`（对称于 `aggregateGaps()`，见下方步骤 6）达到 `study.domain_mismatch_hit_threshold` 时写入一条 `learning_results(action=domain_correction_flag, object_type=domain_correction)`——**这是一条纯人工复核标记，不会自动修改任何域匹配规则、不会自动给 source 改 `domain_id`、也不会反过来影响 `question_domain_match.md` 的行为**。与 `gap_flag` 同样的 advisory-only 契约（详见上面「ActivationLink 晋升默认自动，Wiki 材料准入单独加严」一节里"排序输入，不是准入条件"的措辞——这里同理，达到阈值只是把候选排到人工队列前面，不是判定"该自动纠正了"）。`GET /study/domain-corrections`（`min_hit_count`/`limit` 查询参数，镜像 `GET /study/gaps`）供人工浏览。
+
 ## 配置项（config.yml: study 节扩展）
 
 ```yaml
@@ -121,6 +145,11 @@ study:
   # `qualifying_confirm_distinct_min` 两个配置项随之废弃（见下方 wiki
   # 材料确认段落的说明）。
   gap_hit_threshold:       3
+  domain_mismatch_hit_threshold: 3  # domain_corrections 表的命中阈值（见上方「domain_corrections 表」），
+                                    # 达到后写 domain_correction_flag 供人工复核——纯排序输入，不是
+                                    # 自动纠正的准入条件。上游是否触发这张表的写入还要看
+                                    # retrieval.domain_retry_on_gap_enabled（默认 true，
+                                    # docs/impl/v1/retrieval.md 步骤 2 Fallback 3）是否开启。
   scan_batch_size:         200
   report_period_days:      5
   report_max_keep:         10
@@ -483,6 +512,14 @@ knowledge_gap 聚合逻辑沿用 MVP（UPSERT knowledge_gaps ON CONFLICT(questio
     last_trace_id = 当前事件的 trace_id（learning_events 行自带，无需额外查询）；
   达 gap_hit_threshold 时额外写 learning_results(action=gap_flag,
   object_type=knowledge_gap, reason 含 last_reason)，纳入统一审计；
+
+domain_mismatch 聚合逻辑（2026-09-05 新增，紧跟在 aggregateGaps() 之后调用，
+  见上方「domain_corrections 表」）：UPSERT domain_corrections
+  ON CONFLICT(question_terms)，hit_count += 1，但 attempted_domain_ids/
+  resolved_domain_ids 是覆盖写最新值，不做 reason_counts 式的累计合并；
+  达 domain_mismatch_hit_threshold 时写 learning_results(
+  action=domain_correction_flag, object_type=domain_correction)——
+  仅供人工复核排序，不自动修改任何域匹配规则。
 
 Wiki 重编译标记：设计上仍应有"已发布页面依赖的 KP 出现新增 qualifying KP /
   lifecycle != current 时标记 needs_recompile"这一动作（见 wiki.md「重编译
